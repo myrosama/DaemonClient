@@ -1,8 +1,9 @@
 // src/views/SetupView.js
 import React, { useState } from 'react';
-// Correct imports from your firebase/config.js and firebase/firestore
-import { auth, db, appIdentifier, signOut } from '../firebase/config'; // Use relative path
-import { doc, setDoc } from 'firebase/firestore'; // Import doc and setDoc directly if not re-exported
+// Correct imports from your firebase/config.js. Adjust path if your structure is different.
+// E.g., if SetupView is in src/views and config.js is in src/firebase
+import { auth, db, appIdentifier, signOut } from '../firebase/config';
+import { doc, setDoc, serverTimestamp } from 'firebase/firestore'; // Import serverTimestamp for consistency
 
 const Loader = () => <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-white"></div>;
 
@@ -13,7 +14,7 @@ export default function SetupView({ onSetupComplete }) {
     const [isLoading, setIsLoading] = useState(false);
 
     const handleSaveSetup = async () => {
-        if (!botToken || !channelId) {
+        if (!botToken.trim() || !channelId.trim()) { // Added .trim() for robustness
             setError("Bot Token and Channel ID cannot be empty.");
             return;
         }
@@ -25,26 +26,26 @@ export default function SetupView({ onSetupComplete }) {
             if (!currentUser) {
                 setError("No user logged in. Please log in again.");
                 setIsLoading(false);
-                // Optionally, sign out or redirect to login
-                // await signOut(auth); 
+                // Optionally, trigger a sign out or redirect logic here if needed
+                // await signOut(auth); // This would trigger App.js to show AuthView
                 return;
             }
             const userId = currentUser.uid;
             
-            // Consistent path with App.js using appIdentifier
-            const configPath = `artifacts/${appIdentifier}/users/${userId}/config/telegram`;
-            console.log('[SetupView.js] Saving to Firestore path:', configPath);
-            const userDocRef = doc(db, configPath);
+            // Consistent path using appIdentifier (ensure this matches App.js and DashboardView.js)
+            const configDocumentPath = `artifacts/${appIdentifier}/users/${userId}/config/telegram`;
+            console.log('[SetupView.js] Saving to Firestore path:', configDocumentPath);
+            const userDocRef = doc(db, configDocumentPath); // Use the full path for the document
             
             await setDoc(userDocRef, { 
-                botToken: botToken, // Ensure field name matches what App.js checks
-                channelId: channelId,
-                setupTimestamp: new Date() // Optional: good for debugging
+                botToken: botToken.trim(), // Save trimmed value
+                channelId: channelId.trim(), // Save trimmed value
+                setupTimestamp: serverTimestamp() // Use Firestore server timestamp
             });
             
             console.log('[SetupView.js] Setup data saved successfully.');
             if (onSetupComplete) {
-                onSetupComplete();
+                onSetupComplete(); // Signal App.js that setup is done
             }
         } catch (err) {
             console.error("[SetupView.js] Error saving setup:", err);
@@ -58,7 +59,7 @@ export default function SetupView({ onSetupComplete }) {
         try {
             await signOut(auth);
             console.log('[SetupView.js] User logged out.');
-            // App.js onAuthStateChanged will handle redirecting to AuthView
+            // App.js's onAuthStateChanged listener will handle redirecting to AuthView
         } catch (error) {
             console.error('[SetupView.js] Error logging out:', error);
             setError('Failed to log out.');
@@ -75,11 +76,11 @@ export default function SetupView({ onSetupComplete }) {
 
                 <div className="space-y-6">
                     <div>
-                        <label htmlFor="botToken" className="block text-sm font-medium text-gray-300 mb-2">1. Your Telegram Bot Token</label>
+                        <label htmlFor="botToken-setup" className="block text-sm font-medium text-gray-300 mb-2">1. Your Telegram Bot Token</label>
                         <p className="text-xs text-gray-500 mb-2">Create a bot with <a href="https://t.me/BotFather" target="_blank" rel="noopener noreferrer" className="text-indigo-400 hover:underline">@BotFather</a> and paste the API token here.</p>
                         <input
-                            id="botToken"
-                            type="password" // Good for tokens
+                            id="botToken-setup" // Matched to label's htmlFor
+                            type="password"
                             value={botToken}
                             onChange={(e) => setBotToken(e.target.value)}
                             className="w-full p-3 bg-gray-700 border border-gray-600 rounded-lg text-white focus:ring-2 focus:ring-indigo-500"
@@ -87,10 +88,10 @@ export default function SetupView({ onSetupComplete }) {
                         />
                     </div>
                     <div>
-                        <label htmlFor="channelId" className="block text-sm font-medium text-gray-300 mb-2">2. Your Private Channel ID</label>
-                        <p className="text-xs text-gray-500 mb-2">Create a private channel, add your bot as an admin, then get the Channel ID (e.g., from a bot like @userinfobot, make sure it's the full ID often starting with -100).</p>
+                        <label htmlFor="channelId-setup" className="block text-sm font-medium text-gray-300 mb-2">2. Your Private Channel ID</label>
+                        <p className="text-xs text-gray-500 mb-2">Create a private channel, add your bot as an admin, then get the Channel ID (e.g., from a bot like @userinfobot, often starting with -100).</p>
                         <input
-                            id="channelId"
+                            id="channelId-setup" // Matched to label's htmlFor
                             type="text"
                             value={channelId}
                             onChange={(e) => setChannelId(e.target.value)}
