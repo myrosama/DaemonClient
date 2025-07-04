@@ -22,7 +22,6 @@
 
     <script type="text/babel">
     // --- Firebase Initialization ---
-    // THIS BLOCK IS NOW UPDATED WITH THE VALUES YOU PROVIDED FROM YOUR CONSOLE
     const firebaseConfig = {
       apiKey: "AIzaSyAS76sWZA0MTJOgpMHiY5y7y4-FkGISEmI",
       authDomain: "daemonclient-c0625.firebaseapp.com",
@@ -131,14 +130,17 @@
         onProgress({ percent: 100, status: `Upload complete!`, speed: '', eta: ''});
         return uploadedMessageInfo;
     }
-
+    
     async function downloadFile(fileInfo, botToken, onProgress) {
-        console.log(`[HTML/downloadFile] Starting download for ${fileInfo.fileName}`);
+        console.log(`[HTML/downloadFile] Starting PARALLEL download for ${fileInfo.fileName}`);
         const { messages, fileName, fileSize, fileType } = fileInfo;
         const totalParts = messages.length;
-        const partBlobs = new Array(totalParts); 
+        const partBlobs = new Array(totalParts);
         let downloadedBytes = 0;
+        let completedParts = 0;
         const startTime = Date.now();
+
+        const CONCURRENT_DOWNLOADS = 5;
 
         async function downloadPartWithRetry(partData, index) {
             for (let attempt = 1; attempt <= DOWNLOAD_RETRIES; attempt++) {
@@ -147,52 +149,73 @@
                     const fileInfoRes = await fetch(fileInfoUrl);
                     const fileInfoData = await fileInfoRes.json();
                     if (!fileInfoData.ok) throw new Error(`TG getFile error: ${fileInfoData.description || "Unknown"}`);
-                    
-                    const fileUrl = `https://api.telegram.org/file/bot${botToken}/${fileInfoData.result.file_path}`;
-                    const fileRes = await fetch(fileUrl);
-                    if (!fileRes.ok) throw new Error(`HTTP error ${fileRes.status} downloading part`);
-                    
+                    const filePath = fileInfoData.result.file_path;
+
+                    const proxyUrl = new URL('https://us-central1-daemonclient-c0625.cloudfunctions.net/telegramDownloadProxy');
+                    proxyUrl.searchParams.append('botToken', botToken);
+                    proxyUrl.searchParams.append('filePath', filePath);
+
+                    const fileRes = await fetch(proxyUrl.toString());
+                    if (!fileRes.ok) {
+                        const errorText = await fileRes.text();
+                        throw new Error(`Proxy error ${fileRes.status}: ${errorText}`);
+                    }
                     return await fileRes.blob();
                 } catch (error) {
                     console.error(`[HTML/downloadFile] Error on part ${index + 1} (Attempt ${attempt}):`, error);
-                    if (attempt >= DOWNLOAD_RETRIES) throw error; 
-                    await sleep(2000 * attempt); 
+                    if (attempt >= DOWNLOAD_RETRIES) throw error;
+                    await sleep(2000 * attempt);
                 }
             }
         }
-        
-        for (let i = 0; i < totalParts; i++) {
-            const partData = messages[i];
-            const blob = await downloadPartWithRetry(partData, i);
-            partBlobs[i] = blob;
-            downloadedBytes += blob.size;
 
-            const elapsedTime = (Date.now() - startTime) / 1000 || 1;
-            const speed = downloadedBytes / elapsedTime;
-            const remainingBytes = fileSize - downloadedBytes; 
-            const eta = (remainingBytes > 0 && speed > 0) ? remainingBytes / speed : 0;
-            
-            onProgress({
-                percent: Math.round((downloadedBytes / fileSize) * 100),
-                status: `Downloaded part ${i + 1}/${totalParts}...`,
-                speed: formatSpeed(speed),
-                eta: formatETA(eta)
-            });
-            if (i < totalParts - 1) { 
-                await sleep(500); 
+        return new Promise((resolve, reject) => {
+            const queue = [...messages.entries()]; 
+            const runNext = () => {
+                if (completedParts === totalParts) {
+                    onProgress({ percent: 100, status: `Assembling file...`, speed: '', eta: '' });
+                    const fullBlob = new Blob(partBlobs, { type: fileType || 'application/octet-stream' });
+                    const link = document.createElement('a');
+                    link.href = URL.createObjectURL(fullBlob);
+                    link.download = fileName;
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                    URL.revokeObjectURL(link.href);
+                    console.log(`[HTML/downloadFile] Download complete for ${fileName}`);
+                    resolve();
+                    return;
+                }
+                
+                if(queue.length > 0) {
+                    const [index, partData] = queue.shift();
+                    
+                    downloadPartWithRetry(partData, index)
+                        .then(blob => {
+                            partBlobs[index] = blob;
+                            downloadedBytes += blob.size;
+                            completedParts++;
+
+                            const elapsedTime = (Date.now() - startTime) / 1000 || 1;
+                            const speed = downloadedBytes / elapsedTime;
+                            const remainingBytes = fileSize - downloadedBytes;
+                            const eta = (remainingBytes > 0 && speed > 0) ? remainingBytes / speed : 0;
+
+                            onProgress({
+                                percent: Math.round((downloadedBytes / fileSize) * 100),
+                                status: `Downloaded part ${completedParts}/${totalParts}...`,
+                                speed: formatSpeed(speed),
+                                eta: formatETA(eta)
+                            });
+                            runNext();
+                        })
+                        .catch(error => reject(error));
+                }
+            };
+            for (let i = 0; i < CONCURRENT_DOWNLOADS && i < totalParts; i++) {
+                runNext();
             }
-        }
-
-        onProgress({ percent: 100, status: `Assembling file...`, speed: '', eta: '' });
-        const fullBlob = new Blob(partBlobs, { type: fileType || 'application/octet-stream' });
-        const link = document.createElement('a');
-        link.href = URL.createObjectURL(fullBlob);
-        link.download = fileName;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        URL.revokeObjectURL(link.href);
-        console.log(`[HTML/downloadFile] Download complete for ${fileName}`);
+        });
     }
 
     // ============================================================================
@@ -215,48 +238,81 @@
         </div>
     );
 
-        // --- THIS REPLACES YOUR EXISTING AuthView FUNCTION ---
-        const AuthView = () => {
+    const SettingsModal = ({ initialConfig, onSave, onClose, isSaving }) => {
+        const [botToken, setBotToken] = React.useState(initialConfig.botToken || '');
+        const [channelId, setChannelId] = React.useState(initialConfig.channelId || '');
+        const [error, setError] = React.useState('');
+
+        const handleSave = async () => {
+            if (!botToken.trim() || !channelId.trim()) {
+                setError("Bot Token and Channel ID cannot be empty.");
+                return;
+            }
+            setError('');
+            try {
+                await onSave({ botToken, channelId });
+            } catch (err) {
+                setError(`Save failed: ${err.message}`);
+            }
+        };
+
+        return (
+            <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50 font-sans">
+                <div className="bg-gray-800 rounded-xl shadow-2xl p-8 w-full max-w-lg">
+                    <h2 className="text-2xl font-bold text-indigo-400 mb-4">Settings</h2>
+                    <div className="space-y-4">
+                        <div>
+                            <label htmlFor="botToken-settings" className="block text-sm font-medium text-gray-300 mb-1">Telegram Bot Token</label>
+                            <input id="botToken-settings" type="password" value={botToken} onChange={(e) => setBotToken(e.target.value)} className="w-full p-3 bg-gray-700 border border-gray-600 rounded-lg text-white" />
+                        </div>
+                        <div>
+                            <label htmlFor="channelId-settings" className="block text-sm font-medium text-gray-300 mb-1">Private Channel ID</label>
+                            <input id="channelId-settings" type="text" value={channelId} onChange={(e) => setChannelId(e.target.value)} className="w-full p-3 bg-gray-700 border border-gray-600 rounded-lg text-white" />
+                        </div>
+                        {error && <p className="text-red-400 text-sm text-center py-1">{error}</p>}
+                    </div>
+                    <div className="flex justify-end space-x-4 mt-6">
+                        <button onClick={onClose} disabled={isSaving} className="py-2 px-4 bg-gray-600 hover:bg-gray-500 rounded-lg text-white">Cancel</button>
+                        <button onClick={handleSave} disabled={isSaving} className="py-2 px-6 bg-indigo-600 hover:bg-indigo-700 rounded-lg text-white flex items-center justify-center w-24">
+                            {isSaving ? <LoaderComponent small={true} /> : 'Save'}
+                        </button>
+                    </div>
+                </div>
+            </div>
+        );
+    };
+
+    const AuthView = () => {
         const [isLoginView, setIsLoginView] = React.useState(true);
         const [email, setEmail] = React.useState('');
         const [password, setPassword] = React.useState('');
         const [error, setError] = React.useState('');
         const [isLoading, setIsLoading] = React.useState(false);
+        const [isExplanationVisible, setIsExplanationVisible] = React.useState(false);
 
         const handleAuthAction = async (e) => {
             e.preventDefault();
             if (!email || !password) { setError("Please enter email and password."); return; }
             setIsLoading(true); 
-            setError(''); // Clear previous errors
+            setError(''); 
 
             try {
                 if (isLoginView) {
                     await auth.signInWithEmailAndPassword(email, password);
-                    // onAuthStateChanged in App will handle the view change
                 } else {
                     await auth.createUserWithEmailAndPassword(email, password);
-                    // onAuthStateChanged in App will handle the view change
                 }
             } catch (err) {
-                // --- The updated error handling logic is here ---
                 console.error("[AuthView] Firebase Auth action failed. Code:", err.code);
-
                 switch (err.code) {
-                    // Cases for LOGIN
                     case 'auth/user-not-found':
-                        setError("No account found with this email address. Please sign up.");
-                        break;
                     case 'auth/wrong-password':
-                        setError("Incorrect password. Please try again.");
-                        break;
-                    case 'auth/invalid-credential': // This is a modern catch-all for both errors above
+                    case 'auth/invalid-credential':
                         setError("Invalid credentials. Please check your email and password.");
                         break;
                     case 'auth/too-many-requests':
                         setError("Too many login attempts. Please try again later.");
                         break;
-
-                    // Cases for SIGN UP
                     case 'auth/email-already-in-use':
                         setError("An account with this email already exists. Please log in instead.");
                         break;
@@ -266,8 +322,6 @@
                     case 'auth/invalid-email':
                         setError("The email address format is not valid.");
                         break;
-
-                    // Default fallback
                     default:
                         setError("An unexpected error occurred. Please try again.");
                         break;
@@ -277,9 +331,17 @@
                 setIsLoading(false);
             }
         };
+        
+        const ChevronIcon = ({ open }) => (
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" 
+                 className={`inline-block ml-1 transition-transform duration-300 ${open ? 'rotate-180' : ''}`}>
+                <polyline points="6 9 12 15 18 9"></polyline>
+            </svg>
+        );
 
         return (
-            <div className="min-h-screen bg-gray-900 flex flex-col justify-center items-center p-4 font-sans">
+            <div className="flex flex-col items-center justify-center w-full min-h-screen p-4 py-8 font-sans text-white">
+                
                 <div className="w-full max-w-md">
                     <div className="text-center mb-8">
                         <div className="flex items-center justify-center mb-2">
@@ -315,16 +377,63 @@
                         </form>
                     </div>
                 </div>
+
+                <div className="w-full max-w-2xl mt-8 text-center">
+                    <button 
+                        onClick={() => setIsExplanationVisible(!isExplanationVisible)}
+                        className="text-gray-400 hover:text-indigo-400 transition-colors py-2"
+                    >
+                        What is DaemonClient?
+                        <ChevronIcon open={isExplanationVisible} />
+                    </button>
+                    
+                    <div 
+                        className={`text-left overflow-hidden transition-all duration-500 ease-in-out ${isExplanationVisible ? 'max-h-[1000px] opacity-100 mt-4' : 'max-h-0 opacity-0'}`}
+                    >
+                        <div className="text-gray-300 space-y-4 bg-gray-800/50 backdrop-blur-sm p-6 rounded-lg shadow-lg border border-gray-700">
+                            <p>
+                                DaemonClient is an experiment in creating secure, private, and virtually unlimited cloud storage by leveraging the Telegram API. It's a storage solution where you, and only you, control your data.
+                            </p>
+                            <h3 className="text-lg font-semibold text-white pt-2">How It Works</h3>
+                            <ul className="list-disc list-inside space-y-2 pl-2">
+                                <li>
+                                    <strong>Your Personal Cloud:</strong> It connects to a private Telegram channel that you own. All your files are stored there, accessible only by you through this client.
+                                </li>
+                                <li>
+                                    <strong>Secure & Private:</strong> Files are split into smaller chunks and uploaded to your private channel via your own Telegram Bot. This architecture means no one, not even the developers of this app, can access your files.
+                                </li>
+                                <li>
+                                    <strong>Free & Open Source:</strong> This client is completely free to use. Its source code is open, ensuring transparency and giving you full control and ownership over your data.
+                                </li>
+                            </ul>
+                            <p className="pt-2 text-gray-400 text-sm">
+                                This tool requires you to create your own free Telegram bot and a private channel, allowing you to maintain a zero-cost, private storage infrastructure.
+                            </p>
+                            
+                            <div className="pt-5 mt-5 border-t border-gray-700 text-center">
+                                <a 
+                                    href="https://t.me/montclier49" 
+                                    target="_blank" 
+                                    rel="noopener noreferrer" 
+                                    className="text-sm text-gray-500 hover:text-indigo-400 transition-colors"
+                                >
+                                    A project by @montclier49
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             </div>
         );
     };
-    // --- END OF REPLACEMENT FOR AuthView ---
 
     const SetupView = ({ onSetupComplete }) => {
         const [botToken, setBotToken] = React.useState('');
         const [channelId, setChannelId] = React.useState('');
         const [error, setError] = React.useState('');
         const [isLoading, setIsLoading] = React.useState(false);
+        
+        const [showInstructions, setShowInstructions] = React.useState(false);
 
         const handleSaveSetup = async () => {
             if (!botToken.trim() || !channelId.trim()) { setError("Bot Token and Channel ID are required."); return; }
@@ -341,11 +450,66 @@
             } catch (err) { setError(`Save failed: ${err.message}`); }
             finally { setIsLoading(false); }
         };
+
         const handleLogout = async () => { try { await auth.signOut(); } catch (err) { setError("Logout failed."); }};
-        return (<div className="min-h-screen bg-gray-900 text-white flex flex-col items-center justify-center p-4 font-sans"><div className="w-full max-w-2xl bg-gray-800 rounded-xl shadow-2xl p-8"><div className="text-center mb-6"><h1 className="text-3xl font-bold text-indigo-400">One-Time Setup</h1><p className="text-gray-400 mt-2">Connect your Telegram bot and channel.</p></div><div className="space-y-6"><div><label htmlFor="botToken-setup" className="block text-sm font-medium text-gray-300 mb-2">1. Telegram Bot Token</label><p className="text-xs text-gray-500 mb-2">From <a href="https://t.me/BotFather" target="_blank" rel="noopener noreferrer" className="text-indigo-400 hover:underline">@BotFather</a>.</p><input id="botToken-setup" type="password" value={botToken} onChange={(e) => setBotToken(e.target.value)} className="w-full p-3 bg-gray-700 border border-gray-600 rounded-lg text-white focus:ring-2 focus:ring-indigo-500" placeholder="e.g., 123456:ABC-DEF1234..." /></div><div><label htmlFor="channelId-setup" className="block text-sm font-medium text-gray-300 mb-2">2. Private Channel ID</label><p className="text-xs text-gray-500 mb-2">Add bot as admin. Get ID (e.g., from @userinfobot, often starts -100).</p><input id="channelId-setup" type="text" value={channelId} onChange={(e) => setChannelId(e.target.value)} className="w-full p-3 bg-gray-700 border border-gray-600 rounded-lg text-white focus:ring-2 focus:ring-indigo-500" placeholder="e.g., -1001234567890" /></div>{error && <p className="text-red-400 text-sm text-center py-2">{error}</p>}<button onClick={handleSaveSetup} disabled={isLoading} className="w-full bg-indigo-500 hover:bg-indigo-600 disabled:bg-indigo-800 text-white font-bold py-3 px-4 rounded-lg flex items-center justify-center text-lg transition-colors">{isLoading ? <LoaderComponent small={true} /> : 'Save & Continue'}</button></div><div className="text-center mt-6"><button onClick={handleLogout} className="text-sm text-gray-500 hover:text-gray-300">Logout</button></div></div></div>);
+
+        return (
+            <div className="min-h-screen bg-gray-900 text-white flex flex-col items-center justify-center p-4 font-sans">
+                <div className="w-full max-w-2xl bg-gray-800 rounded-xl shadow-2xl p-6 md:p-8">
+                    <div className="text-center mb-6">
+                        <h1 className="text-3xl font-bold text-indigo-400">One-Time Setup</h1>
+                        <p className="text-gray-400 mt-2">Connect your Telegram bot and channel.</p>
+                        
+                        <button 
+                            onClick={() => setShowInstructions(!showInstructions)} 
+                            className="text-indigo-400 hover:underline mt-4 text-sm"
+                        >
+                            {showInstructions ? 'Hide Instructions' : 'Show Detailed Instructions'}
+                        </button>
+                    </div>
+
+                    {showInstructions && (
+                        <div className="mb-6 p-4 bg-gray-900 rounded-lg text-gray-300 text-sm space-y-4">
+                            <h3 className="font-bold text-white text-base">How to get your credentials:</h3>
+                            <ol className="list-decimal list-inside space-y-3">
+                                <li>
+                                    <strong>Create your Bot:</strong> Open Telegram and search for the official <a href="https://t.me/BotFather" target="_blank" rel="noopener noreferrer" className="text-indigo-400 hover:underline">@BotFather</a> bot. Start a chat and send the <code>/newbot</code> command. Follow the steps, and it will give you a **Bot Token**. Copy it and paste it into the first field above.
+                                </li>
+                                <li>
+                                    <strong>Create a Private Channel:</strong> In Telegram, create a **New Channel**. It's very important that you set it as a **Private Channel**, not Public.
+                                </li>
+                                <li>
+                                    <strong>Add your Bot as Admin:</strong> Go to your new channel's settings, then "Administrators". Click "Add Admin" and search for your bot's username (you created it in Step 1). Select the bot to make it an admin. The default permissions are fine.
+                                </li>
+                                <li>
+                                    <strong>Get the Channel ID:</strong> Forward any message *from* your private channel *to* another bot called <a href="https://t.me/userinfobot" target="_blank" rel="noopener noreferrer" className="text-indigo-400 hover:underline">@userinfobot</a>. It will reply with details about the channel, including its ID. It will be a negative number that starts with <code>-100...</code>. Copy the full ID (including the minus sign) and paste it into the second field above.
+                                </li>
+                            </ol>
+                        </div>
+                    )}
+
+                    <div className="space-y-6">
+                        <div>
+                            <label htmlFor="botToken-setup" className="block text-sm font-medium text-gray-300 mb-2">1. Telegram Bot Token</label>
+                            <input id="botToken-setup" type="password" value={botToken} onChange={(e) => setBotToken(e.target.value)} className="w-full p-3 bg-gray-700 border border-gray-600 rounded-lg text-white focus:ring-2 focus:ring-indigo-500" placeholder="e.g., 123456:ABC-DEF1234..." />
+                        </div>
+                        <div>
+                            <label htmlFor="channelId-setup" className="block text-sm font-medium text-gray-300 mb-2">2. Private Channel ID</label>
+                            <input id="channelId-setup" type="text" value={channelId} onChange={(e) => setChannelId(e.target.value)} className="w-full p-3 bg-gray-700 border border-gray-600 rounded-lg text-white focus:ring-2 focus:ring-indigo-500" placeholder="e.g., -1001234567890" />
+                        </div>
+                        {error && <p className="text-red-400 text-sm text-center py-2">{error}</p>}
+                        <button onClick={handleSaveSetup} disabled={isLoading} className="w-full bg-indigo-500 hover:bg-indigo-600 disabled:bg-indigo-800 text-white font-bold py-3 px-4 rounded-lg flex items-center justify-center text-lg transition-colors">
+                            {isLoading ? <LoaderComponent small={true} /> : 'Save & Continue'}
+                        </button>
+                    </div>
+                    <div className="text-center mt-6">
+                        <button onClick={handleLogout} className="text-sm text-gray-500 hover:text-gray-300">Logout</button>
+                    </div>
+                </div>
+            </div>
+        );
     };
 
-    // --- THIS IS THE REVISED DashboardView FUNCTION ---
     const DashboardView = () => {
         const [config, setConfig] = React.useState(null); 
         const [isLoadingConfig, setIsLoadingConfig] = React.useState(true); 
@@ -357,26 +521,28 @@
         const [uploadProgress, setUploadProgress] = React.useState({ active: false, percent: 0, status: '', speed: '', eta: '' });
         const [downloadProgress, setDownloadProgress] = React.useState({ active: false, percent: 0, status: '', speed: '', eta: '' });
         const [feedbackMessage, setFeedbackMessage] = React.useState({ type: '', text: ''});
+        
+        const [isSettingsOpen, setIsSettingsOpen] = React.useState(false);
+        const [isSavingSettings, setIsSavingSettings] = React.useState(false);
 
         const fileInputRef = React.useRef(null);
         const isUploading = uploadProgress.active;
         const isDownloading = downloadProgress.active;
         const isBusy = isUploading || isDownloading;
+        
+        const SettingsIcon = () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 0 2.4l-.15.08a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1 0-2.4l.15-.08a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path><circle cx="12" cy="12" r="3"></circle></svg>;
 
         React.useEffect(() => {
             const currentAuthUser = auth.currentUser;
-            console.log("[DashboardView] useEffect triggered. User:", currentAuthUser ? currentAuthUser.uid : "None");
-
             if (currentAuthUser) {
                 setIsLoadingConfig(true); setIsLoadingFiles(true);
                 setConfigError(''); setConfig(null); setFiles([]); 
-
                 const fetchData = async () => {
                     const currentUserID = currentAuthUser.uid;
-                    try { // Fetch Config
+                    try { 
                         const configDocRef = db.collection(`artifacts/${appIdentifier}/users/${currentUserID}/config`).doc('telegram');
                         const configSnap = await configDocRef.get();
-                        if (configSnap.exists() && configSnap.data().botToken) {
+                        if (configSnap.exists && configSnap.data().botToken) {
                             setConfig(configSnap.data());
                         } else {
                             setConfigError("Configuration not found. Please re-setup."); setConfig(null); 
@@ -384,7 +550,7 @@
                     } catch (error) { setConfigError(`Error loading config: ${error.message}`); setConfig(null);
                     } finally { setIsLoadingConfig(false); }
                     
-                    try { // Fetch Files
+                    try {
                         const filesCollectionRef = db.collection(`artifacts/${appIdentifier}/users/${currentUserID}/files`);
                         const filesQuery = filesCollectionRef.orderBy("uploadedAt", "desc");
                         const filesSnap = await filesQuery.get();
@@ -397,7 +563,7 @@
             } else { setIsLoadingConfig(false); setIsLoadingFiles(false); setConfig(null); setFiles([]); }
         }, []); 
 
-        const clearFeedback = (delay = 4000) => setTimeout(() => setFeedbackMessage({type: '', text: ''}), delay);
+        const clearFeedback = (delay = 5000) => setTimeout(() => setFeedbackMessage({type: '', text: ''}), delay);
 
         const handleFileUpload = async (e) => {
             const file = e.target.files[0];
@@ -428,14 +594,82 @@
             } catch (err) { setFeedbackMessage({type: 'error', text: `Download failed: ${err.message}`});
             } finally { setDownloadProgress({ active: false, percent: 0, status: '', speed: '', eta: '' }); clearFeedback(); }
         };
+        
         const handleLogout = async () => { try { await auth.signOut(); } catch (err) { setFeedbackMessage({type: 'error', text: "Logout failed."}); clearFeedback(); }};
+
+        const handleSaveSettings = async (newConfig) => {
+            setIsSavingSettings(true);
+            const currentUserID = auth.currentUser.uid;
+            const configDocRef = db.collection(`artifacts/${appIdentifier}/users/${currentUserID}/config`).doc('telegram');
+            
+            try {
+                await configDocRef.update({
+                    botToken: newConfig.botToken,
+                    channelId: newConfig.channelId
+                });
+                setConfig(prev => ({...prev, ...newConfig}));
+                setIsSettingsOpen(false);
+                setFeedbackMessage({type: 'success', text: 'Settings updated successfully!'});
+                clearFeedback();
+            } catch (error) {
+                console.error("Error updating settings:", error);
+                throw error;
+            } finally {
+                setIsSavingSettings(false);
+            }
+        };
 
         if (isLoadingConfig || isLoadingFiles) return <FullScreenLoader message={isLoadingConfig ? "Loading Configuration..." : "Loading Files..."} />;
         if (configError) return (<div className="min-h-screen bg-gray-900 text-white flex items-center justify-center p-4 font-sans"><div className="w-full max-w-3xl bg-gray-800 rounded-xl shadow-2xl p-6"><div className="flex justify-between items-center mb-4"><h1 className="text-3xl font-bold text-indigo-400">DaemonClient</h1><button onClick={handleLogout} className="bg-red-500 hover:bg-red-600 text-white py-2 px-4 rounded-lg text-sm">Logout</button></div><div className="p-4 bg-red-700 text-red-100 rounded-lg"><h2 className="text-xl font-semibold mb-2">Configuration Error</h2><p>{configError}</p><p className="mt-2">Try logging out and in, or re-setup.</p></div></div></div>);
         
-        return (<div className="min-h-screen bg-gray-900 text-white flex items-center justify-center p-4 font-sans"><div className="w-full max-w-3xl bg-gray-800 rounded-xl shadow-2xl p-6"><div className="flex justify-between items-center mb-4"><h1 className="text-3xl font-bold text-indigo-400">DaemonClient</h1><button onClick={handleLogout} className="bg-red-500 hover:bg-red-600 text-white py-2 px-4 rounded-lg text-sm">Logout</button></div><div className="bg-gray-700 p-4 rounded-lg mb-6"><h2 className="text-xl font-semibold mb-2">Upload File</h2><input type="file" ref={fileInputRef} onChange={handleFileUpload} className="hidden" disabled={isBusy || !config} /><button onClick={() => fileInputRef.current.click()} disabled={isBusy || !config} className="w-full bg-indigo-500 hover:bg-indigo-600 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-2 px-4 rounded-lg mt-2">Choose File to Upload (/upload)</button></div>{isUploading && <ProgressBar percent={uploadProgress.percent} status={uploadProgress.status} speed={uploadProgress.speed} eta={uploadProgress.eta} />}{/* Files List */}<div className="bg-gray-700 p-4 rounded-lg mt-4"><h2 className="text-xl font-semibold mb-2">Your Files</h2><div className="mt-4 space-y-2 max-h-60 overflow-y-auto pr-2">{files.length > 0 ? files.map(file => (<div key={file.id || file.fileName} className="flex justify-between items-center bg-gray-800 p-3 rounded-lg hover:bg-gray-750 transition-colors"><div><p className="font-semibold text-white truncate w-60" title={file.fileName}>{file.fileName}</p><p className="text-xs text-gray-400">{(file.fileSize / 1024 / 1024).toFixed(2)} MB {file.uploadedAt?.toDate ? ` - ${file.uploadedAt.toDate().toLocaleDateString()}` : ''}</p></div><button onClick={() => handleFileDownload(file)} disabled={isBusy || !config} className="bg-green-600 hover:bg-green-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-1 px-3 rounded-md text-sm">Download</button></div>)) : (<p className="text-center text-gray-400 py-4">No files uploaded yet.</p>)}</div></div>{isDownloading && <ProgressBar percent={downloadProgress.percent} status={downloadProgress.status} speed={downloadProgress.speed} eta={downloadProgress.eta} />}{feedbackMessage.text && <div className={`mt-4 p-3 rounded-lg text-sm text-center ${feedbackMessage.type === 'error' ? 'bg-red-900 text-red-200' : 'bg-green-900 text-green-200'}`}>{feedbackMessage.text}</div>}{!isUploading && !isDownloading && !feedbackMessage.text && <div className="h-12 mt-4"></div> }</div></div>);
+        return (
+        <div className="min-h-screen bg-gray-900 text-white flex items-center justify-center p-4 font-sans">
+            <div className="w-full max-w-3xl bg-gray-800 rounded-xl shadow-2xl p-6">
+                <div className="flex justify-between items-center mb-4">
+                    <h1 className="text-3xl font-bold text-indigo-400">DaemonClient</h1>
+                    <div className="flex items-center space-x-4">
+                        <button onClick={() => setIsSettingsOpen(true)} className="text-gray-400 hover:text-white" title="Settings">
+                            <SettingsIcon />
+                        </button>
+                        <button onClick={handleLogout} className="bg-red-500 hover:bg-red-600 text-white py-2 px-4 rounded-lg text-sm">Logout</button>
+                    </div>
+                </div>
+
+                <div className="bg-gray-700 p-4 rounded-lg mb-6">
+                    <h2 className="text-xl font-semibold mb-2">Upload File</h2>
+                    <input type="file" ref={fileInputRef} onChange={handleFileUpload} className="hidden" disabled={isBusy || !config} />
+                    <button onClick={() => fileInputRef.current.click()} disabled={isBusy || !config} className="w-full bg-indigo-500 hover:bg-indigo-600 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-2 px-4 rounded-lg mt-2">Choose File to Upload (/upload)</button>
+                </div>
+                {isUploading && <ProgressBar percent={uploadProgress.percent} status={uploadProgress.status} speed={uploadProgress.speed} eta={uploadProgress.eta} />}
+                <div className="bg-gray-700 p-4 rounded-lg mt-4">
+                    <h2 className="text-xl font-semibold mb-2">Your Files</h2>
+                    <div className="mt-4 space-y-2 max-h-60 overflow-y-auto pr-2">{files.length > 0 ? files.map(file => (
+                        <div key={file.id || file.fileName} className="flex justify-between items-center bg-gray-800 p-3 rounded-lg hover:bg-gray-750 transition-colors">
+                            <div>
+                                <p className="font-semibold text-white truncate w-60" title={file.fileName}>{file.fileName}</p>
+                                <p className="text-xs text-gray-400">{(file.fileSize / 1024 / 1024).toFixed(2)} MB {file.uploadedAt?.toDate ? ` - ${file.uploadedAt.toDate().toLocaleDateString()}` : ''}</p>
+                            </div>
+                            <button onClick={() => handleFileDownload(file)} disabled={isBusy || !config} className="bg-green-600 hover:bg-green-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-1 px-3 rounded-md text-sm">Download</button>
+                        </div>
+                        )) : (<p className="text-center text-gray-400 py-4">No files uploaded yet.</p>)}
+                    </div>
+                </div>
+                {isDownloading && <ProgressBar percent={downloadProgress.percent} status={downloadProgress.status} speed={downloadProgress.speed} eta={downloadProgress.eta} />}
+                {feedbackMessage.text && <div className={`mt-4 p-3 rounded-lg text-sm text-center ${feedbackMessage.type === 'error' ? 'bg-red-900 text-red-200' : 'bg-green-900 text-green-200'}`}>{feedbackMessage.text}</div>}
+                {!isUploading && !isDownloading && !feedbackMessage.text && <div className="h-12 mt-4"></div> }
+            </div>
+            
+            {isSettingsOpen && config && (
+                <SettingsModal 
+                    initialConfig={config}
+                    onSave={handleSaveSettings}
+                    onClose={() => setIsSettingsOpen(false)}
+                    isSaving={isSavingSettings}
+                />
+            )}
+        </div>
+        );
     };
-    // --- END OF REVISED DashboardView ---
 
     // ============================================================================
     // --- THE MAIN APP (The Conductor) ---
@@ -447,18 +681,13 @@
 
         React.useEffect(() => {
             const unsubscribe = auth.onAuthStateChanged(async (currentUser) => {
-                console.log("[App] Auth state changed. User:", currentUser ? currentUser.uid : "None");
                 setIsLoading(true); 
                 if (currentUser) {
                     setUser(currentUser); 
                     try {
                         const configDocRef = db.collection(`artifacts/${appIdentifier}/users/${currentUser.uid}/config`).doc('telegram');
                         const docSnap = await configDocRef.get();
-                        if (docSnap.exists() && docSnap.data().botToken) {
-                            setIsSetupComplete(true);
-                        } else {
-                            setIsSetupComplete(false);
-                        }
+                        setIsSetupComplete(docSnap.exists && docSnap.data().botToken);
                     } catch (error) { 
                         console.error("[App] Error checking setup status:", error);
                         setIsSetupComplete(false); 
