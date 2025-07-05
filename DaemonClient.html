@@ -4,14 +4,11 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>DaemonClient</title>
-    <!-- Tailwind CSS for styling -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- React and Babel for running React in the browser -->
     <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
-    <!-- Firebase SDKs (using the v8 compat libraries for this browser version) -->
     <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
     <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-auth.js"></script>
     <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
@@ -62,8 +59,9 @@
         const s = Math.floor(seconds % 60);
         return [h > 0 ? `${h}h` : '', m > 0 ? `${m}m` : '', s > 0 ? `${s}s` : (h===0 && m===0 ? '0s' : '')].filter(Boolean).join(' ') || '...';
     }
-
-    async function uploadFile(file, botToken, channelId, onProgress) {
+    
+    // NEW: Added abortSignal parameter for cancellation
+    async function uploadFile(file, botToken, channelId, onProgress, abortSignal) {
         console.log(`[HTML/uploadFile] Starting upload for ${file.name}, Size: ${(file.size / (1024*1024)).toFixed(2)} MB`);
         const totalParts = Math.ceil(file.size / CHUNK_SIZE);
         const uploadedMessageInfo = [];
@@ -71,11 +69,13 @@
         const startTime = Date.now();
 
         for (let i = 0; i < totalParts; i++) {
+            if (abortSignal.aborted) throw new Error("Upload was cancelled by the user.");
             const partNumber = i + 1;
             const chunk = file.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
             let success = false;
             
             for (let attempt = 1; attempt <= UPLOAD_RETRIES; attempt++) {
+                if (abortSignal.aborted) throw new Error("Upload was cancelled by the user.");
                 try {
                     const elapsedTime = (Date.now() - startTime) / 1000 || 1;
                     const speed = uploadedBytes / elapsedTime;
@@ -93,7 +93,7 @@
                     formData.append('chat_id', channelId);
                     formData.append('document', chunk, `${file.name}.part${String(partNumber).padStart(3, '0')}`);
                     
-                    const response = await fetch(`https://api.telegram.org/bot${botToken}/sendDocument`, { method: 'POST', body: formData });
+                    const response = await fetch(`https://api.telegram.org/bot${botToken}/sendDocument`, { method: 'POST', body: formData, signal: abortSignal });
                     const result = await response.json();
 
                     if (result.ok) {
@@ -112,6 +112,7 @@
                         }
                     }
                 } catch (error) {
+                    if (error.name === 'AbortError') throw error; // Re-throw cancellation error
                     console.error(`[HTML/uploadFile] Network/critical error on part ${partNumber} (Attempt ${attempt}):`, error);
                     if (attempt < UPLOAD_RETRIES) {
                         await sleep(3000 * attempt);
@@ -130,8 +131,9 @@
         onProgress({ percent: 100, status: `Upload complete!`, speed: '', eta: ''});
         return uploadedMessageInfo;
     }
-    
-    async function downloadFile(fileInfo, botToken, onProgress) {
+
+    // NEW: Added abortSignal parameter for cancellation
+    async function downloadFile(fileInfo, botToken, onProgress, abortSignal) {
         console.log(`[HTML/downloadFile] Starting PARALLEL download for ${fileInfo.fileName}`);
         const { messages, fileName, fileSize, fileType } = fileInfo;
         const totalParts = messages.length;
@@ -144,9 +146,10 @@
 
         async function downloadPartWithRetry(partData, index) {
             for (let attempt = 1; attempt <= DOWNLOAD_RETRIES; attempt++) {
+                if (abortSignal.aborted) throw new Error("Download was cancelled by the user.");
                 try {
                     const fileInfoUrl = `https://api.telegram.org/bot${botToken}/getFile?file_id=${partData.file_id}`;
-                    const fileInfoRes = await fetch(fileInfoUrl);
+                    const fileInfoRes = await fetch(fileInfoUrl, { signal: abortSignal });
                     const fileInfoData = await fileInfoRes.json();
                     if (!fileInfoData.ok) throw new Error(`TG getFile error: ${fileInfoData.description || "Unknown"}`);
                     const filePath = fileInfoData.result.file_path;
@@ -155,13 +158,14 @@
                     proxyUrl.searchParams.append('botToken', botToken);
                     proxyUrl.searchParams.append('filePath', filePath);
 
-                    const fileRes = await fetch(proxyUrl.toString());
+                    const fileRes = await fetch(proxyUrl.toString(), { signal: abortSignal });
                     if (!fileRes.ok) {
                         const errorText = await fileRes.text();
                         throw new Error(`Proxy error ${fileRes.status}: ${errorText}`);
                     }
                     return await fileRes.blob();
                 } catch (error) {
+                    if (error.name === 'AbortError') throw error; // Re-throw cancellation error
                     console.error(`[HTML/downloadFile] Error on part ${index + 1} (Attempt ${attempt}):`, error);
                     if (attempt >= DOWNLOAD_RETRIES) throw error;
                     await sleep(2000 * attempt);
@@ -172,6 +176,9 @@
         return new Promise((resolve, reject) => {
             const queue = [...messages.entries()]; 
             const runNext = () => {
+                if (abortSignal.aborted) {
+                    return reject(new Error("Download was cancelled by the user."));
+                }
                 if (completedParts === totalParts) {
                     onProgress({ percent: 100, status: `Assembling file...`, speed: '', eta: '' });
                     const fullBlob = new Blob(partBlobs, { type: fileType || 'application/octet-stream' });
@@ -218,6 +225,34 @@
         });
     }
 
+    // NEW: Helper function to delete file parts from Telegram
+    async function deleteTelegramMessages(botToken, channelId, messages, onProgress) {
+        // NOTE: This client-side request might be blocked by CORS in some browsers.
+        // A server-side proxy (like a Cloud Function) is the most robust solution for this.
+        let i = 0;
+        const total = messages.length;
+        console.log(`[HTML/deleteTelegramMessages] Deleting ${total} parts from Telegram.`);
+        for (const message of messages) {
+            try {
+                const response = await fetch(`https://api.telegram.org/bot${botToken}/deleteMessage`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ chat_id: channelId, message_id: message.message_id })
+                });
+                const result = await response.json();
+                if (!result.ok) {
+                    // It's possible the message is already gone, so we just warn instead of failing.
+                    console.warn(`Could not delete message ${message.message_id}: ${result.description}`);
+                }
+            } catch (error) {
+                console.error(`Network error deleting message ${message.message_id}:`, error);
+            }
+            i++;
+            if (onProgress) onProgress(`Deleting part ${i}/${total}...`);
+            await sleep(350); // Proactive delay to avoid hitting rate-limits.
+        }
+    }
+
     // ============================================================================
     // --- UI & VIEW COMPONENTS ---
     // ============================================================================
@@ -225,11 +260,17 @@
     const LockIcon = () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mr-2 h-10 w-10 text-indigo-400"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>;
     const FullScreenLoader = ({message}) => <div className="flex flex-col items-center justify-center min-h-screen bg-gray-900 text-white"><LoaderComponent /><p className="mt-4 text-lg">{message || "Loading Application..."}</p></div>;
 
-    const ProgressBar = ({ percent, status, speed, eta }) => (
+    const ProgressBar = ({ percent, status, speed, eta, onCancel }) => (
         <div className="w-full mt-4">
-            <div className="flex justify-between mb-1 text-xs text-gray-300">
+            <div className="flex justify-between items-center mb-1 text-xs text-gray-300">
                 <span>{status}</span>
-                <span>{eta || '...'}</span>
+                <div className="flex items-center">
+                    <span className="mr-4">{eta || '...'}</span>
+                    {/* NEW: Cancel Button */}
+                    {onCancel && (
+                        <button onClick={onCancel} className="text-red-400 hover:text-red-300 text-xs font-bold">CANCEL</button>
+                    )}
+                </div>
             </div>
             <div className="w-full bg-gray-600 rounded-full h-2.5">
                 <div className="bg-indigo-500 h-2.5 rounded-full transition-all duration-300 ease-linear" style={{ width: `${percent}%` }}></div>
@@ -334,7 +375,7 @@
         
         const ChevronIcon = ({ open }) => (
             <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" 
-                 className={`inline-block ml-1 transition-transform duration-300 ${open ? 'rotate-180' : ''}`}>
+                className={`inline-block ml-1 transition-transform duration-300 ${open ? 'rotate-180' : ''}`}>
                 <polyline points="6 9 12 15 18 9"></polyline>
             </svg>
         );
@@ -473,7 +514,7 @@
                             <h3 className="font-bold text-white text-base">How to get your credentials:</h3>
                             <ol className="list-decimal list-inside space-y-3">
                                 <li>
-                                    <strong>Create your Bot:</strong> Open Telegram and search for the official <a href="https://t.me/BotFather" target="_blank" rel="noopener noreferrer" className="text-indigo-400 hover:underline">@BotFather</a> bot. Start a chat and send the <code>/newbot</code> command. Follow the steps, and it will give you a **Bot Token**. Copy it and paste it into the first field above.
+                                    <strong>Create your Bot:</strong> Open Telegram and search for the official <a href="https://t.me/BotFather" target="_blank" rel="noopener noreferrer" className="text-indigo-400 hover:underline">@BotFather</a> bot. Start a chat and send the <code>/newbot</code> command. Follow the steps, and it will give you a **Bot Token**. Copy it and paste it into the first field below.
                                 </li>
                                 <li>
                                     <strong>Create a Private Channel:</strong> In Telegram, create a **New Channel**. It's very important that you set it as a **Private Channel**, not Public.
@@ -482,7 +523,7 @@
                                     <strong>Add your Bot as Admin:</strong> Go to your new channel's settings, then "Administrators". Click "Add Admin" and search for your bot's username (you created it in Step 1). Select the bot to make it an admin. The default permissions are fine.
                                 </li>
                                 <li>
-                                    <strong>Get the Channel ID:</strong> Forward any message *from* your private channel *to* another bot called <a href="https://t.me/userinfobot" target="_blank" rel="noopener noreferrer" className="text-indigo-400 hover:underline">@userinfobot</a>. It will reply with details about the channel, including its ID. It will be a negative number that starts with <code>-100...</code>. Copy the full ID (including the minus sign) and paste it into the second field above.
+                                    <strong>Get the Channel ID:</strong> Forward any message *from* your private channel *to* another bot called <a href="https://t.me/userinfobot" target="_blank" rel="noopener noreferrer" className="text-indigo-400 hover:underline">@userinfobot</a>. It will reply with details about the channel, including its ID. It will be a negative number that starts with <code>-100...</code>. Copy the full ID (including the minus sign) and paste it into the second field below.
                                 </li>
                             </ol>
                         </div>
@@ -490,11 +531,15 @@
 
                     <div className="space-y-6">
                         <div>
-                            <label htmlFor="botToken-setup" className="block text-sm font-medium text-gray-300 mb-2">1. Telegram Bot Token</label>
+                            <label htmlFor="botToken-setup" className="block text-sm font-medium text-gray-300 mb-1">1. Telegram Bot Token</label>
+                            {/* NEW: Added short instruction text */}
+                            <p className="text-xs text-gray-400 mb-2">From @BotFather.</p>
                             <input id="botToken-setup" type="password" value={botToken} onChange={(e) => setBotToken(e.target.value)} className="w-full p-3 bg-gray-700 border border-gray-600 rounded-lg text-white focus:ring-2 focus:ring-indigo-500" placeholder="e.g., 123456:ABC-DEF1234..." />
                         </div>
                         <div>
-                            <label htmlFor="channelId-setup" className="block text-sm font-medium text-gray-300 mb-2">2. Private Channel ID</label>
+                            <label htmlFor="channelId-setup" className="block text-sm font-medium text-gray-300 mb-1">2. Private Channel ID</label>
+                            {/* NEW: Added short instruction text */}
+                            <p className="text-xs text-gray-400 mb-2">Add bot as admin. Get ID (e.g., from @userinfobot, often starts -100).</p>
                             <input id="channelId-setup" type="text" value={channelId} onChange={(e) => setChannelId(e.target.value)} className="w-full p-3 bg-gray-700 border border-gray-600 rounded-lg text-white focus:ring-2 focus:ring-indigo-500" placeholder="e.g., -1001234567890" />
                         </div>
                         {error && <p className="text-red-400 text-sm text-center py-2">{error}</p>}
@@ -510,6 +555,7 @@
         );
     };
 
+    // NEW: DashboardView has been refactored into smaller components
     const DashboardView = () => {
         const [config, setConfig] = React.useState(null); 
         const [isLoadingConfig, setIsLoadingConfig] = React.useState(true); 
@@ -524,6 +570,10 @@
         
         const [isSettingsOpen, setIsSettingsOpen] = React.useState(false);
         const [isSavingSettings, setIsSavingSettings] = React.useState(false);
+        
+        // NEW: State for search and cancellation
+        const [searchTerm, setSearchTerm] = React.useState('');
+        const [abortController, setAbortController] = React.useState(null);
 
         const fileInputRef = React.useRef(null);
         const isUploading = uploadProgress.active;
@@ -535,66 +585,140 @@
         React.useEffect(() => {
             const currentAuthUser = auth.currentUser;
             if (currentAuthUser) {
+                const currentUserID = currentAuthUser.uid;
                 setIsLoadingConfig(true); setIsLoadingFiles(true);
                 setConfigError(''); setConfig(null); setFiles([]); 
+                
                 const fetchData = async () => {
-                    const currentUserID = currentAuthUser.uid;
-                    try { 
-                        const configDocRef = db.collection(`artifacts/${appIdentifier}/users/${currentUserID}/config`).doc('telegram');
-                        const configSnap = await configDocRef.get();
+                    // Fetch config and files in parallel
+                    try {
+                        const configPromise = db.collection(`artifacts/${appIdentifier}/users/${currentUserID}/config`).doc('telegram').get();
+                        const filesPromise = db.collection(`artifacts/${appIdentifier}/users/${currentUserID}/files`).orderBy("uploadedAt", "desc").get();
+                        
+                        const [configSnap, filesSnap] = await Promise.all([configPromise, filesPromise]);
+
                         if (configSnap.exists && configSnap.data().botToken) {
                             setConfig(configSnap.data());
                         } else {
-                            setConfigError("Configuration not found. Please re-setup."); setConfig(null); 
+                            setConfigError("Configuration not found. Please complete the one-time setup."); setConfig(null); 
                         }
-                    } catch (error) { setConfigError(`Error loading config: ${error.message}`); setConfig(null);
-                    } finally { setIsLoadingConfig(false); }
-                    
-                    try {
-                        const filesCollectionRef = db.collection(`artifacts/${appIdentifier}/users/${currentUserID}/files`);
-                        const filesQuery = filesCollectionRef.orderBy("uploadedAt", "desc");
-                        const filesSnap = await filesQuery.get();
+
                         const filesData = filesSnap.docs.map(d => ({ id: d.id, ...d.data() }));
                         setFiles(filesData);
-                    } catch (error) { console.error("[DashboardView] Error fetching files:", error);
-                    } finally { setIsLoadingFiles(false); }
+
+                    } catch (error) {
+                        console.error("[DashboardView] Error fetching data:", error);
+                        setConfigError(`Error loading data: ${error.message}. Please try refreshing the page.`);
+                        setConfig(null);
+                    } finally {
+                        setIsLoadingConfig(false);
+                        setIsLoadingFiles(false);
+                    }
                 };
                 fetchData();
-            } else { setIsLoadingConfig(false); setIsLoadingFiles(false); setConfig(null); setFiles([]); }
+            } else {
+                setIsLoadingConfig(false); setIsLoadingFiles(false);
+                setConfig(null); setFiles([]);
+            }
         }, []); 
 
         const clearFeedback = (delay = 5000) => setTimeout(() => setFeedbackMessage({type: '', text: ''}), delay);
 
+        // NEW: Abort/Cancellation handler
+        const handleCancelTransfer = () => {
+            if (abortController) {
+                abortController.abort();
+                setAbortController(null);
+                setUploadProgress({ active: false });
+                setDownloadProgress({ active: false });
+                setFeedbackMessage({ type: 'info', text: 'Operation cancelled.' });
+                clearFeedback();
+            }
+        };
+        
         const handleFileUpload = async (e) => {
             const file = e.target.files[0];
             if (!file) return;
             if (!config || !config.botToken || !config.channelId) {
                 setFeedbackMessage({type: 'error', text: "Bot configuration not loaded. Wait or re-setup."}); clearFeedback(); return;
             }
+
+            const controller = new AbortController();
+            setAbortController(controller);
             setUploadProgress({ active: true, percent: 0, status: 'Starting upload...', speed: '', eta: '' });
             setFeedbackMessage({type: '', text: ''});
+            
             try {
-                const messageInfo = await uploadFile(file, config.botToken, config.channelId, (p) => setUploadProgress(prev => ({ ...prev, ...p, active: true })));
-                const newFileData = {fileName: file.name, fileSize: file.size, fileType: file.type, uploadedAt: firebase.firestore.Timestamp.now(), messages: messageInfo};
-                await db.collection(`artifacts/${appIdentifier}/users/${auth.currentUser.uid}/files`).doc(file.name).set(newFileData);
+                const messageInfo = await uploadFile(file, config.botToken, config.channelId, (p) => setUploadProgress(prev => ({ ...prev, ...p, active: true })), controller.signal);
+                
+                // NEW: Using auto-generated doc ID for more robust file handling
+                const newFileRef = db.collection(`artifacts/${appIdentifier}/users/${auth.currentUser.uid}/files`).doc();
+                const newFileData = { id: newFileRef.id, fileName: file.name, fileSize: file.size, fileType: file.type, uploadedAt: firebase.firestore.Timestamp.now(), messages: messageInfo };
+                await newFileRef.set(newFileData);
+
                 setFiles(prev => [newFileData, ...prev].sort((a,b)=>(b.uploadedAt?.toMillis()||0)-(a.uploadedAt?.toMillis()||0) ));
                 setFeedbackMessage({type: 'success', text: `Uploaded '${file.name}'`});
-            } catch (err) { setFeedbackMessage({type: 'error', text: `Upload failed: ${err.message}`});
-            } finally { setUploadProgress({ active: false, percent: 0, status: '', speed: '', eta: '' }); if(fileInputRef.current) fileInputRef.current.value = ""; clearFeedback(); }
+            } catch (err) { 
+                if (err.name !== 'AbortError') {
+                    setFeedbackMessage({type: 'error', text: `Upload failed: ${err.message}`});
+                }
+            } finally { 
+                setUploadProgress({ active: false, percent: 0, status: '', speed: '', eta: '' }); 
+                if(fileInputRef.current) fileInputRef.current.value = ""; 
+                clearFeedback(); 
+                setAbortController(null);
+            }
         };
 
         const handleFileDownload = async (fileInfo) => {
             if (!config || !config.botToken) { setFeedbackMessage({type: 'error', text: "Bot configuration not loaded."}); clearFeedback(); return; }
             if (!fileInfo || !fileInfo.messages || fileInfo.messages.length === 0) { setFeedbackMessage({type: 'error', text: "File info incomplete."}); clearFeedback(); return; }
+            
+            const controller = new AbortController();
+            setAbortController(controller);
             setDownloadProgress({ active: true, percent: 0, status: 'Preparing download...', speed: '', eta: '' });
             setFeedbackMessage({type: '', text: ''});
+            
             try {
-                await downloadFile(fileInfo, config.botToken, (p) => setDownloadProgress(prev => ({ ...prev, ...p, active: true })));
+                await downloadFile(fileInfo, config.botToken, (p) => setDownloadProgress(prev => ({ ...prev, ...p, active: true })), controller.signal);
                 setFeedbackMessage({type: 'success', text: `Downloaded '${fileInfo.fileName}'`});
-            } catch (err) { setFeedbackMessage({type: 'error', text: `Download failed: ${err.message}`});
-            } finally { setDownloadProgress({ active: false, percent: 0, status: '', speed: '', eta: '' }); clearFeedback(); }
+            } catch (err) {
+                if (err.name !== 'AbortError') {
+                    setFeedbackMessage({type: 'error', text: `Download failed: ${err.message}`});
+                }
+            } finally { 
+                setDownloadProgress({ active: false, percent: 0, status: '', speed: '', eta: '' }); 
+                clearFeedback(); 
+                setAbortController(null);
+            }
         };
         
+        // NEW: File Deletion Handler
+        const handleFileDelete = async (fileToDelete) => {
+            if (isBusy) return;
+            if (!window.confirm(`Are you sure you want to delete "${fileToDelete.fileName}"? This cannot be undone.`)) return;
+
+            setFeedbackMessage({ type: 'info', text: `Deleting '${fileToDelete.fileName}'...` });
+            try {
+                // 1. Delete file parts from Telegram
+                await deleteTelegramMessages(config.botToken, config.channelId, fileToDelete.messages, (status) => {
+                    setFeedbackMessage({ type: 'info', text: status });
+                });
+
+                // 2. Delete metadata from Firestore
+                await db.collection(`artifacts/${appIdentifier}/users/${auth.currentUser.uid}/files`).doc(fileToDelete.id).delete();
+
+                // 3. Update UI state
+                setFiles(prev => prev.filter(f => f.id !== fileToDelete.id));
+                setFeedbackMessage({ type: 'success', text: `Successfully deleted '${fileToDelete.fileName}'.` });
+            } catch (err) {
+                console.error("Deletion Error:", err);
+                setFeedbackMessage({ type: 'error', text: `Failed to delete file: ${err.message}` });
+            } finally {
+                clearFeedback();
+            }
+        };
+
         const handleLogout = async () => { try { await auth.signOut(); } catch (err) { setFeedbackMessage({type: 'error', text: "Logout failed."}); clearFeedback(); }};
 
         const handleSaveSettings = async (newConfig) => {
@@ -620,8 +744,10 @@
         };
 
         if (isLoadingConfig || isLoadingFiles) return <FullScreenLoader message={isLoadingConfig ? "Loading Configuration..." : "Loading Files..."} />;
-        if (configError) return (<div className="min-h-screen bg-gray-900 text-white flex items-center justify-center p-4 font-sans"><div className="w-full max-w-3xl bg-gray-800 rounded-xl shadow-2xl p-6"><div className="flex justify-between items-center mb-4"><h1 className="text-3xl font-bold text-indigo-400">DaemonClient</h1><button onClick={handleLogout} className="bg-red-500 hover:bg-red-600 text-white py-2 px-4 rounded-lg text-sm">Logout</button></div><div className="p-4 bg-red-700 text-red-100 rounded-lg"><h2 className="text-xl font-semibold mb-2">Configuration Error</h2><p>{configError}</p><p className="mt-2">Try logging out and in, or re-setup.</p></div></div></div>);
+        if (configError) return (<div className="min-h-screen bg-gray-900 text-white flex items-center justify-center p-4 font-sans"><div className="w-full max-w-3xl bg-gray-800 rounded-xl shadow-2xl p-6"><div className="flex justify-between items-center mb-4"><h1 className="text-3xl font-bold text-indigo-400">DaemonClient</h1><button onClick={handleLogout} className="bg-red-500 hover:bg-red-600 text-white py-2 px-4 rounded-lg text-sm">Logout</button></div><div className="p-4 bg-red-700 text-red-100 rounded-lg"><h2 className="text-xl font-semibold mb-2">Configuration Error</h2><p>{configError}</p><p className="mt-2">Try logging out and back in.</p></div></div></div>);
         
+        const filteredFiles = files.filter(file => file.fileName.toLowerCase().includes(searchTerm.toLowerCase()));
+
         return (
         <div className="min-h-screen bg-gray-900 text-white flex items-center justify-center p-4 font-sans">
             <div className="w-full max-w-3xl bg-gray-800 rounded-xl shadow-2xl p-6">
@@ -635,27 +761,54 @@
                     </div>
                 </div>
 
-                <div className="bg-gray-700 p-4 rounded-lg mb-6">
+                <div className="bg-gray-700 p-4 rounded-lg mb-4">
                     <h2 className="text-xl font-semibold mb-2">Upload File</h2>
                     <input type="file" ref={fileInputRef} onChange={handleFileUpload} className="hidden" disabled={isBusy || !config} />
                     <button onClick={() => fileInputRef.current.click()} disabled={isBusy || !config} className="w-full bg-indigo-500 hover:bg-indigo-600 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-2 px-4 rounded-lg mt-2">Choose File to Upload (/upload)</button>
                 </div>
-                {isUploading && <ProgressBar percent={uploadProgress.percent} status={uploadProgress.status} speed={uploadProgress.speed} eta={uploadProgress.eta} />}
+
+                {isUploading && <ProgressBar {...uploadProgress} onCancel={handleCancelTransfer} />}
+
                 <div className="bg-gray-700 p-4 rounded-lg mt-4">
-                    <h2 className="text-xl font-semibold mb-2">Your Files</h2>
-                    <div className="mt-4 space-y-2 max-h-60 overflow-y-auto pr-2">{files.length > 0 ? files.map(file => (
-                        <div key={file.id || file.fileName} className="flex justify-between items-center bg-gray-800 p-3 rounded-lg hover:bg-gray-750 transition-colors">
-                            <div>
-                                <p className="font-semibold text-white truncate w-60" title={file.fileName}>{file.fileName}</p>
-                                <p className="text-xs text-gray-400">{(file.fileSize / 1024 / 1024).toFixed(2)} MB {file.uploadedAt?.toDate ? ` - ${file.uploadedAt.toDate().toLocaleDateString()}` : ''}</p>
-                            </div>
-                            <button onClick={() => handleFileDownload(file)} disabled={isBusy || !config} className="bg-green-600 hover:bg-green-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-1 px-3 rounded-md text-sm">Download</button>
+                    <div className="flex justify-between items-center mb-4">
+                        <h2 className="text-xl font-semibold">Your Files ({filteredFiles.length})</h2>
+                        {/* NEW: Search Bar */}
+                        <div className="w-1/2">
+                           <input 
+                              type="text" 
+                              placeholder="Search files..."
+                              value={searchTerm}
+                              onChange={(e) => setSearchTerm(e.target.value)}
+                              className="w-full p-2 bg-gray-800 border border-gray-600 rounded-lg text-white text-sm"
+                              disabled={isBusy}
+                           />
                         </div>
-                        )) : (<p className="text-center text-gray-400 py-4">No files uploaded yet.</p>)}
+                    </div>
+                    <div className="mt-2 space-y-2 max-h-60 overflow-y-auto pr-2">{
+                        !isLoadingFiles && filteredFiles.length > 0 ? filteredFiles.map(file => (
+                            <div key={file.id} className="flex justify-between items-center bg-gray-800 p-3 rounded-lg hover:bg-gray-750 transition-colors">
+                                <div>
+                                    <p className="font-semibold text-white truncate w-48 md:w-60" title={file.fileName}>{file.fileName}</p>
+                                    <p className="text-xs text-gray-400">{(file.fileSize / 1024 / 1024).toFixed(2)} MB {file.uploadedAt?.toDate ? ` - ${file.uploadedAt.toDate().toLocaleDateString()}` : ''}</p>
+                                </div>
+                                <div className="flex items-center space-x-2">
+                                    {/* NEW: Delete Button */}
+                                    <button onClick={() => handleFileDelete(file)} disabled={isBusy || !config} className="bg-red-600 hover:bg-red-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-1 px-3 rounded-md text-sm">Delete</button>
+                                    <button onClick={() => handleFileDownload(file)} disabled={isBusy || !config} className="bg-green-600 hover:bg-green-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-1 px-3 rounded-md text-sm">Download</button>
+                                </div>
+                            </div>
+                        )) : (
+                           <p className="text-center text-gray-400 py-4">{isLoadingFiles ? 'Loading...' : 'No files found.'}</p>
+                        )
+                    }
                     </div>
                 </div>
-                {isDownloading && <ProgressBar percent={downloadProgress.percent} status={downloadProgress.status} speed={downloadProgress.speed} eta={downloadProgress.eta} />}
-                {feedbackMessage.text && <div className={`mt-4 p-3 rounded-lg text-sm text-center ${feedbackMessage.type === 'error' ? 'bg-red-900 text-red-200' : 'bg-green-900 text-green-200'}`}>{feedbackMessage.text}</div>}
+
+                {isDownloading && <ProgressBar {...downloadProgress} onCancel={handleCancelTransfer} />}
+                
+                {feedbackMessage.text && <div className={`mt-4 p-3 rounded-lg text-sm text-center ${feedbackMessage.type === 'error' ? 'bg-red-900 text-red-200' : feedbackMessage.type === 'success' ? 'bg-green-900 text-green-200' : 'bg-blue-900 text-blue-200'}`}>{feedbackMessage.text}</div>}
+                
+                {/* Placeholder to prevent layout shift */}
                 {!isUploading && !isDownloading && !feedbackMessage.text && <div className="h-12 mt-4"></div> }
             </div>
             
@@ -703,8 +856,8 @@
 
         if (isLoading) return <FullScreenLoader message="Initializing App..." />;
         if (!user) return <AuthView />;
-        if (isSetupComplete) return <DashboardView />;
-        return <SetupView onSetupComplete={() => setIsSetupComplete(true)} />;
+        if (!isSetupComplete) return <SetupView onSetupComplete={() => setIsSetupComplete(true)} />;
+        return <DashboardView />;
     }
 
     const container = document.getElementById('root');

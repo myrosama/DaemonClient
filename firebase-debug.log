@@ -1,0 +1,59 @@
+[debug] [2025-07-05T14:15:00.042Z] ----------------------------------------------------------------------
+[debug] [2025-07-05T14:15:00.046Z] Command:       C:\Program Files\nodejs\node.exe C:\Users\Asus\AppData\Roaming\npm\node_modules\firebase-tools\lib\bin\firebase.js init
+[debug] [2025-07-05T14:15:00.047Z] CLI Version:   14.9.0
+[debug] [2025-07-05T14:15:00.047Z] Platform:      win32
+[debug] [2025-07-05T14:15:00.047Z] Node Version:  v22.14.0
+[debug] [2025-07-05T14:15:00.048Z] Time:          Sat Jul 05 2025 19:15:00 GMT+0500 (Uzbekistan Standard Time)
+[debug] [2025-07-05T14:15:00.048Z] ----------------------------------------------------------------------
+[debug] 
+[debug] [2025-07-05T14:15:00.283Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2025-07-05T14:15:00.283Z] > authorizing via signed-in user (sadrikov49@gmail.com)
+[info] 
+     ######## #### ########  ######## ########     ###     ######  ########
+     ##        ##  ##     ## ##       ##     ##  ##   ##  ##       ##
+     ######    ##  ########  ######   ########  #########  ######  ######
+     ##        ##  ##    ##  ##       ##     ## ##     ##       ## ##
+     ##       #### ##     ## ######## ########  ##     ##  ######  ########
+
+You're about to initialize a Firebase project in this directory:
+
+  C:\Users\Asus\Desktop\New folder\DaemonClient
+
+Before we get started, keep in mind:
+
+  * You are initializing within an existing Firebase project directory
+
+[info] 
+=== Project Setup
+[info] 
+[info] First, let's associate this project directory with a Firebase project.
+[info] You can create multiple project aliases by running firebase use --add, 
+[info] but for now we'll just set up a default project.
+[info] 
+[debug] [2025-07-05T14:15:11.483Z] Using project from CLI flag: daemonclient-c0625
+[debug] [2025-07-05T14:15:11.485Z] Checked if tokens are valid: false, expires at: 1751668015988
+[debug] [2025-07-05T14:15:11.485Z] Checked if tokens are valid: false, expires at: 1751668015988
+[debug] [2025-07-05T14:15:11.485Z] > refreshing access token with scopes: []
+[debug] [2025-07-05T14:15:11.488Z] >>> [apiv2][query] POST https://www.googleapis.com/oauth2/v3/token [none]
+[debug] [2025-07-05T14:15:11.488Z] >>> [apiv2][body] POST https://www.googleapis.com/oauth2/v3/token [omitted]
+[debug] [2025-07-05T14:15:11.853Z] <<< [apiv2][status] POST https://www.googleapis.com/oauth2/v3/token 200
+[debug] [2025-07-05T14:15:11.853Z] <<< [apiv2][body] POST https://www.googleapis.com/oauth2/v3/token [omitted]
+[debug] [2025-07-05T14:15:11.864Z] >>> [apiv2][query] GET https://firebase.googleapis.com/v1beta1/projects/daemonclient-c0625 [none]
+[debug] [2025-07-05T14:15:12.335Z] <<< [apiv2][status] GET https://firebase.googleapis.com/v1beta1/projects/daemonclient-c0625 200
+[debug] [2025-07-05T14:15:12.335Z] <<< [apiv2][body] GET https://firebase.googleapis.com/v1beta1/projects/daemonclient-c0625 {"projectId":"daemonclient-c0625","projectNumber":"424457448611","displayName":"DaemonClient","name":"projects/daemonclient-c0625","resources":{"hostingSite":"daemonclient-c0625","realtimeDatabaseInstance":"daemonclient-c0625-default-rtdb"},"state":"ACTIVE","etag":"1_92e1702f-ec0c-4a88-9b2b-54e61c8b2618"}
+[info] i  Using project daemonclient-c0625 (DaemonClient) 
+[info] 
+=== Hosting Setup
+[debug] [2025-07-05T14:15:12.341Z] Checked if tokens are valid: true, expires at: 1751728510853
+[debug] [2025-07-05T14:15:12.341Z] Checked if tokens are valid: true, expires at: 1751728510853
+[debug] [2025-07-05T14:15:12.342Z] >>> [apiv2][query] GET https://firebase.googleapis.com/v1beta1/projects/daemonclient-c0625 [none]
+[debug] [2025-07-05T14:15:12.726Z] <<< [apiv2][status] GET https://firebase.googleapis.com/v1beta1/projects/daemonclient-c0625 200
+[debug] [2025-07-05T14:15:12.726Z] <<< [apiv2][body] GET https://firebase.googleapis.com/v1beta1/projects/daemonclient-c0625 {"projectId":"daemonclient-c0625","projectNumber":"424457448611","displayName":"DaemonClient","name":"projects/daemonclient-c0625","resources":{"hostingSite":"daemonclient-c0625","realtimeDatabaseInstance":"daemonclient-c0625-default-rtdb"},"state":"ACTIVE","etag":"1_92e1702f-ec0c-4a88-9b2b-54e61c8b2618"}
+[info] 
+[info] Your public directory is the folder (relative to your project directory) that
+[info] will contain Hosting assets to be uploaded with firebase deploy. If you
+[info] have a build process for your assets, use your build's output directory.
+[info] 
+[debug] [2025-07-05T14:15:24.773Z] >>> [apiv2][query] GET https://www.gstatic.com/firebasejs/releases.json [none]
+[debug] [2025-07-05T14:15:25.311Z] <<< [apiv2][status] GET https://www.gstatic.com/firebasejs/releases.json 200
+[debug] [2025-07-05T14:15:25.312Z] <<< [apiv2][body] GET https://www.gstatic.com/firebasejs/releases.json {"current":{"version":"11.10.0","browserURL":"https://www.gstatic.com/firebasejs/11.10.0/firebase.js","packageURL":"https://www.gstatic.com/firebasejs/11.10.0/firebase.tgz"},"live":{"version":"11.10","browserURL":"https://www.gstatic.com/firebasejs/live/11.10/firebase.js","packageURL":"https://www.gstatic.com/firebasejs/live/11.10/firebase.tgz"},"components":{"ai":"https://www.gstatic.com/firebasejs/11.10.0/firebase-ai.js","analytics":"https://www.gstatic.com/firebasejs/11.10.0/firebase-analytics.js","app":"https://www.gstatic.com/firebasejs/11.10.0/firebase-app.js","app-check":"https://www.gstatic.com/firebasejs/11.10.0/firebase-app-check.js","auth":"https://www.gstatic.com/firebasejs/11.10.0/firebase-auth.js","auth/cordova":"https://www.gstatic.com/firebasejs/11.10.0/firebase-auth/cordova.js","auth/web-extension":"https://www.gstatic.com/firebasejs/11.10.0/firebase-auth/web-extension.js","functions":"https://www.gstatic.com/firebasejs/11.10.0/firebase-functions.js","firestore":"https://www.gstatic.com/firebasejs/11.10.0/firebase-firestore.js","firestore/lite":"https://www.gstatic.com/firebasejs/11.10.0/firebase-firestore/lite.js","installations":"https://www.gstatic.com/firebasejs/11.10.0/firebase-installations.js","storage":"https://www.gstatic.com/firebasejs/11.10.0/firebase-storage.js","performance":"https://www.gstatic.com/firebasejs/11.10.0/firebase-performance.js","remote-config":"https://www.gstatic.com/firebasejs/11.10.0/firebase-remote-config.js","messaging":"https://www.gstatic.com/firebasejs/11.10.0/firebase-messaging.js","messaging/sw":"https://www.gstatic.com/firebasejs/11.10.0/firebase-messaging/sw.js","database":"https://www.gstatic.com/firebasejs/11.10.0/firebase-database.js","vertexai":"https://www.gstatic.com/firebasejs/11.10.0/firebase-vertexai.js","data-connect":"https://www.gstatic.com/firebasejs/11.10.0/firebase-data-connect.js","firestore.memory":"https://www.gstatic.com/firebasejs/11.10.0/firebase-firestore.memory.js"}}
