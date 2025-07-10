@@ -5,6 +5,7 @@ import re
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import firebase_admin
+import json
 from firebase_admin import credentials, firestore
 from dotenv import load_dotenv
 
@@ -25,16 +26,27 @@ app = Flask(__name__)
 CORS(app)
 
 # --- Initialize Firebase Admin SDK ---
+# --- Initialize Firebase Admin SDK ---
 try:
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    key_path = os.path.join(base_dir, "serviceAccountKey.json")
-    
-    cred = credentials.Certificate(key_path)
+    # 1. Get the JSON string from the environment variable
+    firebase_creds_json_str = os.environ.get('FIREBASE_CREDENTIALS_JSON')
+    if not firebase_creds_json_str:
+        raise ValueError("The FIREBASE_CREDENTIALS_JSON environment variable is not set.")
+
+    # 2. Parse the JSON string into a Python dictionary
+    service_account_info = json.loads(firebase_creds_json_str)
+
+    # 3. Initialize Firebase with the credentials dictionary
+    cred = credentials.Certificate(service_account_info)
     firebase_admin.initialize_app(cred)
     db = firestore.client()
-    print("✅ Firebase initialized successfully.")
+    print("✅ Firebase initialized successfully from environment variable.")
+except ValueError as e:
+    print(f"FATAL: Could not initialize Firebase. {e}")
+except json.JSONDecodeError:
+    print("FATAL: Could not initialize Firebase. The content of FIREBASE_CREDENTIALS_JSON is not valid JSON.")
 except Exception as e:
-    print(f"FATAL: Could not initialize Firebase. Make sure 'serviceAccountKey.json' is present. Error: {e}")
+    print(f"FATAL: Could not initialize Firebase. An unexpected error occurred: {e}")
 
 
 # --- Core Telethon Logic ---
