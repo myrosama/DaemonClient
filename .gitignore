@@ -1,2 +1,66 @@
- 
-node_modules
+# =========================================
+# SENSITIVE & SECRET FILES
+# =========================================
+# Ignore environment variables files
+.env
+.env.*
+!.env.example
+
+# Ignore Firebase and Google Cloud credentials
+serviceAccountKey.json
+
+# Ignore Telethon session files, which contain login credentials
+*.session
+*.session-journal
+
+
+# =========================================
+# PYTHON
+# =========================================
+# Ignore virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# Ignore Python cache files and compiled files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Ignore package distribution folders
+build/
+dist/
+*.egg-info/
+
+
+# =========================================
+# NODE.JS / FIREBASE FUNCTIONS
+# =========================================
+# Ignore dependency folders
+node_modules/
+
+# Ignore log files
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+
+# Ignore build output
+lib/
+lib-es6/
+
+
+# =========================================
+# OPERATING SYSTEM & EDITOR FILES
+# =========================================
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
+
+# VSCode
+.vscode/
+
