@@ -1,0 +1,5 @@
+Flask
+Telethon
+firebase-admin
+Flask-Cors
+python-dotenv
