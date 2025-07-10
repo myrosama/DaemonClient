@@ -10,6 +10,14 @@
 <a href="https://daemonclient-c0625.web.app"><strong>➡️ Launch Web App</strong></a>
 </p>
 
+<p align="center">
+<img src="https://img.shields.io/badge/status-active-success.svg" alt="Status">
+<img src="https://img.shields.io/badge/version-1.0.0-blue.svg" alt="Version">
+<img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License">
+</p>
+
+DaemonClient is a secure, private, and virtually unlimited cloud storage solution that ingeniously leverages the Telegram API as a file storage backend. It provides a user-friendly interface to upload, download, and manage your files in a space that only you can access.
+
 ✨ Features
 🔐 Zero-Knowledge Storage: Your files are uploaded directly to a private Telegram channel that only you control.
 
@@ -36,12 +44,19 @@
 </h3>
 
 🚀 Get Started
-Official Web App (Recommended)
 The easiest way to use DaemonClient is through the official, hosted web application. No installation is required.
 
-➡️ Launch DaemonClient
+<p align="center">
+<a href="https://daemonclient-c0625.web.app" style="display: inline-block; padding: 12px 24px; background-color: #4f46e5; color: white; text-decoration: none; font-weight: bold; border-radius: 8px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
+Launch DaemonClient Web App
+</a>
+</p>
 
-Self-Hosting
+<br>
+
+<details>
+<summary><strong>For Developers: Self-Hosting Guide</strong></summary>
+<br>
 For advanced users who wish to run their own instance of the entire stack.
 
 Clone the Repository:
@@ -54,20 +69,26 @@ Download Proxy: Deploy the TypeScript function in the /firebase-functions direct
 
 Backend Server: The Python Flask server in /backend-server requires an "always-on" hosting provider (e.g., a paid plan on Render or PythonAnywhere) to function correctly. You must also provide your own Telegram userbot credentials in a .env file.
 
+</details>
+
+🛠️ Technology Stack
+Frontend: React, Tailwind CSS
+
+Backend (Setup Service): Python, Flask, Telethon
+
+Backend (Download Proxy): TypeScript, Firebase Cloud Functions
+
+Database & Auth: Google Firebase (Firestore, Authentication, Hosting)
+
+Core Infrastructure: Telegram API
+
 ❤️ Support the Project
 Enjoying DaemonClient? A small donation helps keep the public services running and supports future development.
 
 Available donation methods here. (link to your donation page)
 
 🙏 Credits & Acknowledgements
-Technology
-React & Tailwind CSS for the frontend.
-
-Python, Flask, and Telethon for the backend setup service.
-
-Firebase for hosting, authentication, database, and serverless functions.
-
 Inspiration
 The concept of using Telegram as a private, unlimited cloud storage backend.
 
-A project by @montclier49
+A project by @myrosama.
