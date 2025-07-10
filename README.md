@@ -35,9 +35,9 @@ DaemonClient is a secure, private, and virtually unlimited cloud storage solutio
 <details>
 <summary>Screenshots</summary>
 <p align="center">
-<img src='https://placehold.co/800x500/1f2937/ffffff?text=Dashboard+View' width='70%'>
+<img src='https://github.com/myrosama/DaemonClient/blob/main/screenshots/DashboardView.png' width='70%'>
 <br><em>The main file dashboard.</em><br><br>
-<img src='https://placehold.co/800x500/1f2937/ffffff?text=Setup+Screen' width='70%'>
+<img src='https://github.com/myrosama/DaemonClient/blob/main/screenshots/SignUp.png' width='70%'>
 <br><em>The simple one-time setup process.</em>
 </p>
 </details>
@@ -92,3 +92,4 @@ Inspiration
 The concept of using Telegram as a private, unlimited cloud storage backend.
 
 A project by @myrosama.
+Based on https://github.com/myrosama/telegram-cloud-backup
