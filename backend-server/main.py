@@ -1,11 +1,9 @@
 import os
 import asyncio
 import traceback
-import re
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import firebase_admin
-import json
 from firebase_admin import credentials, firestore
 from dotenv import load_dotenv
 
@@ -15,9 +13,6 @@ from telethon.sessions import StringSession
 from telethon.tl.functions.channels import CreateChannelRequest, EditAdminRequest
 from telethon.tl.types import ChatAdminRights
 
-# Import the keep_alive function
-from keep_alive import keep_alive
-
 # --- Load Environment Variables ---
 load_dotenv() 
 
@@ -26,32 +21,26 @@ app = Flask(__name__)
 CORS(app)
 
 # --- Initialize Firebase Admin SDK ---
-# --- Initialize Firebase Admin SDK ---
 try:
-    # 1. Get the JSON string from the environment variable
-    firebase_creds_json_str = os.environ.get('FIREBASE_CREDENTIALS_JSON')
-    if not firebase_creds_json_str:
-        raise ValueError("The FIREBASE_CREDENTIALS_JSON environment variable is not set.")
-
-    # 2. Parse the JSON string into a Python dictionary
-    service_account_info = json.loads(firebase_creds_json_str)
-
-    # 3. Initialize Firebase with the credentials dictionary
-    cred = credentials.Certificate(service_account_info)
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    key_path = os.path.join(base_dir, "serviceAccountKey.json")
+    
+    cred = credentials.Certificate(key_path)
     firebase_admin.initialize_app(cred)
     db = firestore.client()
-    print("✅ Firebase initialized successfully from environment variable.")
-except ValueError as e:
-    print(f"FATAL: Could not initialize Firebase. {e}")
-except json.JSONDecodeError:
-    print("FATAL: Could not initialize Firebase. The content of FIREBASE_CREDENTIALS_JSON is not valid JSON.")
+    print("✅ Firebase initialized successfully.")
 except Exception as e:
-    print(f"FATAL: Could not initialize Firebase. An unexpected error occurred: {e}")
+    print(f"FATAL: Could not initialize Firebase. Make sure 'serviceAccountKey.json' is present. Error: {e}")
 
 
-# --- Core Telethon Logic ---
+# --- Your Core Telethon Logic ---
+# ... (all the code at the top of the file remains the same) ...
+# Make sure to add this import at the top of your main.py file
+import re
+
+# --- Your Core Telethon Logic ---
 async def _create_resources_with_userbot(api_id, api_hash, session_string, user_id, user_email):
-    """Logic to create a bot and channel."""
+    """This is your original logic to create a bot and channel."""
     print(f"[{user_id}] Starting Telethon client...")
     
     async with TelegramClient(StringSession(session_string), api_id, api_hash) as client:
@@ -108,10 +97,14 @@ async def _create_resources_with_userbot(api_id, api_hash, session_string, user_
     
     return bot_token, channel_id
 
+# ... (the rest of your main.py file remains exactly the same) ...
+
+
+
 # --- API Endpoint ---
 @app.route('/startSetup', methods=['POST'])
 def start_setup_endpoint():
-    """This is the API endpoint website will call."""
+    """This is the API endpoint your website will call."""
     try:
         API_ID = int(os.environ['TELEGRAM_API_ID'])
         API_HASH = os.environ['TELEGRAM_API_HASH']
@@ -153,9 +146,5 @@ def start_setup_endpoint():
         return jsonify({"error": {"message": f"An internal error occurred: {e}"}}), 500
     
 if __name__ == "__main__":
-    # Start the keep-alive server in a separate thread
-    keep_alive()
-    # Start the main application server
-    print("Starting main application server...")
-    # For Render, Gunicorn will run this app. The port is for local testing.
-    app.run(host='0.0.0.0', port=8000, debug=True)
+    print("Starting local development server...")
+    app.run(host='0.0.0.0', port=8080, debug=True)
