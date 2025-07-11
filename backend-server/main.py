@@ -2,6 +2,7 @@ import os
 import asyncio
 import traceback
 import re
+import json
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import firebase_admin
@@ -23,16 +24,23 @@ CORS(app)
 
 # --- Initialize Firebase Admin SDK ---
 try:
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    key_path = os.path.join(base_dir, "serviceAccountKey.json")
+    # Get the JSON credentials from the environment variable
+    firebase_creds_json = os.getenv("FIREBASE_CREDENTIALS_JSON")
+    if not firebase_creds_json:
+        raise ValueError("FIREBASE_CREDENTIALS_JSON environment variable not set.")
 
-    cred = credentials.Certificate(key_path)
+    # Parse the JSON string into a dictionary
+    firebase_creds_dict = json.loads(firebase_creds_json)
+
+    # Initialize Firebase with the credentials dictionary
+    cred = credentials.Certificate(firebase_creds_dict)
     firebase_admin.initialize_app(cred)
     db = firestore.client()
-    print("✅ Firebase initialized successfully.")
+    print("✅ Firebase initialized successfully from environment variable.")
+
 except Exception as e:
     print(
-        f"FATAL: Could not initialize Firebase. Make sure 'serviceAccountKey.json' is present. Error: {e}"
+        f"FATAL: Could not initialize Firebase. Check FIREBASE_CREDENTIALS_JSON. Error: {e}"
     )
 
 # ---Core Telethon Logic ---
