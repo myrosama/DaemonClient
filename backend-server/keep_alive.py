@@ -1,23 +1,22 @@
 from flask import Flask
 from threading import Thread
 
-# Create a simple Flask app for the keep-alive server
-app = Flask('')
+# --- Initialize Flask App for Keep-Alive ---
+app = Flask(__name__)
+
 
 @app.route('/')
 def home():
-    # This is the endpoint that UptimeRobot will ping
-    return "I'm alive"
+    """This route is used by the UptimeRobot or other pinging service."""
+    return "Server is running."
+
 
 def run():
-    # Run the keep-alive server on a different port (e.g., 8080)
-    # Make sure this port does not conflict with your main app's port
+    """Starts the keep-alive server on host 0.0.0.0 and port 8080."""
     app.run(host='0.0.0.0', port=8080)
 
+
 def keep_alive():
-    """
-    Creates and starts a new thread to run the keep-alive server.
-    """
+    """Creates and starts a new thread to run the Flask server."""
     t = Thread(target=run)
     t.start()
-    
