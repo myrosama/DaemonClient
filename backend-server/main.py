@@ -14,13 +14,16 @@ from telethon.sync import TelegramClient
 from telethon.sessions import StringSession
 from telethon.tl.functions.channels import CreateChannelRequest, EditAdminRequest
 from telethon.tl.types import ChatAdminRights
+# Import specific Telethon errors to handle them gracefully
+from telethon.errors.rpcerrorlist import UserDeactivatedBanError, FloodWaitError
 
 # --- Load Environment Variables ---
 load_dotenv()
 
 # --- Initialize Flask App ---
 app = Flask(__name__)
-CORS(app)
+# Allow requests specifically from your frontend's origin
+CORS(app, resources={r"/*": {"origins": "*"}})
 
 # --- Initialize Firebase Admin SDK ---
 try:
@@ -43,9 +46,31 @@ except Exception as e:
         f"FATAL: Could not initialize Firebase. Check FIREBASE_CREDENTIALS_JSON. Error: {e}"
     )
 
-# ---Core Telethon Logic ---
+# --- Bot Pool Management ---
+def get_available_bots():
+    """
+    Fetches all active userbots from the Firestore 'userbots' collection,
+    ordered by the last time they were used to distribute the load.
+    """
+    print("Fetching available userbots from Firestore...")
+    try:
+        bots_ref = db.collection('userbots').where('is_active', '==', True).order_by('last_used', direction=firestore.Query.ASCENDING).stream()
+        bots_list = []
+        for bot in bots_ref:
+            bot_data = bot.to_dict()
+            bot_data['doc_id'] = bot.id  # Keep track of the document ID for updates
+            bots_list.append(bot_data)
+        
+        print(f"Found {len(bots_list)} active bots.")
+        return bots_list
+    except Exception as e:
+        print(f"Error fetching bots from Firestore: {e}")
+        return []
+
+# ---Core Telethon Logic (remains unchanged) ---
 async def _create_resources_with_userbot(api_id, api_hash, session_string,
                                          user_id, user_email):
+    # This function is the same as before
     print(f"[{user_id}] Starting Telethon client...")
 
     async with TelegramClient(StringSession(session_string), api_id,
@@ -113,66 +138,98 @@ async def _create_resources_with_userbot(api_id, api_hash, session_string,
     return bot_token, channel_id
 
 
-
-
 @app.route('/')
 def index():
     """A simple route to let the keep-alive service know the app is running."""
     return "DaemonClient is alive!"
 
 
-# --- API Endpoint ---
+# --- API Endpoint (UPDATED)---
 @app.route('/startSetup', methods=['POST'])
 def start_setup_endpoint():
-    """This is the API endpoint website will call."""
-    try:
-        API_ID = int(os.environ['TELEGRAM_API_ID'])
-        API_HASH = os.environ['TELEGRAM_API_HASH']
-        SESSION_STRING = os.environ['TELEGRAM_SESSION']
+    """
+    This API endpoint now uses a pool of bots from Firestore to perform its task.
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "Invalid request. Expecting JSON body."}), 400
 
-        data = request.get_json()
-        if not data:
-            return jsonify({"error":
-                            "Invalid request. Expecting JSON body."}), 400
+    user_id = data.get('data', {}).get('uid')
+    user_email = data.get('data', {}).get('email')
 
-        user_id = data.get('data', {}).get('uid')
-        user_email = data.get('data', {}).get('email')
+    if not user_id or not user_email:
+        return jsonify({"error": "Missing uid or email in request body."}), 400
 
-        if not user_id or not user_email:
-            return jsonify({"error":
-                            "Missing uid or email in request body."}), 400
+    print(f"Received setup request for user: {user_id}")
 
-        print(f"Received setup request for user: {user_id}")
+    # 1. Fetch the pool of available bots from Firestore
+    available_bots = get_available_bots()
+    if not available_bots:
+        print("FATAL: No active userbots found in Firestore.")
+        return jsonify({"error": {"message": "No available worker bots to process the request."}}), 500
 
-        bot_token, channel_id = asyncio.run(
-            _create_resources_with_userbot(API_ID, API_HASH, SESSION_STRING,
-                                           user_id, user_email))
+    # 2. Loop through the bots until one succeeds
+    setup_successful = False
+    for bot_creds in available_bots:
+        bot_doc_id = bot_creds['doc_id']
+        api_id = bot_creds['api_id']
+        try:
+            print(f"Attempting setup with bot: {bot_doc_id} (API ID: {api_id})")
 
-        user_config_ref = db.collection(
-            f"artifacts/default-daemon-client/users/{user_id}/config"
-        ).document("telegram")
-        user_config_ref.set({
-            "botToken": bot_token,
-            "channelId": channel_id,
-            "setupTimestamp": firestore.SERVER_TIMESTAMP,
-            "createdBy": "local-telethon-v1",
-        })
+            # Execute the main logic with the current bot's credentials
+            bot_token, channel_id = asyncio.run(
+                _create_resources_with_userbot(api_id, bot_creds['api_hash'], bot_creds['session_string'],
+                                               user_id, user_email))
 
-        print(f"Successfully configured user: {user_id}")
+            # --- On Success ---
+            # Save the created resources to the user's config
+            user_config_ref = db.collection(f"artifacts/default-daemon-client/users/{user_id}/config").document("telegram")
+            user_config_ref.set({
+                "botToken": bot_token,
+                "channelId": channel_id,
+                "setupTimestamp": firestore.SERVER_TIMESTAMP,
+                "createdBy": f"telethon-pool-bot-{api_id}",
+            })
+            
+            # Update the bot's 'last_used' timestamp so it goes to the back of the queue
+            db.collection('userbots').document(bot_doc_id).update({
+                'last_used': firestore.SERVER_TIMESTAMP,
+                'status': 'healthy'
+            })
+
+            print(f"✅ Successfully configured user: {user_id} using bot {api_id}")
+            setup_successful = True
+            break  # Exit the loop on success
+
+        except UserDeactivatedBanError as e:
+            # --- On Bot Suspension ---
+            print(f"⛔️ Bot {bot_doc_id} is BANNED. Deactivating it. Error: {e}")
+            db.collection('userbots').document(bot_doc_id).update({
+                'is_active': False,
+                'status': 'suspended_banned',
+                'error_count': firestore.Increment(1)
+            })
+            continue # Move to the next bot
+
+        except Exception as e:
+            # --- On Other Errors ---
+            print(f"⚠️ Bot {bot_doc_id} failed. Trying next bot. Error: {e}")
+            db.collection('userbots').document(bot_doc_id).update({
+                'status': f'error: {str(e)[:200]}', # Store a snippet of the error
+                'error_count': firestore.Increment(1)
+            })
+            print(traceback.format_exc())
+            continue # Move to the next bot
+    
+    # 3. Final response after the loop
+    if setup_successful:
         return jsonify({"data": {"status": "success"}})
-
-    except KeyError as e:
-        error_msg = f"Missing variable in .env file: {e}. Please check your .env file."
-        print(f"ERROR: {error_msg}")
-        return jsonify({"error": {"message": error_msg}}), 500
-    except Exception as e:
-        print(traceback.format_exc())
-        return jsonify(
-            {"error": {
-                "message": f"An internal error occurred: {e}"
-            }}), 500
+    else:
+        # This part is reached only if all bots in the pool failed
+        print(f"CRITICAL: All {len(available_bots)} userbots failed for user {user_id}.")
+        return jsonify({"error": {"message": "All available worker bots failed. Please check bot health in Firestore."}}), 500
 
 
 if __name__ == "__main__":
     print("Starting local development server...")
-    app.run(host='0.0.0.0', port=8080, debug=True)
+    app.run(host='0.0.0.0', port=8080, debug=False) # Note: debug=False is recommended for production/stable setups
