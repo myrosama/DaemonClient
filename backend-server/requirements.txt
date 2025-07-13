@@ -3,3 +3,4 @@ Telethon
 firebase-admin
 Flask-Cors
 python-dotenv
+python-telegram-bot

@@ -64,3 +64,5 @@ Thumbs.db
 # VSCode
 .vscode/
 
+# Ignore the environment file for Cloud Functions
+functions/.env
