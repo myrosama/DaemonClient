@@ -1,6 +1,6 @@
 Flask
-Telethon
-firebase-admin
 Flask-Cors
+firebase-admin
+telethon
+google-cloud-firestore
 python-dotenv
-python-telegram-bot
