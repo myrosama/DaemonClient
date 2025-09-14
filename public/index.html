@@ -25,15 +25,15 @@
     <script type="text/babel">
     // --- Firebase Initialization ---
     const firebaseConfig = {
-        apiKey: "AIzaSyBH5diC5M7MnOIuOWaNPmOB1AV6uJVZyS8",
-        authDomain: "daemonclient-c0625.firebaseapp.com",
-        databaseURL: "https://daemonclient-c0625-default-rtdb.firebaseio.com",
-        projectId: "daemonclient-c0625",
-        storageBucket: "daemonclient-c0625.firebasestorage.app",
-        messagingSenderId: "424457448611",
-        appId: "1:424457448611:web:bea9f7673fb40f137de316",
-        measurementId: "G-72V5NJ7F2C"
-    };
+  apiKey: "AIzaSyBH5diC5M7MnOIuOWaNPmOB1AV6uJVZyS8",
+  authDomain: "daemonclient-c0625.firebaseapp.com",
+  databaseURL: "https://daemonclient-c0625-default-rtdb.firebaseio.com",
+  projectId: "daemonclient-c0625",
+  storageBucket: "daemonclient-c0625.firebasestorage.app",
+  messagingSenderId: "424457448611",
+  appId: "1:424457448611:web:bea9f7673fb40f137de316",
+  measurementId: "G-72V5NJ7F2C"
+};
 
     firebase.initializeApp(firebaseConfig);
     const auth = firebase.auth();
@@ -114,7 +114,7 @@
                     const fileInfoData = await fileInfoRes.json();
                     if (!fileInfoData.ok) throw new Error(`TG getFile error: ${fileInfoData.description || "Unknown"}`);
                     const filePath = fileInfoData.result.file_path;
-                    const proxyUrl = new URL('http://192.168.0.105:4000/telegramDownloadProxy');
+                    const proxyUrl = new URL('https://us-central1-daemonclient-c0625.cloudfunctions.net/telegramDownloadProxy');
                     proxyUrl.searchParams.append('botToken', botToken);
                     proxyUrl.searchParams.append('filePath', filePath);
                     const fileRes = await fetch(proxyUrl.toString(), { signal: abortSignal });
