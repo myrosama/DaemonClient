@@ -6,8 +6,9 @@
 .env.*
 !.env.example
 
-# Ignore Firebase and Google Cloud credentials
-serviceAccountKey.json
+# Ignore Google Cloud service account keys
+functions/serviceAccountsKey.json
+
 
 # Ignore Telethon session files, which contain login credentials
 *.session
