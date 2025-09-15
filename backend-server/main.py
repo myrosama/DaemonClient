@@ -8,13 +8,13 @@ from flask_cors import CORS
 import firebase_admin
 from firebase_admin import credentials, firestore
 from dotenv import load_dotenv
+from google.cloud.firestore_v1.base_query import FieldFilter # <-- IMPORT ADDED HERE
 
 # Import Telethon libraries
 from telethon.sync import TelegramClient
 from telethon.sessions import StringSession
 from telethon.tl.functions.channels import CreateChannelRequest, EditAdminRequest
 from telethon.tl.types import ChatAdminRights
-# Import specific Telethon errors to handle them gracefully
 from telethon.errors.rpcerrorlist import UserDeactivatedBanError, FloodWaitError
 
 # --- Load Environment Variables ---
@@ -22,29 +22,18 @@ load_dotenv()
 
 # --- Initialize Flask App ---
 app = Flask(__name__)
-# Allow requests specifically from your frontend's origin
 CORS(app, resources={r"/*": {"origins": "*"}})
 
 # --- Initialize Firebase Admin SDK ---
 try:
-    # Get the JSON credentials from the environment variable
     firebase_creds_json = os.getenv("FIREBASE_CREDENTIALS_JSON")
-    if not firebase_creds_json:
-        raise ValueError("FIREBASE_CREDENTIALS_JSON environment variable not set.")
-
-    # Parse the JSON string into a dictionary
-    firebase_creds_dict = json.loads(firebase_creds_json)
-
-    # Initialize Firebase with the credentials dictionary
-    cred = credentials.Certificate(firebase_creds_dict)
+    if not firebase_creds_json: raise ValueError("FIREBASE_CREDENTIALS_JSON environment variable not set.")
+    cred = credentials.Certificate(json.loads(firebase_creds_json))
     firebase_admin.initialize_app(cred)
     db = firestore.client()
     print("✅ Firebase initialized successfully from environment variable.")
-
 except Exception as e:
-    print(
-        f"FATAL: Could not initialize Firebase. Check FIREBASE_CREDENTIALS_JSON. Error: {e}"
-    )
+    print(f"FATAL: Could not initialize Firebase. Check FIREBASE_CREDENTIALS_JSON. Error: {e}")
 
 # --- Bot Pool Management ---
 def get_available_bots():
@@ -54,11 +43,13 @@ def get_available_bots():
     """
     print("Fetching available userbots from Firestore...")
     try:
-        bots_ref = db.collection('userbots').where('is_active', '==', True).order_by('last_used', direction=firestore.Query.ASCENDING).stream()
+        # --- THIS IS THE FIX ---
+        bots_ref = db.collection('userbots').where(filter=FieldFilter('is_active', '==', True)).order_by('last_used', direction=firestore.Query.ASCENDING).stream()
+        
         bots_list = []
         for bot in bots_ref:
             bot_data = bot.to_dict()
-            bot_data['doc_id'] = bot.id  # Keep track of the document ID for updates
+            bot_data['doc_id'] = bot.id
             bots_list.append(bot_data)
         
         print(f"Found {len(bots_list)} active bots.")
