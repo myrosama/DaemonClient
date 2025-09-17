@@ -10,6 +10,7 @@ from firebase_admin import credentials, firestore
 from dotenv import load_dotenv
 from google.cloud.firestore_v1.base_query import FieldFilter
 import hashlib
+from telethon.tl.types import InputPeerUser
 
 # Import Telethon libraries
 from telethon import TelegramClient
@@ -95,38 +96,72 @@ async def _create_resources_with_userbot(client, user_id, user_email):
     await client.send_message(bot_username, '/start'); print(f"[{user_id}] Worker has started a chat with @{bot_username}.")
     return bot_token, bot_username, channel_id, invite_link
 
-async def _transfer_ownership(worker_client, bot_username, channel_id, target_user_id):
-    results = {"bot_transfer_status": "pending", "bot_transfer_message": "", "channel_transfer_status": "pending", "channel_transfer_message": ""}
-    try:
-        me = await worker_client.get_me()
-        history = await worker_client(GetHistoryRequest(peer=bot_username, limit=20, offset_date=None, offset_id=0, max_id=0, min_id=0, add_offset=0, hash=0))
-        start_message = next((msg for msg in history.messages if msg.from_id and msg.from_id.user_id == target_user_id), None)
-        if not start_message: raise Exception("User's /start message not found. Please ensure you have started the bot.")
-        async with worker_client.conversation('BotFather', timeout=120) as conv:
-            await conv.send_message('/mybots'); resp = await conv.get_response(); await resp.click(text=f"@{bot_username}")
-            resp = await conv.get_response(); await resp.click(text="Transfer Ownership"); resp = await conv.get_response()
-            if "Choose new owner" not in resp.text: raise Exception("BotFather did not ask for owner.")
-            await worker_client.forward_messages(entity='BotFather', messages=start_message.id, from_peer=bot_username)
-            resp = await conv.get_response();
-            if not resp.buttons: raise Exception("BotFather did not provide confirmation button.")
-            await resp.click(0); resp = await conv.get_response()
-            if "Success" not in resp.text: raise Exception(f"BotFather did not confirm transfer.")
-        results["bot_transfer_status"] = "success"; results["bot_transfer_message"] = "Bot ownership successfully transferred."
-        print(f"✅ Bot ownership transferred to {target_user_id}")
-    except Exception as e:
-        print(f"❌ Bot transfer FAILED. Error: {e}"); results["bot_transfer_status"] = "failed"; results["bot_transfer_message"] = f"Bot transfer failed: {e}"
+# In main.py, replace this entire function
 
+async def _transfer_ownership(worker_client, bot_username, channel_id, target_user_id, target_user_hash):
+    results = {"bot_transfer_status": "pending", "bot_transfer_message": "", "channel_transfer_status": "pending", "channel_transfer_message": ""}
+    
+    # --- BOT TRANSFER (YOUR "SHARE CONTACT" ALGORITHM) ---
     try:
-        password_info = await worker_client(GetPasswordRequest())
-        srp_check = await get_srp_password_check(password=TELETHON_2FA_PASSWORD, srp=password_info)
-        print(f"Transferring channel {channel_id} to {target_user_id}...")
-        await worker_client(EditCreatorRequest(channel=int(channel_id), user_id=target_user_id, password=srp_check))
-        results["channel_transfer_status"] = "success"; results["channel_transfer_message"] = "Channel ownership successfully transferred."
-        print(f"✅ Channel ownership transferred to {target_user_id}")
-    except UserNotParticipantError:
-        print(f"⚠️ Channel transfer FAILED due to privacy settings."); results["channel_transfer_status"] = "failed"; results["channel_transfer_message"] = "Channel transfer failed due to your privacy settings. You can retry later."
+        print(f"Starting bot transfer for @{bot_username} via contact sharing...")
+        
+        # This creates a "vCard" for the user that we can send to BotFather.
+        target_user_contact = InputPeerUser(user_id=target_user_id, access_hash=target_user_hash)
+        
+        async with worker_client.conversation('BotFather', timeout=120) as conv:
+            await conv.send_message('/mybots')
+            resp = await conv.get_response()
+            await resp.click(text=f"@{bot_username}")
+            
+            resp = await conv.get_response()
+            await resp.click(text="Transfer Ownership")
+            
+            resp = await conv.get_response()
+            if "Choose new owner" not in resp.text: raise Exception("BotFather did not ask for owner.")
+            
+            # This is your brilliant idea in action. We send the user's contact directly.
+            await conv.send_file(target_user_contact)
+            
+            resp = await conv.get_response()
+            if not resp.buttons: raise Exception("BotFather did not provide confirmation button.")
+            await resp.click(0)
+            
+            resp = await conv.get_response()
+            if "Success" not in resp.text: raise Exception("BotFather did not confirm transfer.")
+
+        results["bot_transfer_status"] = "success"
+        results["bot_transfer_message"] = "Bot ownership successfully transferred."
+        print(f"✅ Bot ownership transferred to {target_user_id}")
+
     except Exception as e:
-        print(f"❌ Channel transfer FAILED. Error: {e}"); results["channel_transfer_status"] = "failed"; results["channel_transfer_message"] = f"Channel transfer failed: {e}"
+        print(f"❌ Bot transfer FAILED. Error: {e}")
+        traceback.print_exc()
+        results["bot_transfer_status"] = "failed"
+        results["bot_transfer_message"] = f"Bot transfer failed: {e}"
+
+    # --- CHANNEL TRANSFER (WITH 2FA FIX) ---
+    try:
+        print(f"Starting channel ownership transfer for {channel_id}...")
+        password_info = await worker_client(GetPasswordRequest())
+        
+        srp_check = await get_srp_password_check(password=TELETHON_2FA_PASSWORD, srp=password_info)
+        
+        await worker_client(EditCreatorRequest(channel=int(channel_id), user_id=target_user_id, password=srp_check))
+        
+        results["channel_transfer_status"] = "success"
+        results["channel_transfer_message"] = "Channel ownership successfully transferred."
+        print(f"✅ Channel ownership transferred to {target_user_id}")
+
+    except UserNotParticipantError:
+        print(f"⚠️ Channel transfer FAILED due to privacy settings.")
+        results["channel_transfer_status"] = "failed"
+        results["channel_transfer_message"] = "Channel transfer failed due to your privacy settings. You can retry later."
+    except Exception as e:
+        print(f"❌ Channel transfer FAILED. Error: {e}")
+        traceback.print_exc()
+        results["channel_transfer_status"] = "failed"
+        results["channel_transfer_message"] = f"Channel transfer failed: {e}"
+        
     return results
 
 # --- API Endpoints ---
@@ -196,6 +231,8 @@ def start_setup_endpoint():
     # We call asyncio.run() only ONCE, at the very end of the function.
     return asyncio.run(run_setup_flow())
 
+# In main.py, replace this entire endpoint function
+
 @app.route('/finalizeTransfer', methods=['POST'])
 def finalize_transfer_endpoint():
     data = request.get_json().get('data', {}); user_id = data.get('uid')
@@ -215,12 +252,18 @@ def finalize_transfer_endpoint():
             
             print(f"Looking for new user in channel {channel_id}...")
             participants = await worker_client(GetParticipantsRequest(channel=int(channel_id), filter=ChannelParticipantsSearch(''), offset=0, limit=200, hash=0))
+            
             target_user = next((p for p in participants.users if p.id != me.id and not p.bot), None)
             if not target_user: raise Exception("Could not find you in the channel. Please join the channel and try again.")
+            
+            # --- THIS IS THE FIX ---
+            # We get both the ID and the access_hash, which is needed to share the contact.
             target_user_id = target_user.id
-            print(f"Found user {target_user_id} in the channel.")
+            target_user_hash = target_user.access_hash
+            print(f"Found user {target_user_id} with access_hash.")
 
-            transfer_results = await _transfer_ownership(worker_client, bot_username, channel_id, target_user_id)
+            transfer_results = await _transfer_ownership(worker_client, bot_username, channel_id, target_user_id, target_user_hash)
+            
             update_data = {'ownership_transferred': True, 'finalization_status': transfer_results}; config_ref.update(update_data)
             db.collection('userbots').document(worker_bot_id).update({'last_used': firestore.SERVER_TIMESTAMP})
             print(f"✅ Finalization complete for {user_id}.")

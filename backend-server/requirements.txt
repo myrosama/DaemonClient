@@ -4,3 +4,4 @@ firebase-admin
 Flask-Cors
 python-dotenv
 python-telegram-bot
+telethon.crypto.srp
