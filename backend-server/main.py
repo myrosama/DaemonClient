@@ -98,69 +98,68 @@ async def _create_resources_with_userbot(client, user_id, user_email):
 
 # In main.py, replace this entire function
 
-async def _transfer_ownership(worker_client, bot_username, channel_id, target_user_id, target_user_hash):
+# In main.py, replace this entire function
+
+async def _transfer_ownership(worker_client, bot_username, channel_id, target_user_id, target_user_username):
     results = {"bot_transfer_status": "pending", "bot_transfer_message": "", "channel_transfer_status": "pending", "channel_transfer_message": ""}
     
-    # --- BOT TRANSFER (YOUR "SHARE CONTACT" ALGORITHM) ---
+    # --- BOT TRANSFER (YOUR PERFECTED ALGORITHM) ---
     try:
-        print(f"Starting bot transfer for @{bot_username} via contact sharing...")
-        
-        # This creates a "vCard" for the user that we can send to BotFather.
-        target_user_contact = InputPeerUser(user_id=target_user_id, access_hash=target_user_hash)
+        print(f"Starting bot transfer for @{bot_username} to @{target_user_username}...")
         
         async with worker_client.conversation('BotFather', timeout=120) as conv:
+            # Step 1: /mybots
             await conv.send_message('/mybots')
             resp = await conv.get_response()
-            await resp.click(text=f"@{bot_username}")
+
+            # Step 2: Click the correct bot from the list
+            found_button = False
+            for row in resp.buttons:
+                for button in row:
+                    if bot_username in button.text:
+                        await button.click(); found_button = True; break
+                if found_button: break
+            if not found_button: raise Exception(f"Could not find button for bot @{bot_username}")
             
+            # Step 3: Click "Transfer Ownership"
             resp = await conv.get_response()
             await resp.click(text="Transfer Ownership")
-            
-            resp = await conv.get_response()
-            if "Choose new owner" not in resp.text: raise Exception("BotFather did not ask for owner.")
-            
-            # This is your brilliant idea in action. We send the user's contact directly.
-            await conv.send_file(target_user_contact)
-            
-            resp = await conv.get_response()
-            if not resp.buttons: raise Exception("BotFather did not provide confirmation button.")
-            await resp.click(0)
-            
-            resp = await conv.get_response()
-            if "Success" not in resp.text: raise Exception("BotFather did not confirm transfer.")
 
-        results["bot_transfer_status"] = "success"
-        results["bot_transfer_message"] = "Bot ownership successfully transferred."
+            # Step 4: Click "Choose recipient"
+            resp = await conv.get_response()
+            await resp.click(text="Choose recipient")
+
+            # Step 5: Send the user's username
+            resp = await conv.get_response() # "Please share the new owner's contact or their username."
+            await conv.send_message(f"@{target_user_username}")
+
+            # Step 6: Click the final confirmation button
+            resp = await conv.get_response() # "Are you sure..."
+            await resp.click(text="Yes, I am sure, proceed.")
+            
+            # Step 7: Get the final success message
+            resp = await conv.get_response()
+            if "Success" not in resp.text: raise Exception("BotFather did not confirm final transfer.")
+
+        results["bot_transfer_status"] = "success"; results["bot_transfer_message"] = "Bot ownership successfully transferred."
         print(f"✅ Bot ownership transferred to {target_user_id}")
 
     except Exception as e:
-        print(f"❌ Bot transfer FAILED. Error: {e}")
-        traceback.print_exc()
-        results["bot_transfer_status"] = "failed"
-        results["bot_transfer_message"] = f"Bot transfer failed: {e}"
+        print(f"❌ Bot transfer FAILED. Error: {e}"); traceback.print_exc()
+        results["bot_transfer_status"] = "failed"; results["bot_transfer_message"] = f"Bot transfer failed: {e}"
 
     # --- CHANNEL TRANSFER (WITH 2FA FIX) ---
     try:
         print(f"Starting channel ownership transfer for {channel_id}...")
         password_info = await worker_client(GetPasswordRequest())
-        
         srp_check = await get_srp_password_check(password=TELETHON_2FA_PASSWORD, srp=password_info)
-        
         await worker_client(EditCreatorRequest(channel=int(channel_id), user_id=target_user_id, password=srp_check))
-        
-        results["channel_transfer_status"] = "success"
-        results["channel_transfer_message"] = "Channel ownership successfully transferred."
+        results["channel_transfer_status"] = "success"; results["channel_transfer_message"] = "Channel ownership successfully transferred."
         print(f"✅ Channel ownership transferred to {target_user_id}")
-
     except UserNotParticipantError:
-        print(f"⚠️ Channel transfer FAILED due to privacy settings.")
-        results["channel_transfer_status"] = "failed"
-        results["channel_transfer_message"] = "Channel transfer failed due to your privacy settings. You can retry later."
+        print(f"⚠️ Channel transfer FAILED due to privacy settings."); results["channel_transfer_status"] = "failed"; results["channel_transfer_message"] = "Channel transfer failed due to your privacy settings. You can retry later."
     except Exception as e:
-        print(f"❌ Channel transfer FAILED. Error: {e}")
-        traceback.print_exc()
-        results["channel_transfer_status"] = "failed"
-        results["channel_transfer_message"] = f"Channel transfer failed: {e}"
+        print(f"❌ Channel transfer FAILED. Error: {e}"); traceback.print_exc(); results["channel_transfer_status"] = "failed"; results["channel_transfer_message"] = f"Channel transfer failed: {e}"
         
     return results
 
@@ -233,6 +232,8 @@ def start_setup_endpoint():
 
 # In main.py, replace this entire endpoint function
 
+# In main.py, replace this entire endpoint function
+
 @app.route('/finalizeTransfer', methods=['POST'])
 def finalize_transfer_endpoint():
     data = request.get_json().get('data', {}); user_id = data.get('uid')
@@ -257,12 +258,15 @@ def finalize_transfer_endpoint():
             if not target_user: raise Exception("Could not find you in the channel. Please join the channel and try again.")
             
             # --- THIS IS THE FIX ---
-            # We get both the ID and the access_hash, which is needed to share the contact.
-            target_user_id = target_user.id
-            target_user_hash = target_user.access_hash
-            print(f"Found user {target_user_id} with access_hash.")
+            # We get the username and check if it exists.
+            if not target_user.username:
+                raise Exception("The new owner must have a public Telegram @username to complete the transfer.")
 
-            transfer_results = await _transfer_ownership(worker_client, bot_username, channel_id, target_user_id, target_user_hash)
+            target_user_id = target_user.id
+            target_user_username = target_user.username
+            print(f"Found user {target_user_id} with username @{target_user_username}.")
+
+            transfer_results = await _transfer_ownership(worker_client, bot_username, channel_id, target_user_id, target_user_username)
             
             update_data = {'ownership_transferred': True, 'finalization_status': transfer_results}; config_ref.update(update_data)
             db.collection('userbots').document(worker_bot_id).update({'last_used': firestore.SERVER_TIMESTAMP})
