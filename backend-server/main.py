@@ -11,6 +11,8 @@ from dotenv import load_dotenv
 from google.cloud.firestore_v1.base_query import FieldFilter
 import hashlib
 from telethon.tl.types import InputPeerUser
+from telethon.tl.functions.account import GetPasswordRequest
+from telethon.tl.types import InputPeerUser
 
 # Import Telethon libraries
 from telethon import TelegramClient
@@ -100,46 +102,65 @@ async def _create_resources_with_userbot(client, user_id, user_email):
 
 # In main.py, replace this entire function
 
+# In main.py, replace this entire function
+
 async def _transfer_ownership(worker_client, bot_username, channel_id, target_user_id, target_user_username):
     results = {"bot_transfer_status": "pending", "bot_transfer_message": "", "channel_transfer_status": "pending", "channel_transfer_message": ""}
     
-    # --- BOT TRANSFER (YOUR PERFECTED ALGORITHM) ---
+    # --- BOT TRANSFER (THE FINAL, PATIENT ALGORITHM) ---
     try:
         print(f"Starting bot transfer for @{bot_username} to @{target_user_username}...")
         
         async with worker_client.conversation('BotFather', timeout=120) as conv:
-            # Step 1: /mybots
+            # Helper function to find and click a button that contains specific text
+            async def click_button_containing_text(response, text):
+                for row in response.buttons:
+                    for button in row:
+                        if text in button.text:
+                            await button.click()
+                            return True
+                return False
+
+            # Step 1: Send /mybots and get the bot list
             await conv.send_message('/mybots')
-            resp = await conv.get_response()
+            resp_bot_list = await conv.get_response()
 
-            # Step 2: Click the correct bot from the list
-            found_button = False
-            for row in resp.buttons:
-                for button in row:
-                    if bot_username in button.text:
-                        await button.click(); found_button = True; break
-                if found_button: break
-            if not found_button: raise Exception(f"Could not find button for bot @{bot_username}")
+            # Step 2: Find and click the correct bot in the list
+            print("Finding bot in list...")
+            if not await click_button_containing_text(resp_bot_list, bot_username):
+                raise Exception(f"Could not find button for bot @{bot_username}")
             
-            # Step 3: Click "Transfer Ownership"
-            resp = await conv.get_response()
-            await resp.click(text="Transfer Ownership")
+            # Step 3: BE PATIENT, then get the EDITED message and click "Transfer Ownership"
+            print("Waiting for bot menu...")
+            await asyncio.sleep(2) # Crucial wait for the message edit
+            resp_bot_menu = (await worker_client.get_messages('BotFather', limit=1))[0]
+            print("Clicking 'Transfer Ownership'...")
+            if not await click_button_containing_text(resp_bot_menu, "Transfer Ownership"):
+                raise Exception("Could not find 'Transfer Ownership' button.")
 
-            # Step 4: Click "Choose recipient"
-            resp = await conv.get_response()
-            await resp.click(text="Choose recipient")
+            # Step 4: BE PATIENT, then get the EDITED message and click "Choose recipient"
+            print("Waiting for transfer menu...")
+            await asyncio.sleep(2) # Crucial wait for the message edit
+            resp_recipient_menu = (await worker_client.get_messages('BotFather', limit=1))[0]
+            print("Clicking 'Choose recipient'...")
+            if not await click_button_containing_text(resp_recipient_menu, "Choose recipient"):
+                raise Exception("Could not find 'Choose recipient' button.")
 
-            # Step 5: Send the user's username
-            resp = await conv.get_response() # "Please share the new owner's contact or their username."
+            # Step 5: Wait for the NEW message prompt, then send the username
+            print(f"Waiting for prompt and sharing new owner's username: @{target_user_username}")
+            await conv.get_response() # This is a NEW message, so get_response() is correct
             await conv.send_message(f"@{target_user_username}")
 
-            # Step 6: Click the final confirmation button
-            resp = await conv.get_response() # "Are you sure..."
-            await resp.click(text="Yes, I am sure, proceed.")
+            # Step 6: Wait for the NEW confirmation message, then click the button
+            print("Waiting for confirmation and clicking final button...")
+            resp_final_confirm = await conv.get_response()
+            if not await click_button_containing_text(resp_final_confirm, "Yes, I am sure, proceed."):
+                raise Exception("Could not find final confirmation button.")
             
             # Step 7: Get the final success message
-            resp = await conv.get_response()
-            if "Success" not in resp.text: raise Exception("BotFather did not confirm final transfer.")
+            print("Waiting for final success message...")
+            resp_success = await conv.get_response()
+            if "Success" not in resp_success.text: raise Exception("BotFather did not confirm final transfer.")
 
         results["bot_transfer_status"] = "success"; results["bot_transfer_message"] = "Bot ownership successfully transferred."
         print(f"✅ Bot ownership transferred to {target_user_id}")
@@ -148,7 +169,7 @@ async def _transfer_ownership(worker_client, bot_username, channel_id, target_us
         print(f"❌ Bot transfer FAILED. Error: {e}"); traceback.print_exc()
         results["bot_transfer_status"] = "failed"; results["bot_transfer_message"] = f"Bot transfer failed: {e}"
 
-    # --- CHANNEL TRANSFER (WITH 2FA FIX) ---
+    # --- CHANNEL TRANSFER (THIS PART IS ALREADY CORRECT) ---
     try:
         print(f"Starting channel ownership transfer for {channel_id}...")
         password_info = await worker_client(GetPasswordRequest())
@@ -234,6 +255,10 @@ def start_setup_endpoint():
 
 # In main.py, replace this entire endpoint function
 
+# In main.py, replace this entire endpoint function
+
+# In main.py, replace this entire endpoint function
+
 @app.route('/finalizeTransfer', methods=['POST'])
 def finalize_transfer_endpoint():
     data = request.get_json().get('data', {}); user_id = data.get('uid')
@@ -253,19 +278,17 @@ def finalize_transfer_endpoint():
             
             print(f"Looking for new user in channel {channel_id}...")
             participants = await worker_client(GetParticipantsRequest(channel=int(channel_id), filter=ChannelParticipantsSearch(''), offset=0, limit=200, hash=0))
-            
             target_user = next((p for p in participants.users if p.id != me.id and not p.bot), None)
             if not target_user: raise Exception("Could not find you in the channel. Please join the channel and try again.")
             
-            # --- THIS IS THE FIX ---
-            # We get the username and check if it exists.
             if not target_user.username:
-                raise Exception("The new owner must have a public Telegram @username to complete the transfer.")
+                raise Exception("To complete the transfer, you must set a public Telegram @username in your Telegram settings.")
 
             target_user_id = target_user.id
             target_user_username = target_user.username
             print(f"Found user {target_user_id} with username @{target_user_username}.")
 
+            # --- THIS CALL IS NOW CORRECT ---
             transfer_results = await _transfer_ownership(worker_client, bot_username, channel_id, target_user_id, target_user_username)
             
             update_data = {'ownership_transferred': True, 'finalization_status': transfer_results}; config_ref.update(update_data)
