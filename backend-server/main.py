@@ -100,10 +100,6 @@ async def _create_resources_with_userbot(client, user_id, user_email):
 
 # In main.py, replace this entire function
 
-# In main.py, replace this entire function
-
-# In main.py, replace this entire function
-
 async def _transfer_ownership(worker_client, bot_username, channel_id, target_user_id, target_user_username):
     results = {"bot_transfer_status": "pending", "bot_transfer_message": "", "channel_transfer_status": "pending", "channel_transfer_message": ""}
     
@@ -113,11 +109,11 @@ async def _transfer_ownership(worker_client, bot_username, channel_id, target_us
         
         async with worker_client.conversation('BotFather', timeout=120) as conv:
             # Helper function to find and click a button that contains specific text
-            async def click_button_containing_text(response, text):
+            async def click_button_containing_text(response, text, password=None):
                 for row in response.buttons:
                     for button in row:
                         if text in button.text:
-                            await button.click()
+                            await button.click(password=password)
                             return True
                 return False
 
@@ -130,9 +126,10 @@ async def _transfer_ownership(worker_client, bot_username, channel_id, target_us
             if not await click_button_containing_text(resp_bot_list, bot_username):
                 raise Exception(f"Could not find button for bot @{bot_username}")
             
+            # --- THIS IS THE FIX, EXACTLY AS YOU DESIGNED IT ---
             # Step 3: BE PATIENT, then get the EDITED message and click "Transfer Ownership"
             print("Waiting for bot menu...")
-            await asyncio.sleep(2) # Crucial wait for the message edit
+            await asyncio.sleep(2) # A patient wait for the message to be edited
             resp_bot_menu = (await worker_client.get_messages('BotFather', limit=1))[0]
             print("Clicking 'Transfer Ownership'...")
             if not await click_button_containing_text(resp_bot_menu, "Transfer Ownership"):
@@ -140,7 +137,7 @@ async def _transfer_ownership(worker_client, bot_username, channel_id, target_us
 
             # Step 4: BE PATIENT, then get the EDITED message and click "Choose recipient"
             print("Waiting for transfer menu...")
-            await asyncio.sleep(2) # Crucial wait for the message edit
+            await asyncio.sleep(2) # Another patient wait
             resp_recipient_menu = (await worker_client.get_messages('BotFather', limit=1))[0]
             print("Clicking 'Choose recipient'...")
             if not await click_button_containing_text(resp_recipient_menu, "Choose recipient"):
@@ -151,16 +148,23 @@ async def _transfer_ownership(worker_client, bot_username, channel_id, target_us
             await conv.get_response() # This is a NEW message, so get_response() is correct
             await conv.send_message(f"@{target_user_username}")
 
-            # Step 6: Wait for the NEW confirmation message, then click the button
-            print("Waiting for confirmation and clicking final button...")
+            # Step 6: Wait for the NEW confirmation message and prepare for 2FA
+            print("Waiting for confirmation...")
             resp_final_confirm = await conv.get_response()
-            if not await click_button_containing_text(resp_final_confirm, "Yes, I am sure, proceed."):
+            
+            print("Preparing secure password for final confirmation click...")
+            password_info = await worker_client(GetPasswordRequest())
+            srp_check_for_button = await get_srp_password_check(password=TELETHON_2FA_PASSWORD, srp=password_info)
+            
+            print("Clicking final confirmation button with 2FA...")
+            if not await click_button_containing_text(resp_final_confirm, "Yes, I am sure, proceed.", password=srp_check_for_button):
                 raise Exception("Could not find final confirmation button.")
             
             # Step 7: Get the final success message
             print("Waiting for final success message...")
             resp_success = await conv.get_response()
-            if "Success" not in resp_success.text: raise Exception("BotFather did not confirm final transfer.")
+            if "Success" not in resp_success.text:
+                raise Exception("BotFather did not confirm final transfer after password.")
 
         results["bot_transfer_status"] = "success"; results["bot_transfer_message"] = "Bot ownership successfully transferred."
         print(f"✅ Bot ownership transferred to {target_user_id}")
@@ -169,6 +173,20 @@ async def _transfer_ownership(worker_client, bot_username, channel_id, target_us
         print(f"❌ Bot transfer FAILED. Error: {e}"); traceback.print_exc()
         results["bot_transfer_status"] = "failed"; results["bot_transfer_message"] = f"Bot transfer failed: {e}"
 
+    # --- CHANNEL TRANSFER (THIS PART IS ALREADY CORRECT) ---
+    try:
+        print(f"Starting channel ownership transfer for {channel_id}...")
+        password_info = await worker_client(GetPasswordRequest())
+        srp_check_for_channel = await get_srp_password_check(password=TELETHON_2FA_PASSWORD, srp=password_info)
+        await worker_client(EditCreatorRequest(channel=int(channel_id), user_id=target_user_id, password=srp_check_for_channel))
+        results["channel_transfer_status"] = "success"; results["channel_transfer_message"] = "Channel ownership successfully transferred."
+        print(f"✅ Channel ownership transferred to {target_user_id}")
+    except UserNotParticipantError:
+        print(f"⚠️ Channel transfer FAILED due to privacy settings."); results["channel_transfer_status"] = "failed"; results["channel_transfer_message"] = "Channel transfer failed due to your privacy settings. You can retry later."
+    except Exception as e:
+        print(f"❌ Channel transfer FAILED. Error: {e}"); traceback.print_exc(); results["channel_transfer_status"] = "failed"; results["channel_transfer_message"] = f"Channel transfer failed: {e}"
+        
+    return results
     # --- CHANNEL TRANSFER (THIS PART IS ALREADY CORRECT) ---
     try:
         print(f"Starting channel ownership transfer for {channel_id}...")
