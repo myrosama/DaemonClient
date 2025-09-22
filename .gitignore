@@ -7,7 +7,7 @@
 !.env.example
 
 # Ignore Google Cloud service account keys
-functions/serviceAccountsKey.json
+serviceAccountsKey.json
 
 
 # Ignore Telethon session files, which contain login credentials
