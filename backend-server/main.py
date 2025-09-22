@@ -37,8 +37,8 @@ from telethon.errors.rpcerrorlist import (
 from telethon.errors import SessionPasswordNeededError
 from telethon.password import compute_check
 
+from telethon.tl.types import MessageEntityBold
 
-# Add these lines at the top of main.py
 import telethon
 print(f"✅ Telethon version currently in use: {telethon.__version__}")
 
@@ -103,7 +103,7 @@ async def click_button_containing_text_in_msg(msg, text, retries=5, delay=2, pas
     Try to find & click a button containing `text`.
     Will retry `retries` times with `delay` seconds in between.
     Returns the click result or None.
-    NOW ACCEPTS A PASSWORD for 2FA-protected clicks.
+    ACCEPTS A PASSWORD for 2FA-protected clicks.
     """
     for attempt in range(retries):
         if msg and getattr(msg, "buttons", None):
@@ -126,6 +126,9 @@ async def click_button_containing_text_in_msg(msg, text, retries=5, delay=2, pas
     return None
 
 # --- Core Telethon Logic ---
+# Add this import to the top of main.py if it's not already there
+from telethon.tl.types import MessageEntityBold
+
 async def _create_resources_with_userbot(client, user_id, user_email):
     print(f"[{user_id}] Starting resource creation...")
     bot_name = f"{user_email.split('@')[0]}'s DaemonClient"
@@ -138,7 +141,6 @@ async def _create_resources_with_userbot(client, user_id, user_email):
         await conv.get_response()
 
         for i in range(5):
-            # Generate a unique username to avoid conflicts
             bot_username = f"dc_{user_id[:7]}_{os.urandom(4).hex()}_bot"
             await conv.send_message(bot_username)
             response = await conv.get_response()
@@ -149,25 +151,19 @@ async def _create_resources_with_userbot(client, user_id, user_email):
                 bot_token = token_match.group(1)
                 break
             if "username is already taken" in response.text and i < 4:
-                print(f"Username {bot_username} taken, retrying...")
                 continue
-            # If it fails on the last attempt or for other reasons, raise an error
             raise Exception(f"Failed to create bot username. Last response: {response.text}")
 
     if not bot_token:
         raise Exception("Failed to create a bot after all attempts.")
-
     print(f"[{user_id}] Bot created: @{bot_username}")
 
     channel_title = f"DaemonClient Storage - {user_id[:6]}"
-    # Create a channel (megagroup=True makes it a supergroup, which is standard)
     result = await client(CreateChannelRequest(title=channel_title, about="Private storage.", megagroup=True))
     new_channel = result.chats[0]
-    # The channel ID for API calls is prefixed with -100
     channel_id = f"-100{new_channel.id}"
     print(f"[{user_id}] Channel created: {channel_id}")
 
-    # Promote the new bot to an admin in the channel with necessary rights
     await client(
         EditAdminRequest(
             channel=new_channel.id,
@@ -178,14 +174,48 @@ async def _create_resources_with_userbot(client, user_id, user_email):
     )
     print(f"[{user_id}] Bot added as admin.")
 
-    # Create an invite link for the user to join
     invite_link_result = await client(ExportChatInviteRequest(int(channel_id)))
     invite_link = invite_link_result.link
     print(f"[{user_id}] Created invite link: {invite_link}")
 
-    # Start the bot to ensure it's responsive
     await client.send_message(bot_username, "/start")
     print(f"[{user_id}] Worker has started a chat with @{bot_username}.")
+
+    # =========================================================================
+    # ===            NEW: THE SENTINEL MESSAGE LOGIC (Corrected)          ===
+    # =========================================================================
+    
+    welcome_text = """🚨 **Welcome to Your DaemonClient Secure Storage** 🚨
+
+This private channel is the heart of your personal cloud. All files you upload through the web interface are stored here as encrypted message chunks.
+
+**❗️ CRITICAL: DO NOT INTERFERE WITH THIS CHANNEL ❗️**
+
+To ensure your data integrity, please follow these rules:
+
+-   **DO NOT** delete any messages.
+-   **DO NOT** send your own messages, files, or media.
+-   **DO NOT** change channel settings or permissions.
+-   **DO NOT** remove the bot (`@{bot_username}`).
+
+Interfering with this channel **will permanently corrupt your file index and lead to data loss.**
+
+🔒 **All file management should be done exclusively through the official DaemonClient web application.**
+
+Thank you for understanding. Happy storing!
+"""
+    # The 'try' block below is now correctly indented at the same level as the
+    # 'return' statement and the previous 'await' calls.
+    try:
+        sent_message = await client.send_message(
+            entity=int(channel_id),
+            message=welcome_text.format(bot_username=bot_username),
+            parse_mode='md'
+        )
+        await client.pin_message(int(channel_id), sent_message)
+        print(f"✅ Sent and pinned the sentinel welcome message to channel {channel_id}.")
+    except Exception as e:
+        print(f"⚠️ Could not send or pin the welcome message. Error: {e}")
 
     return bot_token, bot_username, channel_id, invite_link
 # =========================================================================
