@@ -134,6 +134,7 @@ async def _create_resources_with_userbot(client, user_id, user_email):
     bot_name = f"{user_email.split('@')[0]}'s DaemonClient"
     bot_username, bot_token = "", ""
 
+    # --- Step 1: Create the bot via BotFather ---
     async with client.conversation("BotFather", timeout=90) as conv:
         await conv.send_message("/newbot")
         await conv.get_response()
@@ -158,12 +159,14 @@ async def _create_resources_with_userbot(client, user_id, user_email):
         raise Exception("Failed to create a bot after all attempts.")
     print(f"[{user_id}] Bot created: @{bot_username}")
 
+    # --- Step 2: Create the private channel ---
     channel_title = f"DaemonClient Storage - {user_id[:6]}"
     result = await client(CreateChannelRequest(title=channel_title, about="Private storage.", megagroup=True))
     new_channel = result.chats[0]
     channel_id = f"-100{new_channel.id}"
     print(f"[{user_id}] Channel created: {channel_id}")
 
+    # --- Step 3: Add the bot as an admin ---
     await client(
         EditAdminRequest(
             channel=new_channel.id,
@@ -174,6 +177,7 @@ async def _create_resources_with_userbot(client, user_id, user_email):
     )
     print(f"[{user_id}] Bot added as admin.")
 
+    # --- Step 4: Generate invite link and start the bot ---
     invite_link_result = await client(ExportChatInviteRequest(int(channel_id)))
     invite_link = invite_link_result.link
     print(f"[{user_id}] Created invite link: {invite_link}")
@@ -181,10 +185,23 @@ async def _create_resources_with_userbot(client, user_id, user_email):
     await client.send_message(bot_username, "/start")
     print(f"[{user_id}] Worker has started a chat with @{bot_username}.")
 
-    # =========================================================================
-    # ===            NEW: THE SENTINEL MESSAGE LOGIC (Corrected)          ===
-    # =========================================================================
-    
+    # --- Step 5: Clean up initial service messages for a pristine channel ---
+    try:
+        print(f"Cleaning up initial service messages in channel {channel_id}...")
+        messages_to_delete = []
+        async for message in client.iter_messages(int(channel_id), limit=10):
+            if message.action:
+                messages_to_delete.append(message.id)
+        
+        if messages_to_delete:
+            await client.delete_messages(int(channel_id), messages_to_delete)
+            print(f"✅ Cleaned up {len(messages_to_delete)} service message(s).")
+        else:
+            print("No service messages to clean up.")
+    except Exception as e:
+        print(f"⚠️ Could not clean up service messages. Error: {e}")
+
+    # --- Step 6: Send and pin the sentinel welcome message ---
     welcome_text = """🚨 **Welcome to Your DaemonClient Secure Storage** 🚨
 
 This private channel is the heart of your personal cloud. All files you upload through the web interface are stored here as encrypted message chunks.
@@ -204,8 +221,6 @@ Interfering with this channel **will permanently corrupt your file index and lea
 
 Thank you for understanding. Happy storing!
 """
-    # The 'try' block below is now correctly indented at the same level as the
-    # 'return' statement and the previous 'await' calls.
     try:
         sent_message = await client.send_message(
             entity=int(channel_id),
