@@ -1,29 +1,29 @@
-// functions/index.js (FINAL - .env Version)
+// functions/index.js (FINAL - With All Notifications)
 
-// Explicit Imports
+// Explicit v2 Imports
 const { onRequest } = require("firebase-functions/v2/https");
-const { onDocumentCreated } = require("firebase-functions/v2/firestore");
-const functions = require("firebase-functions");
+const { onDocumentCreated, onDocumentUpdated } = require("firebase-functions/v2/firestore"); // Added onDocumentUpdated
+const functions = require("firebase-functions"); // For v1 auth trigger
 
 // Common Imports
 const admin = require("firebase-admin");
 const logger = require("firebase-functions/logger");
 const fetch = require("node-fetch");
 
-// This line automatically loads the variables from your 'functions/.env' file
-// into process.env for you when you deploy.
+// Loads variables from 'functions/.env' for local emulation.
+// On Firebase, we'll set these as environment variables directly.
 require("dotenv").config();
 
 admin.initializeApp();
 
 // =========================================================================
-// --- CONFIGURATION - Read from process.env ---
+// --- CONFIGURATION - Read from environment variables ---
 // =========================================================================
 const ADMIN_BOT_TOKEN = process.env.TELEGRAM_ADMIN_BOT_TOKEN;
 const YOUR_CHAT_ID = process.env.TELEGRAM_YOUR_CHAT_ID;
 
 // =========================================================================
-// --- YOUR CRUCIAL FUNCTION ---
+// --- The Public Download Proxy ---
 // =========================================================================
 exports.telegramDownloadProxy = onRequest({ cors: true }, async (req, res) => {
   const { botToken, filePath } = req.query;
@@ -51,12 +51,12 @@ exports.telegramDownloadProxy = onRequest({ cors: true }, async (req, res) => {
 });
 
 // =========================================================================
-// --- HELPER & ALERT FUNCTIONS ---
+// --- Admin Alert Functions ---
 // =========================================================================
 const sendTelegramMessage = (message) => {
     if (!ADMIN_BOT_TOKEN || !YOUR_CHAT_ID) {
       logger.error("Telegram admin bot credentials are not defined in the environment.");
-      return Promise.resolve();
+      return Promise.resolve(); // Don't throw an error, just log and exit.
     }
     const url = `https://api.telegram.org/bot${ADMIN_BOT_TOKEN}/sendMessage`;
     return fetch(url, {
@@ -66,7 +66,7 @@ const sendTelegramMessage = (message) => {
     });
 };
 
-// Auth trigger (Gen 1)
+// 1. New User Signup Alert (Auth Trigger, v1)
 exports.onUserSignedUp = functions.auth.user().onCreate(async (user) => {
   const email = user.email;
   const message = `👋 *New User Signup*!\n\nAn account was just created for:\n\`${email}\``;
@@ -78,15 +78,16 @@ exports.onUserSignedUp = functions.auth.user().onCreate(async (user) => {
   }
 });
 
-// Firestore trigger (Gen 2)
+// 2. Setup Complete Alert (Firestore Create Trigger, v2)
 exports.onSetupComplete = onDocumentCreated("artifacts/default-daemon-client/users/{userId}/config/telegram", async (event) => {
   const userId = event.params.userId;
+  // Firestore path is complex, so we manually reconstruct the parent path.
   const userDocRef = admin.firestore().collection("artifacts/default-daemon-client/users").doc(userId);
   let userEmail = "unknown";
   try {
-    const userDoc = await userDocRef.get();
-    if (userDoc.exists) {
-        userEmail = userDoc.data().email || "email not set";
+    const userDocSnap = await userDocRef.get();
+    if (userDocSnap.exists) {
+        userEmail = userDocSnap.data().email || "email not set";
     }
   } catch (e) {
     logger.error("Could not fetch user email for alert", e);
@@ -98,4 +99,33 @@ exports.onSetupComplete = onDocumentCreated("artifacts/default-daemon-client/use
   } catch (error) {
     logger.error("Failed to send setup complete alert:", error);
   }
+});
+
+// +++ 3. NEW: Ownership Transfer Alert (Firestore Update Trigger, v2) +++
+exports.onTransferComplete = onDocumentUpdated("artifacts/default-daemon-client/users/{userId}/config/telegram", async (event) => {
+    const beforeData = event.data.before.data();
+    const afterData = event.data.after.data();
+
+    // The key condition: Trigger only when 'ownership_transferred' changes to 'true'.
+    if (beforeData.ownership_transferred !== true && afterData.ownership_transferred === true) {
+        const userId = event.params.userId;
+        const userDocRef = admin.firestore().collection("artifacts/default-daemon-client/users").doc(userId);
+        let userEmail = "unknown";
+        try {
+            const userDocSnap = await userDocRef.get();
+            if (userDocSnap.exists) {
+                userEmail = userDocSnap.data().email || "email not set";
+            }
+        } catch (e) {
+            logger.error("Could not fetch user email for alert", e);
+        }
+
+        const message = `🚀 *Ownership Transferred!*\n\nUser \`${userEmail}\` (ID: \`${userId}\`) is now fully onboarded and in control of their resources.`;
+        try {
+            await sendTelegramMessage(message);
+            logger.info(`Successfully sent ownership transfer alert for ${userId}`);
+        } catch (error) {
+            logger.error("Failed to send ownership transfer alert:", error);
+        }
+    }
 });

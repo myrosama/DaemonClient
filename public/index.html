@@ -296,32 +296,70 @@
             </div>
         );
     };
-    const AuthView = () => {
+        const AuthView = () => {
         const [isLoginView, setIsLoginView] = React.useState(true);
         const [email, setEmail] = React.useState('');
         const [password, setPassword] = React.useState('');
         const [error, setError] = React.useState('');
         const [isLoading, setIsLoading] = React.useState(false);
         const [isExplanationVisible, setIsExplanationVisible] = React.useState(false);
+        
+        // --- States for the Terms of Use modal ---
+        const [isTermsModalOpen, setIsTermsModalOpen] = React.useState(false);
+        const [hasAgreedToTerms, setHasAgreedToTerms] = React.useState(false);
+
         const handleAuthAction = async (e) => {
             e.preventDefault();
-            if (!email || !password) { setError("Please enter email and password."); return; }
-            setIsLoading(true); setError(''); 
+            
+            // --- Validation logic combined correctly ---
+            if (!isLoginView && !hasAgreedToTerms) {
+                setError("You must agree to the Terms of Use to create an account.");
+                return; // Stop the function here
+            }
+            if (!email || !password) {
+                setError("Please enter email and password.");
+                return; // Stop the function here
+            }
+            
+            setIsLoading(true);
+            setError(''); 
+            
             try {
-                if (isLoginView) { await auth.signInWithEmailAndPassword(email, password); } 
-                else { await auth.createUserWithEmailAndPassword(email, password); }
+                if (isLoginView) {
+                    await auth.signInWithEmailAndPassword(email, password);
+                } else {
+                    await auth.createUserWithEmailAndPassword(email, password);
+                }
             } catch (err) {
                 switch (err.code) {
-                    case 'auth/user-not-found': case 'auth/wrong-password': case 'auth/invalid-credential': setError("Invalid credentials. Please check your email and password."); break;
-                    case 'auth/too-many-requests': setError("Too many login attempts. Please try again later."); break;
-                    case 'auth/email-already-in-use': setError("An account with this email already exists. Please log in instead."); break;
-                    case 'auth/weak-password': setError("Password is too weak. It should be at least 6 characters long."); break;
-                    case 'auth/invalid-email': setError("The email address format is not valid."); break;
-                    default: setError("An unexpected error occurred. Please try again."); break;
+                    case 'auth/user-not-found':
+                    case 'auth/wrong-password':
+                    case 'auth/invalid-credential':
+                        setError("Invalid credentials. Please check your email and password.");
+                        break;
+                    case 'auth/too-many-requests':
+                        setError("Too many login attempts. Please try again later.");
+                        break;
+                    case 'auth/email-already-in-use':
+                        setError("An account with this email already exists. Please log in instead.");
+                        break;
+                    case 'auth/weak-password':
+                        setError("Password is too weak. It should be at least 6 characters long.");
+                        break;
+                    case 'auth/invalid-email':
+                        setError("The email address format is not valid.");
+                        break;
+                    default:
+                        setError("An unexpected error occurred. Please try again.");
+                        break;
                 }
-            } finally { setIsLoading(false); }
+            } finally {
+                setIsLoading(false);
+            }
         };
+
         const ChevronIcon = ({ open }) => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={`inline-block ml-1 transition-transform duration-300 ${open ? 'rotate-180' : ''}`}><polyline points="6 9 12 15 18 9"></polyline></svg>;
+        
         return (
             <div className="flex flex-col items-center justify-center w-full min-h-screen p-4 py-8 font-sans text-white">
                 <div className="w-full max-w-md">
@@ -344,9 +382,33 @@
                                 <label htmlFor="password-auth" className="block text-sm font-medium text-gray-300 mb-2">Password</label>
                                 <input id="password-auth" type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="w-full p-3 bg-gray-700 border border-gray-600 rounded-lg text-white" required />
                             </div>
+                            
+                            {/* --- NEW: TERMS AGREEMENT CHECKBOX (only for Sign Up view) --- */}
+                            {!isLoginView && (
+                                <div className="flex items-center">
+                                    <input 
+                                        id="terms-agree" 
+                                        type="checkbox" 
+                                        checked={hasAgreedToTerms} 
+                                        onChange={(e) => setHasAgreedToTerms(e.target.checked)}
+                                        className="h-4 w-4 rounded border-gray-500 bg-gray-700 text-indigo-600 focus:ring-indigo-500"
+                                    />
+                                    <label htmlFor="terms-agree" className="ml-2 block text-sm text-gray-300">
+                                        I agree to the{' '}
+                                        <button 
+                                            type="button" 
+                                            onClick={() => setIsTermsModalOpen(true)} 
+                                            className="font-medium text-indigo-400 hover:text-indigo-300"
+                                        >
+                                            Terms of Use
+                                        </button>
+                                    </label>
+                                </div>
+                            )}
+
                             {error && <p className="text-red-400 text-sm text-center">{error}</p>}
                             <div>
-                                <button type="submit" disabled={isLoading} className="w-full flex justify-center py-3 px-4 rounded-lg text-lg font-medium text-white bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-800 disabled:opacity-75">
+                                <button type="submit" disabled={isLoading || (!isLoginView && !hasAgreedToTerms)} className="w-full flex justify-center py-3 px-4 rounded-lg text-lg font-medium text-white bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-800 disabled:opacity-75">
                                     {isLoading ? <LoaderComponent small={true} /> : (isLoginView ? 'Log In' : 'Create Account')}
                                 </button>
                             </div>
@@ -357,18 +419,21 @@
                     <button onClick={() => setIsExplanationVisible(!isExplanationVisible)} className="text-gray-400 hover:text-indigo-400 transition-colors py-2">What is DaemonClient?<ChevronIcon open={isExplanationVisible} /></button>
                     <div className={`text-left overflow-hidden transition-all duration-500 ease-in-out ${isExplanationVisible ? 'max-h-[1000px] opacity-100 mt-4' : 'max-h-0 opacity-0'}`}>
                         <div className="text-gray-300 space-y-4 bg-gray-800/50 backdrop-blur-sm p-6 rounded-lg shadow-lg border border-gray-700">
-                            <p>DaemonClient is an experiment in creating secure, private, and virtually unlimited cloud storage by leveraging the Telegram API. It's a storage solution where you, and only you, control your data.</p>
-                            <h3 className="text-lg font-semibold text-white pt-2">How It Works</h3>
+                            <p>DaemonClient is a novel, zero-knowledge cloud storage platform that transforms your personal Telegram account into a secure, private, and virtually limitless file vault.</p>
+                            <h3 className="text-lg font-semibold text-white pt-2">How It Works: A Decentralized Architecture</h3>
                             <ul className="list-disc list-inside space-y-2 pl-2">
-                                <li><strong>Your Personal Cloud:</strong> It connects to a private Telegram channel that you own. All your files are stored there, accessible only by you through this client.</li>
-                                <li><strong>Secure & Private:</strong> Files are split into smaller chunks and uploaded to your private channel via your own Telegram Bot. This architecture means no one, not even the developers of this app, can access your files.</li>
-                                <li><strong>Free & Open Source:</strong> This client is completely free to use. Its source code is open, ensuring transparency and giving you full control and ownership over your data.</li>
+                                <li><strong>True Privacy:</strong> Your files are chunked, encrypted in transit, and stored in a private Telegram channel that only you and your personal bot can access. The DaemonClient developers have zero ability to see or access your files.</li>
+                                <li><strong>Zero Cost:</strong> By leveraging Telegram's generous file storage policies, this architecture provides terabytes of storage at no cost.</li>
+                                <li><strong>Full Control:</strong> You own the storage infrastructure. All file operations are managed client-side, directly between your browser and the Telegram API, ensuring your data never passes through our servers after the initial setup.</li>
                             </ul>
                             <p className="pt-2 text-gray-400 text-sm">This tool requires you to create your own free Telegram bot and a private channel, allowing you to maintain a zero-cost, private storage infrastructure.</p>
                             <div className="pt-5 mt-5 border-t border-gray-700 text-center"><a href="https://t.me/montclier49" target="_blank" rel="noopener noreferrer" className="text-sm text-gray-500 hover:text-indigo-400 transition-colors">A project by @montclier49</a></div>
                         </div>
                     </div>
                 </div>
+
+                {/* --- RENDER THE MODAL IF OPEN --- */}
+                {isTermsModalOpen && <TermsModal onClose={() => setIsTermsModalOpen(false)} />}
             </div>
         );
     };
@@ -625,7 +690,42 @@
             </div>
         );
     };
+        // ============================================================================
+    // --- NEW: Terms of Use Modal Component ---
+    // ============================================================================
+    const TermsModal = ({ onClose }) => {
+        return (
+            <div className="fixed inset-0 bg-black bg-opacity-80 flex items-center justify-center z-50 font-sans" onClick={onClose}>
+                <div className="bg-gray-800 rounded-xl shadow-2xl p-8 w-full max-w-3xl max-h-[80vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+                    <h2 className="text-2xl font-bold text-indigo-400 mb-4">Terms of Use for DaemonClient</h2>
+                    <div className="text-gray-300 space-y-4 text-sm">
+                        <p className="text-gray-400">Last Updated: September 19, 2025</p>
+                        
+                        <h3 className="font-semibold text-white pt-2">1. The Service</h3>
+                        <p>DaemonClient ("the Service") is a software tool that allows users to leverage their personal Telegram account as a cloud storage backend. The Service is provided "as-is" without any warranties. We are not a file-hosting company; we provide a tool for you to manage your own storage.</p>
 
+                        <h3 className="font-semibold text-white pt-2">2. User Responsibility and Data Ownership</h3>
+                        <p>You, the user, are solely responsible for the data you store using the Service. All files are stored in a private Telegram channel and managed by a Telegram bot to which you are given full ownership. We, the developers, have zero-knowledge of or access to your stored files.</p>
+                        <p>You agree not to use the Service to store any content that is illegal, infringes on copyright, or violates Telegram's Terms of Service.</p>
+
+                        <h3 className="font-semibold text-white pt-2">3. Platform Dependency and Risk of Data Loss</h3>
+                        <p>The Service is critically dependent on the APIs and policies of third-party platforms, primarily Telegram. These platforms may change their services, policies, or APIs at any time without notice. Such changes could render DaemonClient partially or completely non-functional, potentially leading to the loss of access to your data. By using the Service, you acknowledge and accept this risk. We are not liable for any data loss resulting from third-party platform changes.</p>
+
+                        <h3 className="font-semibold text-white pt-2">4. Limitation of Liability</h3>
+                        <p>In no event shall the developers of DaemonClient be liable for any direct, indirect, special, incidental, or consequential damages arising out of the use or inability to use the Service, including but not limited to data loss, even if we have been advised of the possibility of such damages.</p>
+
+                        <h3 className="font-semibold text-white pt-2">5. Termination</h3>
+                        <p>We reserve the right to terminate your access to the Service's authentication system at any time if you are found to be in violation of these terms.</p>
+                        
+                        <div className="text-center pt-4">
+                            <button onClick={onClose} className="py-2 px-6 bg-indigo-600 hover:bg-indigo-700 rounded-lg text-white">Close</button>
+                        </div>
+                    </div>
+                    
+                </div>
+            </div>
+        );
+    };
     // ============================================================================
     // --- SETUP VIEW (Unchanged) ---
     // ============================================================================
