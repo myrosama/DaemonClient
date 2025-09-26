@@ -1,4 +1,4 @@
-// functions/index.js (FINAL - With All Notifications)
+// functions/index.js (FINAL - With Robust Error Checking)
 
 // Explicit v2 Imports
 const { onRequest } = require("firebase-functions/v2/https");
@@ -11,7 +11,7 @@ const logger = require("firebase-functions/logger");
 const fetch = require("node-fetch");
 
 // Loads variables from 'functions/.env' for local emulation.
-// On Firebase, we'll set these as environment variables directly.
+// On Firebase, these are set as environment variables.
 require("dotenv").config();
 
 admin.initializeApp();
@@ -51,19 +51,41 @@ exports.telegramDownloadProxy = onRequest({ cors: true }, async (req, res) => {
 });
 
 // =========================================================================
-// --- Admin Alert Functions ---
+// --- Admin Alert Functions (NOW WITH ROBUST ERROR CHECKING) ---
 // =========================================================================
-const sendTelegramMessage = (message) => {
+const sendTelegramMessage = async (message) => {
     if (!ADMIN_BOT_TOKEN || !YOUR_CHAT_ID) {
-      logger.error("Telegram admin bot credentials are not defined in the environment.");
-      return Promise.resolve(); // Don't throw an error, just log and exit.
+      logger.error("CRITICAL: Telegram admin bot credentials are not defined in environment variables.");
+      // We throw an error so the calling function knows it failed.
+      throw new Error("Admin bot credentials not configured.");
     }
     const url = `https://api.telegram.org/bot${ADMIN_BOT_TOKEN}/sendMessage`;
-    return fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ chat_id: YOUR_CHAT_ID, text: message, parse_mode: "Markdown" }),
-    });
+    
+    try {
+        const response = await fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ chat_id: YOUR_CHAT_ID, text: message, parse_mode: "Markdown" }),
+        });
+
+        // This is the critical new logic: check if Telegram accepted the message.
+        if (!response.ok) {
+            const errorBody = await response.json();
+            logger.error("Telegram API returned an error:", {
+                statusCode: response.status,
+                statusText: response.statusText,
+                errorBody: errorBody,
+            });
+            throw new Error(`Telegram API Error: ${errorBody.description || "Unknown error"}`);
+        }
+
+        logger.info("Successfully sent message request to Telegram API.");
+
+    } catch (error) {
+        logger.error("Failed inside sendTelegramMessage function:", error);
+        // Re-throw the error so the main function's catch block is aware of the failure.
+        throw error;
+    }
 };
 
 // 1. New User Signup Alert (Auth Trigger, v1)
@@ -72,16 +94,16 @@ exports.onUserSignedUp = functions.auth.user().onCreate(async (user) => {
   const message = `👋 *New User Signup*!\n\nAn account was just created for:\n\`${email}\``;
   try {
     await sendTelegramMessage(message);
-    logger.info(`Successfully sent new user alert for ${email}`);
+    logger.info(`Successfully processed new user alert for ${email}`);
   } catch (error) {
-    logger.error("Failed to send new user alert:", error);
+    logger.error(`Failed to process new user alert for ${email}. The error originated in sendTelegramMessage.`);
   }
 });
 
 // 2. Setup Complete Alert (Firestore Create Trigger, v2)
 exports.onSetupComplete = onDocumentCreated("artifacts/default-daemon-client/users/{userId}/config/telegram", async (event) => {
+  logger.info(`onSetupComplete triggered for userId: ${event.params.userId}. Function has started.`);
   const userId = event.params.userId;
-  // Firestore path is complex, so we manually reconstruct the parent path.
   const userDocRef = admin.firestore().collection("artifacts/default-daemon-client/users").doc(userId);
   let userEmail = "unknown";
   try {
@@ -95,16 +117,17 @@ exports.onSetupComplete = onDocumentCreated("artifacts/default-daemon-client/use
   const message = `✅ *Setup Complete!*\n\nUser \`${userEmail}\` (ID: \`${userId}\`) has just successfully completed the automated setup.`;
   try {
     await sendTelegramMessage(message);
-    logger.info(`Successfully sent setup complete alert for ${userId}`);
+    logger.info(`Successfully processed setup complete alert for ${userId}`);
   } catch (error) {
-    logger.error("Failed to send setup complete alert:", error);
+    logger.error(`Failed to process setup complete alert for ${userId}. The error originated in sendTelegramMessage.`);
   }
 });
 
-// +++ 3. NEW: Ownership Transfer Alert (Firestore Update Trigger, v2) +++
+// 3. Ownership Transfer Alert (Firestore Update Trigger, v2)
 exports.onTransferComplete = onDocumentUpdated("artifacts/default-daemon-client/users/{userId}/config/telegram", async (event) => {
+  logger.info(`onTransferComplete triggered for userId: ${event.params.userId}. Function has started.`);
     const beforeData = event.data.before.data();
-    const afterData = event.data.after.data();
+    const afterData = event.data.after.data(); // Corrected from .xdata() to .data()
 
     // The key condition: Trigger only when 'ownership_transferred' changes to 'true'.
     if (beforeData.ownership_transferred !== true && afterData.ownership_transferred === true) {
@@ -123,9 +146,9 @@ exports.onTransferComplete = onDocumentUpdated("artifacts/default-daemon-client/
         const message = `🚀 *Ownership Transferred!*\n\nUser \`${userEmail}\` (ID: \`${userId}\`) is now fully onboarded and in control of their resources.`;
         try {
             await sendTelegramMessage(message);
-            logger.info(`Successfully sent ownership transfer alert for ${userId}`);
+            logger.info(`Successfully processed ownership transfer alert for ${userId}`);
         } catch (error) {
-            logger.error("Failed to send ownership transfer alert:", error);
+            logger.error(`Failed to process ownership transfer alert for ${userId}. The error originated in sendTelegramMessage.`);
         }
     }
 });
