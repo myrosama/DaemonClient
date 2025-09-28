@@ -155,18 +155,18 @@ async def _create_resources_with_userbot(client, user_id, user_email):
         print(f"[{user_id}] Bot created: @{bot_username}")
 
         # =========================================================================
-        # ===           FINAL, UPGRADED Bot Appearance Programming            ===
+        # ===           UPGRADED Bot Appearance Programming (Corrected)         ===
         # =========================================================================
         print(f"[{user_id}] Setting bot description, about text, and pictures...")
 
-        # --- Set the "About" Text (What appears on the bot's profile page) ---
+        # --- Set the "About" Text ---
         about_text = "This bot is your personal key to the DaemonClient storage system. All file management is handled through the web application."
         await conv.send_message(f"/setabouttext @{bot_username}")
         await conv.get_response()
         await conv.send_message(about_text)
         await conv.get_response()
 
-        # --- Set the "Description" Text (What appears under the picture) ---
+        # --- Set the "Description" Text ---
         description_text = (
             "This is your personal DaemonClient Bot.\n\n"
             "👇 Click START below, then return to the website to finalize the setup.\n\n"
@@ -177,27 +177,25 @@ async def _create_resources_with_userbot(client, user_id, user_email):
         await conv.send_message(description_text)
         await conv.get_response()
 
-        # --- ❗ CRITICAL: Set the Description PICTURE (The new feature!) ---
-        # Replace this URL with the direct link to your self-hosted PNG logo.
+        # --- Set the Description PICTURE ---
         BOT_DESCRIPTION_PIC_URL = "https://daemonclient.uz/logo.png"
-        try {
+        # === Corrected Python Syntax ===
+        try:
             await client.send_file("BotFather", BOT_DESCRIPTION_PIC_URL, caption=f"/setdescriptionpicture @{bot_username}")
             await conv.get_response(timeout=20)
             print(f"[{user_id}] Successfully set bot description picture.")
-        } catch (Exception e) {
+        except Exception as e:
             print(f"⚠️ Could not set bot description picture. This is non-critical. Error: {e}")
-        }
 
         # --- Set the Profile Picture (Avatar) ---
-        # You can use the same URL or a different, maybe square, version.
         BOT_PROFILE_PIC_URL = "https://daemonclient.uz/logo.png"
-        try {
+        # === Corrected Python Syntax ===
+        try:
             await client.send_file("BotFather", BOT_PROFILE_PIC_URL, caption=f"/setuserpic @{bot_username}")
             await conv.get_response(timeout=20)
             print(f"[{user_id}] Successfully set bot profile picture.")
-        } catch (Exception e) {
+        except Exception as e:
             print(f"⚠️ Could not set bot profile picture. This is non-critical. Error: {e}")
-    }
 
     # --- Step 2: Create the private channel ---
     channel_title = f"DaemonClient Storage - {user_id[:6]}"
