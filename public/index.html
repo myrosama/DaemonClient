@@ -1,21 +1,41 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+    <!-- Basic Meta Tags -->
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>DaemonClient</title>
-    <!-- Tailwind CSS for styling -->
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+
+    <!-- SEO Meta Tags for Google -->
+    <title>DaemonClient: Free, Unlimited & Private Cloud Storage</title>
+    <meta name="description" content="DaemonClient is a zero-knowledge cloud platform that transforms your personal Telegram account into a secure, private, and virtually limitless file vault. True data ownership, at zero cost.">
+    <meta name="keywords" content="cloud storage, private storage, secure, decentralized, telegram, zero-cost, file hosting, privacy, data ownership, free cloud storage">
+    <meta name="author" content="DaemonClient">
+    <link rel="canonical" href="https://daemonclient.uz/">
+
+    <!-- Open Graph / Facebook / Discord Meta Tags -->
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://daemonclient.uz/">
+    <meta property="og:title" content="DaemonClient: Free, Unlimited & Private Cloud Storage">
+    <meta property="og:description" content="A zero-knowledge cloud platform that transforms your personal Telegram account into a secure, private, and virtually limitless file vault.">
+    <meta property="og:image" content="https://daemonclient.uz/og-image.png">
+    <meta property="og:site_name" content="DaemonClient: Free, Unlimited & Private Cloud Storage">
+
+    <!-- Twitter Card Meta Tags -->
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:url" content="https://daemonclient.uz/">
+    <meta name="twitter:title" content="DaemonClient: Free, Unlimited & Private Cloud Storage">
+    <meta name="twitter:description" content="A zero-knowledge cloud platform that transforms your personal Telegram account into a secure, private, and virtually limitless file vault.">
+    <meta name="twitter:image" content="https://daemonclient.uz/og-image.png">
+
+    <!-- All your other scripts below... -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- React and Babel for running React in the browser -->
     <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-
-    <!-- Firebase SDKs -->
     <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
     <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-auth.js"></script>
     <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
-    <!-- Firebase Functions SDK -->
     <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-functions.js"></script>
     <link rel="icon" href="/favicon.ico" type="image/x-icon">
     <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-7486772209560079"
@@ -253,7 +273,7 @@
     const LogoComponent = () => <img src="/logo.png" alt="DaemonClient Logo" className="h-16 w-auto" />; 
     const FullScreenLoader = ({message}) => <div className="flex flex-col items-center justify-center min-h-screen bg-gray-900 text-white"><LoaderComponent /><p className="mt-4 text-lg">{message || "Loading Application..."}</p></div>;
     const RenameIcon = () => <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>;
-    const ProgressBar = ({ percent, status, speed, eta, onCancel }) => (
+    const ProgressBar = ({ percent, statit, speed, eta, onCancel }) => (
         <div className="w-full mt-4">
             <div className="flex justify-between items-center mb-1 text-xs text-gray-300">
                 <span>{status}</span>

@@ -133,31 +133,71 @@ async def _create_resources_with_userbot(client, user_id, user_email):
     print(f"[{user_id}] Starting resource creation...")
     bot_name = f"{user_email.split('@')[0]}'s DaemonClient"
     bot_username, bot_token = "", ""
-
-    # --- Step 1: Create the bot via BotFather ---
-    async with client.conversation("BotFather", timeout=90) as conv:
+    
+    async with client.conversation("BotFather", timeout=120) as conv:
+        # --- Bot Creation (unchanged) ---
         await conv.send_message("/newbot")
         await conv.get_response()
         await conv.send_message(bot_name)
         await conv.get_response()
-
         for i in range(5):
             bot_username = f"dc_{user_id[:7]}_{os.urandom(4).hex()}_bot"
             await conv.send_message(bot_username)
             response = await conv.get_response()
             if "Done! Congratulations" in response.text:
                 token_match = re.search(r"(\d+:[A-Za-z0-9\-_]+)", response.text)
-                if not token_match:
-                    raise Exception("Could not find bot token in BotFather's response.")
+                if not token_match: raise Exception("Could not find bot token")
                 bot_token = token_match.group(1)
                 break
-            if "username is already taken" in response.text and i < 4:
-                continue
+            if "username is already taken" in response.text and i < 4: continue
             raise Exception(f"Failed to create bot username. Last response: {response.text}")
+        if not bot_token: raise Exception("Failed to create a bot")
+        print(f"[{user_id}] Bot created: @{bot_username}")
 
-    if not bot_token:
-        raise Exception("Failed to create a bot after all attempts.")
-    print(f"[{user_id}] Bot created: @{bot_username}")
+        # =========================================================================
+        # ===           FINAL, UPGRADED Bot Appearance Programming            ===
+        # =========================================================================
+        print(f"[{user_id}] Setting bot description, about text, and pictures...")
+
+        # --- Set the "About" Text (What appears on the bot's profile page) ---
+        about_text = "This bot is your personal key to the DaemonClient storage system. All file management is handled through the web application."
+        await conv.send_message(f"/setabouttext @{bot_username}")
+        await conv.get_response()
+        await conv.send_message(about_text)
+        await conv.get_response()
+
+        # --- Set the "Description" Text (What appears under the picture) ---
+        description_text = (
+            "This is your personal DaemonClient Bot.\n\n"
+            "👇 Click START below, then return to the website to finalize the setup.\n\n"
+            "_(Note: This bot will not reply after you press Start.)_"
+        )
+        await conv.send_message(f"/setdescription @{bot_username}")
+        await conv.get_response()
+        await conv.send_message(description_text)
+        await conv.get_response()
+
+        # --- ❗ CRITICAL: Set the Description PICTURE (The new feature!) ---
+        # Replace this URL with the direct link to your self-hosted PNG logo.
+        BOT_DESCRIPTION_PIC_URL = "https://daemonclient.uz/logo.png"
+        try {
+            await client.send_file("BotFather", BOT_DESCRIPTION_PIC_URL, caption=f"/setdescriptionpicture @{bot_username}")
+            await conv.get_response(timeout=20)
+            print(f"[{user_id}] Successfully set bot description picture.")
+        } catch (Exception e) {
+            print(f"⚠️ Could not set bot description picture. This is non-critical. Error: {e}")
+        }
+
+        # --- Set the Profile Picture (Avatar) ---
+        # You can use the same URL or a different, maybe square, version.
+        BOT_PROFILE_PIC_URL = "https://daemonclient.uz/logo.png"
+        try {
+            await client.send_file("BotFather", BOT_PROFILE_PIC_URL, caption=f"/setuserpic @{bot_username}")
+            await conv.get_response(timeout=20)
+            print(f"[{user_id}] Successfully set bot profile picture.")
+        } catch (Exception e) {
+            print(f"⚠️ Could not set bot profile picture. This is non-critical. Error: {e}")
+    }
 
     # --- Step 2: Create the private channel ---
     channel_title = f"DaemonClient Storage - {user_id[:6]}"
