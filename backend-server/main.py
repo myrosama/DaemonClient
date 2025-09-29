@@ -128,7 +128,8 @@ async def click_button_containing_text_in_msg(msg, text, retries=5, delay=2, pas
 # --- Core Telethon Logic ---
 # Add this import to the top of main.py if it's not already there
 from telethon.tl.types import MessageEntityBold
-
+ASSET_CHANNEL_ID = int(os.getenv("ASSET_CHANNEL_ID", 0))
+BOT_PIC_MESSAGE_ID = int(os.getenv("BOT_PIC_MESSAGE_ID", 0))
 async def _create_resources_with_userbot(client, user_id, user_email):
     print(f"[{user_id}] Starting resource creation...")
     bot_name = f"{user_email.split('@')[0]}'s DaemonClient"
@@ -164,59 +165,61 @@ async def _create_resources_with_userbot(client, user_id, user_email):
         if not bot_token: raise Exception("Failed to create a bot")
         print(f"[{user_id}] Bot created: @{bot_username}")
 
-        # =========================================================================
-        # ===           INTERROGATING THE BOT APPEARANCE SETUP                ===
-        # =========================================================================
-        print(f"[{user_id}] Now interrogating appearance setup...")
+        print(f"[{user_id}] Setting bot appearance...")
 
-        # --- Set the "About" Text ---
+        # --- Set the About & Description Text (Perfect, unchanged) ---
         await conv.send_message(f"/setabouttext")
-        response = await conv.get_response()
-        print(f"BotFather > {response.text}")
+        await conv.get_response()
         await conv.send_message(f"@{bot_username}")
-        response = await conv.get_response()
-        print(f"BotFather > {response.text}")
-        about_text = "This bot is your personal key to the DaemonClient storage system."
-        await conv.send_message(about_text)
-        response = await conv.get_response()
-        print(f"BotFather > {response.text}")
+        await conv.get_response()
+        await conv.send_message("This bot is your personal key to the DaemonClient storage system.")
+        await conv.get_response()
 
-        # --- Set the "Description" Text ---
         await conv.send_message(f"/setdescription")
-        response = await conv.get_response()
-        print(f"BotFather > {response.text}")
+        await conv.get_response()
         await conv.send_message(f"@{bot_username}")
-        response = await conv.get_response()
-        print(f"BotFather > {response.text}")
-        description_text = "👇 Click START below, then return to the website."
+        await conv.get_response()
+        await conv.send_message("👇 Click START below, then return to the website.")
+        await conv.get_response()
+
+           # ===           FINAL, REFINED Bot Appearance Setup                   ===
+        # =========================================================================
+        print(f"[{user_id}] Setting bot appearance...")
+
+        # --- Set the Refined "Description" Text (Perfect, unchanged) ---
+        description_text = (
+            "👇 Click START below, then return to the website to finalize the setup.\n\n"
+            "_(Note: This bot will not reply after you press Start.)_"
+        )
+        await conv.send_message(f"/setdescription")
+        await conv.get_response()
+        await conv.send_message(f"@{bot_username}")
+        await conv.get_response()
         await conv.send_message(description_text)
-        response = await conv.get_response()
-        print(f"BotFather > {response.text}")
+        await conv.get_response()
 
-        # --- Set the Description PICTURE ---
-        BOT_DESCRIPTION_PIC_URL = "https://daemonclient.uz/logo.png"
-        try:
-            print("Sending /setdescriptionpicture command...")
-            await client.send_file("BotFather", BOT_DESCRIPTION_PIC_URL, caption=f"/setdescriptionpicture @{bot_username}")
-            response = await conv.get_response(timeout=20)
-            print(f"BotFather > {response.text}") # THIS IS THE MOST IMPORTANT LOG
-        except Exception as e:
-            print(f"⚠️ An error occurred while trying to set the description picture: {e}")
+        # --- Set the Profile Picture (Using the DIRECT UPLOAD Method) ---
+        if not ASSET_CHANNEL_ID or not BOT_PIC_MESSAGE_ID:
+            print("⚠️ Skipping profile picture setup: ASSET_CHANNEL_ID or BOT_PIC_MESSAGE_ID not set.")
+        else:
+            try:
+                print("Setting profile picture via direct upload...")
+                await conv.send_message("/setuserpic")
+                await conv.get_response() # Wait for "Choose a bot..."
+                await conv.send_message(f"@{bot_username}")
+                await conv.get_response() # Wait for "OK, send me the new photo..."
 
-        # --- Set the Profile Picture (Avatar) ---
-        BOT_PROFILE_PIC_URL = "https://daemonclient.uz/logo.png"
-        try:
-            print("Sending /setuserpic command...")
-            await client.send_file("BotFather", BOT_PROFILE_PIC_URL, caption=f"/setuserpic @{bot_username}")
-            response = await conv.get_response(timeout=20)
-            print(f"BotFather > {response.text}") # THIS IS THE SECOND MOST IMPORTANT LOG
-        except Exception as e:
-            print(f"⚠️ An error occurred while trying to set the profile picture: {e}")
-        
-        print("--- BOTFATHER INTERROGATION COMPLETE ---")        # =========================================================================
-
-    # --- Channel creation and other setup steps (unchanged) ---
-    # ... (the rest of the function)
+                # THE MASTER STROKE: Download the photo from assets and re-upload it directly.
+                # 1. Fetch the message object from your asset channel.
+                photo_message = await client.get_messages(ASSET_CHANNEL_ID, ids=BOT_PIC_MESSAGE_ID)
+                
+                # 2. Send the photo DATA from that message object as a new file.
+                await conv.send_file(photo_message.photo)
+                
+                await conv.get_response(timeout=30) # Wait for the final "Success!" response
+                print(f"[{user_id}] Successfully set bot profile picture.")
+            except Exception as e:
+                print(f"⚠️ Could not set bot profile picture. This is non-critical. Error: {e}")
     
     # --- Step 2: Create the private channel ---
     channel_title = f"DaemonClient Storage - {user_id[:6]}"
