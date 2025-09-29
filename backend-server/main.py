@@ -134,69 +134,90 @@ async def _create_resources_with_userbot(client, user_id, user_email):
     bot_name = f"{user_email.split('@')[0]}'s DaemonClient"
     bot_username, bot_token = "", ""
     
+    # We are starting a verbose conversation to see all of BotFather's replies.
     async with client.conversation("BotFather", timeout=120) as conv:
-        # --- Bot Creation (unchanged) ---
+        print("--- STARTING BOTFATHER INTERROGATION ---")
+
+        # --- Bot Creation ---
         await conv.send_message("/newbot")
-        await conv.get_response()
+        response = await conv.get_response()
+        print(f"BotFather > {response.text}")
+
         await conv.send_message(bot_name)
-        await conv.get_response()
+        response = await conv.get_response()
+        print(f"BotFather > {response.text}")
+
         for i in range(5):
             bot_username = f"dc_{user_id[:7]}_{os.urandom(4).hex()}_bot"
             await conv.send_message(bot_username)
             response = await conv.get_response()
+            print(f"BotFather > {response.text}") # Print the response for every attempt
             if "Done! Congratulations" in response.text:
                 token_match = re.search(r"(\d+:[A-Za-z0-9\-_]+)", response.text)
                 if not token_match: raise Exception("Could not find bot token")
                 bot_token = token_match.group(1)
                 break
             if "username is already taken" in response.text and i < 4: continue
-            raise Exception(f"Failed to create bot username. Last response: {response.text}")
+            if i == 4: # If all attempts failed
+                raise Exception(f"Failed to create bot username. Last response: {response.text}")
+        
         if not bot_token: raise Exception("Failed to create a bot")
         print(f"[{user_id}] Bot created: @{bot_username}")
 
         # =========================================================================
-        # ===           UPGRADED Bot Appearance Programming (Corrected)         ===
+        # ===           INTERROGATING THE BOT APPEARANCE SETUP                ===
         # =========================================================================
-        print(f"[{user_id}] Setting bot description, about text, and pictures...")
+        print(f"[{user_id}] Now interrogating appearance setup...")
 
         # --- Set the "About" Text ---
-        about_text = "This bot is your personal key to the DaemonClient storage system. All file management is handled through the web application."
-        await conv.send_message(f"/setabouttext @{bot_username}")
-        await conv.get_response()
+        await conv.send_message(f"/setabouttext")
+        response = await conv.get_response()
+        print(f"BotFather > {response.text}")
+        await conv.send_message(f"@{bot_username}")
+        response = await conv.get_response()
+        print(f"BotFather > {response.text}")
+        about_text = "This bot is your personal key to the DaemonClient storage system."
         await conv.send_message(about_text)
-        await conv.get_response()
+        response = await conv.get_response()
+        print(f"BotFather > {response.text}")
 
         # --- Set the "Description" Text ---
-        description_text = (
-            "This is your personal DaemonClient Bot.\n\n"
-            "👇 Click START below, then return to the website to finalize the setup.\n\n"
-            "_(Note: This bot will not reply after you press Start.)_"
-        )
-        await conv.send_message(f"/setdescription @{bot_username}")
-        await conv.get_response()
+        await conv.send_message(f"/setdescription")
+        response = await conv.get_response()
+        print(f"BotFather > {response.text}")
+        await conv.send_message(f"@{bot_username}")
+        response = await conv.get_response()
+        print(f"BotFather > {response.text}")
+        description_text = "👇 Click START below, then return to the website."
         await conv.send_message(description_text)
-        await conv.get_response()
+        response = await conv.get_response()
+        print(f"BotFather > {response.text}")
 
         # --- Set the Description PICTURE ---
         BOT_DESCRIPTION_PIC_URL = "https://daemonclient.uz/logo.png"
-        # === Corrected Python Syntax ===
         try:
+            print("Sending /setdescriptionpicture command...")
             await client.send_file("BotFather", BOT_DESCRIPTION_PIC_URL, caption=f"/setdescriptionpicture @{bot_username}")
-            await conv.get_response(timeout=20)
-            print(f"[{user_id}] Successfully set bot description picture.")
+            response = await conv.get_response(timeout=20)
+            print(f"BotFather > {response.text}") # THIS IS THE MOST IMPORTANT LOG
         except Exception as e:
-            print(f"⚠️ Could not set bot description picture. This is non-critical. Error: {e}")
+            print(f"⚠️ An error occurred while trying to set the description picture: {e}")
 
         # --- Set the Profile Picture (Avatar) ---
         BOT_PROFILE_PIC_URL = "https://daemonclient.uz/logo.png"
-        # === Corrected Python Syntax ===
         try:
+            print("Sending /setuserpic command...")
             await client.send_file("BotFather", BOT_PROFILE_PIC_URL, caption=f"/setuserpic @{bot_username}")
-            await conv.get_response(timeout=20)
-            print(f"[{user_id}] Successfully set bot profile picture.")
+            response = await conv.get_response(timeout=20)
+            print(f"BotFather > {response.text}") # THIS IS THE SECOND MOST IMPORTANT LOG
         except Exception as e:
-            print(f"⚠️ Could not set bot profile picture. This is non-critical. Error: {e}")
+            print(f"⚠️ An error occurred while trying to set the profile picture: {e}")
+        
+        print("--- BOTFATHER INTERROGATION COMPLETE ---")        # =========================================================================
 
+    # --- Channel creation and other setup steps (unchanged) ---
+    # ... (the rest of the function)
+    
     # --- Step 2: Create the private channel ---
     channel_title = f"DaemonClient Storage - {user_id[:6]}"
     result = await client(CreateChannelRequest(title=channel_title, about="Private storage.", megagroup=True))
