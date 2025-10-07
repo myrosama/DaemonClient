@@ -179,13 +179,11 @@
                     }
                     
                     const filePath = fileInfoData.result.file_path;
-                    // The lightweight proxy is still needed to bypass CORS.
-                    const proxyUrl = new URL('https://us-central1-daemonclient-c0625.cloudfunctions.net/telegramDownloadProxy');
-                    proxyUrl.searchParams.append('botToken', botToken);
-                    proxyUrl.searchParams.append('filePath', filePath);
-                    
-                    const fileRes = await fetch(proxyUrl.toString(), { signal: abortSignal });
-                    if (!fileRes.ok) throw new Error(`Proxy error ${fileRes.status}: ${await fileRes.text()}`);
+                    // Construct the special URL that our Service Worker will intercept.
+                    const serviceWorkerProxyUrl = `/tg-proxy/file/bot${botToken}/${filePath}`;
+
+                    // Make the fetch call to our local, in-browser proxy URL.
+                    const fileRes = await fetch(serviceWorkerProxyUrl, { signal: abortSignal });
                     
                     // Return the raw data as an ArrayBuffer, perfect for writing to a file.
                     return await fileRes.arrayBuffer();
@@ -1148,5 +1146,18 @@
     root.render(<App />);
 
     </script>
+    <script>
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('/sw.js')
+        .then(registration => {
+          console.log('DaemonClient Service Worker registered successfully:', registration);
+        })
+        .catch(error => {
+          console.error('Service Worker registration failed:', error);
+        });
+    });
+  }
+</script>
 </body>
 </html>
