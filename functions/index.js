@@ -26,31 +26,13 @@ const WEBHOOK_SECRET = process.env.TELEGRAM_WEBHOOK_SECRET;
 // --- 1. PUBLIC HTTP ENDPOINTS (V2) ---
 // =========================================================================
 
-exports.telegramDownloadProxy = onRequest({ cors: true }, async (req, res) => {
-  // ... (This code is perfect, no changes needed)
-  const { botToken, filePath } = req.query;
-  if (!botToken || !filePath) {
-    logger.error("Proxy: Missing botToken or filePath");
-    res.status(400).send("Missing 'botToken' or 'filePath' query parameters.");
-    return;
-  }
-  const fileUrl = `https://api.telegram.org/file/bot${botToken}/${filePath}`;
-  try {
-    const telegramResponse = await fetch(fileUrl);
-    if (!telegramResponse.ok) {
-      const errorText = await telegramResponse.text();
-      logger.error(`Proxy: Telegram API Error: ${errorText}`);
-      res.status(telegramResponse.status).send(`Telegram API Error: ${errorText}`);
-      return;
-    }
-    res.setHeader("Content-Type", telegramResponse.headers.get("content-type"));
-    res.setHeader("Content-Length", telegramResponse.headers.get("content-length"));
-    telegramResponse.body.pipe(res);
-  } catch (error) {
-    logger.error("Proxy: Internal function error:", error);
-    res.status(500).send("An error occurred in the proxy function.");
-  }
-});
+/*
+ *
+ * DELETED: The 'telegramDownloadProxy' function was here. 
+ * It has been removed as it costs money (bandwidth egress) and is not 
+ * used by the main web app, which uses the sw.js Service Worker instead.
+ *
+ */
 
 exports.telegramWebhook = onRequest(async (req, res) => {
     // ... (This code is perfect, no changes needed)
