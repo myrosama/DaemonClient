@@ -1,19 +1,16 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <!-- Basic Meta Tags -->
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="icon" href="/favicon.ico" type="image/x-icon">
 
-    <!-- SEO Meta Tags for Google -->
     <title>DaemonClient: Free, Unlimited & Private Cloud Storage</title>
     <meta name="description" content="DaemonClient is a zero-knowledge cloud platform that transforms your personal Telegram account into a secure, private, and virtually limitless file vault. True data ownership, at zero cost.">
     <meta name="keywords" content="cloud storage, private storage, secure, decentralized, telegram, zero-cost, file hosting, privacy, data ownership, free cloud storage">
     <meta name="author" content="DaemonClient">
     <link rel="canonical" href="https://daemonclient.uz/">
 
-    <!-- Open Graph / Facebook / Discord Meta Tags -->
     <meta property="og:type" content="website">
     <meta property="og:url" content="https://daemonclient.uz/">
     <meta property="og:title" content="DaemonClient: Free, Unlimited & Private Cloud Storage">
@@ -21,14 +18,12 @@
     <meta property="og:image" content="https://daemonclient.uz/og-image.png">
     <meta property="og:site_name" content="DaemonClient: Free, Unlimited & Private Cloud Storage">
 
-    <!-- Twitter Card Meta Tags -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:url" content="https://daemonclient.uz/">
     <meta name="twitter:title" content="DaemonClient: Free, Unlimited & Private Cloud Storage">
     <meta name="twitter:description" content="A zero-knowledge cloud platform that transforms your personal Telegram account into a secure, private, and virtually limitless file vault.">
     <meta name="twitter:image" content="https://daemonclient.uz/og-image.png">
 
-    <!-- All your other scripts below... -->
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
@@ -73,7 +68,9 @@
     const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
     function formatSpeed(bytes) { if (!bytes || bytes < 1024 || isNaN(bytes)) return `...`; if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(2)} KB/s`; return `${(bytes / (1024 * 1024)).toFixed(2)} MB/s`; }
     function formatETA(seconds) { if (seconds === Infinity || isNaN(seconds) || seconds < 1) return '...'; const h = Math.floor(seconds / 3600); const m = Math.floor((seconds % 3600) / 60); const s = Math.floor(seconds % 60); return [h > 0 ? `${h}h` : '', m > 0 ? `${m}m` : '', s > 0 ? `${s}s` : (h===0 && m===0 ? '0s' : '')].filter(Boolean).join(' ') || '...'; }
-    async function uploadFile(file, botToken, channelId, onProgress, abortSignal) {
+    
+    // --- MODIFIED UPLOAD FUNCTION (Now accepts parentId) ---
+    async function uploadFile(file, botToken, channelId, onProgress, abortSignal, parentId) {
         const totalParts = Math.ceil(file.size / CHUNK_SIZE);
         const uploadedMessageInfo = [];
         let uploadedBytes = 0;
@@ -118,48 +115,48 @@
             if (partNumber < totalParts) await sleep(PROACTIVE_DELAY_MS);
         } 
         onProgress({ percent: 100, status: `Upload complete!`, speed: '', eta: ''});
-        return uploadedMessageInfo;
+        
+        // Return file metadata object
+        return {
+            fileName: file.name,
+            fileSize: file.size,
+            fileType: file.type,
+            uploadedAt: firebase.firestore.Timestamp.now(),
+            messages: uploadedMessageInfo,
+            type: 'file', // <-- NEW
+            parentId: parentId  // <-- NEW
+        };
     }
-        // ============================================================================
-    // --- DOWNLOAD FUNCTION (Ultimate Version: Concurrent Streaming to Disk) ---
-    // ============================================================================
+        
+    // --- DOWNLOAD FUNCTION (Unchanged) ---
     async function downloadFile(fileInfo, botToken, onProgress, abortSignal) {
-        // Constants from your original code. CHUNK_SIZE must match the one used for uploads.
+        // ... (This entire function is perfect, no changes needed) ...
         const { messages, fileName, fileSize, fileType } = fileInfo;
-        const CHUNK_SIZE = 19 * 1024 * 1024; // Ensure this matches your upload CHUNK_SIZE
+        const CHUNK_SIZE = 19 * 1024 * 1024;
         const DOWNLOAD_RETRIES = 5;
         const CONCURRENT_DOWNLOADS = 5;
-
         const totalParts = messages.length;
         let downloadedBytes = 0;
         let completedParts = 0;
         const startTime = Date.now();
-
-        // --- Step 1: Check for browser support ---
         if (!window.showSaveFilePicker) {
             const errorMessage = 'Error: Your browser does not support high-performance downloads. Please use the latest version of Chrome, Edge, or Opera.';
             onProgress({ percent: 0, status: errorMessage, speed: '', eta: '' });
             alert(errorMessage);
             throw new Error("File System Access API not supported.");
         }
-
-        // --- Step 2: Get user permission and a file handle ---
         let fileHandle;
         try {
             onProgress({ percent: 0, status: 'Waiting for permission...', speed: '', eta: '' });
             fileHandle = await window.showSaveFilePicker({ suggestedName: fileName });
         } catch (err) {
             if (err.name === 'AbortError') {
-                onProgress({ active: false }); // Reset UI if user cancels
+                onProgress({ active: false });
                 return; 
             }
             throw err;
         }
-
-        // --- Step 3: Create a writable stream to the local file ---
         const writable = await fileHandle.createWritable();
-
-        // --- Step 4: Define the download logic for a single part ---
         async function downloadPartWithRetry(partData) {
             for (let attempt = 1; attempt <= DOWNLOAD_RETRIES; attempt++) {
                 if (abortSignal.aborted) throw new Error("Download was cancelled by the user.");
@@ -168,26 +165,18 @@
                     const fileInfoRes = await fetch(fileInfoUrl, { signal: abortSignal });
                     const fileInfoData = await fileInfoRes.json();
                     if (!fileInfoData.ok) {
-                        // Handle Telegram rate limits gracefully
                         if (fileInfoData.error_code === 429 && fileInfoData.parameters?.retry_after) {
                             const waitTime = fileInfoData.parameters.retry_after;
                             onProgress(prev => ({ ...prev, status: `Rate limited. Waiting ${waitTime}s...` }));
                             await sleep(waitTime * 1000 + 500);
-                            continue; // Retry the same attempt after waiting
+                            continue;
                         }
                         throw new Error(`TG getFile error: ${fileInfoData.description || "Unknown"}`);
                     }
-                    
                     const filePath = fileInfoData.result.file_path;
-                    // Construct the special URL that our Service Worker will intercept.
                     const serviceWorkerProxyUrl = `/tg-proxy/file/bot${botToken}/${filePath}`;
-
-                    // Make the fetch call to our local, in-browser proxy URL.
                     const fileRes = await fetch(serviceWorkerProxyUrl, { signal: abortSignal });
-                    
-                    // Return the raw data as an ArrayBuffer, perfect for writing to a file.
                     return await fileRes.arrayBuffer();
-
                 } catch (error) {
                     if (error.name === 'AbortError') throw error;
                     if (attempt >= DOWNLOAD_RETRIES) throw error;
@@ -195,11 +184,8 @@
                 }
             }
         }
-
-        // --- Step 5: Set up and manage the concurrent download queue ---
         return new Promise((resolve, reject) => {
-            const queue = [...messages.entries()]; // [index, partData]
-
+            const queue = [...messages.entries()];
             const worker = async () => {
                 while (queue.length > 0) {
                     if (abortSignal.aborted) {
@@ -207,54 +193,44 @@
                         reject(new Error("Download was cancelled."));
                         return;
                     }
-
                     const [index, partData] = queue.shift();
-                    
                     try {
                         const chunkData = await downloadPartWithRetry(partData);
-                        
-                        // NINJA TECHNIQUE: Write the downloaded chunk to its specific position in the file.
                         const position = index * CHUNK_SIZE;
                         await writable.write({ type: 'write', position: position, data: chunkData });
-
-                        // Update progress based on actual data received
                         downloadedBytes += chunkData.byteLength;
                         completedParts++;
-
                         const elapsedTime = (Date.now() - startTime) / 1000 || 1;
                         const speed = downloadedBytes / elapsedTime;
                         const remainingBytes = fileSize - downloadedBytes;
                         const eta = (remainingBytes > 0 && speed > 0) ? remainingBytes / speed : 0;
-                        
                         onProgress({ 
                             percent: Math.round((downloadedBytes / fileSize) * 100), 
                             status: `Downloaded part ${completedParts}/${totalParts}...`, 
                             speed: formatSpeed(speed), 
                             eta: formatETA(eta) 
                         });
-                        
-                        // Check if the entire file is complete
                         if (completedParts === totalParts) {
                             await writable.close();
                             onProgress({ percent: 100, status: `Download complete! File saved.`, speed: '', eta: '' });
                             resolve();
-                            return; // Exit the worker
+                            return;
                         }
                     } catch (error) {
-                        await writable.abort(); // Clean up the file on error
+                        await writable.abort();
                         reject(error);
-                        return; // Stop this worker on failure
+                        return;
                     }
                 }
             };
-
-            // Start all concurrent workers
             onProgress({ percent: 0, status: 'Starting download...', speed: '', eta: '' });
             for (let i = 0; i < CONCURRENT_DOWNLOADS; i++) {
                 worker();
             }
         });
     }
+        
+    // --- MODIFIED DELETE FUNCTION (Now handles files, not folders) ---
     async function deleteTelegramMessages(botToken, channelId, messages) {
         for (const message of messages) {
             try {
@@ -266,12 +242,20 @@
             await sleep(350);
         }
     }
+        
+    // --- OTHER COMPONENTS (Unchanged) ---
     const LoaderComponent = ({ small }) => <div className={`animate-spin rounded-full border-b-2 border-white ${small ? 'h-6 w-6' : 'h-10 w-10'}`}></div>;
     const LockIcon = () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mr-2 h-10 w-10 text-indigo-400"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>;
     const LogoComponent = () => <img src="/logo.png" alt="DaemonClient Logo" className="h-16 w-auto" />; 
     const FullScreenLoader = ({message}) => <div className="flex flex-col items-center justify-center min-h-screen bg-gray-900 text-white"><LoaderComponent /><p className="mt-4 text-lg">{message || "Loading Application..."}</p></div>;
     const RenameIcon = () => <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>;
-    const ProgressBar = ({ percent, statit, speed, eta, onCancel }) => (
+    
+    // --- NEW: Folder & Create Folder Icons ---
+    const FolderIcon = () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-indigo-300 w-5 h-5 mr-3 flex-shrink-0"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>;
+    const FileIcon = () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-gray-400 w-5 h-5 mr-3 flex-shrink-0"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path><polyline points="13 2 13 9 20 9"></polyline></svg>;
+    const CreateFolderIcon = () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path><line x1="12" y1="11" x2="12" y2="17"></line><line x1="9" y1="14" x2="15" y2="14"></line></svg>;
+        
+    const ProgressBar = ({ percent, status, speed, eta, onCancel }) => ( // 'status' was misspelled as 'statit'
         <div className="w-full mt-4">
             <div className="flex justify-between items-center mb-1 text-xs text-gray-300">
                 <span>{status}</span>
@@ -318,34 +302,30 @@
             </div>
         );
     };
-        const AuthView = () => {
+    
+    // --- AUTH VIEW (Unchanged) ---
+    const AuthView = () => {
         const [isLoginView, setIsLoginView] = React.useState(true);
         const [email, setEmail] = React.useState('');
         const [password, setPassword] = React.useState('');
         const [error, setError] = React.useState('');
         const [isLoading, setIsLoading] = React.useState(false);
         const [isExplanationVisible, setIsExplanationVisible] = React.useState(false);
-        
-        // --- States for the Terms of Use modal ---
         const [isTermsModalOpen, setIsTermsModalOpen] = React.useState(false);
         const [hasAgreedToTerms, setHasAgreedToTerms] = React.useState(false);
 
         const handleAuthAction = async (e) => {
             e.preventDefault();
-            
-            // --- Validation logic combined correctly ---
             if (!isLoginView && !hasAgreedToTerms) {
                 setError("You must agree to the Terms of Use to create an account.");
-                return; // Stop the function here
+                return;
             }
             if (!email || !password) {
                 setError("Please enter email and password.");
-                return; // Stop the function here
+                return;
             }
-            
             setIsLoading(true);
             setError(''); 
-            
             try {
                 if (isLoginView) {
                     await auth.signInWithEmailAndPassword(email, password);
@@ -387,7 +367,6 @@
                 <div className="w-full max-w-md">
                     <div className="text-center mb-8">
                         <div className="flex items-center justify-center mb-2">
-                     {/* --- THIS IS THE CHANGE --- */}
                         <LogoComponent />
                      </div>
                         <h1 className="text-4xl font-bold text-white">DaemonClient</h1>
@@ -408,7 +387,6 @@
                                 <input id="password-auth" type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="w-full p-3 bg-gray-700 border border-gray-600 rounded-lg text-white" required />
                             </div>
                             
-                            {/* --- NEW: TERMS AGREEMENT CHECKBOX (only for Sign Up view) --- */}
                             {!isLoginView && (
                                 <div className="flex items-center">
                                     <input 
@@ -456,48 +434,88 @@
                         </div>
                     </div>
                 </div>
-
-                {/* --- RENDER THE MODAL IF OPEN --- */}
                 {isTermsModalOpen && <TermsModal onClose={() => setIsTermsModalOpen(false)} />}
             </div>
         );
     };
-    const FileItem = ({ file, isEditing, renameValue, setRenameValue, onSaveRename, onCancelRename, onStartRename, onDownload, onDelete, isBusy }) => {
+        
+    // --- MODIFIED FileItem (Handles folders and files) ---
+    const FileItem = ({ item, isEditing, renameValue, setRenameValue, onSaveRename, onCancelRename, onStartRename, onDownload, onDelete, onFolderClick, isBusy }) => {
+        const isFolder = item.type === 'folder';
+
+        // --- Rename Input (same for file/folder) ---
         if (isEditing) {
             return (
                 <div className="flex justify-between items-center bg-gray-900 p-3 rounded-lg">
-                    <input type="text" value={renameValue} onChange={(e) => setRenameValue(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') onSaveRename(file.id, renameValue); if (e.key === 'Escape') onCancelRename(); }} className="w-full p-1 bg-gray-700 border border-indigo-500 rounded text-white text-sm" autoFocus />
+                    <input type="text" value={renameValue} onChange={(e) => setRenameValue(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') onSaveRename(item.id, renameValue); if (e.key === 'Escape') onCancelRename(); }} className="w-full p-1 bg-gray-700 border border-indigo-500 rounded text-white text-sm" autoFocus />
                     <div className="flex items-center space-x-2 ml-2">
-                        <button onClick={() => onSaveRename(file.id, renameValue)} className="bg-green-600 hover:bg-green-700 text-white font-bold py-1 px-3 rounded-md text-sm">Save</button>
+                        <button onClick={() => onSaveRename(item.id, renameValue)} className="bg-green-600 hover:bg-green-700 text-white font-bold py-1 px-3 rounded-md text-sm">Save</button>
                         <button onClick={onCancelRename} className="bg-gray-600 hover:bg-gray-500 text-white py-1 px-3 rounded-md text-sm">Cancel</button>
                     </div>
                 </div>
             );
         }
+
+        // --- Folder vs. File Display ---
         return (
-            <div className="flex justify-between items-center bg-gray-800 p-3 rounded-lg hover:bg-gray-750 transition-colors">
-                <div>
-                    <p className="font-semibold text-white truncate w-40 md:w-60" title={file.fileName}>{file.fileName}</p>
-                    <p className="text-xs text-gray-400">{(file.fileSize / 1024 / 1024).toFixed(2)} MB {file.uploadedAt?.toDate ? ` - ${file.uploadedAt.toDate().toLocaleDateString()}` : ''}</p>
+            <div 
+                className={`flex justify-between items-center bg-gray-800 p-3 rounded-lg transition-colors ${isFolder ? 'hover:bg-gray-700 cursor-pointer' : 'hover:bg-gray-750'}`}
+                onClick={isFolder ? () => onFolderClick(item) : undefined}
+            >
+                <div className="flex items-center overflow-hidden">
+                    {isFolder ? <FolderIcon /> : <FileIcon />}
+                    <div>
+                        <p className="font-semibold text-white truncate w-40 md:w-60" title={item.fileName}>{item.fileName}</p>
+                        {!isFolder && (
+                            <p className="text-xs text-gray-400">{(item.fileSize / 1024 / 1024).toFixed(2)} MB {item.uploadedAt?.toDate ? ` - ${item.uploadedAt.toDate().toLocaleDateString()}` : ''}</p>
+                        )}
+                    </div>
                 </div>
-                <div className="flex items-center space-x-2">
-                    <button onClick={() => onStartRename(file.id, file.fileName)} disabled={isBusy} className="text-blue-400 hover:text-blue-300 disabled:text-gray-600 disabled:cursor-not-allowed p-1" title="Rename"><RenameIcon /></button>
-                    <button onClick={() => onDelete(file)} disabled={isBusy} className="bg-red-600 hover:bg-red-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-1 px-3 rounded-md text-sm">Delete</button>
-                    <button onClick={() => onDownload(file)} disabled={isBusy} className="bg-green-600 hover:bg-green-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-1 px-3 rounded-md text-sm">Download</button>
+                <div className="flex items-center space-x-2" onClick={(e) => e.stopPropagation()}>
+                    <button onClick={() => onStartRename(item.id, item.fileName)} disabled={isBusy} className="text-blue-400 hover:text-blue-300 disabled:text-gray-600 disabled:cursor-not-allowed p-1" title="Rename"><RenameIcon /></button>
+                    <button onClick={() => onDelete(item)} disabled={isBusy} className="bg-red-600 hover:bg-red-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-1 px-3 rounded-md text-sm">Delete</button>
+                    {!isFolder && (
+                        <button onClick={() => onDownload(item)} disabled={isBusy} className="bg-green-600 hover:bg-green-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-1 px-3 rounded-md text-sm">Download</button>
+                    )}
                 </div>
             </div>
         );
     };
 
+    // --- NEW: Breadcrumbs Component ---
+    const Breadcrumbs = ({ hierarchy, onNavigate }) => {
+        return (
+            <div className="flex items-center space-x-2 text-sm text-gray-400 mb-4">
+                {hierarchy.map((folder, index) => (
+                    <React.Fragment key={folder.id}>
+                        <button 
+                            onClick={() => onNavigate(folder.id, index)} 
+                            className={`hover:text-white ${index === hierarchy.length - 1 ? 'text-white font-semibold' : ''}`}
+                        >
+                            {folder.name}
+                        </button>
+                        {index < hierarchy.length - 1 && <span>/</span>}
+                    </React.Fragment>
+                ))}
+            </div>
+        );
+    };
+
     // ============================================================================
-    // --- DASHBOARD VIEW (Updated for Multi-File Upload) ---
+    // --- MODIFIED DASHBOARD VIEW (Handles Folders) ---
     // ============================================================================
     const DashboardView = () => {
         const [config, setConfig] = React.useState(null); 
         const [isLoadingConfig, setIsLoadingConfig] = React.useState(true); 
         const [configError, setConfigError] = React.useState(''); 
-        const [files, setFiles] = React.useState([]);
-        const [totalFiles, setTotalFiles] = React.useState(0);
+        
+        // --- MODIFIED STATE ---
+        const [items, setItems] = React.useState([]); // Will hold both files and folders
+        const [totalItems, setTotalItems] = React.useState(0);
+        const [currentFolderId, setCurrentFolderId] = React.useState('root');
+        const [folderHierarchy, setFolderHierarchy] = React.useState([{ id: 'root', name: 'Root' }]);
+        // --- END MODIFIED STATE ---
+
         const [isLoadingFiles, setIsLoadingFiles] = React.useState(true); 
         const [uploadProgress, setUploadProgress] = React.useState({ active: false });
         const [downloadProgress, setDownloadProgress] = React.useState({ active: false });
@@ -509,7 +527,6 @@
         const [editingFileId, setEditingFileId] = React.useState(null);
         const [renameValue, setRenameValue] = React.useState('');
         
-        // ✅ 1. State for the upload queue
         const [uploadQueue, setUploadQueue] = React.useState([]);
         const [uploadBatchTotal, setUploadBatchTotal] = React.useState(0);
 
@@ -518,37 +535,59 @@
         const isDownloading = downloadProgress.active;
         const isRenaming = editingFileId !== null;
         const isBusy = isUploading || isDownloading || isRenaming;
-        const SettingsIcon = () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 0 2.4l-.15.08a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l-.22-.38a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1 0-2.4l.15-.08a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path><circle cx="12" cy="12" r="3"></circle></svg>;
+        const SettingsIcon = () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 0 2.4l-.15.08a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l-.22-.38a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1 0-2.4l.15.08a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path><circle cx="12" cy="12" r="3"></circle></svg>;
 
+        // --- MODIFIED useEffect: Fetches config AND files for current folder ---
         React.useEffect(() => {
             const currentAuthUser = auth.currentUser;
-            if (currentAuthUser) {
-                const currentUserID = currentAuthUser.uid;
-                setIsLoadingConfig(true); setIsLoadingFiles(true);
-                setConfigError(''); setConfig(null); setFiles([]); 
-                const fetchData = async () => {
-                    try {
-                        const configPromise = db.collection(`artifacts/${appIdentifier}/users/${currentUserID}/config`).doc('telegram').get();
-                        const filesPromise = db.collection(`artifacts/${appIdentifier}/users/${currentUserID}/files`).orderBy("uploadedAt", "desc").get();
-                        const [configSnap, filesSnap] = await Promise.all([configPromise, filesPromise]);
-                        if (configSnap.exists && configSnap.data().botToken) { setConfig(configSnap.data()); } 
-                        else { setConfigError("Configuration not found. Please complete the one-time setup."); setConfig(null); }
-                        const filesData = filesSnap.docs.map(d => ({ id: d.id, ...d.data() }));
-                        setFiles(filesData);
-                        setTotalFiles(filesData.length);
-                    } catch (error) {
-                        setConfigError(`Error loading data: ${error.message}. Please try refreshing the page.`);
-                        setConfig(null);
-                    } finally { setIsLoadingConfig(false); setIsLoadingFiles(false); }
-                };
-                fetchData();
-            } else { setIsLoadingConfig(false); setIsLoadingFiles(false); setConfig(null); setFiles([]); }
-        }, []); 
+            if (!currentAuthUser) {
+                setIsLoadingConfig(false); setIsLoadingFiles(false); setConfig(null); setItems([]);
+                return;
+            }
+            
+            const currentUserID = currentAuthUser.uid;
+            
+            // 1. Fetch Config
+            const configDocRef = db.collection(`artifacts/${appIdentifier}/users/${currentUserID}/config`).doc('telegram');
+            configDocRef.get().then(configSnap => {
+                if (configSnap.exists && configSnap.data().botToken) {
+                    setConfig(configSnap.data());
+                } else {
+                    setConfigError("Configuration not found. Please complete the one-time setup.");
+                    setConfig(null);
+                }
+            }).catch(error => {
+                setConfigError(`Error loading config: ${error.message}.`);
+                setConfig(null);
+            }).finally(() => {
+                setIsLoadingConfig(false);
+            });
+
+            // 2. Fetch Files & Folders for the currentFolderId
+            setIsLoadingFiles(true);
+            const itemsQuery = db.collection(`artifacts/${appIdentifier}/users/${currentUserID}/files`)
+                                .where('parentId', '==', currentFolderId)
+                                .orderBy('type', 'desc') // 'folder' comes before 'file'
+                                .orderBy('fileName', 'asc');
+
+            const unsubscribe = itemsQuery.onSnapshot(filesSnap => {
+                const filesData = filesSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+                setItems(filesData);
+                setTotalItems(filesData.length);
+                setIsLoadingFiles(false);
+            }, error => {
+                setFeedbackMessage({type: 'error', text: `Error loading files: ${error.message}`});
+                setIsLoadingFiles(false);
+                clearFeedback();
+            });
+
+            return () => unsubscribe(); // Cleanup snapshot listener
+
+        }, [currentFolderId]); // Re-run this effect when the folder changes!
         
         const clearFeedback = (delay = 5000) => setTimeout(() => setFeedbackMessage({type: '', text: ''}), delay);
         const handleCancelTransfer = () => { if (abortController) { abortController.abort(); setAbortController(null); setUploadQueue([]); setUploadProgress({ active: false }); setDownloadProgress({ active: false }); setFeedbackMessage({ type: 'info', text: 'Operation cancelled.' }); clearFeedback(); } };
         
-        // ✅ 2. handleFileUpload now adds files to the queue
         const handleFileUpload = (e) => {
             const newFiles = e.target.files;
             if (!newFiles.length) return;
@@ -559,19 +598,18 @@
             }
             const newFilesArray = Array.from(newFiles);
             setUploadQueue(prevQueue => [...prevQueue, ...newFilesArray]);
-            if (uploadQueue.length === 0) { // If this is the start of a new batch
+            if (uploadQueue.length === 0) {
                 setUploadBatchTotal(newFilesArray.length);
             } else {
                 setUploadBatchTotal(prevTotal => prevTotal + newFilesArray.length);
             }
-
             if(fileInputRef.current) fileInputRef.current.value = ""; 
         };
 
-        // ✅ 3. This useEffect processes the upload queue one by one
+        // --- MODIFIED useEffect: Processes upload queue with parentId ---
         React.useEffect(() => {
             if (isUploading || uploadQueue.length === 0) {
-                return; // Do nothing if already uploading or queue is empty
+                return;
             }
 
             const startNextUpload = async () => {
@@ -586,20 +624,20 @@
                 setFeedbackMessage({ type: '', text: '' });
 
                 try {
-                    const messageInfo = await uploadFile(
+                    // --- PASS currentFolderId TO UPLOAD FUNCTION ---
+                    const newFileData = await uploadFile(
                         fileToUpload, 
                         config.botToken, 
                         config.channelId, 
                         (p) => setUploadProgress(prev => ({ ...prev, ...p, status: `${statusPrefix} - ${p.status}`, active: true })), 
-                        controller.signal
+                        controller.signal,
+                        currentFolderId // <-- Here's the magic
                     );
 
                     const newFileRef = db.collection(`artifacts/${appIdentifier}/users/${auth.currentUser.uid}/files`).doc();
-                    const newFileData = { id: newFileRef.id, fileName: fileToUpload.name, fileSize: fileToUpload.size, fileType: fileToUpload.type, uploadedAt: firebase.firestore.Timestamp.now(), messages: messageInfo };
-                    await newFileRef.set(newFileData);
+                    await newFileRef.set({ id: newFileRef.id, ...newFileData });
 
-                    setFiles(prev => [newFileData, ...prev].sort((a,b) => (b.uploadedAt?.toMillis()||0) - (a.uploadedAt?.toMillis()||0)));
-                    setTotalFiles(prev => prev + 1);
+                    // No need to manually add to state, onSnapshot will do it
                     setFeedbackMessage({ type: 'success', text: `Uploaded '${fileToUpload.name}'` });
                 
                 } catch (err) {
@@ -609,18 +647,17 @@
                 } finally {
                     setUploadProgress({ active: false });
                     setAbortController(null);
-                    // Remove the processed file and move to the next one
                     const nextQueue = uploadQueue.slice(1);
                     setUploadQueue(nextQueue);
                     if (nextQueue.length === 0) {
-                        setUploadBatchTotal(0); // Reset batch total when queue is done
+                        setUploadBatchTotal(0);
                         clearFeedback();
                     }
                 }
             };
 
             startNextUpload();
-        }, [uploadQueue, isUploading]); // This hook runs when the queue or upload status changes
+        }, [uploadQueue, isUploading, currentFolderId]); // Add currentFolderId as dependency
 
         const handleFileDownload = async (fileInfo) => {
             if (!config?.botToken) { setFeedbackMessage({type: 'error', text: "Bot configuration not loaded."}); clearFeedback(); return; }
@@ -633,31 +670,55 @@
             } catch (err) { if (err.name !== 'AbortError') { setFeedbackMessage({type: 'error', text: `Download failed: ${err.message}`}); }
             } finally { setDownloadProgress({ active: false }); clearFeedback(); setAbortController(null); }
         };
-        const handleFileDelete = async (fileToDelete) => {
-            if (isBusy) return; if (!window.confirm(`Are you sure you want to delete "${fileToDelete.fileName}"? This cannot be undone.`)) return;
-            setFeedbackMessage({ type: 'info', text: `Deleting '${fileToDelete.fileName}'...` });
+        
+        // --- MODIFIED DELETE: Handles both files and folders ---
+        // --- MODIFIED DELETE: Handles both files and folders (FIXED) ---
+        const handleFileDelete = async (itemToDelete) => {
+            if (isBusy) return;
+            
+            // --- THIS IS THE FIX ---
+            // It was "item.type", now it's "itemToDelete.type"
+            const isFolder = itemToDelete.type === 'folder'; 
+            
+            const message = isFolder 
+                ? `Are you sure you want to delete the folder "${itemToDelete.fileName}"? This will NOT delete its contents, which will become orphaned. This action is irreversible.`
+                : `Are you sure you want to delete "${itemToDelete.fileName}"? This cannot be undone.`;
+
+            if (!window.confirm(message)) return;
+            
+            setFeedbackMessage({ type: 'info', text: `Deleting '${itemToDelete.fileName}'...` });
+            
             try {
-                await deleteTelegramMessages(config.botToken, config.channelId, fileToDelete.messages);
-                await db.collection(`artifacts/${appIdentifier}/users/${auth.currentUser.uid}/files`).doc(fileToDelete.id).delete();
-                setFiles(prev => prev.filter(f => f.id !== fileToDelete.id));
-                setTotalFiles(prev => prev - 1);
-                setFeedbackMessage({ type: 'success', text: `Successfully deleted '${fileToDelete.fileName}'.` });
-            } catch (err) { setFeedbackMessage({ type: 'error', text: `Failed to delete file: ${err.message}` });
-            } finally { clearFeedback(); }
+                // If it's a file, delete its messages from Telegram
+                if (!isFolder) {
+                    await deleteTelegramMessages(config.botToken, config.channelId, itemToDelete.messages);
+                }
+                
+                // Delete the item's document from Firestore
+                await db.collection(`artifacts/${appIdentifier}/users/${auth.currentUser.uid}/files`).doc(itemToDelete.id).delete();
+                
+                // No need to update local state, onSnapshot will handle it.
+                setFeedbackMessage({ type: 'success', text: `Successfully deleted '${itemToDelete.fileName}'.` });
+            } catch (err) { 
+                setFeedbackMessage({ type: 'error', text: `Failed to delete: ${err.message}` });
+            } finally { 
+                clearFeedback(); 
+            }
         };
+
         const handleStartRename = (fileId, currentName) => { if (isBusy) return; setEditingFileId(fileId); setRenameValue(currentName); };
         const handleCancelRename = () => { setEditingFileId(null); setRenameValue(''); };
         const handleSaveRename = async (fileId, newName) => {
             const trimmedName = newName.trim();
-            if (!trimmedName) { setFeedbackMessage({ type: 'error', text: 'File name cannot be empty.' }); clearFeedback(3000); return; }
-            const originalFile = files.find(f => f.id === fileId);
-            if (originalFile.fileName === trimmedName) { handleCancelRename(); return; }
+            if (!trimmedName) { setFeedbackMessage({ type: 'error', text: 'Name cannot be empty.' }); clearFeedback(3000); return; }
+            const originalItem = items.find(f => f.id === fileId);
+            if (originalItem.fileName === trimmedName) { handleCancelRename(); return; }
             try {
                 const fileRef = db.collection(`artifacts/${appIdentifier}/users/${auth.currentUser.uid}/files`).doc(fileId);
                 await fileRef.update({ fileName: trimmedName });
-                setFiles(prevFiles => prevFiles.map(f => f.id === fileId ? { ...f, fileName: trimmedName } : f));
-                setFeedbackMessage({ type: 'success', text: 'File renamed successfully!' });
-            } catch (error) { setFeedbackMessage({ type: 'error', text: `Failed to rename file: ${error.message}` });
+                // onSnapshot will update the UI
+                setFeedbackMessage({ type: 'success', text: 'Renamed successfully!' });
+            } catch (error) { setFeedbackMessage({ type: 'error', text: `Failed to rename: ${error.message}` });
             } finally { handleCancelRename(); clearFeedback(); }
         };
         const handleLogout = async () => { try { await auth.signOut(); } catch (err) { setFeedbackMessage({type: 'error', text: "Logout failed."}); clearFeedback(); }};
@@ -674,9 +735,53 @@
             } finally { setIsSavingSettings(false); }
         };
 
-        if (isLoadingConfig || isLoadingFiles) return <FullScreenLoader message={isLoadingConfig ? "Loading Configuration..." : "Loading Files..."} />;
+        // --- NEW: Navigation Handlers ---
+        const handleFolderClick = (folder) => {
+            if (isBusy) return;
+            setCurrentFolderId(folder.id);
+            setFolderHierarchy(prev => [...prev, { id: folder.id, name: folder.fileName }]);
+        };
+        
+        const handleBreadcrumbNavigate = (folderId, index) => {
+            if (isBusy) return;
+            setCurrentFolderId(folderId);
+            setFolderHierarchy(prev => prev.slice(0, index + 1));
+        };
+
+        // --- NEW: Folder Creation Handler ---
+        const handleCreateFolder = async () => {
+            if (isBusy) return;
+            const folderName = prompt("Enter new folder name:");
+            if (!folderName || !folderName.trim()) {
+                return;
+            }
+            
+            const trimmedName = folderName.trim();
+            setFeedbackMessage({type: 'info', text: `Creating folder '${trimmedName}'...`});
+
+            try {
+                const newFolderRef = db.collection(`artifacts/${appIdentifier}/users/${auth.currentUser.uid}/files`).doc();
+                const newFolderData = {
+                    id: newFolderRef.id,
+                    fileName: trimmedName,
+                    type: 'folder',
+                    parentId: currentFolderId,
+                    uploadedAt: firebase.firestore.Timestamp.now()
+                };
+                await newFolderRef.set(newFolderData);
+                // onSnapshot will update the UI
+                setFeedbackMessage({type: 'success', text: `Created folder '${trimmedName}'`});
+            } catch (err) {
+                setFeedbackMessage({type: 'error', text: `Failed to create folder: ${err.message}`});
+            } finally {
+                clearFeedback();
+            }
+        };
+
+        if (isLoadingConfig) return <FullScreenLoader message="Loading Configuration..." />;
         if (configError) return (<div className="min-h-screen bg-gray-900 text-white flex items-center justify-center p-4"><div className="w-full max-w-3xl bg-gray-800 rounded-xl shadow-2xl p-6"><div className="flex justify-between items-center mb-4"><h1 className="text-3xl font-bold text-indigo-400">DaemonClient</h1><button onClick={handleLogout} className="bg-red-500 hover:bg-red-600 text-white py-2 px-4 rounded-lg text-sm">Logout</button></div><div className="p-4 bg-red-700 text-red-100 rounded-lg"><h2 className="text-xl font-semibold mb-2">Configuration Error</h2><p>{configError}</p><p className="mt-2">Try logging out and back in.</p></div></div></div>);
-        const filteredFiles = files.filter(file => file.fileName.toLowerCase().includes(searchTerm.toLowerCase()));
+        
+        const filteredItems = items.filter(item => item.fileName.toLowerCase().includes(searchTerm.toLowerCase()));
 
         return (
             <div className="min-h-screen bg-gray-900 text-white flex items-center justify-center p-4 font-sans">
@@ -690,22 +795,53 @@
                     </div>
                     <div className="bg-gray-700 p-4 rounded-lg mb-4">
                         <h2 className="text-xl font-semibold mb-2">Upload Files</h2>
-                        {/* ✅ 4. The input now accepts multiple files */}
                         <input type="file" ref={fileInputRef} onChange={handleFileUpload} className="hidden" disabled={isBusy} multiple />
                         <button onClick={() => fileInputRef.current.click()} disabled={isBusy} className="w-full bg-indigo-500 hover:bg-indigo-600 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-2 px-4 rounded-lg mt-2">
                             {isUploading ? 'Uploading...' : 'Choose Files to Upload'}
                         </button>
                     </div>
 
-                    {/* ✅ 5. The progress bar UI is enhanced for queue status */}
                     {isUploading && <ProgressBar {...uploadProgress} onCancel={handleCancelTransfer} />}
 
                     <div className="bg-gray-700 p-4 rounded-lg mt-4">
                         <div className="flex justify-between items-center mb-4">
-                            <h2 className="text-xl font-semibold">Your Files ({totalFiles})</h2>
-                            <div className="w-1/2"><input type="text" placeholder="Search files..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full p-2 bg-gray-800 border border-gray-600 rounded-lg text-white text-sm" disabled={isBusy} /></div>
+                            <h2 className="text-xl font-semibold">Your Files</h2>
+                            <div className="flex items-center space-x-2">
+                                <button onClick={handleCreateFolder} disabled={isBusy} className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-1 px-2 rounded-lg text-sm flex items-center" title="Create Folder">
+                                    <CreateFolderIcon />
+                                    <span className="ml-1">New Folder</span>
+                                </button>
+                                <input type="text" placeholder="Search files..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full p-2 bg-gray-800 border border-gray-600 rounded-lg text-white text-sm" disabled={isBusy} />
+                            </div>
                         </div>
-                        <div className="mt-2 space-y-2 max-h-60 overflow-y-auto pr-2">{ !isLoadingFiles && filteredFiles.length > 0 ? filteredFiles.map(file => (<FileItem key={file.id} file={file} isEditing={editingFileId === file.id} renameValue={renameValue} setRenameValue={setRenameValue} onStartRename={handleStartRename} onCancelRename={handleCancelRename} onSaveRename={handleSaveRename} onDownload={handleFileDownload} onDelete={handleFileDelete} isBusy={isBusy && editingFileId !== file.id} /> )) : (<p className="text-center text-gray-400 py-4">{isLoadingFiles ? 'Loading...' : 'No files found.'}</p>)}</div>
+
+                        {/* --- NEW: BREADCRUMBS --- */}
+                        <Breadcrumbs hierarchy={folderHierarchy} onNavigate={handleBreadcrumbNavigate} />
+                        
+                        <div className="mt-2 space-y-2 max-h-60 overflow-y-auto pr-2">
+                            { isLoadingFiles ? (<p className="text-center text-gray-400 py-4">Loading...</p>) :
+                              filteredItems.length > 0 ? (
+                                filteredItems.map(item => (
+                                    <FileItem 
+                                        key={item.id} 
+                                        item={item} 
+                                        isEditing={editingFileId === item.id} 
+                                        renameValue={renameValue} 
+                                        setRenameValue={setRenameValue} 
+                                        onStartRename={handleStartRename} 
+                                        onCancelRename={handleCancelRename} 
+                                        onSaveRename={handleSaveRename} 
+                                        onDownload={handleFileDownload} 
+                                        onDelete={handleFileDelete}
+                                        onFolderClick={handleFolderClick} 
+                                        isBusy={isBusy && editingFileId !== item.id} 
+                                    />
+                                ))
+                              ) : (
+                                <p className="text-center text-gray-400 py-4">This folder is empty.</p>
+                              )
+                            }
+                        </div>
                     </div>
                     {isDownloading && <ProgressBar {...downloadProgress} onCancel={handleCancelTransfer} />}
                     {feedbackMessage.text && <div className={`mt-4 p-3 rounded-lg text-sm text-center ${feedbackMessage.type === 'error' ? 'bg-red-900 text-red-200' : feedbackMessage.type === 'success' ? 'bg-green-900 text-green-200' : 'bg-blue-900 text-blue-200'}`}>{feedbackMessage.text}</div>}
@@ -715,9 +851,8 @@
             </div>
         );
     };
-        // ============================================================================
-    // --- NEW: Terms of Use Modal Component ---
-    // ============================================================================
+        
+    // --- Terms of Use Modal (Unchanged) ---
     const TermsModal = ({ onClose }) => {
         return (
             <div className="fixed inset-0 bg-black bg-opacity-80 flex items-center justify-center z-50 font-sans" onClick={onClose}>
@@ -725,35 +860,27 @@
                     <h2 className="text-2xl font-bold text-indigo-400 mb-4">Terms of Use for DaemonClient</h2>
                     <div className="text-gray-300 space-y-4 text-sm">
                         <p className="text-gray-400">Last Updated: September 19, 2025</p>
-                        
                         <h3 className="font-semibold text-white pt-2">1. The Service</h3>
                         <p>DaemonClient ("the Service") is a software tool that allows users to leverage their personal Telegram account as a cloud storage backend. The Service is provided "as-is" without any warranties. We are not a file-hosting company; we provide a tool for you to manage your own storage.</p>
-
                         <h3 className="font-semibold text-white pt-2">2. User Responsibility and Data Ownership</h3>
                         <p>You, the user, are solely responsible for the data you store using the Service. All files are stored in a private Telegram channel and managed by a Telegram bot to which you are given full ownership. We, the developers, have zero-knowledge of or access to your stored files.</p>
                         <p>You agree not to use the Service to store any content that is illegal, infringes on copyright, or violates Telegram's Terms of Service.</p>
-
                         <h3 className="font-semibold text-white pt-2">3. Platform Dependency and Risk of Data Loss</h3>
                         <p>The Service is critically dependent on the APIs and policies of third-party platforms, primarily Telegram. These platforms may change their services, policies, or APIs at any time without notice. Such changes could render DaemonClient partially or completely non-functional, potentially leading to the loss of access to your data. By using the Service, you acknowledge and accept this risk. We are not liable for any data loss resulting from third-party platform changes.</p>
-
                         <h3 className="font-semibold text-white pt-2">4. Limitation of Liability</h3>
                         <p>In no event shall the developers of DaemonClient be liable for any direct, indirect, special, incidental, or consequential damages arising out of the use or inability to use the Service, including but not limited to data loss, even if we have been advised of the possibility of such damages.</p>
-
                         <h3 className="font-semibold text-white pt-2">5. Termination</h3>
                         <p>We reserve the right to terminate your access to the Service's authentication system at any time if you are found to be in violation of these terms.</p>
-                        
                         <div className="text-center pt-4">
                             <button onClick={onClose} className="py-2 px-6 bg-indigo-600 hover:bg-indigo-700 rounded-lg text-white">Close</button>
                         </div>
                     </div>
-                    
                 </div>
             </div>
         );
     };
-    // ============================================================================
+        
     // --- SETUP VIEW (Unchanged) ---
-    // ============================================================================
     const SetupView = ({ onSetupComplete }) => {
         const [showManualForm, setShowManualForm] = React.useState(false);
         const [statusMessage, setStatusMessage] = React.useState('');
@@ -761,7 +888,6 @@
         const [channelId, setChannelId] = React.useState('');
         const [error, setError] = React.useState('');
         const [isLoading, setIsLoading] = React.useState(false);
-
         const handleStartAutomatedSetup = async () => {
             setStatusMessage('Initiating secure setup... This may take a minute.');
             setError('');
@@ -770,27 +896,18 @@
                 const response = await fetch('https://daemonclient.onrender.com/startSetup', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        data: {
-                            uid: auth.currentUser.uid,
-                            email: auth.currentUser.email,
-                        }
-                    })
+                    body: JSON.stringify({ data: { uid: auth.currentUser.uid, email: auth.currentUser.email, } })
                 });
                 const result = await response.json();
-                if (!response.ok) {
-                    throw new Error(result.error?.message || 'The setup service returned an unspecified error.');
-                }
+                if (!response.ok) { throw new Error(result.error?.message || 'The setup service returned an unspecified error.'); }
                 setStatusMessage("Finalizing configuration...");
                 const configDocRef = db.collection(`artifacts/${appIdentifier}/users/${auth.currentUser.uid}/config`).doc('telegram');
                 let attempts = 0;
                 const maxAttempts = 5;
                 while (attempts < maxAttempts) {
                     const docSnap = await configDocRef.get();
-                    // This is the new, correct logic
                     if (docSnap.exists && docSnap.data().botToken) {
                         setStatusMessage('Configuration saved! Proceeding to final step...');
-                        // No more setTimeout. We call the function immediately to switch pages.
                         onSetupComplete(); 
                         return;
                     }
@@ -810,7 +927,6 @@
                 setIsLoading(false);
             }
         };
-
         const handleSaveManualSetup = async () => {
             if (!botToken.trim() || !channelId.trim()) { setError("Bot Token and Channel ID are required."); return; }
             setIsLoading(true); setError('');
@@ -821,9 +937,7 @@
             } catch (err) { setError(`Save failed: ${err.message}`); }
             finally { setIsLoading(false); }
         };
-
         const handleLogout = async () => { try { await auth.signOut(); } catch (err) { /* silent fail */ }};
-        
         React.useEffect(() => {
             const uid = auth.currentUser?.uid;
             if (!uid) return;
@@ -836,7 +950,6 @@
                 });
             return () => unsubscribe();
         }, [onSetupComplete]);
-        
         const AutomatedSetupPanel = () => (
              <div className="bg-gray-900 border-2 border-indigo-500 rounded-lg p-6 relative">
                 <span className="absolute top-0 right-4 -mt-3 bg-indigo-500 text-white text-xs font-bold px-3 py-1 rounded-full">Recommended</span>
@@ -847,7 +960,6 @@
                 </button>
             </div>
         );
-
         const ManualSetupPanel = () => (
             <div className="bg-gray-700 rounded-lg p-6">
                  <h2 className="text-xl font-semibold text-white">Manual Setup</h2>
@@ -855,7 +967,6 @@
                 <button onClick={() => setShowManualForm(true)} className="mt-4 w-full bg-gray-600 hover:bg-gray-500 text-white font-bold py-2 px-4 rounded-lg flex items-center justify-center">Enter Credentials Manually</button>
             </div>
         );
-
         const ManualSetupForm = () => (
             <div className="mt-8 animate-fade-in">
                 <h2 className="text-xl font-semibold text-center text-white mb-4">Enter Your Credentials</h2>
@@ -876,14 +987,12 @@
                 </div>
             </div>
         );
-        
         const StatusBar = ({message}) => (
              <div className="mt-8 p-4 bg-gray-900 rounded-lg flex items-center justify-center animate-fade-in">
                 <LoaderComponent small={true} />
                 <p className="ml-4 text-indigo-300">{message}</p>
              </div>
         );
-
         return (
             <div className="min-h-screen bg-gray-900 text-white flex flex-col items-center justify-center p-4 font-sans">
                 <div className="w-full max-w-2xl">
@@ -904,12 +1013,10 @@
         );
     };
 
-        // ============================================================================
-    // --- OWNERSHIP VIEW (REDESIGNED FOR YOUR SUPERIOR MULTI-STEP FLOW) ---
-    // ============================================================================
+    // --- OWNERSHIP VIEW (Unchanged) ---
     const OwnershipView = ({ onOwnershipConfirmed }) => {
         const [config, setConfig] = React.useState(null);
-        const [step, setStep] = React.useState(1); // 1 = start bot, 2 = join channel, 3 = processing
+        const [step, setStep] = React.useState(1);
         const [isLoading, setIsLoading] = React.useState(true);
         const [error, setError] = React.useState('');
         const [countdown, setCountdown] = React.useState(10);
@@ -918,7 +1025,6 @@
         const [isProcessing, setIsProcessing] = React.useState(false);
         const [transferStatus, setTransferStatus] = React.useState(null);
 
-        // Fetch the config once on component mount
         React.useEffect(() => {
             const fetchConfig = async () => {
                 try {
@@ -937,15 +1043,10 @@
             };
             fetchConfig();
         }, []);
-
-        // This effect manages the countdown timer for each new step
         React.useEffect(() => {
-            if (isLoading) return; // Don't start timers while loading config
-            
-            setIsButtonDisabled(true); // Always disable button at the start of a step
-            setCountdown(10); // Reset countdown for each new step
-            
-            // This flag is to ensure the user must click the link before the timer starts
+            if (isLoading) return;
+            setIsButtonDisabled(true);
+            setCountdown(10);
             if (hasClickedLink) {
                 const interval = setInterval(() => {
                     setCountdown(prev => {
@@ -960,28 +1061,18 @@
                 return () => clearInterval(interval);
             }
         }, [step, hasClickedLink, isLoading]);
-
-        const handleLinkClicked = () => {
-            if (!hasClickedLink) {
-                setHasClickedLink(true);
-            }
-        };
-        
-        const handleNextStep = () => {
-            setStep(2);
-            setHasClickedLink(false); // Reset for the next step
-        }
-
+        const handleLinkClicked = () => { if (!hasClickedLink) { setHasClickedLink(true); } };
+        const handleNextStep = () => { setStep(2); setHasClickedLink(false); };
         const handleFinalize = async () => {
-            setIsProcessing(true); // Use a different state for the final API call
-            setStep(3); // Move to the processing view
+            setIsProcessing(true);
+            setStep(3);
             setError('');
             setTransferStatus({
                 bot: { status: 'pending', message: 'Verifying user and transferring bot ownership...' },
                 channel: { status: 'pending', message: 'Attempting to transfer channel ownership...' }
             });
             try {
-                const response = await fetch('https://daemonclient.onrender.com/finalizeTransfer', { // Make sure this URL is your live Render URL
+                const response = await fetch('https://daemonclient.onrender.com/finalizeTransfer', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ data: { uid: auth.currentUser.uid } })
@@ -990,35 +1081,28 @@
                 if (!response.ok) {
                     throw new Error(result.error?.message || 'The server returned an unspecified error.');
                 }
-                
                 setTransferStatus({
                     bot: { status: result.bot_transfer_status, message: result.bot_transfer_message },
                     channel: { status: result.channel_transfer_status, message: result.channel_transfer_message }
                 });
-                
                 setTimeout(() => onOwnershipConfirmed(), 5000);
-
             } catch (err) {
                 setError(`A critical error occurred: ${err.message}`);
-                setStep(2); // Go back to the last step on error
+                setStep(2);
                 setIsProcessing(false);
                 setHasClickedLink(false);
             }
         };
-
         const StatusItem = ({ status, message }) => {
             const icon = status === 'pending' ? <LoaderComponent small={true} /> :
                          status === 'success' ? <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-green-400"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg> :
                          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-red-400"><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg>;
             const textColor = status === 'success' ? 'text-green-300' : status === 'failed' ? 'text-red-300' : 'text-gray-300';
-
             return <li className="flex items-start space-x-3 py-2"><div className="flex-shrink-0 mt-1">{icon}</div><p className={`${textColor} text-sm`}>{message}</p></li>;
         };
-
         if (isLoading) {
             return <FullScreenLoader message="Loading your bot and channel details..." />;
         }
-        
         const renderStepContent = () => {
             switch (step) {
                 case 1:
@@ -1071,7 +1155,6 @@
                     return null;
             }
         };
-
         return (
             <div className="min-h-screen bg-gray-900 text-white flex flex-col items-center justify-center p-4 font-sans">
                 <div className="w-full max-w-xl bg-gray-800 rounded-xl shadow-2xl p-6 md:p-8">
@@ -1082,9 +1165,7 @@
         );
     };
 
-         // ============================================================================
-    // --- MAIN APP COMPONENT (FINAL, CORRECTED VERSION) ---
-    // ============================================================================
+    // --- MAIN APP COMPONENT (Unchanged) ---
     function App() {
         const [user, setUser] = React.useState(null);
         const [appState, setAppState] = React.useState('loading'); // loading, auth, setup, transfer, dashboard
