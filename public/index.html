@@ -43,7 +43,7 @@
     <script type="text/babel">
     // --- Firebase Initialization ---
     const firebaseConfig = {
-  apiKey: "AIzaSyBH5diC5M7MnOIuOWaNPmOB1AV6uJVZyS8",
+apiKey: "AIzaSyBH5diC5M7MnOIuOWaNPmOB1AV6uJVZyS8",
   authDomain: "daemonclient-c0625.firebaseapp.com",
   databaseURL: "https://daemonclient-c0625-default-rtdb.firebaseio.com",
   projectId: "daemonclient-c0625",
@@ -130,7 +130,6 @@
         
     // --- DOWNLOAD FUNCTION (Unchanged) ---
     async function downloadFile(fileInfo, botToken, onProgress, abortSignal) {
-        // ... (This entire function is perfect, no changes needed) ...
         const { messages, fileName, fileSize, fileType } = fileInfo;
         const CHUNK_SIZE = 19 * 1024 * 1024;
         const DOWNLOAD_RETRIES = 5;
@@ -161,9 +160,11 @@
             for (let attempt = 1; attempt <= DOWNLOAD_RETRIES; attempt++) {
                 if (abortSignal.aborted) throw new Error("Download was cancelled by the user.");
                 try {
+                    // 1. Get the file path from Telegram
                     const fileInfoUrl = `https://api.telegram.org/bot${botToken}/getFile?file_id=${partData.file_id}`;
                     const fileInfoRes = await fetch(fileInfoUrl, { signal: abortSignal });
                     const fileInfoData = await fileInfoRes.json();
+                    
                     if (!fileInfoData.ok) {
                         if (fileInfoData.error_code === 429 && fileInfoData.parameters?.retry_after) {
                             const waitTime = fileInfoData.parameters.retry_after;
@@ -173,10 +174,22 @@
                         }
                         throw new Error(`TG getFile error: ${fileInfoData.description || "Unknown"}`);
                     }
+
                     const filePath = fileInfoData.result.file_path;
-                    const serviceWorkerProxyUrl = `/tg-proxy/file/bot${botToken}/${filePath}`;
-                    const fileRes = await fetch(serviceWorkerProxyUrl, { signal: abortSignal });
+                    const telegramUrl = `https://api.telegram.org/file/bot${botToken}/${filePath}`;
+
+                    
+                    const proxyBaseUrl = "https://daemonclient-proxy.sadrikov49.workers.dev"; 
+
+                    const proxyUrl = `${proxyBaseUrl}?url=${encodeURIComponent(telegramUrl)}`;
+                    
+                    // 3. Fetch from Cloudflare (CORS is now handled!)
+                    const fileRes = await fetch(proxyUrl, { signal: abortSignal });
+                    
+                    if (!fileRes.ok) throw new Error(`Proxy fetch failed: ${fileRes.status}`);
+
                     return await fileRes.arrayBuffer();
+
                 } catch (error) {
                     if (error.name === 'AbortError') throw error;
                     if (attempt >= DOWNLOAD_RETRIES) throw error;
