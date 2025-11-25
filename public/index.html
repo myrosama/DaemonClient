@@ -128,39 +128,55 @@ apiKey: "AIzaSyBH5diC5M7MnOIuOWaNPmOB1AV6uJVZyS8",
         };
     }
         
-    // --- DOWNLOAD FUNCTION (Unchanged) ---
+    // --- HYBRID DOWNLOAD FUNCTION (Desktop & Mobile Support) ---
     async function downloadFile(fileInfo, botToken, onProgress, abortSignal) {
         const { messages, fileName, fileSize, fileType } = fileInfo;
         const CHUNK_SIZE = 19 * 1024 * 1024;
         const DOWNLOAD_RETRIES = 5;
-        const CONCURRENT_DOWNLOADS = 5;
+        
+        // Reduce concurrency on mobile to save memory/CPU
+        const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+        const CONCURRENT_DOWNLOADS = isMobile ? 3 : 5;
+
         const totalParts = messages.length;
         let downloadedBytes = 0;
         let completedParts = 0;
         const startTime = Date.now();
-        if (!window.showSaveFilePicker) {
-            const errorMessage = 'Error: Your browser does not support high-performance downloads. Please use the latest version of Chrome, Edge, or Opera.';
-            onProgress({ percent: 0, status: errorMessage, speed: '', eta: '' });
-            alert(errorMessage);
-            throw new Error("File System Access API not supported.");
-        }
-        let fileHandle;
-        try {
-            onProgress({ percent: 0, status: 'Waiting for permission...', speed: '', eta: '' });
-            fileHandle = await window.showSaveFilePicker({ suggestedName: fileName });
-        } catch (err) {
-            if (err.name === 'AbortError') {
-                onProgress({ active: false });
-                return; 
+
+        // --- Step 1: Determine Download Method ---
+        const useFileSystemAPI = !!window.showSaveFilePicker; // True on Desktop (Chrome/Edge), False on Mobile/Firefox
+        
+        let fileHandle, writable, fileParts;
+
+        if (useFileSystemAPI) {
+            // [DESKTOP STRATEGY] Stream directly to disk
+            try {
+                onProgress({ percent: 0, status: 'Waiting for permission...', speed: '', eta: '' });
+                fileHandle = await window.showSaveFilePicker({ suggestedName: fileName });
+                writable = await fileHandle.createWritable();
+            } catch (err) {
+                if (err.name === 'AbortError') { onProgress({ active: false }); return; }
+                throw err;
             }
-            throw err;
+        } else {
+            // [MOBILE STRATEGY] Download to RAM (Array)
+            // Warn user if file is potentially too big for phone RAM
+            if (fileSize > 500 * 1024 * 1024) { 
+                 if (!confirm(`This file is large (${(fileSize / 1024 / 1024).toFixed(0)}MB). Downloading huge files on mobile may crash your browser tab due to memory limits. Do you want to try anyway?`)) {
+                     onProgress({ active: false });
+                     return;
+                 }
+            }
+            // Pre-allocate array to hold chunks
+            fileParts = new Array(totalParts);
         }
-        const writable = await fileHandle.createWritable();
+
+        // --- Inner Function: Download a single chunk ---
         async function downloadPartWithRetry(partData) {
             for (let attempt = 1; attempt <= DOWNLOAD_RETRIES; attempt++) {
                 if (abortSignal.aborted) throw new Error("Download was cancelled by the user.");
                 try {
-                    // 1. Get the file path from Telegram
+                    // 1. Get Telegram Path
                     const fileInfoUrl = `https://api.telegram.org/bot${botToken}/getFile?file_id=${partData.file_id}`;
                     const fileInfoRes = await fetch(fileInfoUrl, { signal: abortSignal });
                     const fileInfoData = await fileInfoRes.json();
@@ -170,7 +186,7 @@ apiKey: "AIzaSyBH5diC5M7MnOIuOWaNPmOB1AV6uJVZyS8",
                             const waitTime = fileInfoData.parameters.retry_after;
                             onProgress(prev => ({ ...prev, status: `Rate limited. Waiting ${waitTime}s...` }));
                             await sleep(waitTime * 1000 + 500);
-                            continue;
+                            continue; 
                         }
                         throw new Error(`TG getFile error: ${fileInfoData.description || "Unknown"}`);
                     }
@@ -180,12 +196,11 @@ apiKey: "AIzaSyBH5diC5M7MnOIuOWaNPmOB1AV6uJVZyS8",
 
                     
                     const proxyBaseUrl = "https://daemonclient-proxy.sadrikov49.workers.dev"; 
-
+                    
                     const proxyUrl = `${proxyBaseUrl}?url=${encodeURIComponent(telegramUrl)}`;
                     
-                    // 3. Fetch from Cloudflare (CORS is now handled!)
+                    // 3. Fetch the bytes
                     const fileRes = await fetch(proxyUrl, { signal: abortSignal });
-                    
                     if (!fileRes.ok) throw new Error(`Proxy fetch failed: ${fileRes.status}`);
 
                     return await fileRes.arrayBuffer();
@@ -197,45 +212,80 @@ apiKey: "AIzaSyBH5diC5M7MnOIuOWaNPmOB1AV6uJVZyS8",
                 }
             }
         }
+
+        // --- Step 2: Process the Download Queue ---
         return new Promise((resolve, reject) => {
-            const queue = [...messages.entries()];
+            const queue = [...messages.entries()]; 
+
             const worker = async () => {
                 while (queue.length > 0) {
                     if (abortSignal.aborted) {
-                        await writable.abort();
+                        if (writable) await writable.abort();
                         reject(new Error("Download was cancelled."));
                         return;
                     }
+
                     const [index, partData] = queue.shift();
+                    
                     try {
                         const chunkData = await downloadPartWithRetry(partData);
-                        const position = index * CHUNK_SIZE;
-                        await writable.write({ type: 'write', position: position, data: chunkData });
+                        
+                        // CRITICAL: Handle data based on method
+                        if (useFileSystemAPI) {
+                            // Desktop: Write straight to disk (Low RAM usage)
+                            const position = index * CHUNK_SIZE;
+                            await writable.write({ type: 'write', position: position, data: chunkData });
+                        } else {
+                            // Mobile: Save chunk to RAM array
+                            fileParts[index] = chunkData;
+                        }
+
+                        // Update stats
                         downloadedBytes += chunkData.byteLength;
                         completedParts++;
                         const elapsedTime = (Date.now() - startTime) / 1000 || 1;
                         const speed = downloadedBytes / elapsedTime;
                         const remainingBytes = fileSize - downloadedBytes;
                         const eta = (remainingBytes > 0 && speed > 0) ? remainingBytes / speed : 0;
+                        
                         onProgress({ 
                             percent: Math.round((downloadedBytes / fileSize) * 100), 
                             status: `Downloaded part ${completedParts}/${totalParts}...`, 
                             speed: formatSpeed(speed), 
                             eta: formatETA(eta) 
                         });
+                        
+                        // Finish
                         if (completedParts === totalParts) {
-                            await writable.close();
-                            onProgress({ percent: 100, status: `Download complete! File saved.`, speed: '', eta: '' });
+                            if (useFileSystemAPI) {
+                                await writable.close();
+                            } else {
+                                // Mobile Finalization: Assemble Blob and trigger "Fake" Download
+                                onProgress({ percent: 100, status: `Assembling file...`, speed: '', eta: '' });
+                                const blob = new Blob(fileParts, { type: fileType }); // Combine all chunks
+                                const url = URL.createObjectURL(blob);
+                                const a = document.createElement('a');
+                                a.href = url;
+                                a.download = fileName;
+                                document.body.appendChild(a); 
+                                a.click(); // Auto-click the link
+                                document.body.removeChild(a);
+                                setTimeout(() => URL.revokeObjectURL(url), 10000); // Clean up RAM
+                            }
+
+                            onProgress({ percent: 100, status: `Download complete!`, speed: '', eta: '' });
                             resolve();
-                            return;
+                            return; 
                         }
                     } catch (error) {
-                        await writable.abort();
+                        if (writable) await writable.abort(); 
                         reject(error);
-                        return;
+                        return; 
                     }
                 }
             };
+
+            // Start concurrent workers
             onProgress({ percent: 0, status: 'Starting download...', speed: '', eta: '' });
             for (let i = 0; i < CONCURRENT_DOWNLOADS; i++) {
                 worker();
