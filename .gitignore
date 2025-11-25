@@ -67,3 +67,5 @@ Thumbs.db
 
 # Ignore the environment file for Cloud Functions
 functions/.env
+
+daemonclient-desktop/node_modules
