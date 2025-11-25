@@ -1,0 +1,6 @@
+# Allow all ethical web crawlers
+User-agent: *
+Allow: /
+
+# Location of the sitemap
+Sitemap: https://daemonclient.uz/sitemap.xml

@@ -13,21 +13,13 @@
     }
   ],
   "hosting": {
-    "public": "public",
+    "public": "frontend/dist",
     "ignore": [
       "firebase.json",
       "**/.*",
       "**/node_modules/**"
     ],
     "rewrites": [
-      {
-        "source": "/robots.txt",    
-        "destination": "/robots.txt"
-      },
-      {
-        "source": "/sitemap.xml",
-        "destination": "/sitemap.xml"
-      },
       {
         "source": "**",
         "destination": "/index.html"
