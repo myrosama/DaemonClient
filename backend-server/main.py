@@ -448,6 +448,40 @@ def finalize_transfer_endpoint():
 
     return asyncio.run(run_finalization())
 
+@app.route('/api/register', methods=['POST'])
+@check_auth
+def register_file():
+    """Registers a completed upload in Firestore."""
+    data = request.get_json()
+    
+    # Validate required fields
+    required = ['fileName', 'fileSize', 'messages', 'parentId', 'type']
+    if not all(k in data for k in required):
+        return jsonify({'error': 'Missing metadata fields'}), 400
+
+    try:
+        # Create the new file document
+        # We use the same path as the web app
+        files_col = db.collection(f"artifacts/default-daemon-client/users/{request.user_uid}/files")
+        new_doc = files_col.document()
+        
+        file_data = {
+            'id': new_doc.id,
+            'fileName': data['fileName'],
+            'fileSize': data['fileSize'],
+            'fileType': data.get('fileType', 'application/octet-stream'),
+            'parentId': data['parentId'],
+            'type': data['type'],
+            'messages': data['messages'],
+            'uploadedAt': firestore.SERVER_TIMESTAMP
+        }
+        
+        new_doc.set(file_data)
+        
+        return jsonify({'status': 'success', 'file_id': new_doc.id})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 if __name__ == "__main__":
     print("Starting local development server...")
     app.run(host="0.0.0.0", port=8080, debug=True, use_reloader=False)
