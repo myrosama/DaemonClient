@@ -916,7 +916,7 @@ const SetupView = ({ onSetupComplete }) => {
         setError('');
         setIsLoading(true);
         try {
-            const response = await fetch('https://daemonclient.onrender.com/startSetup', {
+            const response = await fetch('http://127.0.0.1:8080/startSetup', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ data: { uid: auth.currentUser.uid, email: auth.currentUser.email, } })
@@ -1096,7 +1096,7 @@ const OwnershipView = ({ onOwnershipConfirmed }) => {
             channel: { status: 'pending', message: 'Attempting to transfer channel ownership...' }
         });
         try {
-            const response = await fetch('https://daemonclient.onrender.com/finalizeTransfer', {
+            const response = await fetch('http://127.0.0.1:8080/finalizeTransfer', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ data: { uid: auth.currentUser.uid } })
@@ -1246,4 +1246,4 @@ function App() {
     }
 }
 
-export default App;
+export default App; 

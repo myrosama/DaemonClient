@@ -1,0 +1,6 @@
+typer
+requests
+rich
+python-dotenv
+firebase-admin
+pyrebase4
