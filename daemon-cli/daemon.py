@@ -222,5 +222,71 @@ def upload(file_path: str):
     except Exception as e:
         console.print(f"[red]Registration Error:[/red] {e}")
 
+@app.command()
+def download(file_id: str, output_path: str = typer.Option(None, help="Custom output path")):
+    """Download a file from the cloud (Direct from Telegram)."""
+    
+    # 1. Get Auth & Config
+    token = get_auth_token()
+    headers = {"Authorization": f"Bearer {token}"}
+    
+    # We need the Bot Token to download
+    try:
+        config_res = requests.get(f"{API_URL}/config", headers=headers)
+        bot_token = config_res.json()['bot_token']
+    except Exception:
+        console.print("[red]Failed to get bot configuration.[/red]")
+        raise typer.Exit(1)
+
+    # 2. Get File Metadata (We need the message IDs to find the file paths)
+    # We can reuse the /api/list endpoint, or it's better to make a specific /api/file/<id> endpoint.
+    # For now, let's filtering the list (Simple but inefficient for huge lists)
+    # A better way is to fetch the specific file doc.
+    
+    # Let's iterate the list for now as it's easiest without changing backend
+    console.print(f"[dim]Fetching metadata for {file_id}...[/dim]")
+    list_res = requests.get(f"{API_URL}/list", headers=headers)
+    files = list_res.json()['files']
+    
+    target_file = next((f for f in files if f['id'] == file_id), None)
+    
+    if not target_file:
+        console.print(f"[red]File ID {file_id} not found.[/red]")
+        raise typer.Exit(1)
+
+    file_name = target_file['fileName']
+    final_path = output_path or file_name
+    
+    # 3. Download Logic
+    console.print(f"⬇️  Downloading [cyan]{file_name}[/cyan]...")
+    
+    # Sort messages by index to ensure order
+    # (The web app stores them in order, but good to be safe)
+    # Note: The CLI upload stored them as a list of dicts. 
+    # We assume they are in order or have an index. 
+    # If your `messages` array doesn't have 'index', we trust the list order.
+    
+    with open(final_path, "wb") as f_out:
+        with typer.progressbar(target_file['messages'], label="Downloading") as progress:
+            for msg in target_file['messages']:
+                # Get the path for this chunk
+                # We call Telegram's getFile method
+                file_info_res = requests.get(f"https://api.telegram.org/bot{bot_token}/getFile?file_id={msg['file_id']}")
+                if file_info_res.status_code != 200:
+                     console.print(f"[red]Telegram Error:[/red] {file_info_res.text}")
+                     continue
+                
+                file_path_tg = file_info_res.json()['result']['file_path']
+                download_url = f"https://api.telegram.org/file/bot{bot_token}/{file_path_tg}"
+                
+                # Stream the download
+                chunk_res = requests.get(download_url, stream=True)
+                for chunk in chunk_res.iter_content(chunk_size=8192):
+                    f_out.write(chunk)
+                
+                progress.update(1)
+
+    console.print(f"[green]✅ Download complete: {final_path}[/green]")
+
 if __name__ == "__main__":
     app()
