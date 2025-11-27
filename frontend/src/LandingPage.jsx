@@ -1,15 +1,15 @@
 import React, { useState, useEffect } from 'react';
-import { motion } from 'framer-motion';
+import { motion, useSpring, useTransform } from 'framer-motion';
 
 // --- Icons ---
 const CloudIcon = () => (
-  <svg xmlns="http://www.w3.org/2000/svg" className="h-10 w-10 text-indigo-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+  <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 15a4 4 0 004 4h9a5 5 0 10-.1-9.999 5.002 5.002 0 10-9.78 2.096A4.001 4.001 0 003 15z" />
   </svg>
 );
 
 const LockIcon = () => (
-  <svg xmlns="http://www.w3.org/2000/svg" className="h-10 w-10 text-indigo-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+  <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
   </svg>
 );
@@ -20,7 +20,29 @@ const TerminalIcon = () => (
   </svg>
 );
 
-// --- NEW: Terminal Typing Animation Component ---
+// --- ANIMATED COUNTER COMPONENT ---
+const Counter = ({ from, to }) => {
+  const [count, setCount] = useState(from);
+  
+  useEffect(() => {
+    const controls = { value: from };
+    const step = (to - from) / 100;
+    const interval = setInterval(() => {
+        controls.value += step;
+        if (controls.value >= to) {
+            setCount(to);
+            clearInterval(interval);
+        } else {
+            setCount(Math.floor(controls.value));
+        }
+    }, 20);
+    return () => clearInterval(interval);
+  }, [from, to]);
+
+  return <span>{count.toLocaleString()}</span>;
+};
+
+// --- TERMINAL DEMO ---
 const TerminalDemo = () => {
   const [text, setText] = useState('');
   const fullText = "> daemon upload secret_plans.pdf\n[+] Encrypting file...\n[+] Chunking into 19MB parts...\n[+] Uploading to secure channel...\n[+] File 'secret_plans.pdf' registered.\n> ";
@@ -32,14 +54,14 @@ const TerminalDemo = () => {
       i++;
       if (i > fullText.length) {
         clearInterval(interval);
-        setTimeout(() => { i=0; setText(''); }, 5000); // Loop after 5s
+        setTimeout(() => { i=0; setText(''); }, 5000); 
       }
     }, 50);
     return () => clearInterval(interval);
   }, []);
 
   return (
-    <div className="bg-[#0F131F] rounded-xl border border-gray-800 p-6 font-mono text-sm shadow-2xl w-full max-w-lg mx-auto">
+    <div className="bg-[#0F131F] rounded-xl border border-gray-800 p-6 font-mono text-sm shadow-2xl w-full">
       <div className="flex gap-2 mb-4">
         <div className="w-3 h-3 rounded-full bg-red-500/50" />
         <div className="w-3 h-3 rounded-full bg-yellow-500/50" />
@@ -52,7 +74,7 @@ const TerminalDemo = () => {
   );
 };
 
-// --- Secure Cloud Core Animation ---
+// --- SECURE CLOUD CORE ANIMATION ---
 const SecureCloudCore = () => {
   return (
     <div className="relative w-full h-[500px] flex items-center justify-center">
@@ -87,6 +109,17 @@ const SecureCloudCore = () => {
   );
 };
 
+// --- COMPONENTS ---
+const AlgoStep = ({ title, description, visual }) => (
+  <div className="bg-[#0F131F] p-8 rounded-2xl border border-gray-800 hover:border-indigo-500/30 transition-all flex flex-col h-full hover:bg-[#131725]">
+    <div className="h-40 flex items-center justify-center mb-6 bg-black/20 rounded-xl border border-gray-800/50 overflow-hidden relative">
+       {visual}
+    </div>
+    <h4 className="text-xl font-bold text-white mb-2">{title}</h4>
+    <p className="text-gray-400 text-sm leading-relaxed">{description}</p>
+  </div>
+);
+
 const FeatureCard = ({ icon, title, description, delay }) => (
   <motion.div 
     initial={{ opacity: 0, y: 20 }}
@@ -103,14 +136,11 @@ const FeatureCard = ({ icon, title, description, delay }) => (
   </motion.div>
 );
 
-const StepCard = ({ number, title, description }) => (
-  <div className="relative flex flex-col items-center text-center p-6 z-10">
-    <div className="w-14 h-14 rounded-2xl bg-indigo-600/20 border border-indigo-500/30 flex items-center justify-center text-2xl font-bold text-indigo-400 mb-6 shadow-[0_0_30px_rgba(99,102,241,0.15)]">
-      {number}
+const StatCard = ({ number, label }) => (
+    <div className="p-6 rounded-2xl bg-[#0F131F] border border-gray-800 text-center hover:border-indigo-500/30 transition-colors">
+        <div className="text-3xl font-bold text-white mb-1 font-mono">{number}</div>
+        <div className="text-xs uppercase tracking-widest text-gray-500 font-bold">{label}</div>
     </div>
-    <h3 className="text-xl font-bold text-white mb-3">{title}</h3>
-    <p className="text-gray-400 text-sm leading-relaxed">{description}</p>
-  </div>
 );
 
 const DownloadOption = ({ title, icon, status, description, buttonText, href, primary }) => (
@@ -154,8 +184,8 @@ export default function LandingPage({ onLaunchApp }) {
             <span className="text-lg font-bold tracking-tight">DaemonClient</span>
           </div>
           <div className="hidden md:flex items-center gap-8">
-            <a href="#how-it-works" className="text-sm font-medium text-gray-400 hover:text-white transition-colors">Architecture</a>
             <a href="#philosophy" className="text-sm font-medium text-gray-400 hover:text-white transition-colors">Philosophy</a>
+            <a href="#protocol" className="text-sm font-medium text-gray-400 hover:text-white transition-colors">Protocol</a>
             <a href="#download" className="text-sm font-medium text-gray-400 hover:text-white transition-colors">Download</a>
             <a href="https://github.com/myrosama/DaemonClient" target="_blank" className="text-gray-400 hover:text-white transition-colors">GitHub</a>
             <button onClick={onLaunchApp} className="bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-2 rounded-lg text-sm font-semibold transition-all shadow-lg shadow-indigo-900/20 hover:-translate-y-0.5">Launch App</button>
@@ -173,11 +203,17 @@ export default function LandingPage({ onLaunchApp }) {
               Public Beta Live
             </div>
             <h1 className="text-5xl md:text-7xl font-bold leading-tight mb-6 tracking-tight">
-              Your Cloud.<br /><span className="text-transparent bg-clip-text bg-gradient-to-r from-indigo-400 to-cyan-400">Uncompromised.</span>
+              The Cloud is Broken.<br /><span className="text-transparent bg-clip-text bg-gradient-to-r from-indigo-400 to-cyan-400">We Fixed It.</span>
             </h1>
-            <p className="text-lg text-gray-400 mb-10 leading-relaxed max-w-lg">
-              The first <span className="text-white font-semibold">zero-cost</span>, <span className="text-white font-semibold">infinite</span> cloud storage platform built on Telegram. End-to-end encryption. Open Source. No limits.
+            <p className="text-lg text-gray-400 mb-8 leading-relaxed max-w-lg">
+              Traditional cloud storage charges you rent for digital space. We reverse-engineered the concept to give you <b>infinite bandwidth</b> and <b>zero costs</b> by owning the infrastructure.
             </p>
+            
+            {/* MOVED: Terminal Demo is now here in the hero for immediate impact */}
+            <div className="mb-8">
+                <TerminalDemo />
+            </div>
+
             <div className="flex flex-col sm:flex-row gap-4">
               <button onClick={onLaunchApp} className="bg-white text-black hover:bg-gray-100 px-8 py-3.5 rounded-xl font-bold text-lg transition-all shadow-[0_0_20px_rgba(255,255,255,0.15)] hover:shadow-[0_0_30px_rgba(255,255,255,0.25)] hover:-translate-y-1">Start Uploading</button>
               <a href="#download" className="bg-[#1A1F2E] hover:bg-gray-800 px-8 py-3.5 rounded-xl font-bold text-lg transition-all border border-gray-700 hover:border-gray-500 flex items-center justify-center gap-2 group text-gray-200">
@@ -186,78 +222,123 @@ export default function LandingPage({ onLaunchApp }) {
             </div>
           </motion.div>
         </div>
+        
         <motion.div initial={{ opacity: 0, scale: 0.8 }} animate={{ opacity: 1, scale: 1 }} transition={{ duration: 1, delay: 0.2 }} className="md:w-1/2 mt-12 md:mt-0 h-[400px] md:h-[500px] w-full flex items-center justify-center relative">
             <SecureCloudCore />
         </motion.div>
       </header>
 
-      {/* How It Works Section (Unified Background) */}
-      <section id="how-it-works" className="py-24 bg-[#05080F] border-y border-gray-800/30 relative overflow-hidden">
-        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[600px] h-[300px] bg-indigo-500/5 rounded-full blur-[100px] -z-10"></div>
+      {/* NEW SECTION: Live Network Status (Animation Effect) */}
+      <section className="py-12 border-y border-gray-800/50 bg-[#0B0F19]/50">
         <div className="container mx-auto px-6">
-          <div className="text-center mb-20">
-             <h2 className="text-xs font-bold text-indigo-400 tracking-[0.2em] uppercase mb-3">Architecture</h2>
-             <h3 className="text-3xl md:text-4xl font-bold text-white">Set up in 3 minutes. Forever.</h3>
-          </div>
-          <div className="grid md:grid-cols-3 gap-8 max-w-6xl mx-auto relative">
-            <div className="hidden md:block absolute top-12 left-[20%] right-[20%] h-[2px] bg-gradient-to-r from-transparent via-indigo-500/20 to-transparent -z-0"></div>
-            <StepCard number="1" title="Create a Bot" description="Our automated wizard helps you create a free Telegram bot. This bot acts as your personal, private file manager." />
-            <StepCard number="2" title="Secure Channel" description="We automatically create a private, encrypted channel that only YOU and your bot can access. This is your vault." />
-            <StepCard number="3" title="Ownership Transfer" description="The final step transfers full ownership of the bot and channel to you. We delete our keys. You are in total control." />
-          </div>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-8">
+                <StatCard number={<Counter from={0} to={100} />} label="% Uptime" />
+                <StatCard number={<Counter from={0} to={5000} />} label="Downloads Today" />
+                <StatCard number="0ms" label="Latency Added" />
+                <StatCard number="$0.00" label="Cost to You" />
+            </div>
         </div>
       </section>
 
-      {/* NEW: The Philosophy Section */}
+      {/* Philosophy Section (Restored) */}
       <section id="philosophy" className="py-32 bg-[#05080F] relative">
         <div className="container mx-auto px-6">
-            <div className="flex flex-col md:flex-row gap-16 items-center">
-                <div className="md:w-1/2">
-                    <TerminalDemo />
-                </div>
-                <div className="md:w-1/2">
-                    <h2 className="text-3xl md:text-4xl font-bold mb-6 leading-tight">The Cloud is Broken. <br/><span className="text-indigo-400">We Fixed It.</span></h2>
-                    <p className="text-gray-400 text-lg mb-6 leading-relaxed">
-                        Traditional cloud storage charges you rent for digital space. They hold the keys to your data, meaning they can scan, analyze, or delete your files at any time.
-                    </p>
-                    <p className="text-gray-400 text-lg mb-8 leading-relaxed">
-                        <strong>DaemonClient is different.</strong> We reverse-engineered the concept of cloud storage. Instead of selling you server space, we built a protocol that lets you own the infrastructure. By leveraging the massive, free infrastructure of Telegram, we provide infinite storage bandwidth and zero costs.
-                    </p>
-                    <div className="grid grid-cols-2 gap-6">
-                        <div className="p-4 bg-gray-900/50 rounded-xl border border-gray-800">
-                            <h4 className="font-bold text-white mb-1">Zero Rent</h4>
-                            <p className="text-sm text-gray-500">Pay $0/mo for Terabytes.</p>
-                        </div>
-                        <div className="p-4 bg-gray-900/50 rounded-xl border border-gray-800">
-                            <h4 className="font-bold text-white mb-1">Zero Knowledge</h4>
-                            <p className="text-sm text-gray-500">You own the bot keys.</p>
-                        </div>
-                    </div>
+            <div className="max-w-4xl mx-auto text-center">
+                <h2 className="text-xs font-bold text-indigo-400 tracking-[0.2em] uppercase mb-6">Manifesto</h2>
+                <h3 className="text-3xl md:text-5xl font-bold mb-8 leading-tight">We believe you should own your data.<br/> Not rent it.</h3>
+                <p className="text-xl text-gray-400 leading-relaxed mb-12">
+                    DaemonClient isn't just a tool; it's a statement. By decoupling the storage layer (Telegram) from the access layer (DaemonClient), we create a system where no single entity controls your digital life. You hold the keys. You hold the bot. You hold the power.
+                </p>
+                <div className="grid md:grid-cols-2 gap-4 text-left">
+                     <div className="p-6 rounded-xl bg-gradient-to-br from-gray-900 to-gray-950 border border-gray-800">
+                        <h4 className="text-lg font-bold text-white mb-2">🔒 True Privacy</h4>
+                        <p className="text-gray-400">We use a "Zero-Knowledge" setup. After creation, we transfer bot ownership to you and delete our access tokens.</p>
+                     </div>
+                     <div className="p-6 rounded-xl bg-gradient-to-br from-gray-900 to-gray-950 border border-gray-800">
+                        <h4 className="text-lg font-bold text-white mb-2">💸 Zero Cost</h4>
+                        <p className="text-gray-400">We abuse no bugs. We simply use the API as intended, just... very efficiently.</p>
+                     </div>
                 </div>
             </div>
         </div>
       </section>
 
-      {/* Features Grid */}
-      <section id="features" className="py-24 bg-[#05080F] border-t border-gray-800/30">
+      {/* Protocol Section */}
+      <section id="protocol" className="py-24 bg-[#05080F] relative">
+        <div className="absolute inset-0 bg-gradient-to-b from-[#05080F] via-indigo-950/5 to-[#05080F] -z-10"></div>
         <div className="container mx-auto px-6">
           <div className="text-center mb-20">
-            <h2 className="text-3xl md:text-4xl font-bold mb-6">Engineered for Power Users</h2>
+             <h2 className="text-xs font-bold text-cyan-400 tracking-[0.2em] uppercase mb-3">The Protocol</h2>
+             <h3 className="text-3xl md:text-4xl font-bold text-white">How We Achieved Infinite Storage</h3>
           </div>
-          <div className="grid md:grid-cols-3 gap-6">
-            <FeatureCard icon={<CloudIcon />} title="Infinite Storage" description="Stop paying for storage tiers. By leveraging Telegram's massive infrastructure, you can store terabytes of data without paying a cent." delay={0.2} />
-            <FeatureCard icon={<LockIcon />} title="Zero-Knowledge" description="We don't hold the keys. Your data is chunked, encrypted, and stored in a private channel that only YOU can access." delay={0.4} />
-            <FeatureCard icon={<TerminalIcon />} title="Developer First" description="Built for automation. Use our powerful CLI and API to script backups, sync servers, and integrate storage into your workflow." delay={0.6} />
+
+          <div className="grid md:grid-cols-3 gap-8">
+             <AlgoStep 
+               title="1. Atomic Chunking" 
+               description="Large files are split into encrypted 19MB shards directly in your browser. This bypasses Telegram's file size limits and allows for parallel, high-speed uploads."
+               visual={
+                 <div className="relative w-full h-full flex items-center justify-center gap-2">
+                    <div className="w-12 h-16 bg-gray-700 rounded border border-gray-500 flex items-center justify-center text-[10px]">FILE</div>
+                    <span className="text-gray-500">➔</span>
+                    <div className="grid grid-cols-3 gap-1">
+                        {[...Array(6)].map((_, i) => (
+                            <motion.div key={i} initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: i*0.1, duration: 0.5, repeat: Infinity, repeatDelay: 2 }} className="w-6 h-6 bg-indigo-600 rounded border border-indigo-400" />
+                        ))}
+                    </div>
+                 </div>
+               }
+             />
+             <AlgoStep 
+               title="2. Zero-Cost Distribution" 
+               description="We use a custom Cloudflare Worker as a transparent proxy. Data streams from your device -> Edge -> Telegram. It never touches our servers, costing us $0."
+               visual={
+                 <div className="relative w-full h-full flex items-center justify-center">
+                    <div className="absolute w-full h-[1px] bg-gray-700"></div>
+                    <motion.div animate={{ x: [-60, 60] }} transition={{ duration: 2, repeat: Infinity, ease: "linear" }} className="w-3 h-3 bg-cyan-400 rounded-full shadow-[0_0_10px_cyan] z-10" />
+                    <div className="absolute left-8 p-1 bg-gray-800 rounded border border-gray-600 text-[10px]">You</div>
+                    <div className="absolute right-8 p-1 bg-indigo-900 rounded border border-indigo-500 text-[10px]">Cloud</div>
+                 </div>
+               }
+             />
+             <AlgoStep 
+               title="3. Metadata Indexing" 
+               description="A lightweight pointer map is stored in Firebase. It remembers which 19MB chunks belong to 'Holiday_Video.mp4', allowing instant reconstruction when you download."
+               visual={
+                 <div className="w-full h-full flex flex-col items-center justify-center gap-2 font-mono text-[10px] text-green-400/80">
+                    <div className="w-40 p-2 bg-gray-900 border border-green-900 rounded shadow-[0_0_10px_rgba(74,222,128,0.1)]">
+                        {"{ id: 'vid.mp4',"} <br/>
+                        {"  parts: [892, 893...] }"}
+                    </div>
+                 </div>
+               }
+             />
           </div>
         </div>
       </section>
 
-      {/* Download / CLI Section */}
+      {/* Engineered for Power Users (Restored Title) */}
+      <section id="features" className="py-24 bg-[#05080F]">
+        <div className="container mx-auto px-6">
+          <div className="text-center mb-20">
+            <h2 className="text-3xl md:text-4xl font-bold mb-6">Engineered for Power Users</h2>
+            <p className="text-gray-400 max-w-2xl mx-auto">Tools that respect your workflow, not disrupt it.</p>
+          </div>
+          <div className="grid md:grid-cols-3 gap-6">
+            <FeatureCard icon={<CloudIcon />} title="Infinite Storage" description="Stop paying for storage tiers. Store terabytes of data without paying a cent." delay={0.2} />
+            <FeatureCard icon={<LockIcon />} title="Zero-Knowledge" description="Your data is chunked, encrypted, and stored in a private channel that only YOU can access." delay={0.4} />
+            <FeatureCard icon={<TerminalIcon />} title="Developer First" description="Built for automation. Use our powerful CLI to script backups and sync servers." delay={0.6} />
+          </div>
+        </div>
+      </section>
+
+      {/* Download / CLI Section (Restored Old Layout) */}
       <section id="download" className="py-24 relative bg-[#080B14] border-t border-gray-800/50">
         <div className="container mx-auto px-6">
           <div className="text-center mb-16">
             <h2 className="text-3xl md:text-4xl font-bold mb-6">Download & Install</h2>
-            <p className="text-gray-400 text-lg max-w-xl mx-auto">Access your files from any device. Use the Web App for quick access, or the CLI for power users.</p>
+            <p className="text-gray-400 text-lg max-w-xl mx-auto">
+              Access your files from any device.
+            </p>
           </div>
           <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6 mb-16">
             <DownloadOption title="Web App" icon={<span className="text-2xl">🌐</span>} status="Live" description="Instant access from any browser. No installation required." buttonText="Launch Now" href="#" primary={true} />
