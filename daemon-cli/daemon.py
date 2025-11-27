@@ -288,5 +288,76 @@ def download(file_id: str, output_path: str = typer.Option(None, help="Custom ou
 
     console.print(f"[green]✅ Download complete: {final_path}[/green]")
 
+@app.command()
+def delete(file_id: str, yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation (for scripts)")):
+    """Delete a file (Removes from Telegram & Registry)."""
+    
+    # 1. Setup Auth
+    token = get_auth_token()
+    headers = {"Authorization": f"Bearer {token}"}
+    
+    # 2. Get Config (We need Bot Token & Channel ID to delete messages)
+    try:
+        config_res = requests.get(f"{API_URL}/config", headers=headers)
+        if config_res.status_code != 200:
+            console.print("[red]Failed to get config.[/red]")
+            raise typer.Exit(1)
+        config = config_res.json()
+        bot_token = config['bot_token']
+        channel_id = config['channel_id']
+    except Exception as e:
+        console.print(f"[red]Connection Error:[/red] {e}")
+        raise typer.Exit(1)
+
+    # 3. Get Metadata (We need the list of message_ids to delete)
+    # Since we don't have a specific GET /file/<id> endpoint yet, we search the list.
+    try:
+        files_res = requests.get(f"{API_URL}/list", headers=headers)
+        files = files_res.json().get('files', [])
+        target_file = next((f for f in files if f['id'] == file_id), None)
+        
+        if not target_file:
+            console.print(f"[red]File ID {file_id} not found.[/red]")
+            raise typer.Exit(1)
+            
+    except Exception as e:
+        console.print(f"[red]Error fetching metadata:[/red] {e}")
+        raise typer.Exit(1)
+
+    # 4. Confirmation (Skipped if --yes is passed)
+    if not yes:
+        confirm = typer.confirm(f"Are you sure you want to delete '{target_file.get('fileName')}'?")
+        if not confirm:
+            console.print("[yellow]Operation cancelled.[/yellow]")
+            raise typer.Abort()
+
+    # 5. Delete Chunks from Telegram (Client-Side)
+    messages = target_file.get('messages', [])
+    console.print(f"[yellow]Deleting {len(messages)} chunks from Telegram...[/yellow]")
+    
+    with typer.progressbar(messages, label="Cleaning Up") as progress:
+        for msg in messages:
+            try:
+                # Direct call to Telegram API
+                del_res = requests.post(f"https://api.telegram.org/bot{bot_token}/deleteMessage", json={
+                    "chat_id": channel_id,
+                    "message_id": msg['message_id']
+                })
+                # We don't stop on error, we try to delete as much as possible
+                progress.update(1)
+            except Exception as e:
+                console.print(f"[dim]Failed to delete chunk {msg['message_id']}: {e}[/dim]")
+
+    # 6. Delete from Firestore Registry (Server-Side)
+    try:
+        res = requests.post(f"{API_URL}/delete", headers=headers, json={"file_id": file_id})
+        if res.status_code == 200:
+            console.print(f"[green]🗑️  File '{target_file.get('fileName')}' deleted successfully.[/green]")
+        else:
+            console.print(f"[red]Registry delete failed:[/red] {res.text}")
+            
+    except Exception as e:
+        console.print(f"[red]API Error:[/red] {e}")
+
 if __name__ == "__main__":
     app()
