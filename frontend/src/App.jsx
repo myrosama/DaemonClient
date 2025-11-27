@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import firebase from 'firebase/compat/app';
 import 'firebase/compat/auth';
 import 'firebase/compat/firestore';
+import LandingPage from './LandingPage';
 
 // --- Firebase Initialization ---
 const firebaseConfig = {
@@ -15,7 +16,6 @@ const firebaseConfig = {
   measurementId: "G-72V5NJ7F2C"
 };
 
-// Initialize Firebase only once to prevent errors during hot-reload
 if (!firebase.apps.length) {
     firebase.initializeApp(firebaseConfig);
 }
@@ -24,14 +24,13 @@ const auth = firebase.auth();
 const db = firebase.firestore();
 const appIdentifier = 'default-daemon-client'; 
 
-// ============================================================================
-// --- HELPER FUNCTIONS ---
-// ============================================================================
+// --- CONSTANTS ---
 const CHUNK_SIZE = 19 * 1024 * 1024;
 const UPLOAD_RETRIES = 10;
 const DOWNLOAD_RETRIES = 5;
 const PROACTIVE_DELAY_MS = 1000;
 
+// --- HELPER FUNCTIONS ---
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 function formatSpeed(bytes) { 
@@ -48,12 +47,13 @@ function formatETA(seconds) {
     return [h > 0 ? `${h}h` : '', m > 0 ? `${m}m` : '', s > 0 ? `${s}s` : (h===0 && m===0 ? '0s' : '')].filter(Boolean).join(' ') || '...'; 
 }
 
-// --- UPLOAD FUNCTION ---
+// --- UPLOAD FUNCTION (With Proxy) ---
 async function uploadFile(file, botToken, channelId, onProgress, abortSignal, parentId) {
     const totalParts = Math.ceil(file.size / CHUNK_SIZE);
     const uploadedMessageInfo = [];
     let uploadedBytes = 0;
     const startTime = Date.now();
+    const proxyBaseUrl = "https://daemonclient-proxy.sadrikov49.workers.dev"; 
 
     for (let i = 0; i < totalParts; i++) {
         if (abortSignal.aborted) throw new Error("Upload was cancelled by the user.");
@@ -80,13 +80,17 @@ async function uploadFile(file, botToken, channelId, onProgress, abortSignal, pa
                 formData.append('chat_id', channelId);
                 formData.append('document', chunk, `${file.name}.part${String(partNumber).padStart(3, '0')}`);
                 
-                const response = await fetch(`https://api.telegram.org/bot${botToken}/sendDocument`, { 
+                const telegramUploadUrl = `https://api.telegram.org/bot${botToken}/sendDocument`;
+                const proxyUrl = `${proxyBaseUrl}?url=${encodeURIComponent(telegramUploadUrl)}`;
+
+                const response = await fetch(proxyUrl, { 
                     method: 'POST', 
                     body: formData, 
                     signal: abortSignal 
                 });
                 
                 const result = await response.json();
+                
                 if (result.ok) {
                     uploadedMessageInfo.push({ message_id: result.result.message_id, file_id: result.result.document.file_id });
                     uploadedBytes += chunk.size;
@@ -124,23 +128,17 @@ async function uploadFile(file, botToken, channelId, onProgress, abortSignal, pa
 // --- HYBRID DOWNLOAD FUNCTION ---
 async function downloadFile(fileInfo, botToken, onProgress, abortSignal) {
     const { messages, fileName, fileSize, fileType } = fileInfo;
-    // Reduce concurrency on mobile to save memory/CPU
     const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
     const CONCURRENT_DOWNLOADS = isMobile ? 3 : 5;
-    const CHUNK_SIZE = 19 * 1024 * 1024;
-
     const totalParts = messages.length;
     let downloadedBytes = 0;
     let completedParts = 0;
     const startTime = Date.now();
 
-    // --- Step 1: Determine Download Method ---
     const useFileSystemAPI = !!window.showSaveFilePicker; 
-    
     let fileHandle, writable, fileParts;
 
     if (useFileSystemAPI) {
-        // [DESKTOP STRATEGY] Stream directly to disk
         try {
             onProgress({ percent: 0, status: 'Waiting for permission...', speed: '', eta: '' });
             fileHandle = await window.showSaveFilePicker({ suggestedName: fileName });
@@ -150,7 +148,6 @@ async function downloadFile(fileInfo, botToken, onProgress, abortSignal) {
             throw err;
         }
     } else {
-        // [MOBILE STRATEGY] Download to RAM (Array)
         if (fileSize > 500 * 1024 * 1024) { 
              if (!confirm(`This file is large (${(fileSize / 1024 / 1024).toFixed(0)}MB). Downloading huge files on mobile may crash your browser tab due to memory limits. Do you want to try anyway?`)) {
                  onProgress({ active: false });
@@ -160,12 +157,10 @@ async function downloadFile(fileInfo, botToken, onProgress, abortSignal) {
         fileParts = new Array(totalParts);
     }
 
-    // --- Inner Function: Download a single chunk ---
     async function downloadPartWithRetry(partData) {
         for (let attempt = 1; attempt <= DOWNLOAD_RETRIES; attempt++) {
             if (abortSignal.aborted) throw new Error("Download was cancelled by the user.");
             try {
-                // 1. Get Telegram Path
                 const fileInfoUrl = `https://api.telegram.org/bot${botToken}/getFile?file_id=${partData.file_id}`;
                 const fileInfoRes = await fetch(fileInfoUrl, { signal: abortSignal });
                 const fileInfoData = await fileInfoRes.json();
@@ -182,16 +177,11 @@ async function downloadFile(fileInfo, botToken, onProgress, abortSignal) {
 
                 const filePath = fileInfoData.result.file_path;
                 const telegramUrl = `https://api.telegram.org/file/bot${botToken}/${filePath}`;
-
-                // 2. USE CLOUDFLARE PROXY
-                // IMPORTANT: This URL must match your deployed Cloudflare Worker
                 const proxyBaseUrl = "https://daemonclient-proxy.sadrikov49.workers.dev"; 
                 const proxyUrl = `${proxyBaseUrl}?url=${encodeURIComponent(telegramUrl)}`;
                 
-                // 3. Fetch the bytes
                 const fileRes = await fetch(proxyUrl, { signal: abortSignal });
                 if (!fileRes.ok) throw new Error(`Proxy fetch failed: ${fileRes.status}`);
-
                 return await fileRes.arrayBuffer();
 
             } catch (error) {
@@ -202,10 +192,8 @@ async function downloadFile(fileInfo, botToken, onProgress, abortSignal) {
         }
     }
 
-    // --- Step 2: Process the Download Queue ---
     return new Promise((resolve, reject) => {
         const queue = [...messages.entries()]; 
-
         const worker = async () => {
             while (queue.length > 0) {
                 if (abortSignal.aborted) {
@@ -215,10 +203,8 @@ async function downloadFile(fileInfo, botToken, onProgress, abortSignal) {
                 }
 
                 const [index, partData] = queue.shift();
-                
                 try {
                     const chunkData = await downloadPartWithRetry(partData);
-                    
                     if (useFileSystemAPI) {
                         const position = index * CHUNK_SIZE;
                         await writable.write({ type: 'write', position: position, data: chunkData });
@@ -255,7 +241,6 @@ async function downloadFile(fileInfo, botToken, onProgress, abortSignal) {
                             document.body.removeChild(a);
                             setTimeout(() => URL.revokeObjectURL(url), 10000); 
                         }
-
                         onProgress({ percent: 100, status: `Download complete!`, speed: '', eta: '' });
                         resolve();
                         return; 
@@ -267,11 +252,8 @@ async function downloadFile(fileInfo, botToken, onProgress, abortSignal) {
                 }
             }
         };
-
         onProgress({ percent: 0, status: 'Starting download...', speed: '', eta: '' });
-        for (let i = 0; i < CONCURRENT_DOWNLOADS; i++) {
-            worker();
-        }
+        for (let i = 0; i < CONCURRENT_DOWNLOADS; i++) { worker(); }
     });
 }
 
@@ -288,10 +270,7 @@ async function deleteTelegramMessages(botToken, channelId, messages) {
     }
 }
 
-// ============================================================================
 // --- UI COMPONENTS ---
-// ============================================================================
-
 const LoaderComponent = ({ small }) => <div className={`animate-spin rounded-full border-b-2 border-white ${small ? 'h-6 w-6' : 'h-10 w-10'}`}></div>;
 const LogoComponent = () => <img src="/logo.png" alt="DaemonClient Logo" className="h-16 w-auto" />; 
 const FullScreenLoader = ({message}) => <div className="flex flex-col items-center justify-center min-h-screen bg-gray-900 text-white"><LoaderComponent /><p className="mt-4 text-lg">{message || "Loading Application..."}</p></div>;
@@ -351,7 +330,6 @@ const SettingsModal = ({ initialConfig, onSave, onClose, isSaving }) => {
     );
 };
 
-// --- AUTH VIEW ---
 const AuthView = () => {
     const [isLoginView, setIsLoginView] = useState(true);
     const [email, setEmail] = useState('');
@@ -485,7 +463,6 @@ const AuthView = () => {
     );
 };
 
-// --- TERMS MODAL ---
 const TermsModal = ({ onClose }) => {
     return (
         <div className="fixed inset-0 bg-black bg-opacity-80 flex items-center justify-center z-50 font-sans" onClick={onClose}>
@@ -513,7 +490,6 @@ const TermsModal = ({ onClose }) => {
     );
 };
 
-// --- FILE ITEM ---
 const FileItem = ({ item, isEditing, renameValue, setRenameValue, onSaveRename, onCancelRename, onStartRename, onDownload, onDelete, onFolderClick, isBusy }) => {
     const isFolder = item.type === 'folder';
 
@@ -554,7 +530,6 @@ const FileItem = ({ item, isEditing, renameValue, setRenameValue, onSaveRename, 
     );
 };
 
-// --- BREADCRUMBS ---
 const Breadcrumbs = ({ hierarchy, onNavigate }) => {
     return (
         <div className="flex items-center space-x-2 text-sm text-gray-400 mb-4">
@@ -573,7 +548,6 @@ const Breadcrumbs = ({ hierarchy, onNavigate }) => {
     );
 };
 
-// --- DASHBOARD VIEW ---
 const DashboardView = () => {
     const [config, setConfig] = useState(null); 
     const [isLoadingConfig, setIsLoadingConfig] = useState(true); 
@@ -902,302 +876,14 @@ const DashboardView = () => {
     );
 };
 
-// --- SETUP VIEW ---
-const SetupView = ({ onSetupComplete }) => {
-    const [showManualForm, setShowManualForm] = useState(false);
-    const [statusMessage, setStatusMessage] = useState('');
-    const [botToken, setBotToken] = useState('');
-    const [channelId, setChannelId] = useState('');
-    const [error, setError] = useState('');
-    const [isLoading, setIsLoading] = useState(false);
-    
-    const handleStartAutomatedSetup = async () => {
-        setStatusMessage('Initiating secure setup... This may take a minute.');
-        setError('');
-        setIsLoading(true);
-        try {
-            const response = await fetch('http://127.0.0.1:8080/startSetup', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ data: { uid: auth.currentUser.uid, email: auth.currentUser.email, } })
-            });
-            const result = await response.json();
-            if (!response.ok) { throw new Error(result.error?.message || 'The setup service returned an unspecified error.'); }
-            setStatusMessage("Finalizing configuration...");
-            const configDocRef = db.collection(`artifacts/${appIdentifier}/users/${auth.currentUser.uid}/config`).doc('telegram');
-            let attempts = 0;
-            const maxAttempts = 5;
-            while (attempts < maxAttempts) {
-                const docSnap = await configDocRef.get();
-                if (docSnap.exists && docSnap.data().botToken) {
-                    setStatusMessage('Configuration saved! Proceeding to final step...');
-                    onSetupComplete(); 
-                    return;
-                }
-                await new Promise(resolve => setTimeout(resolve, 1000));
-                attempts++;
-            }
-            throw new Error("Could not verify configuration after setup. Please try again.");
-        } catch (err) {
-            console.error("Error during setup process:", err);
-            setStatusMessage('');
-            if (err.message.includes('Failed to fetch')) {
-                setError(`Could not connect to the setup service. Please try again later.`);
-            } else {
-                setError(`An unexpected error occurred. Please try again or contact support.`);
-            }
-        } finally {
-            setIsLoading(false);
-        }
-    };
-    
-    const handleSaveManualSetup = async () => {
-        if (!botToken.trim() || !channelId.trim()) { setError("Bot Token and Channel ID are required."); return; }
-        setIsLoading(true); setError('');
-        try {
-            const configDocRef = db.collection(`artifacts/${appIdentifier}/users/${auth.currentUser.uid}/config`).doc('telegram');
-            await configDocRef.set({ botToken: botToken.trim(), channelId: channelId.trim(), setupTimestamp: firebase.firestore.FieldValue.serverTimestamp() });
-            onSetupComplete();
-        } catch (err) { setError(`Save failed: ${err.message}`); }
-        finally { setIsLoading(false); }
-    };
-    const handleLogout = async () => { try { await auth.signOut(); } catch (err) { /* silent fail */ }};
-    useEffect(() => {
-        const uid = auth.currentUser?.uid;
-        if (!uid) return;
-        const unsubscribe = db.collection(`artifacts/${appIdentifier}/users/${uid}/config`).doc('telegram')
-            .onSnapshot((doc) => {
-                if (doc.exists && doc.data().botToken) {
-                    setStatusMessage('Setup complete! Redirecting to your dashboard...');
-                    setTimeout(() => onSetupComplete(), 1500);
-                }
-            });
-        return () => unsubscribe();
-    }, [onSetupComplete]);
-    const AutomatedSetupPanel = () => (
-         <div className="bg-gray-900 border-2 border-indigo-500 rounded-lg p-6 relative">
-            <span className="absolute top-0 right-4 -mt-3 bg-indigo-500 text-white text-xs font-bold px-3 py-1 rounded-full">Recommended</span>
-            <h2 className="text-xl font-semibold text-white">Automated Setup</h2>
-            <p className="text-gray-400 mt-2 text-sm">The easiest way to get started. We'll automatically create and configure a private bot and channel for you.</p>
-            <button onClick={handleStartAutomatedSetup} disabled={isLoading || !!statusMessage} className="mt-6 w-full bg-indigo-500 hover:bg-indigo-600 text-white font-bold py-3 px-4 rounded-lg flex items-center justify-center text-lg disabled:bg-gray-600 disabled:cursor-not-allowed">
-                {isLoading ? <LoaderComponent /> : 'Create My Secure Storage'}
-            </button>
-        </div>
-    );
-    const ManualSetupPanel = () => (
-        <div className="bg-gray-700 rounded-lg p-6">
-             <h2 className="text-xl font-semibold text-white">Manual Setup</h2>
-             <p className="text-gray-400 mt-2 text-sm">For advanced users who want to use their own existing bot and channel.</p>
-            <button onClick={() => setShowManualForm(true)} className="mt-4 w-full bg-gray-600 hover:bg-gray-500 text-white font-bold py-2 px-4 rounded-lg flex items-center justify-center">Enter Credentials Manually</button>
-        </div>
-    );
-    const ManualSetupForm = () => (
-        <div className="mt-8 animate-fade-in">
-            <h2 className="text-xl font-semibold text-center text-white mb-4">Enter Your Credentials</h2>
-             <div className="space-y-6">
-                <div>
-                    <label htmlFor="botToken-setup" className="block text-sm font-medium text-gray-300 mb-1">Telegram Bot Token</label>
-                    <input id="botToken-setup" type="password" value={botToken} onChange={(e) => setBotToken(e.target.value)} className="w-full p-3 bg-gray-600 border border-gray-500 rounded-lg text-white" placeholder="From @BotFather" />
-                </div>
-                <div>
-                    <label htmlFor="channelId-setup" className="block text-sm font-medium text-gray-300 mb-1">Private Channel ID</label>
-                    <input id="channelId-setup" type="text" value={channelId} onChange={(e) => setChannelId(e.target.value)} className="w-full p-3 bg-gray-600 border border-gray-500 rounded-lg text-white" placeholder="From @userinfobot" />
-                </div>
-                {error && <p className="text-red-400 text-sm text-center py-2">{error}</p>}
-                <button onClick={handleSaveManualSetup} disabled={isLoading} className="w-full bg-indigo-500 hover:bg-indigo-600 disabled:bg-indigo-800 text-white font-bold py-3 px-4 rounded-lg flex items-center justify-center text-lg">
-                    {isLoading ? <LoaderComponent small={true} /> : 'Save & Continue'}
-                </button>
-                <button onClick={() => setShowManualForm(false)} className="w-full text-center text-gray-400 hover:text-white text-sm mt-4">Back to setup options</button>
-            </div>
-        </div>
-    );
-    const StatusBar = ({message}) => (
-         <div className="mt-8 p-4 bg-gray-900 rounded-lg flex items-center justify-center animate-fade-in">
-            <LoaderComponent small={true} />
-            <p className="ml-4 text-indigo-300">{message}</p>
-         </div>
-    );
-    return (
-        <div className="min-h-screen bg-gray-900 text-white flex flex-col items-center justify-center p-4 font-sans">
-            <div className="w-full max-w-2xl">
-                <div className="bg-gray-800 rounded-xl shadow-2xl p-6 md:p-8 relative overflow-hidden">
-                    <div className="text-center mb-8">
-                        <h1 className="text-3xl font-bold text-indigo-400">One-Time Setup</h1>
-                        <p className="text-gray-400 mt-2">Let's create your private, secure storage.</p>
-                    </div>
-                    {showManualForm ? <ManualSetupForm /> : (<div className="space-y-8"><AutomatedSetupPanel /><ManualSetupPanel /></div>)}
-                    {statusMessage && <StatusBar message={statusMessage} />}
-                    {error && !statusMessage && <p className="text-red-400 text-center mt-4">{error}</p>}
-                </div>
-                 <div className="text-center mt-6">
-                    <button onClick={handleLogout} className="text-sm text-gray-500 hover:text-gray-300">Logout</button>
-                </div>
-            </div>
-        </div>
-    );
-};
-
-// --- OWNERSHIP VIEW ---
-const OwnershipView = ({ onOwnershipConfirmed }) => {
-    const [config, setConfig] = useState(null);
-    const [step, setStep] = useState(1);
-    const [isLoading, setIsLoading] = useState(true);
-    const [error, setError] = useState('');
-    const [countdown, setCountdown] = useState(10);
-    const [isButtonDisabled, setIsButtonDisabled] = useState(true);
-    const [hasClickedLink, setHasClickedLink] = useState(false);
-    const [isProcessing, setIsProcessing] = useState(false);
-    const [transferStatus, setTransferStatus] = useState(null);
-
-    useEffect(() => {
-        const fetchConfig = async () => {
-            try {
-                const configDocRef = db.collection(`artifacts/${appIdentifier}/users/${auth.currentUser.uid}/config`).doc('telegram');
-                const docSnap = await configDocRef.get();
-                if (docSnap.exists) {
-                    setConfig(docSnap.data());
-                } else {
-                    setError("Could not find your configuration. Please try the setup again.");
-                }
-            } catch (err) {
-                setError("Error fetching configuration: " + err.message);
-            } finally {
-                setIsLoading(false);
-            }
-        };
-        fetchConfig();
-    }, []);
-    useEffect(() => {
-        if (isLoading) return;
-        setIsButtonDisabled(true);
-        setCountdown(10);
-        if (hasClickedLink) {
-            const interval = setInterval(() => {
-                setCountdown(prev => {
-                    if (prev <= 1) {
-                        clearInterval(interval);
-                        setIsButtonDisabled(false);
-                        return 0;
-                    }
-                    return prev - 1;
-                });
-            }, 1000);
-            return () => clearInterval(interval);
-        }
-    }, [step, hasClickedLink, isLoading]);
-    const handleLinkClicked = () => { if (!hasClickedLink) { setHasClickedLink(true); } };
-    const handleNextStep = () => { setStep(2); setHasClickedLink(false); };
-    const handleFinalize = async () => {
-        setIsProcessing(true);
-        setStep(3);
-        setError('');
-        setTransferStatus({
-            bot: { status: 'pending', message: 'Verifying user and transferring bot ownership...' },
-            channel: { status: 'pending', message: 'Attempting to transfer channel ownership...' }
-        });
-        try {
-            const response = await fetch('http://127.0.0.1:8080/finalizeTransfer', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ data: { uid: auth.currentUser.uid } })
-            });
-            const result = await response.json();
-            if (!response.ok) {
-                throw new Error(result.error?.message || 'The server returned an unspecified error.');
-            }
-            setTransferStatus({
-                bot: { status: result.bot_transfer_status, message: result.bot_transfer_message },
-                channel: { status: result.channel_transfer_status, message: result.channel_transfer_message }
-            });
-            setTimeout(() => onOwnershipConfirmed(), 5000);
-        } catch (err) {
-            setError(`A critical error occurred: ${err.message}`);
-            setStep(2);
-            setIsProcessing(false);
-            setHasClickedLink(false);
-        }
-    };
-    const StatusItem = ({ status, message }) => {
-        const icon = status === 'pending' ? <LoaderComponent small={true} /> :
-                     status === 'success' ? <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-green-400"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg> :
-                     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-red-400"><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg>;
-        const textColor = status === 'success' ? 'text-green-300' : status === 'failed' ? 'text-red-300' : 'text-gray-300';
-        return <li className="flex items-start space-x-3 py-2"><div className="flex-shrink-0 mt-1">{icon}</div><p className={`${textColor} text-sm`}>{message}</p></li>;
-    };
-    if (isLoading) {
-        return <FullScreenLoader message="Loading your bot and channel details..." />;
-    }
-    const renderStepContent = () => {
-        switch (step) {
-            case 1:
-                return (
-                    <div className="space-y-6 text-center">
-                         <h1 className="text-3xl font-bold text-indigo-400">Final Step (1/2): Start Your Bot</h1>
-                         <p className="text-gray-400">This is required by Telegram to transfer ownership. Click the link, press START in Telegram, then come back here.</p>
-                         <a 
-                            href={config ? `https://t.me/${config.botUsername}` : '#'} 
-                            target="_blank" 
-                            onClick={handleLinkClicked}
-                            className="inline-block bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-6 rounded-lg text-lg"
-                         >
-                             {config ? `Open Bot: @${config.botUsername}` : <LoaderComponent small={true} />}
-                         </a>
-                         <button onClick={handleNextStep} disabled={isButtonDisabled} className="w-full max-w-xs mx-auto bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-3 px-4 rounded-lg flex items-center justify-center text-lg">
-                            {isButtonDisabled ? `Next Step (${countdown}s)` : 'Next Step'}
-                         </button>
-                    </div>
-                );
-            case 2:
-                return (
-                    <div className="space-y-6 text-center">
-                        <h1 className="text-3xl font-bold text-indigo-400">Final Step (2/2): Join Your Channel</h1>
-                        <p className="text-gray-400">This allows us to securely identify you as the owner. Click the link to join, then come back and finalize.</p>
-                        <a 
-                            href={config ? config.invite_link : '#'} 
-                            target="_blank"
-                            onClick={handleLinkClicked}
-                            className="inline-block bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-6 rounded-lg text-lg"
-                        >
-                            {config ? 'Join Secure Channel' : <LoaderComponent small={true} />}
-                        </a>
-                        <button onClick={handleFinalize} disabled={isButtonDisabled} className="w-full max-w-xs mx-auto bg-green-600 hover:bg-green-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-3 px-4 rounded-lg flex items-center justify-center text-lg">
-                            {isButtonDisabled ? `Finalize (${countdown}s)` : 'Finalize Transfer'}
-                        </button>
-                    </div>
-                );
-            case 3:
-                 return (
-                    <div>
-                        <h1 className="text-3xl font-bold text-indigo-400 text-center mb-4">Finalizing Setup...</h1>
-                        <ul className="space-y-2 bg-gray-900 p-4 rounded-lg">
-                            <StatusItem status={transferStatus.bot.status} message={transferStatus.bot.message} />
-                            <StatusItem status={transferStatus.channel.status} message={transferStatus.channel.message} />
-                        </ul>
-                    </div>
-                );
-            default:
-                return null;
-        }
-    };
-    return (
-        <div className="min-h-screen bg-gray-900 text-white flex flex-col items-center justify-center p-4 font-sans">
-            <div className="w-full max-w-xl bg-gray-800 rounded-xl shadow-2xl p-6 md:p-8">
-                {renderStepContent()}
-                {error && <p className="text-red-400 text-sm text-center mt-4">{error}</p>}
-            </div>
-        </div>
-    );
-};
-
-// --- MAIN APP ---
-function App() {
+const App = () => {
     const [user, setUser] = useState(null);
     const [appState, setAppState] = useState('loading'); 
 
     useEffect(() => {
         const unsubscribe = auth.onAuthStateChanged(async (currentUser) => {
             if (!currentUser) {
-                setAppState('auth');
+                setAppState(prevState => prevState === 'auth' ? 'auth' : 'landing');
                 return;
             }
             setUser(currentUser);
@@ -1222,6 +908,10 @@ function App() {
         return () => unsubscribe(); 
     }, []); 
 
+    const handleLaunchApp = () => {
+        setAppState('auth'); 
+    };
+
     const handleSetupComplete = () => {
         setAppState('transfer');
     };
@@ -1233,6 +923,8 @@ function App() {
     if (appState === 'loading') return <FullScreenLoader message="Initializing App..." />;
     
     switch (appState) {
+        case 'landing':
+            return <LandingPage onLaunchApp={handleLaunchApp} />;
         case 'auth':
             return <AuthView />;
         case 'setup':
@@ -1244,6 +936,6 @@ function App() {
         default:
             return <AuthView />;
     }
-}
+};
 
-export default App; 
+export default App;
