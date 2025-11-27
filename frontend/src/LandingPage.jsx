@@ -1,15 +1,15 @@
 import React, { useState, useEffect } from 'react';
-import { motion } from 'framer-motion';
+import { motion, AnimatePresence } from 'framer-motion';
 
 // --- Icons ---
 const CloudIcon = () => (
-  <svg xmlns="http://www.w3.org/2000/svg" className="h-10 w-10 text-indigo-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+  <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 15a4 4 0 004 4h9a5 5 0 10-.1-9.999 5.002 5.002 0 10-9.78 2.096A4.001 4.001 0 003 15z" />
   </svg>
 );
 
 const LockIcon = () => (
-  <svg xmlns="http://www.w3.org/2000/svg" className="h-10 w-10 text-indigo-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+  <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
   </svg>
 );
@@ -18,6 +18,12 @@ const TerminalIcon = () => (
   <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
   </svg>
+);
+
+const ServerIcon = () => (
+    <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01" />
+    </svg>
 );
 
 // --- ANIMATED COUNTER ---
@@ -42,7 +48,7 @@ const Counter = ({ from, to, suffix = "" }) => {
   return <span>{count.toLocaleString()}{suffix}</span>;
 };
 
-// --- TERMINAL DEMO ---
+// --- VISUAL 1: TERMINAL DEMO ---
 const TerminalDemo = () => {
   const [text, setText] = useState('');
   const fullText = "> daemon upload secret_plans.pdf\n[+] Encrypting file...\n[+] Chunking into 19MB parts...\n[+] Uploading to secure channel...\n[+] File 'secret_plans.pdf' registered.\n> ";
@@ -54,55 +60,106 @@ const TerminalDemo = () => {
       i++;
       if (i > fullText.length) {
         clearInterval(interval);
-        setTimeout(() => { i=0; setText(''); }, 5000); 
+        setTimeout(() => { i=0; setText(''); }, 4000); 
       }
-    }, 50);
+    }, 40);
     return () => clearInterval(interval);
   }, []);
 
   return (
-    <div className="bg-[#0F131F] rounded-xl border border-gray-800 p-6 font-mono text-sm shadow-2xl w-full max-w-lg mx-auto">
-      <div className="flex gap-2 mb-4">
+    <div className="bg-[#0F131F] rounded-xl border border-gray-800 p-6 font-mono text-sm shadow-2xl w-full h-64 flex flex-col">
+      <div className="flex gap-2 mb-4 border-b border-gray-800 pb-4">
         <div className="w-3 h-3 rounded-full bg-red-500/50" />
         <div className="w-3 h-3 rounded-full bg-yellow-500/50" />
         <div className="w-3 h-3 rounded-full bg-green-500/50" />
+        <span className="ml-auto text-xs text-gray-600">bash</span>
       </div>
-      <div className="text-gray-300 min-h-[120px] whitespace-pre-line text-left">
+      <div className="text-gray-300 whitespace-pre-line flex-grow overflow-hidden">
         {text}<span className="animate-pulse inline-block w-2 h-4 bg-indigo-500 align-middle ml-1" />
       </div>
     </div>
   );
 };
 
-// --- SECURE CLOUD CORE ANIMATION ---
+// --- VISUAL 2: INFINITY ANIMATION ---
+const InfinityVisual = () => (
+    <div className="relative w-full h-64 flex items-center justify-center bg-[#0F131F] rounded-xl border border-gray-800 overflow-hidden">
+        <div className="absolute inset-0 bg-gradient-to-br from-indigo-500/5 to-transparent"></div>
+        <motion.div 
+            animate={{ rotate: 360 }}
+            transition={{ duration: 20, repeat: Infinity, ease: "linear" }}
+            className="w-32 h-32 rounded-full border-2 border-dashed border-indigo-500/30"
+        />
+        <motion.div 
+            animate={{ rotate: -360 }}
+            transition={{ duration: 15, repeat: Infinity, ease: "linear" }}
+            className="absolute w-48 h-48 rounded-full border border-cyan-500/20"
+        />
+         <div className="absolute text-6xl font-bold text-white/10 select-none">∞</div>
+         <motion.div 
+            animate={{ scale: [1, 1.2, 1], opacity: [0.5, 1, 0.5] }}
+            transition={{ duration: 3, repeat: Infinity }}
+            className="absolute w-20 h-20 bg-indigo-500/20 rounded-full blur-xl"
+         />
+    </div>
+);
+
+// --- VISUAL 3: SECURITY/CODE ANIMATION ---
+const SecurityVisual = () => (
+    <div className="relative w-full h-64 flex items-center justify-center bg-[#0F131F] rounded-xl border border-gray-800 overflow-hidden">
+         <div className="grid grid-cols-4 gap-2 opacity-20">
+            {[...Array(16)].map((_, i) => (
+                <motion.div 
+                    key={i}
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: [0, 1, 0] }}
+                    transition={{ duration: 2, delay: i * 0.1, repeat: Infinity }}
+                    className="w-8 h-8 rounded bg-indigo-500"
+                />
+            ))}
+         </div>
+         <div className="absolute inset-0 flex items-center justify-center">
+             <div className="p-4 bg-[#0B0F19] rounded-full border border-indigo-500/50 shadow-[0_0_30px_rgba(99,102,241,0.3)]">
+                <LockIcon />
+             </div>
+         </div>
+    </div>
+);
+
+
+// --- SECURE CLOUD CORE ANIMATION (HERO) ---
 const SecureCloudCore = () => {
   return (
     <div className="relative w-full h-[500px] flex items-center justify-center">
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,_rgba(99,102,241,0.15)_0%,_transparent_70%)] blur-3xl" />
       <motion.div 
         animate={{ rotate: 360 }}
-        transition={{ duration: 40, repeat: Infinity, ease: "linear" }}
-        className="absolute w-[380px] h-[380px] rounded-full border border-indigo-500/20 border-dashed"
+        transition={{ duration: 50, repeat: Infinity, ease: "linear" }}
+        className="absolute w-[450px] h-[450px] rounded-full border border-indigo-500/10 border-dashed"
       />
       <motion.div 
         animate={{ rotate: -360 }}
-        transition={{ duration: 25, repeat: Infinity, ease: "linear" }}
-        className="absolute w-[280px] h-[280px] rounded-full border border-cyan-500/30"
-        style={{ borderTopColor: 'transparent', borderBottomColor: 'transparent' }}
+        transition={{ duration: 30, repeat: Infinity, ease: "linear" }}
+        className="absolute w-[300px] h-[300px] rounded-full border border-cyan-500/20"
+        style={{ borderTopColor: 'transparent', borderBottomColor: 'transparent', borderWidth: '2px' }}
       />
+      
+      {/* Circular Container for Logo - RESTORED TO CIRCLE */}
       <motion.div
         initial={{ scale: 0.9, opacity: 0 }}
-        animate={{ scale: 1, opacity: 1, y: [0, -10, 0] }}
-        transition={{ scale: { duration: 0.8 }, opacity: { duration: 0.8 }, y: { duration: 4, repeat: Infinity, ease: "easeInOut" } }}
+        animate={{ scale: 1, opacity: 1, y: [0, -15, 0] }}
+        transition={{ scale: { duration: 1 }, opacity: { duration: 1 }, y: { duration: 6, repeat: Infinity, ease: "easeInOut" } }}
         className="relative z-10"
       >
-        <div className="relative w-40 h-40 md:w-56 md:h-56 bg-[#0F131F]/80 backdrop-blur-xl border border-indigo-500/30 rounded-3xl flex items-center justify-center shadow-[0_0_60px_rgba(99,102,241,0.15)]">
-           <motion.div 
-             animate={{ scale: [1, 1.1, 1], opacity: [0.5, 0.2, 0.5] }}
-             transition={{ duration: 3, repeat: Infinity }}
-             className="absolute inset-4 bg-indigo-500/20 rounded-2xl blur-md"
+        <div className="relative w-40 h-40 md:w-64 md:h-64 bg-[#0F131F]/80 backdrop-blur-xl border border-indigo-500/30 rounded-full flex items-center justify-center shadow-[0_0_80px_rgba(99,102,241,0.2)] overflow-hidden">
+           <div className="absolute inset-0 rounded-full bg-gradient-to-tr from-indigo-500/10 to-transparent"></div>
+           <motion.img 
+             src="/logo.png" 
+             alt="Core" 
+             className="w-24 h-24 md:w-32 md:h-32 object-contain relative z-20 drop-shadow-[0_0_25px_rgba(99,102,241,0.6)]"
+             animate={{ scale: [1, 1.05, 1] }}
+             transition={{ duration: 4, repeat: Infinity, ease: "easeInOut" }}
            />
-           <img src="/logo.png" alt="Core" className="w-24 h-24 md:w-32 md:h-32 object-contain relative z-20 drop-shadow-[0_0_15px_rgba(99,102,241,0.5)]"/>
         </div>
       </motion.div>
     </div>
@@ -111,27 +168,17 @@ const SecureCloudCore = () => {
 
 // --- COMPONENTS ---
 const AlgoStep = ({ title, description, visual }) => (
-  <div className="bg-[#0F131F] p-8 rounded-2xl border border-gray-800 hover:border-indigo-500/30 transition-all flex flex-col h-full hover:bg-[#131725]">
-    <div className="h-40 flex items-center justify-center mb-6 bg-black/20 rounded-xl border border-gray-800/50 overflow-hidden relative">
+  <div className="bg-[#0F131F] p-8 rounded-2xl border border-gray-800 hover:border-indigo-500/30 transition-all flex flex-col h-full hover:bg-[#131725] group">
+    <div className="h-40 flex items-center justify-center mb-6 bg-black/20 rounded-xl border border-gray-800/50 overflow-hidden relative group-hover:border-indigo-500/20 transition-colors">
        {visual}
     </div>
-    <h4 className="text-xl font-bold text-white mb-2">{title}</h4>
+    <h4 className="text-xl font-bold text-white mb-2 group-hover:text-indigo-400 transition-colors">{title}</h4>
     <p className="text-gray-400 text-sm leading-relaxed">{description}</p>
   </div>
 );
 
-const FeatureCard = ({ icon, title, description }) => (
-  <div className="bg-gray-900/50 backdrop-blur-sm p-8 rounded-2xl border border-gray-800 hover:border-indigo-500/50 transition-all hover:-translate-y-1 hover:shadow-2xl hover:shadow-indigo-900/20 group">
-    <div className="mb-6 inline-block p-3 rounded-xl bg-[#0F131F] border border-gray-700 group-hover:border-indigo-500/30 transition-colors">
-      {icon}
-    </div>
-    <h3 className="text-xl font-bold text-white mb-3 group-hover:text-indigo-200 transition-colors">{title}</h3>
-    <p className="text-gray-400 leading-relaxed">{description}</p>
-  </div>
-);
-
 const StatCard = ({ number, label }) => (
-    <div className="p-6 rounded-2xl bg-[#0F131F] border border-gray-800 text-center hover:border-indigo-500/30 transition-colors">
+    <div className="p-6 rounded-2xl bg-[#0F131F]/50 border border-gray-800 text-center hover:border-indigo-500/30 transition-colors backdrop-blur-sm">
         <div className="text-3xl font-bold text-white mb-1 font-mono">{number}</div>
         <div className="text-xs uppercase tracking-widest text-gray-500 font-bold">{label}</div>
     </div>
@@ -139,7 +186,7 @@ const StatCard = ({ number, label }) => (
 
 const StepCard = ({ number, title, description }) => (
   <div className="relative flex flex-col items-center text-center p-6 z-10">
-    <div className="w-14 h-14 rounded-2xl bg-indigo-600/20 border border-indigo-500/30 flex items-center justify-center text-2xl font-bold text-indigo-400 mb-6 shadow-[0_0_30px_rgba(99,102,241,0.15)]">
+    <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-indigo-600 to-purple-700 flex items-center justify-center text-xl font-bold text-white mb-6 shadow-lg shadow-indigo-900/50">
       {number}
     </div>
     <h3 className="text-xl font-bold text-white mb-3">{title}</h3>
@@ -148,7 +195,7 @@ const StepCard = ({ number, title, description }) => (
 );
 
 const DownloadOption = ({ title, icon, status, description, buttonText, href, primary }) => (
-  <div className={`p-8 rounded-2xl border transition-all duration-300 hover:-translate-y-1 ${primary ? 'border-indigo-500 bg-indigo-900/10 hover:bg-indigo-900/20' : 'border-gray-800 bg-[#0F131F] hover:border-gray-600'} flex flex-col h-full group`}>
+  <div className={`p-8 rounded-2xl border transition-all duration-300 hover:-translate-y-1 ${primary ? 'border-indigo-500 bg-indigo-900/10 hover:bg-indigo-900/20' : 'border-gray-800 bg-[#0F131F] hover:border-gray-700'} flex flex-col h-full group`}>
     <div className="flex items-center justify-between mb-6">
       <h3 className="text-lg font-bold text-white flex items-center gap-3 group-hover:text-indigo-300 transition-colors">
         {icon} {title}
@@ -176,7 +223,46 @@ const DownloadOption = ({ title, icon, status, description, buttonText, href, pr
   </div>
 );
 
+const TechStackItem = ({ name }) => (
+    <span className="px-4 py-2 rounded-full border border-gray-800 bg-gray-900 text-gray-400 text-sm font-mono hover:border-indigo-500/50 hover:text-indigo-300 transition-colors cursor-default">
+        {name}
+    </span>
+);
+
 export default function LandingPage({ onLaunchApp }) {
+  
+  // --- CAROUSEL STATE ---
+  const [activeFeature, setActiveFeature] = useState(0);
+  
+  // Auto-rotate carousel
+  useEffect(() => {
+    const interval = setInterval(() => {
+        setActiveFeature((prev) => (prev + 1) % 3);
+    }, 5000); // Change every 5 seconds
+    return () => clearInterval(interval);
+  }, []);
+
+  const features = [
+    {
+        title: "Daemon CLI",
+        desc: "Automate your backups. Write simple scripts to sync folders, upload logs, or manage your cloud from the terminal.",
+        icon: <TerminalIcon />,
+        visual: <TerminalDemo />
+    },
+    {
+        title: "Infinite Scalability",
+        desc: "Whether you store 1GB or 100TB, the protocol handles it. No caps. No throttling. Just raw storage.",
+        icon: <CloudIcon />,
+        visual: <InfinityVisual />
+    },
+    {
+        title: "Code as Infrastructure",
+        desc: "Everything is open source. Audit the code yourself. Host your own instance. You own the platform.",
+        icon: <LockIcon />,
+        visual: <SecurityVisual />
+    }
+  ];
+
   return (
     <div className="min-h-screen bg-[#05080F] text-white font-sans selection:bg-indigo-500 selection:text-white overflow-x-hidden scroll-smooth">
       
@@ -209,10 +295,9 @@ export default function LandingPage({ onLaunchApp }) {
             <h1 className="text-5xl md:text-7xl font-bold leading-tight mb-6 tracking-tight">
               The Cloud is Broken.<br /><span className="text-transparent bg-clip-text bg-gradient-to-r from-indigo-400 to-cyan-400">We Fixed It.</span>
             </h1>
-            <p className="text-lg text-gray-400 mb-8 leading-relaxed max-w-lg">
+            <p className="text-lg text-gray-400 mb-10 leading-relaxed max-w-lg">
               Traditional cloud storage charges you rent for digital space. We reverse-engineered the concept to give you <b>infinite bandwidth</b> and <b>zero costs</b> by owning the infrastructure.
             </p>
-            
             <div className="flex flex-col sm:flex-row gap-4 mb-12">
               <button onClick={onLaunchApp} className="bg-white text-black hover:bg-gray-100 px-8 py-3.5 rounded-xl font-bold text-lg transition-all shadow-[0_0_20px_rgba(255,255,255,0.15)] hover:shadow-[0_0_30px_rgba(255,255,255,0.25)] hover:-translate-y-1">Start Uploading</button>
               <a href="#download" className="bg-[#1A1F2E] hover:bg-gray-800 px-8 py-3.5 rounded-xl font-bold text-lg transition-all border border-gray-700 hover:border-gray-500 flex items-center justify-center gap-2 group text-gray-200">
@@ -238,7 +323,7 @@ export default function LandingPage({ onLaunchApp }) {
         </div>
       </section>
 
-      {/* Philosophy Section (Restored) */}
+      {/* Philosophy Section */}
       <motion.section 
         id="philosophy" 
         className="py-32 bg-[#05080F] relative overflow-hidden"
@@ -354,7 +439,7 @@ export default function LandingPage({ onLaunchApp }) {
         </div>
       </motion.section>
 
-      {/* Engineered for Power Users (With Terminal) */}
+      {/* CAROUSEL SECTION (Power Users) */}
       <motion.section 
         id="features" 
         className="py-24 bg-[#0B0F19]"
@@ -365,19 +450,50 @@ export default function LandingPage({ onLaunchApp }) {
       >
         <div className="container mx-auto px-6">
           <div className="flex flex-col lg:flex-row gap-16 items-center">
-            <div className="lg:w-1/2">
-                <h2 className="text-3xl md:text-4xl font-bold mb-6">Engineered for Power Users</h2>
-                <p className="text-gray-400 text-lg mb-10 leading-relaxed">
-                    DaemonClient respects your workflow. We provide a full suite of tools, from a beautiful web UI to a headless CLI for your servers.
-                </p>
-                <div className="space-y-6">
-                    <FeatureCard icon={<TerminalIcon />} title="Daemon CLI" description="Automate your backups. Write simple scripts to sync folders, upload logs, or manage your cloud from the terminal." />
-                    <FeatureCard icon={<CloudIcon />} title="Infinite Scalability" description="Whether you store 1GB or 100TB, the protocol handles it. No caps. No throttling." />
-                    <FeatureCard icon={<LockIcon />} title="Code as Infrastructure" description="Everything is open source. Audit the code yourself. Host your own instance." />
-                </div>
+            
+            {/* LEFT: Carousel Cards */}
+            <div className="lg:w-1/2 space-y-4">
+                <h2 className="text-3xl md:text-4xl font-bold mb-8">Engineered for Power Users</h2>
+                
+                {features.map((feature, index) => (
+                    <div 
+                        key={index}
+                        onClick={() => setActiveFeature(index)}
+                        className={`p-6 rounded-xl border transition-all cursor-pointer ${
+                            activeFeature === index 
+                            ? 'bg-[#151926] border-indigo-500/50 shadow-lg shadow-indigo-500/10 scale-[1.02]' 
+                            : 'bg-transparent border-gray-800 hover:bg-gray-900/50'
+                        }`}
+                    >
+                        <div className="flex items-center gap-4 mb-2">
+                            <div className={`p-2 rounded-lg ${activeFeature === index ? 'bg-indigo-500/20 text-indigo-400' : 'bg-gray-800 text-gray-500'}`}>
+                                {feature.icon}
+                            </div>
+                            <h3 className={`text-lg font-bold ${activeFeature === index ? 'text-white' : 'text-gray-400'}`}>
+                                {feature.title}
+                            </h3>
+                        </div>
+                        <p className={`text-sm leading-relaxed pl-[52px] ${activeFeature === index ? 'text-gray-300' : 'text-gray-600'}`}>
+                            {feature.desc}
+                        </p>
+                    </div>
+                ))}
             </div>
-            <div className="lg:w-1/2 w-full flex flex-col items-center lg:items-end">
-                <TerminalDemo />
+
+            {/* RIGHT: Dynamic Visual */}
+            <div className="lg:w-1/2 w-full h-[400px] flex items-center justify-center">
+                <AnimatePresence mode="wait">
+                    <motion.div
+                        key={activeFeature}
+                        initial={{ opacity: 0, scale: 0.9, x: 20 }}
+                        animate={{ opacity: 1, scale: 1, x: 0 }}
+                        exit={{ opacity: 0, scale: 0.9, x: -20 }}
+                        transition={{ duration: 0.4 }}
+                        className="w-full flex justify-center"
+                    >
+                        {features[activeFeature].visual}
+                    </motion.div>
+                </AnimatePresence>
             </div>
           </div>
         </div>
