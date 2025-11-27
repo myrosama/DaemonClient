@@ -1,15 +1,15 @@
 import React, { useState, useEffect } from 'react';
-import { motion, useSpring, useTransform } from 'framer-motion';
+import { motion } from 'framer-motion';
 
 // --- Icons ---
 const CloudIcon = () => (
-  <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+  <svg xmlns="http://www.w3.org/2000/svg" className="h-10 w-10 text-indigo-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 15a4 4 0 004 4h9a5 5 0 10-.1-9.999 5.002 5.002 0 10-9.78 2.096A4.001 4.001 0 003 15z" />
   </svg>
 );
 
 const LockIcon = () => (
-  <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+  <svg xmlns="http://www.w3.org/2000/svg" className="h-10 w-10 text-indigo-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
   </svg>
 );
@@ -20,13 +20,13 @@ const TerminalIcon = () => (
   </svg>
 );
 
-// --- ANIMATED COUNTER COMPONENT ---
-const Counter = ({ from, to }) => {
+// --- ANIMATED COUNTER ---
+const Counter = ({ from, to, suffix = "" }) => {
   const [count, setCount] = useState(from);
   
   useEffect(() => {
     const controls = { value: from };
-    const step = (to - from) / 100;
+    const step = (to - from) / 60; 
     const interval = setInterval(() => {
         controls.value += step;
         if (controls.value >= to) {
@@ -39,7 +39,7 @@ const Counter = ({ from, to }) => {
     return () => clearInterval(interval);
   }, [from, to]);
 
-  return <span>{count.toLocaleString()}</span>;
+  return <span>{count.toLocaleString()}{suffix}</span>;
 };
 
 // --- TERMINAL DEMO ---
@@ -61,13 +61,13 @@ const TerminalDemo = () => {
   }, []);
 
   return (
-    <div className="bg-[#0F131F] rounded-xl border border-gray-800 p-6 font-mono text-sm shadow-2xl w-full">
+    <div className="bg-[#0F131F] rounded-xl border border-gray-800 p-6 font-mono text-sm shadow-2xl w-full max-w-lg mx-auto">
       <div className="flex gap-2 mb-4">
         <div className="w-3 h-3 rounded-full bg-red-500/50" />
         <div className="w-3 h-3 rounded-full bg-yellow-500/50" />
         <div className="w-3 h-3 rounded-full bg-green-500/50" />
       </div>
-      <div className="text-gray-300 min-h-[120px] whitespace-pre-line">
+      <div className="text-gray-300 min-h-[120px] whitespace-pre-line text-left">
         {text}<span className="animate-pulse inline-block w-2 h-4 bg-indigo-500 align-middle ml-1" />
       </div>
     </div>
@@ -120,20 +120,14 @@ const AlgoStep = ({ title, description, visual }) => (
   </div>
 );
 
-const FeatureCard = ({ icon, title, description, delay }) => (
-  <motion.div 
-    initial={{ opacity: 0, y: 20 }}
-    whileInView={{ opacity: 1, y: 0 }}
-    viewport={{ once: true }}
-    transition={{ duration: 0.5, delay }}
-    className="bg-gray-900/50 backdrop-blur-sm p-8 rounded-2xl border border-gray-800 hover:border-indigo-500/50 transition-all hover:-translate-y-1 hover:shadow-2xl hover:shadow-indigo-900/20 group"
-  >
+const FeatureCard = ({ icon, title, description }) => (
+  <div className="bg-gray-900/50 backdrop-blur-sm p-8 rounded-2xl border border-gray-800 hover:border-indigo-500/50 transition-all hover:-translate-y-1 hover:shadow-2xl hover:shadow-indigo-900/20 group">
     <div className="mb-6 inline-block p-3 rounded-xl bg-[#0F131F] border border-gray-700 group-hover:border-indigo-500/30 transition-colors">
       {icon}
     </div>
     <h3 className="text-xl font-bold text-white mb-3 group-hover:text-indigo-200 transition-colors">{title}</h3>
     <p className="text-gray-400 leading-relaxed">{description}</p>
-  </motion.div>
+  </div>
 );
 
 const StatCard = ({ number, label }) => (
@@ -141,6 +135,16 @@ const StatCard = ({ number, label }) => (
         <div className="text-3xl font-bold text-white mb-1 font-mono">{number}</div>
         <div className="text-xs uppercase tracking-widest text-gray-500 font-bold">{label}</div>
     </div>
+);
+
+const StepCard = ({ number, title, description }) => (
+  <div className="relative flex flex-col items-center text-center p-6 z-10">
+    <div className="w-14 h-14 rounded-2xl bg-indigo-600/20 border border-indigo-500/30 flex items-center justify-center text-2xl font-bold text-indigo-400 mb-6 shadow-[0_0_30px_rgba(99,102,241,0.15)]">
+      {number}
+    </div>
+    <h3 className="text-xl font-bold text-white mb-3">{title}</h3>
+    <p className="text-gray-400 text-sm leading-relaxed">{description}</p>
+  </div>
 );
 
 const DownloadOption = ({ title, icon, status, description, buttonText, href, primary }) => (
@@ -186,7 +190,7 @@ export default function LandingPage({ onLaunchApp }) {
           <div className="hidden md:flex items-center gap-8">
             <a href="#philosophy" className="text-sm font-medium text-gray-400 hover:text-white transition-colors">Philosophy</a>
             <a href="#protocol" className="text-sm font-medium text-gray-400 hover:text-white transition-colors">Protocol</a>
-            <a href="#download" className="text-sm font-medium text-gray-400 hover:text-white transition-colors">Download</a>
+            <a href="#features" className="text-sm font-medium text-gray-400 hover:text-white transition-colors">Power Users</a>
             <a href="https://github.com/myrosama/DaemonClient" target="_blank" className="text-gray-400 hover:text-white transition-colors">GitHub</a>
             <button onClick={onLaunchApp} className="bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-2 rounded-lg text-sm font-semibold transition-all shadow-lg shadow-indigo-900/20 hover:-translate-y-0.5">Launch App</button>
           </div>
@@ -209,12 +213,7 @@ export default function LandingPage({ onLaunchApp }) {
               Traditional cloud storage charges you rent for digital space. We reverse-engineered the concept to give you <b>infinite bandwidth</b> and <b>zero costs</b> by owning the infrastructure.
             </p>
             
-            {/* MOVED: Terminal Demo is now here in the hero for immediate impact */}
-            <div className="mb-8">
-                <TerminalDemo />
-            </div>
-
-            <div className="flex flex-col sm:flex-row gap-4">
+            <div className="flex flex-col sm:flex-row gap-4 mb-12">
               <button onClick={onLaunchApp} className="bg-white text-black hover:bg-gray-100 px-8 py-3.5 rounded-xl font-bold text-lg transition-all shadow-[0_0_20px_rgba(255,255,255,0.15)] hover:shadow-[0_0_30px_rgba(255,255,255,0.25)] hover:-translate-y-1">Start Uploading</button>
               <a href="#download" className="bg-[#1A1F2E] hover:bg-gray-800 px-8 py-3.5 rounded-xl font-bold text-lg transition-all border border-gray-700 hover:border-gray-500 flex items-center justify-center gap-2 group text-gray-200">
                 <TerminalIcon /><span>Download CLI</span>
@@ -222,50 +221,89 @@ export default function LandingPage({ onLaunchApp }) {
             </div>
           </motion.div>
         </div>
-        
         <motion.div initial={{ opacity: 0, scale: 0.8 }} animate={{ opacity: 1, scale: 1 }} transition={{ duration: 1, delay: 0.2 }} className="md:w-1/2 mt-12 md:mt-0 h-[400px] md:h-[500px] w-full flex items-center justify-center relative">
             <SecureCloudCore />
         </motion.div>
       </header>
 
-      {/* NEW SECTION: Live Network Status (Animation Effect) */}
-      <section className="py-12 border-y border-gray-800/50 bg-[#0B0F19]/50">
+      {/* Live Network Status Bar */}
+      <section className="py-10 border-y border-gray-800/50 bg-[#0B0F19]/30 backdrop-blur-sm">
         <div className="container mx-auto px-6">
             <div className="grid grid-cols-2 md:grid-cols-4 gap-8">
-                <StatCard number={<Counter from={0} to={100} />} label="% Uptime" />
-                <StatCard number={<Counter from={0} to={5000} />} label="Downloads Today" />
-                <StatCard number="0ms" label="Latency Added" />
+                <StatCard number={<Counter from={0} to={99.9} suffix="%" />} label="Uptime" />
+                <StatCard number={<Counter from={0} to={5000} suffix="+" />} label="Files Secured" />
+                <StatCard number="~20ms" label="Global Latency" />
                 <StatCard number="$0.00" label="Cost to You" />
             </div>
         </div>
       </section>
 
       {/* Philosophy Section (Restored) */}
-      <section id="philosophy" className="py-32 bg-[#05080F] relative">
-        <div className="container mx-auto px-6">
+      <motion.section 
+        id="philosophy" 
+        className="py-32 bg-[#05080F] relative overflow-hidden"
+        initial={{ opacity: 0, y: 50 }}
+        whileInView={{ opacity: 1, y: 0 }}
+        viewport={{ once: true, margin: "-100px" }}
+        transition={{ duration: 0.8 }}
+      >
+        <div className="absolute top-0 left-0 w-full h-full opacity-20 pointer-events-none">
+             <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-purple-600/20 rounded-full blur-[120px]"></div>
+             <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-indigo-600/20 rounded-full blur-[120px]"></div>
+        </div>
+        <div className="container mx-auto px-6 relative z-10">
             <div className="max-w-4xl mx-auto text-center">
                 <h2 className="text-xs font-bold text-indigo-400 tracking-[0.2em] uppercase mb-6">Manifesto</h2>
                 <h3 className="text-3xl md:text-5xl font-bold mb-8 leading-tight">We believe you should own your data.<br/> Not rent it.</h3>
                 <p className="text-xl text-gray-400 leading-relaxed mb-12">
                     DaemonClient isn't just a tool; it's a statement. By decoupling the storage layer (Telegram) from the access layer (DaemonClient), we create a system where no single entity controls your digital life. You hold the keys. You hold the bot. You hold the power.
                 </p>
-                <div className="grid md:grid-cols-2 gap-4 text-left">
-                     <div className="p-6 rounded-xl bg-gradient-to-br from-gray-900 to-gray-950 border border-gray-800">
-                        <h4 className="text-lg font-bold text-white mb-2">🔒 True Privacy</h4>
-                        <p className="text-gray-400">We use a "Zero-Knowledge" setup. After creation, we transfer bot ownership to you and delete our access tokens.</p>
+                <div className="grid md:grid-cols-2 gap-6 text-left">
+                     <div className="p-8 rounded-2xl bg-gradient-to-br from-[#0F131F] to-gray-900 border border-gray-800 hover:border-indigo-500/30 transition-colors">
+                        <h4 className="text-xl font-bold text-white mb-3 flex items-center gap-2">🔒 True Privacy</h4>
+                        <p className="text-gray-400 leading-relaxed">We use a "Zero-Knowledge" setup. After creation, we transfer bot ownership to you and delete our access tokens.</p>
                      </div>
-                     <div className="p-6 rounded-xl bg-gradient-to-br from-gray-900 to-gray-950 border border-gray-800">
-                        <h4 className="text-lg font-bold text-white mb-2">💸 Zero Cost</h4>
-                        <p className="text-gray-400">We abuse no bugs. We simply use the API as intended, just... very efficiently.</p>
+                     <div className="p-8 rounded-2xl bg-gradient-to-br from-[#0F131F] to-gray-900 border border-gray-800 hover:border-indigo-500/30 transition-colors">
+                        <h4 className="text-xl font-bold text-white mb-3 flex items-center gap-2">💸 Zero Cost</h4>
+                        <p className="text-gray-400 leading-relaxed">We abuse no bugs. We simply use the API as intended, utilizing its generous limits very efficiently.</p>
                      </div>
                 </div>
             </div>
         </div>
-      </section>
+      </motion.section>
 
-      {/* Protocol Section */}
-      <section id="protocol" className="py-24 bg-[#05080F] relative">
-        <div className="absolute inset-0 bg-gradient-to-b from-[#05080F] via-indigo-950/5 to-[#05080F] -z-10"></div>
+      {/* Protocol Section (3-Step Setup) */}
+      <motion.section 
+        id="how-it-works" 
+        className="py-24 bg-[#05080F] relative"
+        initial={{ opacity: 0, y: 50 }}
+        whileInView={{ opacity: 1, y: 0 }}
+        viewport={{ once: true, margin: "-100px" }}
+        transition={{ duration: 0.8 }}
+      >
+        <div className="container mx-auto px-6">
+          <div className="text-center mb-20">
+             <h2 className="text-xs font-bold text-indigo-400 tracking-[0.2em] uppercase mb-3">Architecture</h2>
+             <h3 className="text-3xl md:text-4xl font-bold text-white">Set up in 3 minutes. Forever.</h3>
+          </div>
+          <div className="grid md:grid-cols-3 gap-12 max-w-6xl mx-auto relative">
+            <div className="hidden md:block absolute top-6 left-[20%] right-[20%] h-[2px] bg-gradient-to-r from-transparent via-indigo-500/20 to-transparent -z-0"></div>
+            <StepCard number="1" title="Create a Bot" description="Our automated wizard helps you create a free Telegram bot. This bot acts as your personal, private file manager." />
+            <StepCard number="2" title="Secure Channel" description="We automatically create a private, encrypted channel that only YOU and your bot can access. This is your vault." />
+            <StepCard number="3" title="Ownership Transfer" description="The final step transfers full ownership of the bot and channel to you. We delete our keys. You are in total control." />
+          </div>
+        </div>
+      </motion.section>
+
+       {/* Protocol Deep Dive Section */}
+      <motion.section 
+        id="protocol" 
+        className="py-24 bg-[#05080F] relative border-t border-gray-800/30"
+        initial={{ opacity: 0, y: 50 }}
+        whileInView={{ opacity: 1, y: 0 }}
+        viewport={{ once: true, margin: "-100px" }}
+        transition={{ duration: 0.8 }}
+      >
         <div className="container mx-auto px-6">
           <div className="text-center mb-20">
              <h2 className="text-xs font-bold text-cyan-400 tracking-[0.2em] uppercase mb-3">The Protocol</h2>
@@ -314,25 +352,46 @@ export default function LandingPage({ onLaunchApp }) {
              />
           </div>
         </div>
-      </section>
+      </motion.section>
 
-      {/* Engineered for Power Users (Restored Title) */}
-      <section id="features" className="py-24 bg-[#05080F]">
+      {/* Engineered for Power Users (With Terminal) */}
+      <motion.section 
+        id="features" 
+        className="py-24 bg-[#0B0F19]"
+        initial={{ opacity: 0, y: 50 }}
+        whileInView={{ opacity: 1, y: 0 }}
+        viewport={{ once: true, margin: "-100px" }}
+        transition={{ duration: 0.8 }}
+      >
         <div className="container mx-auto px-6">
-          <div className="text-center mb-20">
-            <h2 className="text-3xl md:text-4xl font-bold mb-6">Engineered for Power Users</h2>
-            <p className="text-gray-400 max-w-2xl mx-auto">Tools that respect your workflow, not disrupt it.</p>
-          </div>
-          <div className="grid md:grid-cols-3 gap-6">
-            <FeatureCard icon={<CloudIcon />} title="Infinite Storage" description="Stop paying for storage tiers. Store terabytes of data without paying a cent." delay={0.2} />
-            <FeatureCard icon={<LockIcon />} title="Zero-Knowledge" description="Your data is chunked, encrypted, and stored in a private channel that only YOU can access." delay={0.4} />
-            <FeatureCard icon={<TerminalIcon />} title="Developer First" description="Built for automation. Use our powerful CLI to script backups and sync servers." delay={0.6} />
+          <div className="flex flex-col lg:flex-row gap-16 items-center">
+            <div className="lg:w-1/2">
+                <h2 className="text-3xl md:text-4xl font-bold mb-6">Engineered for Power Users</h2>
+                <p className="text-gray-400 text-lg mb-10 leading-relaxed">
+                    DaemonClient respects your workflow. We provide a full suite of tools, from a beautiful web UI to a headless CLI for your servers.
+                </p>
+                <div className="space-y-6">
+                    <FeatureCard icon={<TerminalIcon />} title="Daemon CLI" description="Automate your backups. Write simple scripts to sync folders, upload logs, or manage your cloud from the terminal." />
+                    <FeatureCard icon={<CloudIcon />} title="Infinite Scalability" description="Whether you store 1GB or 100TB, the protocol handles it. No caps. No throttling." />
+                    <FeatureCard icon={<LockIcon />} title="Code as Infrastructure" description="Everything is open source. Audit the code yourself. Host your own instance." />
+                </div>
+            </div>
+            <div className="lg:w-1/2 w-full flex flex-col items-center lg:items-end">
+                <TerminalDemo />
+            </div>
           </div>
         </div>
-      </section>
+      </motion.section>
 
-      {/* Download / CLI Section (Restored Old Layout) */}
-      <section id="download" className="py-24 relative bg-[#080B14] border-t border-gray-800/50">
+      {/* Download / CLI Section (Restored Grid) */}
+      <motion.section 
+        id="download" 
+        className="py-24 relative bg-[#05080F] border-t border-gray-800/50"
+        initial={{ opacity: 0, y: 50 }}
+        whileInView={{ opacity: 1, y: 0 }}
+        viewport={{ once: true, margin: "-100px" }}
+        transition={{ duration: 0.8 }}
+      >
         <div className="container mx-auto px-6">
           <div className="text-center mb-16">
             <h2 className="text-3xl md:text-4xl font-bold mb-6">Download & Install</h2>
@@ -347,7 +406,7 @@ export default function LandingPage({ onLaunchApp }) {
             <DownloadOption title="Mobile App" icon={<span className="text-2xl">📱</span>} status="Coming Soon" description="iOS and Android apps for on-the-go access." buttonText="Notify Me" />
           </div>
         </div>
-      </section>
+      </motion.section>
 
       <footer className="bg-[#020408] py-12 border-t border-gray-800">
         <div className="container mx-auto px-6 flex flex-col md:flex-row justify-between items-center gap-6">
