@@ -3,13 +3,13 @@ import { motion, AnimatePresence } from 'framer-motion';
 
 // --- Icons ---
 const CloudIcon = () => (
-  <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+  <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 15a4 4 0 004 4h9a5 5 0 10-.1-9.999 5.002 5.002 0 10-9.78 2.096A4.001 4.001 0 003 15z" />
   </svg>
 );
 
 const LockIcon = () => (
-  <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+  <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
   </svg>
 );
@@ -18,12 +18,6 @@ const TerminalIcon = () => (
   <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
   </svg>
-);
-
-const ServerIcon = () => (
-    <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01" />
-    </svg>
 );
 
 // --- ANIMATED COUNTER ---
@@ -62,19 +56,19 @@ const TerminalDemo = () => {
         clearInterval(interval);
         setTimeout(() => { i=0; setText(''); }, 4000); 
       }
-    }, 40);
+    }, 30);
     return () => clearInterval(interval);
   }, []);
 
   return (
-    <div className="bg-[#0F131F] rounded-xl border border-gray-800 p-6 font-mono text-sm shadow-2xl w-full h-64 flex flex-col">
-      <div className="flex gap-2 mb-4 border-b border-gray-800 pb-4">
+    <div className="bg-[#0F131F] rounded-xl border border-gray-800 p-6 font-mono text-sm shadow-2xl w-full h-64 flex flex-col justify-center">
+      <div className="flex gap-2 mb-4 border-b border-gray-800 pb-2">
         <div className="w-3 h-3 rounded-full bg-red-500/50" />
         <div className="w-3 h-3 rounded-full bg-yellow-500/50" />
         <div className="w-3 h-3 rounded-full bg-green-500/50" />
         <span className="ml-auto text-xs text-gray-600">bash</span>
       </div>
-      <div className="text-gray-300 whitespace-pre-line flex-grow overflow-hidden">
+      <div className="text-gray-300 whitespace-pre-line overflow-hidden">
         {text}<span className="animate-pulse inline-block w-2 h-4 bg-indigo-500 align-middle ml-1" />
       </div>
     </div>
@@ -84,7 +78,7 @@ const TerminalDemo = () => {
 // --- VISUAL 2: INFINITY ANIMATION ---
 const InfinityVisual = () => (
     <div className="relative w-full h-64 flex items-center justify-center bg-[#0F131F] rounded-xl border border-gray-800 overflow-hidden">
-        <div className="absolute inset-0 bg-gradient-to-br from-indigo-500/5 to-transparent"></div>
+        <div className="absolute inset-0 bg-gradient-to-br from-indigo-500/10 to-transparent"></div>
         <motion.div 
             animate={{ rotate: 360 }}
             transition={{ duration: 20, repeat: Infinity, ease: "linear" }}
@@ -95,11 +89,11 @@ const InfinityVisual = () => (
             transition={{ duration: 15, repeat: Infinity, ease: "linear" }}
             className="absolute w-48 h-48 rounded-full border border-cyan-500/20"
         />
-         <div className="absolute text-6xl font-bold text-white/10 select-none">∞</div>
+         <div className="absolute text-7xl font-bold text-white/20 select-none">∞</div>
          <motion.div 
-            animate={{ scale: [1, 1.2, 1], opacity: [0.5, 1, 0.5] }}
+            animate={{ scale: [1, 1.5, 1], opacity: [0.3, 0.6, 0.3] }}
             transition={{ duration: 3, repeat: Infinity }}
-            className="absolute w-20 h-20 bg-indigo-500/20 rounded-full blur-xl"
+            className="absolute w-24 h-24 bg-indigo-500/20 rounded-full blur-2xl"
          />
     </div>
 );
@@ -107,19 +101,19 @@ const InfinityVisual = () => (
 // --- VISUAL 3: SECURITY/CODE ANIMATION ---
 const SecurityVisual = () => (
     <div className="relative w-full h-64 flex items-center justify-center bg-[#0F131F] rounded-xl border border-gray-800 overflow-hidden">
-         <div className="grid grid-cols-4 gap-2 opacity-20">
-            {[...Array(16)].map((_, i) => (
+         <div className="grid grid-cols-6 gap-4 opacity-20 rotate-12 scale-150">
+            {[...Array(24)].map((_, i) => (
                 <motion.div 
                     key={i}
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: [0, 1, 0] }}
-                    transition={{ duration: 2, delay: i * 0.1, repeat: Infinity }}
-                    className="w-8 h-8 rounded bg-indigo-500"
+                    initial={{ opacity: 0.2 }}
+                    animate={{ opacity: [0.2, 0.8, 0.2] }}
+                    transition={{ duration: Math.random() * 2 + 1, repeat: Infinity }}
+                    className="w-12 h-2 rounded bg-indigo-500"
                 />
             ))}
          </div>
-         <div className="absolute inset-0 flex items-center justify-center">
-             <div className="p-4 bg-[#0B0F19] rounded-full border border-indigo-500/50 shadow-[0_0_30px_rgba(99,102,241,0.3)]">
+         <div className="absolute inset-0 flex items-center justify-center z-10">
+             <div className="p-5 bg-[#0B0F19] rounded-full border border-indigo-500/50 shadow-[0_0_40px_rgba(99,102,241,0.4)]">
                 <LockIcon />
              </div>
          </div>
@@ -134,29 +128,29 @@ const SecureCloudCore = () => {
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,_rgba(99,102,241,0.15)_0%,_transparent_70%)] blur-3xl" />
       <motion.div 
         animate={{ rotate: 360 }}
-        transition={{ duration: 50, repeat: Infinity, ease: "linear" }}
+        transition={{ duration: 60, repeat: Infinity, ease: "linear" }}
         className="absolute w-[450px] h-[450px] rounded-full border border-indigo-500/10 border-dashed"
       />
       <motion.div 
         animate={{ rotate: -360 }}
-        transition={{ duration: 30, repeat: Infinity, ease: "linear" }}
-        className="absolute w-[300px] h-[300px] rounded-full border border-cyan-500/20"
-        style={{ borderTopColor: 'transparent', borderBottomColor: 'transparent', borderWidth: '2px' }}
+        transition={{ duration: 40, repeat: Infinity, ease: "linear" }}
+        className="absolute w-[320px] h-[320px] rounded-full border border-cyan-500/20"
+        style={{ borderTopColor: 'transparent', borderBottomColor: 'transparent', borderWidth: '1px' }}
       />
       
       {/* Circular Container for Logo - RESTORED TO CIRCLE */}
       <motion.div
         initial={{ scale: 0.9, opacity: 0 }}
-        animate={{ scale: 1, opacity: 1, y: [0, -15, 0] }}
+        animate={{ scale: 1, opacity: 1, y: [0, -10, 0] }}
         transition={{ scale: { duration: 1 }, opacity: { duration: 1 }, y: { duration: 6, repeat: Infinity, ease: "easeInOut" } }}
         className="relative z-10"
       >
-        <div className="relative w-40 h-40 md:w-64 md:h-64 bg-[#0F131F]/80 backdrop-blur-xl border border-indigo-500/30 rounded-full flex items-center justify-center shadow-[0_0_80px_rgba(99,102,241,0.2)] overflow-hidden">
-           <div className="absolute inset-0 rounded-full bg-gradient-to-tr from-indigo-500/10 to-transparent"></div>
+        <div className="relative w-40 h-40 md:w-56 md:h-56 bg-[#0F131F]/80 backdrop-blur-xl border border-indigo-500/30 rounded-full flex items-center justify-center shadow-[0_0_80px_rgba(99,102,241,0.25)] overflow-hidden">
+           <div className="absolute inset-0 rounded-full bg-gradient-to-b from-white/5 to-transparent"></div>
            <motion.img 
              src="/logo.png" 
              alt="Core" 
-             className="w-24 h-24 md:w-32 md:h-32 object-contain relative z-20 drop-shadow-[0_0_25px_rgba(99,102,241,0.6)]"
+             className="w-24 h-24 md:w-32 md:h-32 object-contain relative z-20 drop-shadow-[0_0_30px_rgba(99,102,241,0.6)]"
              animate={{ scale: [1, 1.05, 1] }}
              transition={{ duration: 4, repeat: Infinity, ease: "easeInOut" }}
            />
@@ -194,8 +188,17 @@ const StepCard = ({ number, title, description }) => (
   </div>
 );
 
-const DownloadOption = ({ title, icon, status, description, buttonText, href, primary }) => (
-  <div className={`p-8 rounded-2xl border transition-all duration-300 hover:-translate-y-1 ${primary ? 'border-indigo-500 bg-indigo-900/10 hover:bg-indigo-900/20' : 'border-gray-800 bg-[#0F131F] hover:border-gray-700'} flex flex-col h-full group`}>
+const DownloadOption = ({ title, icon, status, description, buttonText, onClick, isActive, primary }) => (
+  <div 
+      className={`p-8 rounded-2xl border transition-all duration-300 cursor-pointer hover:-translate-y-1 flex flex-col h-full group ${
+        isActive 
+            ? 'border-indigo-500 bg-indigo-900/10 shadow-lg shadow-indigo-500/20' 
+            : primary 
+                ? 'border-indigo-500/50 bg-indigo-900/5 hover:bg-indigo-900/10'
+                : 'border-gray-800 bg-[#0F131F] hover:border-gray-700'
+      }`}
+      onClick={onClick}
+  >
     <div className="flex items-center justify-between mb-6">
       <h3 className="text-lg font-bold text-white flex items-center gap-3 group-hover:text-indigo-300 transition-colors">
         {icon} {title}
@@ -209,55 +212,48 @@ const DownloadOption = ({ title, icon, status, description, buttonText, href, pr
       )}
     </div>
     <p className="text-gray-400 text-sm mb-8 flex-grow leading-relaxed">{description}</p>
-    <a 
-      href={href || "#"}
+    <button 
       className={`w-full py-3 px-6 rounded-lg text-center font-bold tracking-wide transition-all text-sm ${
         primary 
           ? 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-500/25' 
-          : 'bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white cursor-not-allowed'
+          : 'bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white'
       }`}
-      onClick={e => !href && e.preventDefault()}
     >
       {buttonText}
-    </a>
+    </button>
   </div>
-);
-
-const TechStackItem = ({ name }) => (
-    <span className="px-4 py-2 rounded-full border border-gray-800 bg-gray-900 text-gray-400 text-sm font-mono hover:border-indigo-500/50 hover:text-indigo-300 transition-colors cursor-default">
-        {name}
-    </span>
 );
 
 export default function LandingPage({ onLaunchApp }) {
   
   // --- CAROUSEL STATE ---
   const [activeFeature, setActiveFeature] = useState(0);
-  
+  const [activeDownload, setActiveDownload] = useState(null);
+
   // Auto-rotate carousel
   useEffect(() => {
     const interval = setInterval(() => {
         setActiveFeature((prev) => (prev + 1) % 3);
-    }, 5000); // Change every 5 seconds
+    }, 5000); 
     return () => clearInterval(interval);
   }, []);
 
   const features = [
     {
         title: "Daemon CLI",
-        desc: "Automate your backups. Write simple scripts to sync folders, upload logs, or manage your cloud from the terminal.",
+        desc: "Automate backups. Scriptable sync. Headless power.",
         icon: <TerminalIcon />,
         visual: <TerminalDemo />
     },
     {
-        title: "Infinite Scalability",
-        desc: "Whether you store 1GB or 100TB, the protocol handles it. No caps. No throttling. Just raw storage.",
+        title: "Infinite Scale",
+        desc: "Store 100TB without fees. No throttling. Just raw storage.",
         icon: <CloudIcon />,
         visual: <InfinityVisual />
     },
     {
-        title: "Code as Infrastructure",
-        desc: "Everything is open source. Audit the code yourself. Host your own instance. You own the platform.",
+        title: "Open Source",
+        desc: "Audit the code. Host it yourself. You own the platform.",
         icon: <LockIcon />,
         visual: <SecurityVisual />
     }
@@ -439,7 +435,7 @@ export default function LandingPage({ onLaunchApp }) {
         </div>
       </motion.section>
 
-      {/* CAROUSEL SECTION (Power Users) */}
+      {/* NEW CAROUSEL SECTION (Power Users) */}
       <motion.section 
         id="features" 
         className="py-24 bg-[#0B0F19]"
@@ -449,31 +445,31 @@ export default function LandingPage({ onLaunchApp }) {
         transition={{ duration: 0.8 }}
       >
         <div className="container mx-auto px-6">
-          <div className="flex flex-col lg:flex-row gap-16 items-center">
+          <div className="flex flex-col lg:flex-row gap-12 items-center">
             
             {/* LEFT: Carousel Cards */}
-            <div className="lg:w-1/2 space-y-4">
+            <div className="lg:w-5/12 space-y-3">
                 <h2 className="text-3xl md:text-4xl font-bold mb-8">Engineered for Power Users</h2>
                 
                 {features.map((feature, index) => (
                     <div 
                         key={index}
                         onClick={() => setActiveFeature(index)}
-                        className={`p-6 rounded-xl border transition-all cursor-pointer ${
+                        className={`p-5 rounded-xl border transition-all cursor-pointer duration-300 ${
                             activeFeature === index 
-                            ? 'bg-[#151926] border-indigo-500/50 shadow-lg shadow-indigo-500/10 scale-[1.02]' 
-                            : 'bg-transparent border-gray-800 hover:bg-gray-900/50'
+                            ? 'bg-[#151926] border-indigo-500/50 shadow-lg shadow-indigo-500/10' 
+                            : 'bg-transparent border-transparent hover:bg-gray-900/50'
                         }`}
                     >
-                        <div className="flex items-center gap-4 mb-2">
-                            <div className={`p-2 rounded-lg ${activeFeature === index ? 'bg-indigo-500/20 text-indigo-400' : 'bg-gray-800 text-gray-500'}`}>
+                        <div className="flex items-center gap-3 mb-1">
+                            <div className={`p-1.5 rounded-lg ${activeFeature === index ? 'bg-indigo-500/20 text-indigo-400' : 'bg-gray-800/50 text-gray-500'}`}>
                                 {feature.icon}
                             </div>
-                            <h3 className={`text-lg font-bold ${activeFeature === index ? 'text-white' : 'text-gray-400'}`}>
+                            <h3 className={`text-base font-bold ${activeFeature === index ? 'text-white' : 'text-gray-400'}`}>
                                 {feature.title}
                             </h3>
                         </div>
-                        <p className={`text-sm leading-relaxed pl-[52px] ${activeFeature === index ? 'text-gray-300' : 'text-gray-600'}`}>
+                        <p className={`text-sm leading-relaxed pl-[46px] ${activeFeature === index ? 'text-gray-300' : 'text-gray-600'}`}>
                             {feature.desc}
                         </p>
                     </div>
@@ -481,15 +477,15 @@ export default function LandingPage({ onLaunchApp }) {
             </div>
 
             {/* RIGHT: Dynamic Visual */}
-            <div className="lg:w-1/2 w-full h-[400px] flex items-center justify-center">
+            <div className="lg:w-7/12 w-full h-[350px] flex items-center justify-center">
                 <AnimatePresence mode="wait">
                     <motion.div
                         key={activeFeature}
-                        initial={{ opacity: 0, scale: 0.9, x: 20 }}
-                        animate={{ opacity: 1, scale: 1, x: 0 }}
-                        exit={{ opacity: 0, scale: 0.9, x: -20 }}
-                        transition={{ duration: 0.4 }}
-                        className="w-full flex justify-center"
+                        initial={{ opacity: 0, x: 20, filter: "blur(4px)" }}
+                        animate={{ opacity: 1, x: 0, filter: "blur(0px)" }}
+                        exit={{ opacity: 0, x: -20, filter: "blur(4px)" }}
+                        transition={{ duration: 0.3 }}
+                        className="w-full flex justify-center items-center"
                     >
                         {features[activeFeature].visual}
                     </motion.div>
@@ -516,11 +512,117 @@ export default function LandingPage({ onLaunchApp }) {
             </p>
           </div>
           <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6 mb-16">
-            <DownloadOption title="Web App" icon={<span className="text-2xl">🌐</span>} status="Live" description="Instant access from any browser. No installation required." buttonText="Launch Now" href="#" primary={true} />
-            <DownloadOption title="Daemon CLI" icon={<span className="text-2xl">💻</span>} status="Live" description="Powerful terminal tool for power users. Scriptable uploads and sync." buttonText="View on GitHub" href="https://github.com/myrosama/DaemonClient" primary={false} />
-            <DownloadOption title="Desktop Sync" icon={<span className="text-2xl">🖥️</span>} status="Beta" description="Native app for Windows, Mac, and Linux. Automatic folder sync." buttonText="Coming Soon" />
-            <DownloadOption title="Mobile App" icon={<span className="text-2xl">📱</span>} status="Coming Soon" description="iOS and Android apps for on-the-go access." buttonText="Notify Me" />
+            <DownloadOption 
+                title="Web App" 
+                icon={<span className="text-2xl">🌐</span>} 
+                status="Live" 
+                description="Instant access from any browser. No installation required." 
+                buttonText="Launch Now" 
+                onClick={onLaunchApp}
+                primary={true} 
+            />
+            <DownloadOption 
+                title="Daemon CLI" 
+                icon={<span className="text-2xl">💻</span>} 
+                status="Live" 
+                description="Powerful terminal tool for power users. Scriptable uploads and sync." 
+                buttonText="Install" 
+                onClick={() => setActiveDownload(activeDownload === 'cli' ? null : 'cli')}
+                isActive={activeDownload === 'cli'}
+                primary={false} 
+            />
+            <DownloadOption 
+                title="Desktop Sync" 
+                icon={<span className="text-2xl">🖥️</span>} 
+                status="Beta" 
+                description="Native app for Windows, Mac, and Linux. Automatic folder sync." 
+                buttonText="Coming Soon" 
+                onClick={() => setActiveDownload(activeDownload === 'desktop' ? null : 'desktop')}
+                isActive={activeDownload === 'desktop'}
+            />
+            <DownloadOption 
+                title="Mobile App" 
+                icon={<span className="text-2xl">📱</span>} 
+                status="Coming Soon" 
+                description="iOS and Android apps for on-the-go access." 
+                buttonText="Notify Me" 
+                onClick={() => setActiveDownload(activeDownload === 'mobile' ? null : 'mobile')}
+                isActive={activeDownload === 'mobile'}
+            />
           </div>
+          
+          {/* DYNAMIC INSTALL CONTENT */}
+          <AnimatePresence>
+            {activeDownload === 'cli' && (
+                <motion.div 
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: "auto" }}
+                    exit={{ opacity: 0, height: 0 }}
+                    className="overflow-hidden"
+                >
+                  <div className="max-w-3xl mx-auto bg-[#0B0F19] rounded-2xl overflow-hidden border border-gray-800 shadow-2xl">
+                    <div className="bg-[#151926] px-6 py-3 border-b border-gray-800 flex items-center justify-between">
+                      <div className="flex gap-2">
+                        <div className="w-3 h-3 rounded-full bg-red-500/80"></div>
+                        <div className="w-3 h-3 rounded-full bg-yellow-500/80"></div>
+                        <div className="w-3 h-3 rounded-full bg-green-500/80"></div>
+                      </div>
+                      <span className="text-xs text-gray-500 font-mono font-bold">TERMINAL</span>
+                    </div>
+                    <div className="p-8 font-mono text-sm">
+                      <div className="mb-8">
+                          <p className="text-gray-500 mb-3 uppercase text-xs font-bold tracking-wider">Option 1: PIP Install</p>
+                          <div className="flex items-center justify-between bg-indigo-950/20 border border-indigo-500/20 p-4 rounded-xl group transition-colors hover:border-indigo-500/40">
+                            <div className="flex gap-3 text-gray-300">
+                              <span className="text-indigo-400 select-none">$</span>
+                              <code>pip install daemon-cli</code>
+                            </div>
+                            <button 
+                              className="text-gray-500 hover:text-white transition-colors opacity-0 group-hover:opacity-100" 
+                              onClick={() => navigator.clipboard.writeText('pip install daemon-cli')}
+                              title="Copy"
+                            >
+                              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
+                            </button>
+                          </div>
+                      </div>
+                      
+                      <div>
+                          <p className="text-gray-500 mb-3 uppercase text-xs font-bold tracking-wider">Option 2: Standalone Binary</p>
+                          <div className="flex flex-wrap gap-3">
+                            {['Linux (x64)', 'Windows (.exe)', 'macOS (M1/Intel)'].map((platform) => (
+                                <a key={platform} href="#" className="px-4 py-2 rounded bg-gray-800 text-gray-300 hover:bg-gray-700 hover:text-white transition-colors border border-gray-700 text-xs font-bold hover:border-gray-500">
+                                    {platform}
+                                </a>
+                            ))}
+                          </div>
+                      </div>
+                    </div>
+                  </div>
+                </motion.div>
+            )}
+             {activeDownload === 'desktop' && (
+                <motion.div 
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: "auto" }}
+                    exit={{ opacity: 0, height: 0 }}
+                    className="text-center text-gray-400 py-8"
+                >
+                    <p>Desktop Sync is currently in closed beta. <a href="#" className="text-indigo-400 underline">Join the waitlist</a> to get early access.</p>
+                </motion.div>
+            )}
+            {activeDownload === 'mobile' && (
+                <motion.div 
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: "auto" }}
+                    exit={{ opacity: 0, height: 0 }}
+                    className="text-center text-gray-400 py-8"
+                >
+                    <p>Mobile apps are under active development. Follow us on <a href="https://t.me/daemonclient" className="text-indigo-400 underline">Telegram</a> for updates.</p>
+                </motion.div>
+            )}
+          </AnimatePresence>
+          
         </div>
       </motion.section>
 
@@ -533,7 +635,7 @@ export default function LandingPage({ onLaunchApp }) {
             <div className="flex gap-8 text-sm text-gray-500 font-medium">
                 <a href="#" className="hover:text-white transition-colors">Terms</a>
                 <a href="#" className="hover:text-white transition-colors">Privacy</a>
-                <a href="https://twitter.com/montclier49" target="_blank" className="hover:text-white transition-colors">Twitter</a>
+                <a href="https://t.me/daemonclient" target="_blank" className="hover:text-white transition-colors">Telegram</a>
                 <a href="https://github.com/myrosama/DaemonClient" target="_blank" className="hover:text-white transition-colors">GitHub</a>
             </div>
         </div>
