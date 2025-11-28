@@ -20,6 +20,12 @@ const TerminalIcon = () => (
   </svg>
 );
 
+const ServerIcon = () => (
+    <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01" />
+    </svg>
+);
+
 // --- ANIMATED COUNTER ---
 const Counter = ({ from, to, suffix = "" }) => {
   const [count, setCount] = useState(from);
@@ -124,17 +130,17 @@ const SecurityVisual = () => (
 // --- SECURE CLOUD CORE ANIMATION (HERO) ---
 const SecureCloudCore = () => {
   return (
-    <div className="relative w-full h-[500px] flex items-center justify-center">
+    <div className="relative w-full h-[300px] md:h-[500px] flex items-center justify-center overflow-hidden md:overflow-visible">
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,_rgba(99,102,241,0.15)_0%,_transparent_70%)] blur-3xl" />
       <motion.div 
         animate={{ rotate: 360 }}
         transition={{ duration: 60, repeat: Infinity, ease: "linear" }}
-        className="absolute w-[450px] h-[450px] rounded-full border border-indigo-500/10 border-dashed"
+        className="absolute w-[300px] h-[300px] md:w-[450px] md:h-[450px] rounded-full border border-indigo-500/10 border-dashed"
       />
       <motion.div 
         animate={{ rotate: -360 }}
         transition={{ duration: 40, repeat: Infinity, ease: "linear" }}
-        className="absolute w-[320px] h-[320px] rounded-full border border-cyan-500/20"
+        className="absolute w-[200px] h-[200px] md:w-[320px] md:h-[320px] rounded-full border border-cyan-500/20"
         style={{ borderTopColor: 'transparent', borderBottomColor: 'transparent', borderWidth: '1px' }}
       />
       
@@ -145,12 +151,12 @@ const SecureCloudCore = () => {
         transition={{ scale: { duration: 1 }, opacity: { duration: 1 }, y: { duration: 6, repeat: Infinity, ease: "easeInOut" } }}
         className="relative z-10"
       >
-        <div className="relative w-40 h-40 md:w-56 md:h-56 bg-[#0F131F]/80 backdrop-blur-xl border border-indigo-500/30 rounded-full flex items-center justify-center shadow-[0_0_80px_rgba(99,102,241,0.25)] overflow-hidden">
+        <div className="relative w-32 h-32 md:w-40 md:h-40 bg-[#0F131F]/80 backdrop-blur-xl border border-indigo-500/30 rounded-full flex items-center justify-center shadow-[0_0_80px_rgba(99,102,241,0.25)] overflow-hidden">
            <div className="absolute inset-0 rounded-full bg-gradient-to-b from-white/5 to-transparent"></div>
            <motion.img 
              src="/logo.png" 
              alt="Core" 
-             className="w-24 h-24 md:w-32 md:h-32 object-contain relative z-20 drop-shadow-[0_0_30px_rgba(99,102,241,0.6)]"
+             className="w-20 h-20 md:w-24 md:h-24 object-contain relative z-20 drop-shadow-[0_0_30px_rgba(99,102,241,0.6)]"
              animate={{ scale: [1, 1.05, 1] }}
              transition={{ duration: 4, repeat: Infinity, ease: "easeInOut" }}
            />
@@ -276,11 +282,15 @@ export default function LandingPage({ onLaunchApp }) {
             <a href="https://github.com/myrosama/DaemonClient" target="_blank" className="text-gray-400 hover:text-white transition-colors">GitHub</a>
             <button onClick={onLaunchApp} className="bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-2 rounded-lg text-sm font-semibold transition-all shadow-lg shadow-indigo-900/20 hover:-translate-y-0.5">Launch App</button>
           </div>
+          {/* Mobile Menu Button (Visible only on mobile) */}
+          <div className="md:hidden">
+             <button onClick={onLaunchApp} className="text-indigo-500 font-semibold">Login</button>
+          </div>
         </div>
       </nav>
 
       {/* Hero Section */}
-      <header className="container mx-auto px-6 pt-32 pb-16 md:pt-40 md:pb-24 flex flex-col md:flex-row items-center relative">
+      <header className="container mx-auto px-6 pt-28 pb-16 md:pt-40 md:pb-24 flex flex-col md:flex-row items-center relative">
         <div className="absolute inset-0 bg-[linear-gradient(to_right,#80808012_1px,transparent_1px),linear-gradient(to_bottom,#80808012_1px,transparent_1px)] bg-[size:24px_24px] [mask-image:radial-gradient(ellipse_60%_50%_at_50%_0%,#000_70%,transparent_100%)] -z-10 pointer-events-none" />
         <div className="md:w-1/2 md:pr-12 z-10">
           <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6 }}>
@@ -288,7 +298,7 @@ export default function LandingPage({ onLaunchApp }) {
               <span className="relative flex h-2 w-2"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span><span className="relative inline-flex rounded-full h-2 w-2 bg-indigo-500"></span></span>
               Public Beta Live
             </div>
-            <h1 className="text-5xl md:text-7xl font-bold leading-tight mb-6 tracking-tight">
+            <h1 className="text-4xl md:text-7xl font-bold leading-tight mb-6 tracking-tight">
               The Cloud is Broken.<br /><span className="text-transparent bg-clip-text bg-gradient-to-r from-indigo-400 to-cyan-400">We Fixed It.</span>
             </h1>
             <p className="text-lg text-gray-400 mb-10 leading-relaxed max-w-lg">
@@ -302,7 +312,7 @@ export default function LandingPage({ onLaunchApp }) {
             </div>
           </motion.div>
         </div>
-        <motion.div initial={{ opacity: 0, scale: 0.8 }} animate={{ opacity: 1, scale: 1 }} transition={{ duration: 1, delay: 0.2 }} className="md:w-1/2 mt-12 md:mt-0 h-[400px] md:h-[500px] w-full flex items-center justify-center relative">
+        <motion.div initial={{ opacity: 0, scale: 0.8 }} animate={{ opacity: 1, scale: 1 }} transition={{ duration: 1, delay: 0.2 }} className="md:w-1/2 mt-12 md:mt-0 h-[300px] md:h-[500px] w-full flex items-center justify-center relative">
             <SecureCloudCore />
         </motion.div>
       </header>
@@ -322,7 +332,7 @@ export default function LandingPage({ onLaunchApp }) {
       {/* Philosophy Section */}
       <motion.section 
         id="philosophy" 
-        className="py-32 bg-[#05080F] relative overflow-hidden"
+        className="py-24 md:py-32 bg-[#05080F] relative overflow-hidden"
         initial={{ opacity: 0, y: 50 }}
         whileInView={{ opacity: 1, y: 0 }}
         viewport={{ once: true, margin: "-100px" }}
