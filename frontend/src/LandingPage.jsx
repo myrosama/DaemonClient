@@ -130,7 +130,7 @@ const SecurityVisual = () => (
 // --- SECURE CLOUD CORE ANIMATION (HERO) ---
 const SecureCloudCore = () => {
   return (
-    <div className="relative w-full h-[400px] md:h-[600px] flex items-center justify-center overflow-hidden md:overflow-visible">
+    <div className="relative w-full h-[400px] md:h-[600px] flex items-center justify-center overflow-visible scale-110 md:scale-125"> {/* Increased scale and height */}
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,_rgba(99,102,241,0.15)_0%,_transparent_70%)] blur-3xl" />
       <motion.div 
         animate={{ rotate: 360 }}
@@ -312,12 +312,12 @@ export default function LandingPage({ onLaunchApp }) {
             </div>
           </motion.div>
         </div>
-        {/* Mobile Optimization: Re-enabled and scaled for mobile */}
+        {/* Mobile Optimization: Bigger and better centered */}
         <motion.div 
             initial={{ opacity: 0, scale: 0.8 }} 
             animate={{ opacity: 1, scale: 1 }} 
             transition={{ duration: 1, delay: 0.2 }} 
-            className="w-full md:w-1/2 mt-12 md:mt-0 h-[400px] md:h-[600px] flex items-center justify-center relative"
+            className="w-full md:w-1/2 mt-12 md:mt-0 h-[300px] md:h-[500px] flex items-center justify-center relative"
         >
             <SecureCloudCore />
         </motion.div>
