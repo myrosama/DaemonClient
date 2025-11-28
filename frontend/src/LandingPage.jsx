@@ -135,7 +135,7 @@ const SecureCloudCore = () => {
       <motion.div 
         animate={{ rotate: 360 }}
         transition={{ duration: 60, repeat: Infinity, ease: "linear" }}
-        className="absolute w-[300px] h-[300px] md:w-[450px] md:h-[450px] rounded-full border border-indigo-500/10 border-dashed"
+        className="absolute w-[280px] h-[280px] md:w-[450px] md:h-[450px] rounded-full border border-indigo-500/10 border-dashed"
       />
       <motion.div 
         animate={{ rotate: -360 }}
@@ -312,12 +312,12 @@ export default function LandingPage({ onLaunchApp }) {
             </div>
           </motion.div>
         </div>
-        {/* Mobile Optimization: Hidden on smaller screens */}
+        {/* Mobile Optimization: Re-enabled and scaled for mobile */}
         <motion.div 
             initial={{ opacity: 0, scale: 0.8 }} 
             animate={{ opacity: 1, scale: 1 }} 
             transition={{ duration: 1, delay: 0.2 }} 
-            className="hidden md:flex md:w-1/2 mt-12 md:mt-0 h-[300px] md:h-[500px] w-full items-center justify-center relative"
+            className="w-full md:w-1/2 mt-12 md:mt-0 h-[400px] md:h-[500px] flex items-center justify-center relative"
         >
             <SecureCloudCore />
         </motion.div>
@@ -464,7 +464,7 @@ export default function LandingPage({ onLaunchApp }) {
           <div className="flex flex-col lg:flex-row gap-12 items-center">
             
             {/* LEFT: Carousel Cards */}
-            <div className="lg:w-5/12 space-y-3">
+            <div className="lg:w-5/12 space-y-3 w-full">
                 <h2 className="text-3xl md:text-4xl font-bold mb-8">Engineered for Power Users</h2>
                 
                 {features.map((feature, index) => (
@@ -492,8 +492,8 @@ export default function LandingPage({ onLaunchApp }) {
                 ))}
             </div>
 
-            {/* RIGHT: Dynamic Visual - Hidden on Mobile */}
-            <div className="hidden lg:flex lg:w-7/12 w-full h-[350px] items-center justify-center">
+            {/* RIGHT: Dynamic Visual - Re-enabled for mobile, stacked below */}
+            <div className="w-full lg:w-7/12 h-[350px] flex items-center justify-center mt-8 lg:mt-0">
                 <AnimatePresence mode="wait">
                     <motion.div
                         key={activeFeature}
