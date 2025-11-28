@@ -284,7 +284,7 @@ export default function LandingPage({ onLaunchApp }) {
           </div>
           {/* Mobile Menu Button (Visible only on mobile) */}
           <div className="md:hidden">
-             <button onClick={onLaunchApp} className="text-indigo-500 font-semibold">Login</button>
+             <button onClick={onLaunchApp} className="text-indigo-500 font-semibold">Launch App</button>
           </div>
         </div>
       </nav>
@@ -312,7 +312,13 @@ export default function LandingPage({ onLaunchApp }) {
             </div>
           </motion.div>
         </div>
-        <motion.div initial={{ opacity: 0, scale: 0.8 }} animate={{ opacity: 1, scale: 1 }} transition={{ duration: 1, delay: 0.2 }} className="md:w-1/2 mt-12 md:mt-0 h-[300px] md:h-[500px] w-full flex items-center justify-center relative">
+        {/* Mobile Optimization: Hidden on smaller screens */}
+        <motion.div 
+            initial={{ opacity: 0, scale: 0.8 }} 
+            animate={{ opacity: 1, scale: 1 }} 
+            transition={{ duration: 1, delay: 0.2 }} 
+            className="hidden md:flex md:w-1/2 mt-12 md:mt-0 h-[300px] md:h-[500px] w-full items-center justify-center relative"
+        >
             <SecureCloudCore />
         </motion.div>
       </header>
@@ -486,8 +492,8 @@ export default function LandingPage({ onLaunchApp }) {
                 ))}
             </div>
 
-            {/* RIGHT: Dynamic Visual */}
-            <div className="lg:w-7/12 w-full h-[350px] flex items-center justify-center">
+            {/* RIGHT: Dynamic Visual - Hidden on Mobile */}
+            <div className="hidden lg:flex lg:w-7/12 w-full h-[350px] items-center justify-center">
                 <AnimatePresence mode="wait">
                     <motion.div
                         key={activeFeature}
