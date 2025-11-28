@@ -130,17 +130,17 @@ const SecurityVisual = () => (
 // --- SECURE CLOUD CORE ANIMATION (HERO) ---
 const SecureCloudCore = () => {
   return (
-    <div className="relative w-full h-[300px] md:h-[500px] flex items-center justify-center overflow-hidden md:overflow-visible">
+    <div className="relative w-full h-[400px] md:h-[600px] flex items-center justify-center overflow-hidden md:overflow-visible">
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,_rgba(99,102,241,0.15)_0%,_transparent_70%)] blur-3xl" />
       <motion.div 
         animate={{ rotate: 360 }}
         transition={{ duration: 60, repeat: Infinity, ease: "linear" }}
-        className="absolute w-[280px] h-[280px] md:w-[450px] md:h-[450px] rounded-full border border-indigo-500/10 border-dashed"
+        className="absolute w-[350px] h-[350px] md:w-[550px] md:h-[550px] rounded-full border border-indigo-500/10 border-dashed"
       />
       <motion.div 
         animate={{ rotate: -360 }}
         transition={{ duration: 40, repeat: Infinity, ease: "linear" }}
-        className="absolute w-[200px] h-[200px] md:w-[320px] md:h-[320px] rounded-full border border-cyan-500/20"
+        className="absolute w-[250px] h-[250px] md:w-[400px] md:h-[400px] rounded-full border border-cyan-500/20"
         style={{ borderTopColor: 'transparent', borderBottomColor: 'transparent', borderWidth: '1px' }}
       />
       
@@ -151,12 +151,12 @@ const SecureCloudCore = () => {
         transition={{ scale: { duration: 1 }, opacity: { duration: 1 }, y: { duration: 6, repeat: Infinity, ease: "easeInOut" } }}
         className="relative z-10"
       >
-        <div className="relative w-32 h-32 md:w-40 md:h-40 bg-[#0F131F]/80 backdrop-blur-xl border border-indigo-500/30 rounded-full flex items-center justify-center shadow-[0_0_80px_rgba(99,102,241,0.25)] overflow-hidden">
+        <div className="relative w-40 h-40 md:w-52 md:h-52 bg-[#0F131F]/80 backdrop-blur-xl border border-indigo-500/30 rounded-full flex items-center justify-center shadow-[0_0_80px_rgba(99,102,241,0.25)] overflow-hidden">
            <div className="absolute inset-0 rounded-full bg-gradient-to-b from-white/5 to-transparent"></div>
            <motion.img 
              src="/logo.png" 
              alt="Core" 
-             className="w-20 h-20 md:w-24 md:h-24 object-contain relative z-20 drop-shadow-[0_0_30px_rgba(99,102,241,0.6)]"
+             className="w-24 h-24 md:w-32 md:h-32 object-contain relative z-20 drop-shadow-[0_0_30px_rgba(99,102,241,0.6)]"
              animate={{ scale: [1, 1.05, 1] }}
              transition={{ duration: 4, repeat: Infinity, ease: "easeInOut" }}
            />
@@ -317,7 +317,7 @@ export default function LandingPage({ onLaunchApp }) {
             initial={{ opacity: 0, scale: 0.8 }} 
             animate={{ opacity: 1, scale: 1 }} 
             transition={{ duration: 1, delay: 0.2 }} 
-            className="w-full md:w-1/2 mt-12 md:mt-0 h-[400px] md:h-[500px] flex items-center justify-center relative"
+            className="w-full md:w-1/2 mt-12 md:mt-0 h-[400px] md:h-[600px] flex items-center justify-center relative"
         >
             <SecureCloudCore />
         </motion.div>
