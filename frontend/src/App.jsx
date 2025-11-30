@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { Terminal, Cloud, Lock, ChevronRight, Command, Server, Globe, Smartphone, Laptop } from 'lucide-react';
 import firebase from 'firebase/compat/app';
 import 'firebase/compat/auth';
 import 'firebase/compat/firestore';
@@ -1159,68 +1160,143 @@ const OwnershipView = ({ onOwnershipConfirmed }) => {
     );
 };
 
-// --- LANDING PAGE (FULL DEFINITION INLINE) ---
-const LandingPage = ({ onLaunchApp }) => {
-    // --- STATE ---
+// ============================================================================
+// --- VISUAL COMPONENTS (Backgrounds, 3D Core, Animations) ---
+// ============================================================================
+
+const HeroBackground = () => {
+  const particles = [...Array(15)].map((_, i) => ({
+    id: i,
+    x: Math.random() * 100,
+    y: Math.random() * 100,
+    size: Math.random() * 3 + 1,
+    duration: Math.random() * 10 + 10,
+  }));
+
+  return (
+    <div className="absolute inset-0 overflow-hidden pointer-events-none -z-10">
+      <div className="absolute inset-0 bg-[#05080F]" />
+      <div className="absolute inset-0 bg-[linear-gradient(to_right,#80808012_1px,transparent_1px),linear-gradient(to_bottom,#80808012_1px,transparent_1px)] bg-[size:24px_24px] [mask-image:radial-gradient(ellipse_60%_50%_at_50%_0%,#000_70%,transparent_100%)]" />
+      {particles.map((p) => (
+        <motion.div
+          key={p.id}
+          className="absolute rounded-full bg-indigo-500/20 blur-[1px]"
+          style={{ left: `${p.x}%`, top: `${p.y}%`, width: p.size, height: p.size }}
+          animate={{ y: [0, -40, 0], opacity: [0.2, 0.5, 0.2] }}
+          transition={{ duration: p.duration, repeat: Infinity, ease: "easeInOut" }}
+        />
+      ))}
+      <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-purple-600/10 rounded-full blur-[100px]" />
+      <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-indigo-600/10 rounded-full blur-[100px]" />
+    </div>
+  );
+};
+
+const SecureCloudCore = () => {
+  return (
+    <div className="relative w-full h-[500px] md:h-[700px] flex items-center justify-center perspective-1000">
+      <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,_rgba(99,102,241,0.15)_0%,_transparent_60%)] blur-3xl" />
+      
+      {/* Outer Ring - Keeps slow rotation for atmosphere */}
+      <motion.div
+        animate={{ rotate: [0, 360] }}
+        transition={{ duration: 60, repeat: Infinity, ease: "linear" }}
+        className="absolute w-[450px] h-[450px] md:w-[650px] md:h-[650px] rounded-full border border-indigo-500/10 border-dashed"
+      >
+        <div className="absolute top-0 left-1/2 w-3 h-3 -ml-1.5 -mt-1.5 bg-indigo-500 rounded-full blur-[1px] shadow-[0_0_10px_#6366f1]" />
+      </motion.div>
+
+      {/* Inner Ring - Keeps slow counter-rotation */}
+      <motion.div
+        animate={{ rotate: [360, 0] }}
+        transition={{ duration: 40, repeat: Infinity, ease: "linear" }}
+        className="absolute w-[320px] h-[320px] md:w-[500px] md:h-[500px] rounded-full border border-cyan-500/20"
+        style={{ borderTopColor: "rgba(6,182,212,0.6)", borderRightColor: "transparent", borderBottomColor: "transparent", borderLeftColor: "transparent", borderWidth: "1px" }}
+      >
+        <div className="absolute bottom-[14%] right-[14%] w-2 h-2 bg-cyan-400 rounded-full shadow-[0_0_8px_#22d3ee]" />
+      </motion.div>
+
+      {/* Core Sphere */}
+      <motion.div
+        // KEEPING the Hover Animation
+        animate={{ y: [0, -20, 0] }}
+        transition={{ duration: 6, repeat: Infinity, ease: "easeInOut" }}
+        className="relative z-10"
+      >
+        <div className="relative w-48 h-48 md:w-64 md:h-64 bg-[#0F131F]/80 backdrop-blur-xl border border-indigo-500/30 rounded-full flex items-center justify-center shadow-[0_0_80px_rgba(99,102,241,0.25)] overflow-hidden">
+            
+            {/* CLEAN INTERIOR: No scanning lines, no rotating gradients. */}
+            
+            <div className="relative z-20">
+                <img 
+                    src="/logo.png" 
+                    alt="Core" 
+                    className="w-24 h-24 md:w-32 md:h-32 object-contain drop-shadow-[0_0_25px_rgba(99,102,241,0.5)]" 
+                />
+            </div>
+            
+            {/* Subtle glass reflection */}
+            <div className="absolute inset-0 rounded-full bg-gradient-to-b from-white/10 to-transparent pointer-events-none" />
+        </div>
+      </motion.div>
+    </div>
+  );
+};
+
+const TerminalDemo = () => {
+    const [text, setText] = useState('');
+    const fullText = "> daemon upload secret_plans.pdf\n[+] Encrypting file...\n[+] Chunking into 19MB parts...\n[+] Uploading to secure channel...\n[+] File 'secret_plans.pdf' registered.\n> ";
+    useEffect(() => {
+        let i = 0; let mounted = true;
+        const typeWriter = () => {
+            if (!mounted) return;
+            if (i <= fullText.length) { setText(fullText.slice(0, i)); i++; setTimeout(typeWriter, 30); } 
+            else { setTimeout(() => { if(mounted) { i = 0; setText(''); typeWriter(); } }, 4000); }
+        };
+        typeWriter();
+        return () => { mounted = false; };
+    }, []);
+    return (
+        <div className="bg-[#0F131F] rounded-xl border border-gray-800 p-6 font-mono text-sm shadow-2xl w-full h-64 flex flex-col relative overflow-hidden group">
+            <div className="absolute inset-0 bg-[linear-gradient(rgba(18,16,16,0)_50%,rgba(0,0,0,0.25)_50%),linear-gradient(90deg,rgba(255,0,0,0.06),rgba(0,255,0,0.02),rgba(0,0,255,0.06))] z-10 pointer-events-none bg-[length:100%_4px,3px_100%]" />
+            <div className="flex gap-2 mb-4 border-b border-gray-800 pb-2 z-20">
+                <div className="w-3 h-3 rounded-full bg-red-500/50" />
+                <div className="w-3 h-3 rounded-full bg-yellow-500/50" />
+                <div className="w-3 h-3 rounded-full bg-green-500/50" />
+                <span className="ml-auto text-xs text-gray-600">bash</span>
+            </div>
+            <div className="text-gray-300 whitespace-pre-line z-20">{text}<span className="animate-pulse inline-block w-2 h-4 bg-indigo-500 align-middle ml-1" /></div>
+        </div>
+    );
+};
+
+// ============================================================================
+// --- LANDING PAGE COMPONENT ---
+// ============================================================================
+
+const LandingPage = ({ onLaunchApp = () => console.log("Launch") }) => {
     const [activeFeature, setActiveFeature] = useState(0);
     const [activeDownload, setActiveDownload] = useState(null);
 
-    // Auto-rotate carousel
     useEffect(() => {
-        const interval = setInterval(() => {
-            setActiveFeature((prev) => (prev + 1) % 3);
-        }, 5000); 
+        const interval = setInterval(() => { setActiveFeature((prev) => (prev + 1) % 3); }, 5000); 
         return () => clearInterval(interval);
     }, []);
 
-    // --- UI Components for Landing Page ---
     const Counter = ({ from, to, suffix = "" }) => {
         const [count, setCount] = useState(from);
         useEffect(() => {
-            const controls = { value: from };
-            const step = (to - from) / 60; 
-            const interval = setInterval(() => {
-                controls.value += step;
-                if (controls.value >= to) {
-                    setCount(to);
-                    clearInterval(interval);
-                } else {
-                    setCount(Math.floor(controls.value));
-                }
-            }, 20);
-            return () => clearInterval(interval);
+            let startTime; const duration = 2000;
+            const animate = (timestamp) => {
+                if (!startTime) startTime = timestamp;
+                const progress = Math.min((timestamp - startTime) / duration, 1);
+                setCount(progress * (to - from) + from);
+                if (progress < 1) requestAnimationFrame(animate);
+            };
+            requestAnimationFrame(animate);
         }, [from, to]);
-        return <span>{count.toLocaleString()}{suffix}</span>;
-    };
-
-    const TerminalDemo = () => {
-        const [text, setText] = useState('');
-        const fullText = "> daemon upload secret_plans.pdf\n[+] Encrypting file...\n[+] Chunking into 19MB parts...\n[+] Uploading to secure channel...\n[+] File 'secret_plans.pdf' registered.\n> ";
-        useEffect(() => {
-            let i = 0;
-            const interval = setInterval(() => {
-                setText(fullText.slice(0, i));
-                i++;
-                if (i > fullText.length) {
-                    clearInterval(interval);
-                    setTimeout(() => { i=0; setText(''); }, 4000); 
-                }
-            }, 30);
-            return () => clearInterval(interval);
-        }, []);
-        return (
-            <div className="bg-[#0F131F] rounded-xl border border-gray-800 p-6 font-mono text-sm shadow-2xl w-full h-64 flex flex-col justify-center">
-                <div className="flex gap-2 mb-4 border-b border-gray-800 pb-2">
-                    <div className="w-3 h-3 rounded-full bg-red-500/50" />
-                    <div className="w-3 h-3 rounded-full bg-yellow-500/50" />
-                    <div className="w-3 h-3 rounded-full bg-green-500/50" />
-                    <span className="ml-auto text-xs text-gray-600">bash</span>
-                </div>
-                <div className="text-gray-300 whitespace-pre-line overflow-hidden">
-                    {text}<span className="animate-pulse inline-block w-2 h-4 bg-indigo-500 align-middle ml-1" />
-                </div>
-            </div>
-        );
+        const display = to % 1 !== 0 ? count.toFixed(1) : Math.floor(count).toLocaleString();
+        return <span>{display}{suffix}</span>;
     };
 
     const InfinityVisual = () => (
@@ -1229,7 +1305,7 @@ const LandingPage = ({ onLaunchApp }) => {
             <motion.div animate={{ rotate: 360 }} transition={{ duration: 20, repeat: Infinity, ease: "linear" }} className="w-32 h-32 rounded-full border-2 border-dashed border-indigo-500/30" />
             <motion.div animate={{ rotate: -360 }} transition={{ duration: 15, repeat: Infinity, ease: "linear" }} className="absolute w-48 h-48 rounded-full border border-cyan-500/20" />
             <div className="absolute text-7xl font-bold text-white/20 select-none">∞</div>
-            <motion.div animate={{ scale: [1, 1.5, 1], opacity: [0.3, 0.6, 0.3] }} transition={{ duration: 3, repeat: Infinity }} className="absolute w-24 h-24 bg-indigo-500/20 rounded-full blur-2xl" />
+            <motion.div animate={{ scale: [1, 1.5, 1], opacity: [0.3, 0.6, 0.3] }} transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }} className="absolute w-24 h-24 bg-indigo-500/20 rounded-full blur-2xl" />
         </div>
     );
 
@@ -1242,48 +1318,23 @@ const LandingPage = ({ onLaunchApp }) => {
             </div>
             <div className="absolute inset-0 flex items-center justify-center z-10">
                 <div className="p-5 bg-[#0B0F19] rounded-full border border-indigo-500/50 shadow-[0_0_40px_rgba(99,102,241,0.4)]">
-                    <LockIconLP />
+                    <Lock className="w-8 h-8 text-indigo-400" />
                 </div>
             </div>
-        </div>
-    );
-
-    const SecureCloudCore = () => (
-        <div className="relative w-full h-[400px] md:h-[600px] flex items-center justify-center overflow-visible scale-125 md:scale-150 transform-gpu origin-center">
-            <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,_rgba(99,102,241,0.15)_0%,_transparent_70%)] blur-3xl scale-150" />
-            <motion.div animate={{ rotate: 360 }} transition={{ duration: 60, repeat: Infinity, ease: "linear" }} className="absolute w-[400px] h-[400px] md:w-[600px] md:h-[600px] rounded-full border border-indigo-500/10 border-dashed" />
-            <motion.div animate={{ rotate: -360 }} transition={{ duration: 40, repeat: Infinity, ease: "linear" }} className="absolute w-[280px] h-[280px] md:w-[450px] md:h-[450px] rounded-full border border-cyan-500/20" style={{ borderTopColor: 'transparent', borderBottomColor: 'transparent', borderWidth: '1px' }} />
-            <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1, y: [0, -15, 0] }} transition={{ scale: { duration: 1 }, opacity: { duration: 1 }, y: { duration: 6, repeat: Infinity, ease: "easeInOut" } }} className="relative z-10">
-                <div className="relative w-48 h-48 md:w-64 md:h-64 bg-[#0F131F]/80 backdrop-blur-xl border border-indigo-500/30 rounded-full flex items-center justify-center shadow-[0_0_100px_rgba(99,102,241,0.3)] overflow-hidden">
-                    <div className="absolute inset-0 rounded-full bg-gradient-to-b from-white/5 to-transparent"></div>
-                    <motion.img src="/logo.png" alt="Core" className="w-28 h-28 md:w-36 md:h-36 object-contain relative z-20 drop-shadow-[0_0_40px_rgba(99,102,241,0.6)]" animate={{ scale: [1, 1.05, 1] }} transition={{ duration: 4, repeat: Infinity, ease: "easeInOut" }} />
-                </div>
-            </motion.div>
         </div>
     );
 
     const AlgoStep = ({ title, description, visual }) => (
         <div className="bg-[#0F131F] p-8 rounded-2xl border border-gray-800 hover:border-indigo-500/30 transition-all flex flex-col h-full hover:bg-[#131725] group">
-            <div className="h-40 flex items-center justify-center mb-6 bg-black/20 rounded-xl border border-gray-800/50 overflow-hidden relative group-hover:border-indigo-500/20 transition-colors">
-                {visual}
-            </div>
+            <div className="h-40 flex items-center justify-center mb-6 bg-black/20 rounded-xl border border-gray-800/50 overflow-hidden relative group-hover:border-indigo-500/20 transition-colors">{visual}</div>
             <h4 className="text-xl font-bold text-white mb-2 group-hover:text-indigo-400 transition-colors">{title}</h4>
             <p className="text-gray-400 text-sm leading-relaxed">{description}</p>
         </div>
     );
 
-    const StatCard = ({ number, label }) => (
-        <div className="p-6 rounded-2xl bg-[#0F131F]/50 border border-gray-800 text-center hover:border-indigo-500/30 transition-colors backdrop-blur-sm">
-            <div className="text-3xl font-bold text-white mb-1 font-mono">{number}</div>
-            <div className="text-xs uppercase tracking-widest text-gray-500 font-bold">{label}</div>
-        </div>
-    );
-
     const StepCard = ({ number, title, description }) => (
-        <div className="relative flex flex-col items-center text-center p-6 z-10">
-            <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-indigo-600 to-purple-700 flex items-center justify-center text-xl font-bold text-white mb-6 shadow-lg shadow-indigo-900/50">
-                {number}
-            </div>
+        <div className="relative flex flex-col items-center text-center p-6 z-10 group">
+            <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-indigo-600 to-purple-700 flex items-center justify-center text-xl font-bold text-white mb-6 shadow-lg shadow-indigo-900/50 group-hover:scale-110 transition-transform duration-300">{number}</div>
             <h3 className="text-xl font-bold text-white mb-3">{title}</h3>
             <p className="text-gray-400 text-sm leading-relaxed">{description}</p>
         </div>
@@ -1292,49 +1343,44 @@ const LandingPage = ({ onLaunchApp }) => {
     const DownloadOption = ({ title, icon, status, description, buttonText, onClick, isActive, primary }) => (
         <div className={`p-8 rounded-2xl border transition-all duration-300 cursor-pointer hover:-translate-y-1 flex flex-col h-full group ${isActive ? 'border-indigo-500 bg-indigo-900/10 shadow-lg shadow-indigo-500/20' : primary ? 'border-indigo-500/50 bg-indigo-900/5 hover:bg-indigo-900/10' : 'border-gray-800 bg-[#0F131F] hover:border-gray-700'}`} onClick={onClick}>
             <div className="flex items-center justify-between mb-6">
-                <h3 className="text-lg font-bold text-white flex items-center gap-3 group-hover:text-indigo-300 transition-colors">
-                    {icon} {title}
-                </h3>
+                <h3 className="text-lg font-bold text-white flex items-center gap-3 group-hover:text-indigo-300 transition-colors">{icon} {title}</h3>
                 {status && <span className={`text-[10px] uppercase tracking-wider px-2 py-1 rounded border ${status === 'Live' ? 'bg-green-900/30 text-green-400 border-green-800' : 'bg-yellow-900/30 text-yellow-400 border-yellow-800'}`}>{status}</span>}
             </div>
             <p className="text-gray-400 text-sm mb-8 flex-grow leading-relaxed">{description}</p>
-            <button className={`w-full py-3 px-6 rounded-lg text-center font-bold tracking-wide transition-all text-sm ${primary ? 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-500/25' : 'bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white'}`}>
-                {buttonText}
-            </button>
+            <button className={`w-full py-3 px-6 rounded-lg text-center font-bold tracking-wide transition-all text-sm ${primary ? 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-500/25' : 'bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white'}`}>{buttonText}</button>
         </div>
     );
 
     const features = [
-        { title: "Daemon CLI", desc: "Automate backups. Scriptable sync. Headless power.", icon: <TerminalIconLP />, visual: <TerminalDemo /> },
-        { title: "Infinite Scale", desc: "Store 100TB without fees. No throttling. Just raw storage.", icon: <CloudIconLP />, visual: <InfinityVisual /> },
-        { title: "Open Source", desc: "Audit the code. Host it yourself. You own the platform.", icon: <LockIconLP />, visual: <SecurityVisual /> }
+        { title: "Daemon CLI", desc: "Automate backups. Scriptable sync. Headless power.", icon: <Terminal className="w-5 h-5"/>, visual: <TerminalDemo /> },
+        { title: "Infinite Scale", desc: "Store 100TB without fees. No throttling. Just raw storage.", icon: <Cloud className="w-5 h-5"/>, visual: <InfinityVisual /> },
+        { title: "Open Source", desc: "Audit the code. Host it yourself. You own the platform.", icon: <Lock className="w-5 h-5"/>, visual: <SecurityVisual /> }
     ];
 
     return (
         <div className="min-h-screen bg-[#05080F] text-white font-sans selection:bg-indigo-500 selection:text-white overflow-x-hidden scroll-smooth">
             {/* Navbar */}
-            <nav className="fixed top-0 w-full z-50 bg-[#05080F]/80 backdrop-blur-md border-b border-gray-800/50">
-                <div className="container mx-auto px-6 py-4 flex justify-between items-center">
-                    <div className="flex items-center gap-3 cursor-pointer" onClick={() => window.scrollTo(0,0)}>
-                        <img src="/logo.png" alt="Logo" className="h-8 w-8" />
-                        <span className="text-lg font-bold tracking-tight">DaemonClient</span>
-                    </div>
-                    <div className="hidden md:flex items-center gap-8">
-                        <a href="#philosophy" className="text-sm font-medium text-gray-400 hover:text-white transition-colors">Philosophy</a>
-                        <a href="#protocol" className="text-sm font-medium text-gray-400 hover:text-white transition-colors">Protocol</a>
-                        <a href="#features" className="text-sm font-medium text-gray-400 hover:text-white transition-colors">Power Users</a>
-                        <a href="https://github.com/myrosama/DaemonClient" target="_blank" className="text-gray-400 hover:text-white transition-colors">GitHub</a>
-                        <button onClick={onLaunchApp} className="bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-2 rounded-lg text-sm font-semibold transition-all shadow-lg shadow-indigo-900/20 hover:-translate-y-0.5">Launch App</button>
-                    </div>
-                    <div className="md:hidden">
-                        <button onClick={onLaunchApp} className="text-indigo-500 font-semibold">Launch App</button>
-                    </div>
-                </div>
-            </nav>
+<nav className="fixed top-0 w-full z-50 bg-[#05080F]/80 backdrop-blur-md border-b border-gray-800/50">
+    <div className="container mx-auto px-6 py-4 flex justify-between items-center">
+        <div className="flex items-center gap-3 cursor-pointer" onClick={() => window.scrollTo(0,0)}>
+            {/* LOGO UPDATE START */}
+            <img src="/logo.png" alt="Logo" className="w-8 h-8 object-contain" />
+            {/* LOGO UPDATE END */}
+            <span className="text-lg font-bold tracking-tight">DaemonClient</span>
+        </div>
+        <div className="hidden md:flex items-center gap-8">
+            <a href="#philosophy" className="text-sm font-medium text-gray-400 hover:text-white transition-colors">Philosophy</a>
+            <a href="#protocol" className="text-sm font-medium text-gray-400 hover:text-white transition-colors">Protocol</a>
+            <a href="#features" className="text-sm font-medium text-gray-400 hover:text-white transition-colors">Power Users</a>
+            <a href="https://github.com/myrosama/DaemonClient" target="_blank" rel="noreferrer" className="text-gray-400 hover:text-white transition-colors">GitHub</a>
+            <button onClick={onLaunchApp} className="bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-2 rounded-lg text-sm font-semibold transition-all shadow-lg shadow-indigo-900/20 hover:-translate-y-0.5">Launch App</button>
+        </div>
+        <div className="md:hidden"><button onClick={onLaunchApp} className="text-indigo-500 font-semibold">Launch App</button></div>
+    </div>
+</nav>
 
-            {/* Hero Section */}
-            <header className="container mx-auto px-6 pt-28 pb-16 md:pt-40 md:pb-24 flex flex-col md:flex-row items-center relative overflow-hidden">
-                <div className="absolute inset-0 bg-[linear-gradient(to_right,#80808012_1px,transparent_1px),linear-gradient(to_bottom,#80808012_1px,transparent_1px)] bg-[size:24px_24px] [mask-image:radial-gradient(ellipse_60%_50%_at_50%_0%,#000_70%,transparent_100%)] -z-10 pointer-events-none" />
+            <header className="container mx-auto px-6 pt-28 pb-16 md:pt-40 md:pb-24 flex flex-col md:flex-row items-center relative">
+                <HeroBackground />
                 <div className="md:w-1/2 md:pr-12 z-10 relative">
                     <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6 }}>
                         <div className="inline-flex items-center gap-2 py-1 px-3 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-indigo-300 text-xs font-bold uppercase tracking-wider mb-6">
@@ -1344,14 +1390,10 @@ const LandingPage = ({ onLaunchApp }) => {
                         <h1 className="text-4xl md:text-7xl font-bold leading-tight mb-6 tracking-tight">
                             The Cloud is Broken.<br /><span className="text-transparent bg-clip-text bg-gradient-to-r from-indigo-400 to-cyan-400">We Fixed It.</span>
                         </h1>
-                        <p className="text-lg text-gray-400 mb-10 leading-relaxed max-w-lg">
-                            Traditional cloud storage charges you rent for digital space. We reverse-engineered the concept to give you <b>infinite bandwidth</b> and <b>zero costs</b> by owning the infrastructure.
-                        </p>
+                        <p className="text-lg text-gray-400 mb-10 leading-relaxed max-w-lg">Traditional cloud storage charges you rent for digital space. We reverse-engineered the concept to give you <b>infinite bandwidth</b> and <b>zero costs</b> by owning the infrastructure.</p>
                         <div className="flex flex-col sm:flex-row gap-4 mb-12">
-                            <button onClick={onLaunchApp} className="bg-white text-black hover:bg-gray-100 px-8 py-3.5 rounded-xl font-bold text-lg transition-all shadow-[0_0_20px_rgba(255,255,255,0.15)] hover:shadow-[0_0_30px_rgba(255,255,255,0.25)] hover:-translate-y-1">Start Uploading</button>
-                            <a href="#download" className="bg-[#1A1F2E] hover:bg-gray-800 px-8 py-3.5 rounded-xl font-bold text-lg transition-all border border-gray-700 hover:border-gray-500 flex items-center justify-center gap-2 group text-gray-200">
-                                <TerminalIconLP /><span>Download CLI</span>
-                            </a>
+                            <button onClick={onLaunchApp} className="bg-white text-black hover:bg-gray-100 px-8 py-3.5 rounded-xl font-bold text-lg transition-all shadow-[0_0_20px_rgba(255,255,255,0.15)] hover:shadow-[0_0_30px_rgba(255,255,255,0.25)] hover:-translate-y-1 flex items-center justify-center gap-2">Start Uploading <ChevronRight className="w-5 h-5"/></button>
+                            <a href="#download" className="bg-[#1A1F2E] hover:bg-gray-800 px-8 py-3.5 rounded-xl font-bold text-lg transition-all border border-gray-700 hover:border-gray-500 flex items-center justify-center gap-2 group text-gray-200"><Terminal className="w-5 h-5 text-gray-400 group-hover:text-white transition-colors" /><span>Download CLI</span></a>
                         </div>
                     </motion.div>
                 </div>
@@ -1360,19 +1402,17 @@ const LandingPage = ({ onLaunchApp }) => {
                 </motion.div>
             </header>
 
-            {/* Live Network Status Bar */}
-            <section className="py-10 border-y border-gray-800/50 bg-[#0B0F19]/30 backdrop-blur-sm">
+            <section className="py-10 border-y border-gray-800/50 bg-[#0B0F19]/30 backdrop-blur-sm relative z-20">
                 <div className="container mx-auto px-6">
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-8">
-                        <StatCard number={<Counter from={0} to={99.9} suffix="%" />} label="Uptime" />
-                        <StatCard number={<Counter from={0} to={5000} suffix="+" />} label="Files Secured" />
-                        <StatCard number="~20ms" label="Global Latency" />
-                        <StatCard number="$0.00" label="Cost to You" />
+                        <div className="p-6 rounded-2xl bg-[#0F131F]/50 border border-gray-800 text-center hover:border-indigo-500/30 transition-colors backdrop-blur-sm"><div className="text-3xl font-bold text-white mb-1 font-mono"><Counter from={0} to={99.9} suffix="%" /></div><div className="text-xs uppercase tracking-widest text-gray-500 font-bold">Uptime</div></div>
+                        <div className="p-6 rounded-2xl bg-[#0F131F]/50 border border-gray-800 text-center hover:border-indigo-500/30 transition-colors backdrop-blur-sm"><div className="text-3xl font-bold text-white mb-1 font-mono"><Counter from={0} to={5000} suffix="+" /></div><div className="text-xs uppercase tracking-widest text-gray-500 font-bold">Files Secured</div></div>
+                        <div className="p-6 rounded-2xl bg-[#0F131F]/50 border border-gray-800 text-center hover:border-indigo-500/30 transition-colors backdrop-blur-sm"><div className="text-3xl font-bold text-white mb-1 font-mono">~20ms</div><div className="text-xs uppercase tracking-widest text-gray-500 font-bold">Global Latency</div></div>
+                        <div className="p-6 rounded-2xl bg-[#0F131F]/50 border border-gray-800 text-center hover:border-indigo-500/30 transition-colors backdrop-blur-sm"><div className="text-3xl font-bold text-white mb-1 font-mono">$0.00</div><div className="text-xs uppercase tracking-widest text-gray-500 font-bold">Cost to You</div></div>
                     </div>
                 </div>
             </section>
 
-            {/* Philosophy Section */}
             <motion.section id="philosophy" className="py-24 md:py-32 bg-[#05080F] relative overflow-hidden" initial={{ opacity: 0, y: 50 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true, margin: "-100px" }} transition={{ duration: 0.8 }}>
                 <div className="absolute top-0 left-0 w-full h-full opacity-20 pointer-events-none">
                     <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-purple-600/20 rounded-full blur-[120px]"></div>
@@ -1382,30 +1422,18 @@ const LandingPage = ({ onLaunchApp }) => {
                     <div className="max-w-4xl mx-auto text-center">
                         <h2 className="text-xs font-bold text-indigo-400 tracking-[0.2em] uppercase mb-6">Manifesto</h2>
                         <h3 className="text-3xl md:text-5xl font-bold mb-8 leading-tight">We believe you should own your data.<br/> Not rent it.</h3>
-                        <p className="text-xl text-gray-400 leading-relaxed mb-12">
-                            DaemonClient isn't just a tool; it's a statement. By decoupling the storage layer (Telegram) from the access layer (DaemonClient), we create a system where no single entity controls your digital life. You hold the keys. You hold the bot. You hold the power.
-                        </p>
+                        <p className="text-xl text-gray-400 leading-relaxed mb-12">DaemonClient isn't just a tool; it's a statement. By decoupling the storage layer (Telegram) from the access layer (DaemonClient), we create a system where no single entity controls your digital life.</p>
                         <div className="grid md:grid-cols-2 gap-6 text-left">
-                            <div className="p-8 rounded-2xl bg-gradient-to-br from-[#0F131F] to-gray-900 border border-gray-800 hover:border-indigo-500/30 transition-colors">
-                                <h4 className="text-xl font-bold text-white mb-3 flex items-center gap-2">🔒 True Privacy</h4>
-                                <p className="text-gray-400 leading-relaxed">We use a "Zero-Knowledge" setup. After creation, we transfer bot ownership to you and delete our access tokens.</p>
-                            </div>
-                            <div className="p-8 rounded-2xl bg-gradient-to-br from-[#0F131F] to-gray-900 border border-gray-800 hover:border-indigo-500/30 transition-colors">
-                                <h4 className="text-xl font-bold text-white mb-3 flex items-center gap-2">💸 Zero Cost</h4>
-                                <p className="text-gray-400 leading-relaxed">We abuse no bugs. We simply use the API as intended, utilizing its generous limits very efficiently.</p>
-                            </div>
+                            <div className="p-8 rounded-2xl bg-gradient-to-br from-[#0F131F] to-gray-900 border border-gray-800 hover:border-indigo-500/30 transition-colors group"><h4 className="text-xl font-bold text-white mb-3 flex items-center gap-2"><Lock className="w-5 h-5 text-indigo-500 group-hover:text-indigo-400"/> True Privacy</h4><p className="text-gray-400 leading-relaxed">We use a "Zero-Knowledge" setup. After creation, we transfer bot ownership to you and delete our access tokens.</p></div>
+                            <div className="p-8 rounded-2xl bg-gradient-to-br from-[#0F131F] to-gray-900 border border-gray-800 hover:border-indigo-500/30 transition-colors group"><h4 className="text-xl font-bold text-white mb-3 flex items-center gap-2"><Server className="w-5 h-5 text-indigo-500 group-hover:text-indigo-400"/> Zero Cost</h4><p className="text-gray-400 leading-relaxed">We abuse no bugs. We simply use the API as intended, utilizing its generous limits very efficiently.</p></div>
                         </div>
                     </div>
                 </div>
             </motion.section>
 
-            {/* Protocol Section */}
             <motion.section id="how-it-works" className="py-24 bg-[#05080F] relative" initial={{ opacity: 0, y: 50 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true, margin: "-100px" }} transition={{ duration: 0.8 }}>
                 <div className="container mx-auto px-6">
-                    <div className="text-center mb-20">
-                        <h2 className="text-xs font-bold text-indigo-400 tracking-[0.2em] uppercase mb-3">Architecture</h2>
-                        <h3 className="text-3xl md:text-4xl font-bold text-white">Set up in 3 minutes. Forever.</h3>
-                    </div>
+                    <div className="text-center mb-20"><h2 className="text-xs font-bold text-indigo-400 tracking-[0.2em] uppercase mb-3">Architecture</h2><h3 className="text-3xl md:text-4xl font-bold text-white">Set up in 3 minutes. Forever.</h3></div>
                     <div className="grid md:grid-cols-3 gap-12 max-w-6xl mx-auto relative">
                         <div className="hidden md:block absolute top-6 left-[20%] right-[20%] h-[2px] bg-gradient-to-r from-transparent via-indigo-500/20 to-transparent -z-0"></div>
                         <StepCard number="1" title="Create a Bot" description="Our automated wizard helps you create a free Telegram bot. This bot acts as your personal, private file manager." />
@@ -1415,46 +1443,17 @@ const LandingPage = ({ onLaunchApp }) => {
                 </div>
             </motion.section>
 
-            {/* Protocol Deep Dive Section */}
             <motion.section id="protocol" className="py-24 bg-[#05080F] relative border-t border-gray-800/30" initial={{ opacity: 0, y: 50 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true, margin: "-100px" }} transition={{ duration: 0.8 }}>
                 <div className="container mx-auto px-6">
-                    <div className="text-center mb-20">
-                        <h2 className="text-xs font-bold text-cyan-400 tracking-[0.2em] uppercase mb-3">The Protocol</h2>
-                        <h3 className="text-3xl md:text-4xl font-bold text-white">How We Achieved Infinite Storage</h3>
-                    </div>
+                    <div className="text-center mb-20"><h2 className="text-xs font-bold text-cyan-400 tracking-[0.2em] uppercase mb-3">The Protocol</h2><h3 className="text-3xl md:text-4xl font-bold text-white">How We Achieved Infinite Storage</h3></div>
                     <div className="grid md:grid-cols-3 gap-8">
-                        <AlgoStep title="1. Atomic Chunking" description="Large files are split into encrypted 19MB shards directly in your browser. This bypasses Telegram's file size limits and allows for parallel, high-speed uploads." visual={
-                            <div className="relative w-full h-full flex items-center justify-center gap-2">
-                                <div className="w-12 h-16 bg-gray-700 rounded border border-gray-500 flex items-center justify-center text-[10px]">FILE</div>
-                                <span className="text-gray-500">➔</span>
-                                <div className="grid grid-cols-3 gap-1">
-                                    {[...Array(6)].map((_, i) => (
-                                        <motion.div key={i} initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: i*0.1, duration: 0.5, repeat: Infinity, repeatDelay: 2 }} className="w-6 h-6 bg-indigo-600 rounded border border-indigo-400" />
-                                    ))}
-                                </div>
-                            </div>
-                        } />
-                        <AlgoStep title="2. Zero-Cost Distribution" description="We use a custom Cloudflare Worker as a transparent proxy. Data streams from your device -> Edge -> Telegram. It never touches our servers, costing us $0." visual={
-                            <div className="relative w-full h-full flex items-center justify-center">
-                                <div className="absolute w-full h-[1px] bg-gray-700"></div>
-                                <motion.div animate={{ x: [-60, 60] }} transition={{ duration: 2, repeat: Infinity, ease: "linear" }} className="w-3 h-3 bg-cyan-400 rounded-full shadow-[0_0_10px_cyan] z-10" />
-                                <div className="absolute left-8 p-1 bg-gray-800 rounded border border-gray-600 text-[10px]">You</div>
-                                <div className="absolute right-8 p-1 bg-indigo-900 rounded border border-indigo-500 text-[10px]">Cloud</div>
-                            </div>
-                        } />
-                        <AlgoStep title="3. Metadata Indexing" description="A lightweight pointer map is stored in Firebase. It remembers which 19MB chunks belong to 'Holiday_Video.mp4', allowing instant reconstruction when you download." visual={
-                            <div className="w-full h-full flex flex-col items-center justify-center gap-2 font-mono text-[10px] text-green-400/80">
-                                <div className="w-40 p-2 bg-gray-900 border border-green-900 rounded shadow-[0_0_10px_rgba(74,222,128,0.1)]">
-                                    {"{ id: 'vid.mp4',"} <br/>
-                                    {"  parts: [892, 893...] }"}
-                                </div>
-                            </div>
-                        } />
+                        <AlgoStep title="1. Atomic Chunking" description="Large files are split into encrypted 19MB shards directly in your browser. This bypasses Telegram's file size limits and allows for parallel, high-speed uploads." visual={<div className="relative w-full h-full flex items-center justify-center gap-2"><div className="w-12 h-16 bg-gray-700 rounded border border-gray-500 flex items-center justify-center text-[10px]">FILE</div><span className="text-gray-500">➔</span><div className="grid grid-cols-3 gap-1">{[...Array(6)].map((_, i) => (<motion.div key={i} initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: i*0.1, duration: 0.5, repeat: Infinity, repeatDelay: 2 }} className="w-6 h-6 bg-indigo-600 rounded border border-indigo-400" />))}</div></div>} />
+                        <AlgoStep title="2. Zero-Cost Distribution" description="We use a custom Cloudflare Worker as a transparent proxy. Data streams from your device -> Edge -> Telegram. It never touches our servers, costing us $0." visual={<div className="relative w-full h-full flex items-center justify-center"><div className="absolute w-full h-[1px] bg-gray-700"></div><motion.div animate={{ x: [-60, 60] }} transition={{ duration: 2, repeat: Infinity, ease: "linear" }} className="w-3 h-3 bg-cyan-400 rounded-full shadow-[0_0_10px_cyan] z-10" /><div className="absolute left-8 p-1 bg-gray-800 rounded border border-gray-600 text-[10px]">You</div><div className="absolute right-8 p-1 bg-indigo-900 rounded border border-indigo-500 text-[10px]">Cloud</div></div>} />
+                        <AlgoStep title="3. Metadata Indexing" description="A lightweight pointer map is stored in Firebase. It remembers which 19MB chunks belong to 'Holiday_Video.mp4', allowing instant reconstruction when you download." visual={<div className="w-full h-full flex flex-col items-center justify-center gap-2 font-mono text-[10px] text-green-400/80"><div className="w-40 p-2 bg-gray-900 border border-green-900 rounded shadow-[0_0_10px_rgba(74,222,128,0.1)]">{"{ id: 'vid.mp4',"} <br/>{"  parts: [892, 893...] }"}</div></div>} />
                     </div>
                 </div>
             </motion.section>
 
-            {/* NEW CAROUSEL SECTION (Power Users) */}
             <motion.section id="features" className="py-24 bg-[#0B0F19]" initial={{ opacity: 0, y: 50 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true, margin: "-100px" }} transition={{ duration: 0.8 }}>
                 <div className="container mx-auto px-6">
                     <div className="flex flex-col lg:flex-row gap-12 items-center">
@@ -1462,113 +1461,57 @@ const LandingPage = ({ onLaunchApp }) => {
                             <h2 className="text-3xl md:text-4xl font-bold mb-8">Engineered for Power Users</h2>
                             {features.map((feature, index) => (
                                 <div key={index} onClick={() => setActiveFeature(index)} className={`p-5 rounded-xl border transition-all cursor-pointer duration-300 ${activeFeature === index ? 'bg-[#151926] border-indigo-500/50 shadow-lg shadow-indigo-500/10' : 'bg-transparent border-transparent hover:bg-gray-900/50'}`}>
-                                    <div className="flex items-center gap-3 mb-1">
-                                        <div className={`p-1.5 rounded-lg ${activeFeature === index ? 'bg-indigo-500/20 text-indigo-400' : 'bg-gray-800/50 text-gray-500'}`}>
-                                            {feature.icon}
-                                        </div>
-                                        <h3 className={`text-base font-bold ${activeFeature === index ? 'text-white' : 'text-gray-400'}`}>
-                                            {feature.title}
-                                        </h3>
-                                    </div>
-                                    <p className={`text-sm leading-relaxed pl-[46px] ${activeFeature === index ? 'text-gray-300' : 'text-gray-600'}`}>
-                                        {feature.desc}
-                                    </p>
+                                    <div className="flex items-center gap-3 mb-1"><div className={`p-1.5 rounded-lg ${activeFeature === index ? 'bg-indigo-500/20 text-indigo-400' : 'bg-gray-800/50 text-gray-500'}`}>{feature.icon}</div><h3 className={`text-base font-bold ${activeFeature === index ? 'text-white' : 'text-gray-400'}`}>{feature.title}</h3></div>
+                                    <p className={`text-sm leading-relaxed pl-[46px] ${activeFeature === index ? 'text-gray-300' : 'text-gray-600'}`}>{feature.desc}</p>
                                 </div>
                             ))}
                         </div>
                         <div className="w-full lg:w-7/12 h-[350px] flex items-center justify-center mt-8 lg:mt-0">
                             <AnimatePresence mode="wait">
-                                <motion.div key={activeFeature} initial={{ opacity: 0, x: 20, filter: "blur(4px)" }} animate={{ opacity: 1, x: 0, filter: "blur(0px)" }} exit={{ opacity: 0, x: -20, filter: "blur(4px)" }} transition={{ duration: 0.3 }} className="w-full flex justify-center items-center">
-                                    {features[activeFeature].visual}
-                                </motion.div>
+                                <motion.div key={activeFeature} initial={{ opacity: 0, x: 20, filter: "blur(4px)" }} animate={{ opacity: 1, x: 0, filter: "blur(0px)" }} exit={{ opacity: 0, x: -20, filter: "blur(4px)" }} transition={{ duration: 0.3 }} className="w-full flex justify-center items-center">{features[activeFeature].visual}</motion.div>
                             </AnimatePresence>
                         </div>
                     </div>
                 </div>
             </motion.section>
 
-            {/* Download / CLI Section */}
             <motion.section id="download" className="py-24 relative bg-[#05080F] border-t border-gray-800/50" initial={{ opacity: 0, y: 50 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true, margin: "-100px" }} transition={{ duration: 0.8 }}>
                 <div className="container mx-auto px-6">
-                    <div className="text-center mb-16">
-                        <h2 className="text-3xl md:text-4xl font-bold mb-6">Download & Install</h2>
-                        <p className="text-gray-400 text-lg max-w-xl mx-auto">Access your files from any device.</p>
-                    </div>
+                    <div className="text-center mb-16"><h2 className="text-3xl md:text-4xl font-bold mb-6">Download & Install</h2><p className="text-gray-400 text-lg max-w-xl mx-auto">Access your files from any device.</p></div>
                     <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6 mb-16">
-                        <DownloadOption title="Web App" icon={<span className="text-2xl">🌐</span>} status="Live" description="Instant access from any browser. No installation required." buttonText="Launch Now" onClick={onLaunchApp} primary={true} />
-                        <DownloadOption title="Daemon CLI" icon={<span className="text-2xl">💻</span>} status="Live" description="Powerful terminal tool for power users. Scriptable uploads and sync." buttonText="Install" onClick={() => setActiveDownload(activeDownload === 'cli' ? null : 'cli')} isActive={activeDownload === 'cli'} primary={false} />
-                        <DownloadOption title="Desktop Sync" icon={<span className="text-2xl">🖥️</span>} status="Beta" description="Native app for Windows, Mac, and Linux. Automatic folder sync." buttonText="Coming Soon" onClick={() => setActiveDownload(activeDownload === 'desktop' ? null : 'desktop')} isActive={activeDownload === 'desktop'} />
-                        <DownloadOption title="Mobile App" icon={<span className="text-2xl">📱</span>} status="Coming Soon" description="iOS and Android apps for on-the-go access." buttonText="Notify Me" onClick={() => setActiveDownload(activeDownload === 'mobile' ? null : 'mobile')} isActive={activeDownload === 'mobile'} />
+                        <DownloadOption title="Web App" icon={<Globe className="w-6 h-6"/>} status="Live" description="Instant access from any browser. No installation required." buttonText="Launch Now" onClick={onLaunchApp} primary={true} />
+                        <DownloadOption title="Daemon CLI" icon={<Terminal className="w-6 h-6"/>} status="Live" description="Powerful terminal tool for power users. Scriptable uploads and sync." buttonText="Install" onClick={() => setActiveDownload(activeDownload === 'cli' ? null : 'cli')} isActive={activeDownload === 'cli'} primary={false} />
+                        <DownloadOption title="Desktop Sync" icon={<Laptop className="w-6 h-6"/>} status="Beta" description="Native app for Windows, Mac, and Linux. Automatic folder sync." buttonText="Coming Soon" onClick={() => setActiveDownload(activeDownload === 'desktop' ? null : 'desktop')} isActive={activeDownload === 'desktop'} />
+                        <DownloadOption title="Mobile App" icon={<Smartphone className="w-6 h-6"/>} status="Coming Soon" description="iOS and Android apps for on-the-go access." buttonText="Notify Me" onClick={() => setActiveDownload(activeDownload === 'mobile' ? null : 'mobile')} isActive={activeDownload === 'mobile'} />
                     </div>
                     <AnimatePresence>
-                        {activeDownload === 'cli' && (
-                            <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} className="overflow-hidden">
-                                <div className="max-w-3xl mx-auto bg-[#0B0F19] rounded-2xl overflow-hidden border border-gray-800 shadow-2xl">
-                                    <div className="bg-[#151926] px-6 py-3 border-b border-gray-800 flex items-center justify-between">
-                                        <div className="flex gap-2">
-                                            <div className="w-3 h-3 rounded-full bg-red-500/80"></div>
-                                            <div className="w-3 h-3 rounded-full bg-yellow-500/80"></div>
-                                            <div className="w-3 h-3 rounded-full bg-green-500/80"></div>
-                                        </div>
-                                        <span className="text-xs text-gray-500 font-mono font-bold">TERMINAL</span>
-                                    </div>
-                                    <div className="p-8 font-mono text-sm">
-                                        <div className="mb-8">
-                                            <p className="text-gray-500 mb-3 uppercase text-xs font-bold tracking-wider">Option 1: PIP Install</p>
-                                            <div className="flex items-center justify-between bg-indigo-950/20 border border-indigo-500/20 p-4 rounded-xl group transition-colors hover:border-indigo-500/40">
-                                                <div className="flex gap-3 text-gray-300">
-                                                    <span className="text-indigo-400 select-none">$</span>
-                                                    <code>pip install daemon-cli</code>
-                                                </div>
-                                                <button className="text-gray-500 hover:text-white transition-colors opacity-0 group-hover:opacity-100" onClick={() => navigator.clipboard.writeText('pip install daemon-cli')} title="Copy">
-                                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
-                                                </button>
-                                            </div>
-                                        </div>
-                                        <div>
-                                            <p className="text-gray-500 mb-3 uppercase text-xs font-bold tracking-wider">Option 2: Standalone Binary</p>
-                                            <div className="flex flex-wrap gap-3">
-                                                {['Linux (x64)', 'Windows (.exe)', 'macOS (M1/Intel)'].map((platform) => (
-                                                    <a key={platform} href="#" className="px-4 py-2 rounded bg-gray-800 text-gray-300 hover:bg-gray-700 hover:text-white transition-colors border border-gray-700 text-xs font-bold hover:border-gray-500">{platform}</a>
-                                                ))}
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
-                            </motion.div>
-                        )}
-                        {activeDownload === 'desktop' && (
-                            <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} className="text-center text-gray-400 py-8">
-                                <p>Desktop Sync is currently in closed beta. <a href="#" className="text-indigo-400 underline">Join the waitlist</a> to get early access.</p>
-                            </motion.div>
-                        )}
-                        {activeDownload === 'mobile' && (
-                            <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} className="text-center text-gray-400 py-8">
-                                <p>Mobile apps are under active development. Follow us on <a href="https://t.me/daemonclient" className="text-indigo-400 underline">Telegram</a> for updates.</p>
-                            </motion.div>
-                        )}
+                        {activeDownload === 'cli' && (<motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} className="overflow-hidden"><div className="max-w-3xl mx-auto bg-[#0B0F19] rounded-2xl overflow-hidden border border-gray-800 shadow-2xl"><div className="bg-[#151926] px-6 py-3 border-b border-gray-800 flex items-center justify-between"><div className="flex gap-2"><div className="w-3 h-3 rounded-full bg-red-500/80"></div><div className="w-3 h-3 rounded-full bg-yellow-500/80"></div><div className="w-3 h-3 rounded-full bg-green-500/80"></div></div><span className="text-xs text-gray-500 font-mono font-bold">TERMINAL</span></div><div className="p-8 font-mono text-sm"><div className="mb-8"><p className="text-gray-500 mb-3 uppercase text-xs font-bold tracking-wider">Option 1: PIP Install</p><div className="flex items-center justify-between bg-indigo-950/20 border border-indigo-500/20 p-4 rounded-xl group transition-colors hover:border-indigo-500/40"><div className="flex gap-3 text-gray-300"><span className="text-indigo-400 select-none">$</span><code>pip install daemon-cli</code></div><button className="text-gray-500 hover:text-white transition-colors opacity-0 group-hover:opacity-100" onClick={() => navigator.clipboard.writeText('pip install daemon-cli')} title="Copy"><svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg></button></div></div><div><p className="text-gray-500 mb-3 uppercase text-xs font-bold tracking-wider">Option 2: Standalone Binary</p><div className="flex flex-wrap gap-3">{['Linux (x64)', 'Windows (.exe)', 'macOS (M1/Intel)'].map((platform) => (<a key={platform} href="#" className="px-4 py-2 rounded bg-gray-800 text-gray-300 hover:bg-gray-700 hover:text-white transition-colors border border-gray-700 text-xs font-bold hover:border-gray-500">{platform}</a>))}</div></div></div></div></motion.div>)}
+                        {activeDownload === 'desktop' && (<motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} className="text-center text-gray-400 py-8"><p>Desktop Sync is currently in closed beta. <a href="#" className="text-indigo-400 underline">Join the waitlist</a> to get early access.</p></motion.div>)}
+                        {activeDownload === 'mobile' && (<motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} className="text-center text-gray-400 py-8"><p>Mobile apps are under active development. Follow us on <a href="https://t.me/daemonclient" className="text-indigo-400 underline">Telegram</a> for updates.</p></motion.div>)}
                     </AnimatePresence>
                 </div>
             </motion.section>
 
             {/* Footer */}
-            <footer className="bg-[#020408] py-12 border-t border-gray-800">
-                <div className="container mx-auto px-6 flex flex-col md:flex-row justify-between items-center gap-6">
-                    <div className="flex items-center gap-3 opacity-50 hover:opacity-100 transition-opacity">
-                        <img src="/logo.png" alt="Logo" className="h-6 w-6 grayscale" />
-                        <p className="text-gray-500 text-sm font-medium">&copy; {new Date().getFullYear()} DaemonClient</p>
-                    </div>
-                    <div className="flex gap-8 text-sm text-gray-500 font-medium">
-                        <a href="#" className="hover:text-white transition-colors">Terms</a>
-                        <a href="#" className="hover:text-white transition-colors">Privacy</a>
-                        <a href="https://t.me/daemonclient" target="_blank" className="hover:text-white transition-colors">Telegram</a>
-                        <a href="https://github.com/myrosama/DaemonClient" target="_blank" className="hover:text-white transition-colors">GitHub</a>
-                    </div>
-                </div>
-            </footer>
+<footer className="bg-[#020408] py-12 border-t border-gray-800">
+    <div className="container mx-auto px-6 flex flex-col md:flex-row justify-between items-center gap-6">
+        <div className="flex items-center gap-3 opacity-50 hover:opacity-100 transition-opacity">
+            {/* LOGO UPDATE START */}
+            <img src="/logo.png" alt="Logo" className="w-6 h-6 grayscale opacity-80" />
+            {/* LOGO UPDATE END */}
+            <p className="text-gray-500 text-sm font-medium">&copy; {new Date().getFullYear()} DaemonClient</p>
+        </div>
+        <div className="flex gap-8 text-sm text-gray-500 font-medium">
+            <a href="#" className="hover:text-white transition-colors">Terms</a>
+            <a href="#" className="hover:text-white transition-colors">Privacy</a>
+            <a href="https://t.me/daemonclient" target="_blank" rel="noreferrer" className="hover:text-white transition-colors">Telegram</a>
+            <a href="https://github.com/myrosama/DaemonClient" target="_blank" rel="noreferrer" className="hover:text-white transition-colors">GitHub</a>
+        </div>
+    </div>
+</footer>
         </div>
     );
-}
+};
 
 // ============================================================================
 // --- MAIN APP COMPONENT (The Router) ---
