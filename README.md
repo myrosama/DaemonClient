@@ -25,7 +25,7 @@
 
 ## 🚀 What is DaemonClient?
 
-DaemonClient is a **secure, open-source cloud storage platform** that transforms your Telegram account into an infinite, zero-cost file vault. Unlike traditional cloud services that rent you space, we give you the tools to **own your infrastructure**.
+DaemonClient is a **secure, open-source cloud storage platform** that provisions a user-owned Telegram bot and private channel to function as a personal, zero-cost file vault. Unlike traditional cloud services that rent storage, it gives users full ownership of their infrastructure.
 
 <table>
 <tr>
