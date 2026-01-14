@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="public/logo.png" alt="DaemonClient Dashboard" width="85%">
+  <img src="public/logo.png" alt="DaemonClient Dashboard" width="50%">
 </p>
 
 <h1 align="center">DaemonClient</h1>
