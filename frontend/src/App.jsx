@@ -507,6 +507,9 @@ const DashboardView = () => {
     const [zkeLoading, setZkeLoading] = useState(true);
 
     const fileInputRef = useRef(null);
+    const folderInputRef = useRef(null);
+    const [isDragging, setIsDragging] = useState(false);
+    const dragCounter = useRef(0);
     const isUploading = uploadProgress.active;
     const isDownloading = downloadProgress.active;
     const isRenaming = editingFileId !== null;
@@ -668,7 +671,9 @@ const DashboardView = () => {
         if (isUploading || uploadQueue.length === 0) return;
 
         const startNextUpload = async () => {
-            const fileToUpload = uploadQueue[0];
+            const queueItem = uploadQueue[0];
+            const fileToUpload = queueItem.file || queueItem; // support both {file, parentId} and raw File
+            const targetParentId = queueItem.parentId || currentFolderId;
             const controller = new AbortController();
             setAbortController(controller);
 
@@ -685,8 +690,8 @@ const DashboardView = () => {
                     config.channelId,
                     (p) => setUploadProgress(prev => ({ ...prev, ...p, status: `${statusPrefix} - ${p.status}`, active: true })),
                     controller.signal,
-                    currentFolderId,
-                    zkeEnabled ? encryptionKey : null  // Pass encryption key if ZKE enabled
+                    targetParentId,
+                    zkeEnabled ? encryptionKey : null
                 );
 
                 const newFileRef = db.collection(`artifacts/${appIdentifier}/users/${auth.currentUser.uid}/files`).doc();
@@ -725,7 +730,7 @@ const DashboardView = () => {
             clearFeedback();
             return;
         }
-        const newFilesArray = Array.from(newFiles);
+        const newFilesArray = Array.from(newFiles).map(f => ({ file: f, parentId: currentFolderId }));
         setUploadQueue(prevQueue => [...prevQueue, ...newFilesArray]);
         if (uploadQueue.length === 0) {
             setUploadBatchTotal(newFilesArray.length);
@@ -877,31 +882,203 @@ const DashboardView = () => {
         setFolderHierarchy(prev => prev.slice(0, index + 1));
     };
 
+    // --- Reusable folder creation helper ---
+    const createFolderInFirestore = async (name, parentId) => {
+        const ref = db.collection(`artifacts/${appIdentifier}/users/${auth.currentUser.uid}/files`).doc();
+        await ref.set({
+            id: ref.id,
+            fileName: name,
+            type: 'folder',
+            parentId: parentId,
+            uploadedAt: firebase.firestore.Timestamp.now()
+        });
+        return ref.id;
+    };
+
     const handleCreateFolder = async () => {
         if (isBusy) return;
         const folderName = prompt("Enter new folder name:");
-        if (!folderName || !folderName.trim()) {
-            return;
-        }
+        if (!folderName || !folderName.trim()) return;
 
         const trimmedName = folderName.trim();
         setFeedbackMessage({ type: 'info', text: `Creating folder '${trimmedName}'...` });
 
         try {
-            const newFolderRef = db.collection(`artifacts/${appIdentifier}/users/${auth.currentUser.uid}/files`).doc();
-            const newFolderData = {
-                id: newFolderRef.id,
-                fileName: trimmedName,
-                type: 'folder',
-                parentId: currentFolderId,
-                uploadedAt: firebase.firestore.Timestamp.now()
-            };
-            await newFolderRef.set(newFolderData);
+            await createFolderInFirestore(trimmedName, currentFolderId);
             setFeedbackMessage({ type: 'success', text: `Created folder '${trimmedName}'` });
         } catch (err) {
             setFeedbackMessage({ type: 'error', text: `Failed to create folder: ${err.message}` });
         } finally {
             clearFeedback();
+        }
+    };
+
+    // --- Folder upload: recursively walk entries and create subfolders ---
+    const getEntriesRecursively = async (entry, path = '') => {
+        if (entry.isFile) {
+            const file = await new Promise((resolve, reject) => entry.file(resolve, reject));
+            return [{ file, path: path }];
+        }
+        if (entry.isDirectory) {
+            const reader = entry.createReader();
+            let allChildren = [];
+            // readEntries may not return all entries at once, must call repeatedly
+            const readBatch = () => new Promise((resolve, reject) => reader.readEntries(resolve, reject));
+            let batch;
+            do {
+                batch = await readBatch();
+                allChildren = allChildren.concat(batch);
+            } while (batch.length > 0);
+
+            const results = [];
+            for (const child of allChildren) {
+                results.push(...await getEntriesRecursively(child, path + entry.name + '/'));
+            }
+            return results;
+        }
+        return [];
+    };
+
+    const handleFolderUpload = async (fileEntries) => {
+        // fileEntries = [{ file, path: 'FolderA/SubB/' }, ...]
+        if (!config?.botToken) {
+            setFeedbackMessage({ type: 'error', text: "Bot configuration not loaded." });
+            clearFeedback();
+            return;
+        }
+
+        setFeedbackMessage({ type: 'info', text: 'Creating folder structure...' });
+
+        // Build the folder tree in Firestore, caching IDs to avoid dupes
+        const folderCache = new Map(); // 'FolderA/SubB/' -> firestoreId
+        const queueItems = [];
+
+        for (const entry of fileEntries) {
+            const pathParts = entry.path.split('/').filter(Boolean); // ['FolderA', 'SubB']
+            let parentId = currentFolderId;
+
+            // Create each folder level if not cached
+            for (let i = 0; i < pathParts.length; i++) {
+                const folderPath = pathParts.slice(0, i + 1).join('/') + '/';
+                if (!folderCache.has(folderPath)) {
+                    try {
+                        const folderId = await createFolderInFirestore(pathParts[i], parentId);
+                        folderCache.set(folderPath, folderId);
+                        parentId = folderId;
+                    } catch (err) {
+                        console.error(`Failed to create folder ${folderPath}:`, err);
+                        parentId = currentFolderId;
+                    }
+                } else {
+                    parentId = folderCache.get(folderPath);
+                }
+            }
+
+            queueItems.push({ file: entry.file, parentId });
+        }
+
+        // Queue all files
+        setUploadQueue(prevQueue => [...prevQueue, ...queueItems]);
+        if (uploadQueue.length === 0) {
+            setUploadBatchTotal(queueItems.length);
+        } else {
+            setUploadBatchTotal(prevTotal => prevTotal + queueItems.length);
+        }
+        setFeedbackMessage({ type: 'info', text: `Queued ${queueItems.length} files from folder(s)` });
+        clearFeedback();
+    };
+
+    const handleFolderInputChange = async (e) => {
+        const files = e.target.files;
+        if (!files || files.length === 0) return;
+
+        // webkitdirectory gives us files with webkitRelativePath
+        const entries = Array.from(files).map(f => {
+            const pathParts = f.webkitRelativePath.split('/');
+            pathParts.pop(); // remove filename
+            const path = pathParts.length > 0 ? pathParts.join('/') + '/' : '';
+            return { file: f, path };
+        });
+
+        await handleFolderUpload(entries);
+        if (folderInputRef.current) folderInputRef.current.value = '';
+    };
+
+    // --- Drag and Drop handlers ---
+    const handleDragEnter = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        dragCounter.current++;
+        if (e.dataTransfer.items && e.dataTransfer.items.length > 0) {
+            setIsDragging(true);
+        }
+    };
+
+    const handleDragLeave = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        dragCounter.current--;
+        if (dragCounter.current === 0) {
+            setIsDragging(false);
+        }
+    };
+
+    const handleDragOver = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+    };
+
+    const handleDrop = async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsDragging(false);
+        dragCounter.current = 0;
+
+        if (isBusy) return;
+        if (!config?.botToken) {
+            setFeedbackMessage({ type: 'error', text: "Bot configuration not loaded." });
+            clearFeedback();
+            return;
+        }
+
+        const items = e.dataTransfer.items;
+        if (!items || items.length === 0) return;
+
+        const allEntries = [];
+        const flatFiles = [];
+
+        // Use webkitGetAsEntry for folder support
+        for (let i = 0; i < items.length; i++) {
+            const entry = items[i].webkitGetAsEntry ? items[i].webkitGetAsEntry() : null;
+            if (entry) {
+                if (entry.isDirectory) {
+                    const entries = await getEntriesRecursively(entry);
+                    allEntries.push(...entries);
+                } else if (entry.isFile) {
+                    const file = await new Promise((resolve, reject) => entry.file(resolve, reject));
+                    flatFiles.push(file);
+                }
+            } else {
+                // Fallback: just get the file
+                const file = items[i].getAsFile();
+                if (file) flatFiles.push(file);
+            }
+        }
+
+        // Process folders if any
+        if (allEntries.length > 0) {
+            await handleFolderUpload(allEntries);
+        }
+
+        // Process flat files
+        if (flatFiles.length > 0) {
+            const queueItems = flatFiles.map(f => ({ file: f, parentId: currentFolderId }));
+            setUploadQueue(prevQueue => [...prevQueue, ...queueItems]);
+            if (uploadQueue.length === 0 && allEntries.length === 0) {
+                setUploadBatchTotal(queueItems.length);
+            } else {
+                setUploadBatchTotal(prevTotal => prevTotal + queueItems.length);
+            }
         }
     };
 
@@ -1065,7 +1242,24 @@ const DashboardView = () => {
     const filteredItems = items.filter(item => item.fileName.toLowerCase().includes(searchTerm.toLowerCase()));
 
     return (
-        <div className="min-h-screen bg-gray-900 text-white flex items-center justify-center p-4 font-sans">
+        <div className="min-h-screen bg-gray-900 text-white flex items-center justify-center p-4 font-sans"
+            onDragEnter={handleDragEnter}
+            onDragLeave={handleDragLeave}
+            onDragOver={handleDragOver}
+            onDrop={handleDrop}
+        >
+            {/* Drag overlay */}
+            {isDragging && (
+                <div className="fixed inset-0 bg-indigo-900/60 backdrop-blur-sm z-50 flex items-center justify-center pointer-events-none">
+                    <div className="border-4 border-dashed border-indigo-400 rounded-2xl p-16 text-center">
+                        <svg className="w-16 h-16 mx-auto mb-4 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                        </svg>
+                        <p className="text-2xl font-bold text-indigo-300">Drop files or folders to upload</p>
+                        <p className="text-indigo-400 mt-2">Folder structure will be preserved</p>
+                    </div>
+                </div>
+            )}
             <div className="w-full max-w-3xl bg-gray-800 rounded-xl shadow-2xl p-6">
                 <div className="flex justify-between items-center mb-4">
                     <h1 className="text-3xl font-bold text-indigo-400">DaemonClient</h1>
@@ -1077,9 +1271,16 @@ const DashboardView = () => {
                 <div className="bg-gray-700 p-4 rounded-lg mb-4">
                     <h2 className="text-xl font-semibold mb-2">Upload Files</h2>
                     <input type="file" ref={fileInputRef} onChange={handleFileUpload} className="hidden" disabled={isBusy} multiple />
-                    <button onClick={() => fileInputRef.current.click()} disabled={isBusy} className="w-full bg-indigo-500 hover:bg-indigo-600 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-2 px-4 rounded-lg mt-2">
-                        {isUploading ? 'Uploading...' : 'Choose Files to Upload'}
-                    </button>
+                    <input type="file" ref={folderInputRef} onChange={handleFolderInputChange} className="hidden" disabled={isBusy} webkitdirectory="" directory="" multiple />
+                    <div className="flex gap-2 mt-2">
+                        <button onClick={() => fileInputRef.current.click()} disabled={isBusy} className="flex-1 bg-indigo-500 hover:bg-indigo-600 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-2 px-4 rounded-lg">
+                            {isUploading ? 'Uploading...' : 'Upload Files'}
+                        </button>
+                        <button onClick={() => folderInputRef.current.click()} disabled={isBusy} className="flex-1 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-2 px-4 rounded-lg">
+                            Upload Folder
+                        </button>
+                    </div>
+                    <p className="text-xs text-gray-400 mt-2 text-center">or drag & drop files/folders anywhere</p>
                 </div>
 
                 {isUploading && <ProgressBar {...uploadProgress} onCancel={handleCancelTransfer} />}
