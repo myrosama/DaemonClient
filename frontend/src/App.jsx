@@ -92,7 +92,12 @@ async function uploadFile(file, botToken, channelId, onProgress, abortSignal, pa
 
                 const formData = new FormData();
                 formData.append('chat_id', channelId);
-                formData.append('document', chunkToUpload, `${file.name}.part${String(partNumber).padStart(3, '0')}`);
+                // When ZKE is enabled, use a random opaque name so Telegram can't see the real filename
+                const partSuffix = `.part${String(partNumber).padStart(3, '0')}`;
+                const displayName = isEncrypted
+                    ? `${Array.from(crypto.getRandomValues(new Uint8Array(8)), b => b.toString(16).padStart(2, '0')).join('')}${partSuffix}`
+                    : `${file.name}${partSuffix}`;
+                formData.append('document', chunkToUpload, displayName);
 
                 const telegramUploadUrl = `https://api.telegram.org/bot${botToken}/sendDocument`;
                 const proxyUrl = `${proxyBaseUrl}?url=${encodeURIComponent(telegramUploadUrl)}`;
