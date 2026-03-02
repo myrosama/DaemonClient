@@ -53,7 +53,7 @@ export async function deriveKey(password, salt) {
         },
         keyMaterial,
         { name: 'AES-GCM', length: KEY_LENGTH },
-        false, // not extractable
+        true, // extractable — needed to export raw key bytes to the Service Worker
         ['encrypt', 'decrypt']
     );
 }

@@ -509,8 +509,30 @@
         };
 
         // --- MODIFIED FileItem (Handles folders and files) ---
-        const FileItem = ({ item, isEditing, renameValue, setRenameValue, onSaveRename, onCancelRename, onStartRename, onDownload, onDelete, onFolderClick, isBusy }) => {
+        // --- Viewable File Detection ---
+        const VIEWABLE_EXTENSIONS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'mp4', 'webm', 'ogg', 'mov', 'pdf'];
+        const VIEWABLE_MIMES = ['image/', 'video/', 'application/pdf'];
+        const getFileExt = (name) => (name || '').split('.').pop().toLowerCase();
+        const isFileViewable = (item) => {
+            if (item.type === 'folder') return false;
+            const ext = getFileExt(item.fileName);
+            if (VIEWABLE_EXTENSIONS.includes(ext)) return true;
+            const mime = (item.fileType || '').toLowerCase();
+            return VIEWABLE_MIMES.some(prefix => mime.startsWith(prefix));
+        };
+        const getViewerType = (item) => {
+            const ext = getFileExt(item.fileName);
+            const mime = (item.fileType || '').toLowerCase();
+            if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'].includes(ext) || mime.startsWith('image/')) return 'image';
+            if (['mp4', 'webm', 'ogg', 'mov'].includes(ext) || mime.startsWith('video/')) return 'video';
+            if (ext === 'pdf' || mime === 'application/pdf') return 'pdf';
+            return null;
+        };
+
+        // --- Helper Component: FileItem ---
+        const FileItem = ({ item, isEditing, renameValue, setRenameValue, onSaveRename, onCancelRename, onStartRename, onDownload, onDelete, onFolderClick, onOpen, isBusy }) => {
             const isFolder = item.type === 'folder';
+            const viewable = isFileViewable(item);
 
             // --- Rename Input (same for file/folder) ---
             if (isEditing) {
@@ -528,8 +550,9 @@
             // --- Folder vs. File Display ---
             return (
                 <div
-                    className={`flex justify-between items-center bg-gray-800 p-3 rounded-lg transition-colors ${isFolder ? 'hover:bg-gray-700 cursor-pointer' : 'hover:bg-gray-750'}`}
+                    className={`flex justify-between items-center bg-gray-800 p-3 rounded-lg transition-colors ${(isFolder || viewable) ? 'hover:bg-gray-700 cursor-pointer' : 'hover:bg-gray-750'}`}
                     onClick={isFolder ? () => onFolderClick(item) : undefined}
+                    onDoubleClick={viewable ? () => onOpen(item) : undefined}
                 >
                     <div className="flex items-center overflow-hidden">
                         {isFolder ? <FolderIcon /> : <FileIcon />}
@@ -543,6 +566,9 @@
                     <div className="flex items-center space-x-2" onClick={(e) => e.stopPropagation()}>
                         <button onClick={() => onStartRename(item.id, item.fileName)} disabled={isBusy} className="text-blue-400 hover:text-blue-300 disabled:text-gray-600 disabled:cursor-not-allowed p-1" title="Rename"><RenameIcon /></button>
                         <button onClick={() => onDelete(item)} disabled={isBusy} className="bg-red-600 hover:bg-red-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-1 px-3 rounded-md text-sm">Delete</button>
+                        {viewable && (
+                            <button onClick={() => onOpen(item)} disabled={isBusy} className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-1 px-3 rounded-md text-sm">Open</button>
+                        )}
                         {!isFolder && (
                             <button onClick={() => onDownload(item)} disabled={isBusy} className="bg-green-600 hover:bg-green-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-1 px-3 rounded-md text-sm">Download</button>
                         )}
@@ -598,6 +624,7 @@
 
             const [uploadQueue, setUploadQueue] = React.useState([]);
             const [uploadBatchTotal, setUploadBatchTotal] = React.useState(0);
+            const [viewingFile, setViewingFile] = React.useState(null);
 
             const fileInputRef = React.useRef(null);
             const isUploading = uploadProgress.active;
@@ -855,6 +882,82 @@
 
             const filteredItems = items.filter(item => item.fileName.toLowerCase().includes(searchTerm.toLowerCase()));
 
+            // --- FILE VIEWER LOGIC ---
+            const handleFileOpen = async (item) => {
+                if (!config?.botToken) return;
+                if (!('serviceWorker' in navigator)) {
+                    setFeedbackMessage({ type: 'warning', text: 'Service Workers are not supported in this browser.' });
+                    clearFeedback();
+                    return;
+                }
+                try {
+                    const registration = await navigator.serviceWorker.ready;
+                    const sw = registration.active;
+                    if (!sw) {
+                        setFeedbackMessage({ type: 'warning', text: 'Service Worker not active. Try refreshing.' });
+                        clearFeedback();
+                        return;
+                    }
+                    sw.postMessage({
+                        type: 'REGISTER_FILE',
+                        fileId: item.id,
+                        messages: item.messages,
+                        botToken: config.botToken,
+                        rawKeyBytes: null, // ZKE not in index.html version yet
+                        fileSize: item.fileSize,
+                        fileType: item.fileType || 'application/octet-stream',
+                    });
+                    setViewingFile(item);
+                } catch (err) {
+                    console.error('Service Worker error:', err);
+                    setFeedbackMessage({ type: 'warning', text: 'Service Worker not active. Try refreshing.' });
+                    clearFeedback();
+                }
+            };
+
+            const FileViewerModal = ({ file, onClose }) => {
+                if (!file) return null;
+                const vType = getViewerType(file);
+                const url = `/stream/${file.id}`;
+
+                let content = null;
+                if (vType === 'image') {
+                    content = React.createElement('img', { src: url, alt: file.fileName, className: 'max-w-full max-h-[85vh] object-contain rounded-lg shadow-2xl' });
+                } else if (vType === 'video') {
+                    content = React.createElement('video', { controls: true, autoPlay: true, src: url, className: 'w-full max-h-[85vh] rounded-lg shadow-2xl' });
+                } else if (vType === 'pdf') {
+                    content = React.createElement('iframe', { src: url, className: 'w-full h-[85vh] bg-white rounded-lg shadow-2xl', title: file.fileName });
+                } else {
+                    content = React.createElement('p', { className: 'text-gray-400' }, 'Unsupported preview type.');
+                }
+
+                return React.createElement('div', {
+                    className: 'fixed inset-0 bg-black/95 backdrop-blur-md flex items-center justify-center z-[100] font-sans',
+                    onClick: onClose
+                },
+                    React.createElement('div', {
+                        className: 'absolute top-4 right-4 flex gap-2 z-[101]',
+                        onClick: (e) => e.stopPropagation()
+                    },
+                        React.createElement('button', {
+                            onClick: () => { handleFileDownload(file); onClose(); },
+                            className: 'bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded-lg'
+                        }, '⬇️ Download'),
+                        React.createElement('button', {
+                            onClick: onClose,
+                            className: 'bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-lg'
+                        }, '✕ Close')
+                    ),
+                    React.createElement('div', {
+                        className: 'w-full max-w-6xl p-4 flex flex-col items-center',
+                        onClick: (e) => e.stopPropagation()
+                    },
+                        content,
+                        React.createElement('h3', { className: 'text-gray-300 mt-4 font-semibold text-lg' }, file.fileName)
+                    )
+                );
+            };
+
             return (
                 <div className="min-h-screen bg-gray-900 text-white flex items-center justify-center p-4 font-sans">
                     <div className="w-full max-w-3xl bg-gray-800 rounded-xl shadow-2xl p-6">
@@ -906,6 +1009,7 @@
                                                 onDownload={handleFileDownload}
                                                 onDelete={handleFileDelete}
                                                 onFolderClick={handleFolderClick}
+                                                onOpen={handleFileOpen}
                                                 isBusy={isBusy && editingFileId !== item.id}
                                             />
                                         ))
@@ -920,6 +1024,7 @@
                         {!isUploading && !isDownloading && !feedbackMessage.text && <div className="h-12 mt-4"></div>}
                     </div>
                     {isSettingsOpen && config && <SettingsModal initialConfig={config} onSave={handleSaveSettings} onClose={() => setIsSettingsOpen(false)} isSaving={isSavingSettings} />}
+                    {viewingFile && <FileViewerModal file={viewingFile} onClose={() => setViewingFile(null)} />}
                 </div>
             );
         };

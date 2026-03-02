@@ -499,6 +499,7 @@ const DashboardView = () => {
 
     const [uploadQueue, setUploadQueue] = useState([]);
     const [uploadBatchTotal, setUploadBatchTotal] = useState(0);
+    const [viewingFile, setViewingFile] = useState(null);
 
     // ZKE (Zero-Knowledge Encryption) State
     const [zkeEnabled, setZkeEnabled] = useState(true);
@@ -516,8 +517,14 @@ const DashboardView = () => {
     const isBusy = isUploading || isDownloading || isRenaming;
 
     // --- HELPER COMPONENTS (defined locally to DashboardView) ---
-    const FileItem = ({ item, isEditing, renameValue, setRenameValue, onSaveRename, onCancelRename, onStartRename, onDownload, onDelete, onFolderClick, isBusy }) => {
+    const VIEWABLE_EXTENSIONS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'mp4', 'webm', 'ogg', 'mov', 'pdf'];
+    const getFileExt = (name) => (name || '').split('.').pop().toLowerCase();
+
+    const FileItem = ({ item, isEditing, renameValue, setRenameValue, onSaveRename, onCancelRename, onStartRename, onDownload, onDelete, onFolderClick, onOpen, isBusy }) => {
         const isFolder = item.type === 'folder';
+        const ext = getFileExt(item.fileName);
+        const isViewable = !isFolder && VIEWABLE_EXTENSIONS.includes(ext);
+
         if (isEditing) {
             return (
                 <div className="flex justify-between items-center bg-gray-900 p-3 rounded-lg">
@@ -531,8 +538,9 @@ const DashboardView = () => {
         }
         return (
             <div
-                className={`flex justify-between items-center bg-gray-800 p-3 rounded-lg transition-colors ${isFolder ? 'hover:bg-gray-700 cursor-pointer' : 'hover:bg-gray-750'}`}
+                className={`flex justify-between items-center bg-gray-800 p-3 rounded-lg transition-colors ${(isFolder || isViewable) ? 'hover:bg-gray-700 cursor-pointer' : 'hover:bg-gray-750'}`}
                 onClick={isFolder ? () => onFolderClick(item) : undefined}
+                onDoubleClick={isViewable ? () => onOpen(item) : undefined}
             >
                 <div className="flex items-center overflow-hidden">
                     {isFolder ? <FolderIcon /> : <FileIcon />}
@@ -543,11 +551,23 @@ const DashboardView = () => {
                         )}
                     </div>
                 </div>
-                <div className="flex items-center space-x-2" onClick={(e) => e.stopPropagation()}>
+                <div className="flex items-center space-x-1 md:space-x-2" onClick={(e) => e.stopPropagation()}>
                     <button onClick={() => onStartRename(item.id, item.fileName)} disabled={isBusy} className="text-blue-400 hover:text-blue-300 disabled:text-gray-600 disabled:cursor-not-allowed p-1" title="Rename"><RenameIcon /></button>
-                    <button onClick={() => onDelete(item)} disabled={isBusy} className="bg-red-600 hover:bg-red-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-1 px-3 rounded-md text-sm">Delete</button>
+                    {/* Delete: icon on mobile, text on desktop */}
+                    <button onClick={() => onDelete(item)} disabled={isBusy} className="bg-red-600 hover:bg-red-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-1 px-2 md:px-3 rounded-md text-sm" title="Delete">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="md:hidden"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+                        <span className="hidden md:inline">Delete</span>
+                    </button>
+                    {/* Open: hidden on mobile entirely */}
+                    {isViewable && (
+                        <button onClick={() => onOpen(item)} disabled={isBusy} className="hidden md:inline-flex bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-1 px-3 rounded-md text-sm">Open</button>
+                    )}
+                    {/* Download: icon on mobile, text on desktop */}
                     {!isFolder && (
-                        <button onClick={() => onDownload(item)} disabled={isBusy} className="bg-green-600 hover:bg-green-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-1 px-3 rounded-md text-sm">Download</button>
+                        <button onClick={() => onDownload(item)} disabled={isBusy} className="bg-green-600 hover:bg-green-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-1 px-2 md:px-3 rounded-md text-sm" title="Download">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="md:hidden"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                            <span className="hidden md:inline">Download</span>
+                        </button>
                     )}
                 </div>
             </div>
@@ -1241,6 +1261,78 @@ const DashboardView = () => {
 
     const filteredItems = items.filter(item => item.fileName.toLowerCase().includes(searchTerm.toLowerCase()));
 
+    // --- FILE VIEWER LOGIC ---
+    const handleFileOpen = async (item) => {
+        if (!config?.botToken) return;
+        if (!('serviceWorker' in navigator)) {
+            setFeedbackMessage({ type: 'warning', text: 'Service Workers are not supported in this browser.' });
+            clearFeedback();
+            return;
+        }
+        try {
+            const registration = await navigator.serviceWorker.ready;
+            const sw = registration.active;
+            if (!sw) {
+                setFeedbackMessage({ type: 'warning', text: 'Service Worker not active. Try refreshing.' });
+                clearFeedback();
+                return;
+            }
+            // Export the CryptoKey to raw bytes for the SW (CryptoKey can't be serialized)
+            let rawKeyBytes = null;
+            if (zkeEnabled && encryptionKey) {
+                try {
+                    rawKeyBytes = await crypto.subtle.exportKey('raw', encryptionKey);
+                } catch (e) {
+                    console.error('Failed to export encryption key:', e);
+                }
+            }
+            sw.postMessage({
+                type: 'REGISTER_FILE',
+                fileId: item.id,
+                messages: item.messages,
+                botToken: config.botToken,
+                rawKeyBytes: rawKeyBytes, // ArrayBuffer, not CryptoKey
+                fileSize: item.fileSize,
+                fileType: item.fileType || 'application/octet-stream',
+            });
+            setViewingFile(item);
+        } catch (err) {
+            console.error('Service Worker error:', err);
+            setFeedbackMessage({ type: 'warning', text: 'Service Worker not active. Try refreshing.' });
+            clearFeedback();
+        }
+    };
+
+    const FileViewerModal = ({ file, onClose }) => {
+        if (!file) return null;
+        const ext = getFileExt(file.fileName);
+        const url = `/stream/${file.id}`;
+
+        let content = null;
+        if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'].includes(ext)) {
+            content = <img src={url} alt={file.fileName} className="max-w-full max-h-[85vh] object-contain rounded-lg shadow-2xl" />;
+        } else if (['mp4', 'webm', 'ogg', 'mov'].includes(ext)) {
+            content = <video controls autoPlay src={url} className="w-full max-h-[85vh] rounded-lg shadow-2xl" />;
+        } else if (ext === 'pdf') {
+            content = <iframe src={url} className="w-full h-[85vh] bg-white rounded-lg shadow-2xl" title={file.fileName} />;
+        } else {
+            content = <p className="text-gray-400">Unsupported preview type.</p>;
+        }
+
+        return (
+            <div className="fixed inset-0 bg-black/95 backdrop-blur-md flex items-center justify-center z-[100] font-sans" onClick={onClose}>
+                <div className="absolute top-4 right-4 flex gap-2 z-[101]" onClick={(e) => e.stopPropagation()}>
+                    <button onClick={() => { handleFileDownload(file); onClose(); }} className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded-lg flex items-center gap-2">⬇️ Download</button>
+                    <button onClick={onClose} className="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-lg">&times; Close</button>
+                </div>
+                <div className="w-full max-w-6xl p-4 flex flex-col items-center" onClick={(e) => e.stopPropagation()}>
+                    {content}
+                    <h3 className="text-gray-300 mt-4 font-semibold text-lg">{file.fileName}</h3>
+                </div>
+            </div>
+        );
+    };
+
     return (
         <div className="min-h-screen bg-gray-900 text-white flex items-center justify-center p-4 font-sans"
             onDragEnter={handleDragEnter}
@@ -1315,6 +1407,7 @@ const DashboardView = () => {
                                         onDownload={handleFileDownload}
                                         onDelete={handleFileDelete}
                                         onFolderClick={handleFolderClick}
+                                        onOpen={handleFileOpen}
                                         isBusy={isBusy && editingFileId !== item.id}
                                     />
                                 ))
@@ -1337,6 +1430,7 @@ const DashboardView = () => {
                 zkeMode={zkeMode}
                 onZkeToggle={handleZkeToggle}
             />}
+            {viewingFile && <FileViewerModal file={viewingFile} onClose={() => setViewingFile(null)} />}
         </div>
     );
 };
