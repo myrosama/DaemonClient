@@ -517,13 +517,25 @@ const DashboardView = () => {
     const isBusy = isUploading || isDownloading || isRenaming;
 
     // --- HELPER COMPONENTS (defined locally to DashboardView) ---
-    const VIEWABLE_EXTENSIONS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'mp4', 'webm', 'ogg', 'mov', 'pdf'];
-    const getFileExt = (name) => (name || '').split('.').pop().toLowerCase();
+    const VIEWABLE_EXTENSIONS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'mp4', 'webm', 'ogg', 'mov'];
+    const PDF_EXTENSIONS = ['pdf'];
+    const getFileExt = (name, type) => {
+        const ext = (name || '').split('.').pop().toLowerCase();
+        if (ext && ext !== name.toLowerCase()) return ext;
+        if (type) {
+            if (type.startsWith('image/')) return type.split('/')[1];
+            if (type.startsWith('video/')) return type.split('/')[1];
+            if (type === 'application/pdf') return 'pdf';
+        }
+        return '';
+    };
 
     const FileItem = ({ item, isEditing, renameValue, setRenameValue, onSaveRename, onCancelRename, onStartRename, onDownload, onDelete, onFolderClick, onOpen, isBusy }) => {
         const isFolder = item.type === 'folder';
-        const ext = getFileExt(item.fileName);
+        const ext = getFileExt(item.fileName, item.fileType);
         const isViewable = !isFolder && VIEWABLE_EXTENSIONS.includes(ext);
+        const isPdf = !isFolder && PDF_EXTENSIONS.includes(ext);
+        const isOpenable = isViewable || isPdf;
 
         if (isEditing) {
             return (
@@ -538,9 +550,9 @@ const DashboardView = () => {
         }
         return (
             <div
-                className={`flex justify-between items-center bg-gray-800 p-3 rounded-lg transition-colors ${(isFolder || isViewable) ? 'hover:bg-gray-700 cursor-pointer' : 'hover:bg-gray-750'}`}
+                className={`flex justify-between items-center bg-gray-800 p-3 rounded-lg transition-colors ${(isFolder || isOpenable) ? 'hover:bg-gray-700 cursor-pointer' : 'hover:bg-gray-750'}`}
                 onClick={isFolder ? () => onFolderClick(item) : undefined}
-                onDoubleClick={isViewable ? () => onOpen(item) : undefined}
+                onDoubleClick={isOpenable ? () => onOpen(item) : undefined}
             >
                 <div className="flex items-center overflow-hidden">
                     {isFolder ? <FolderIcon /> : <FileIcon />}
@@ -558,9 +570,9 @@ const DashboardView = () => {
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="md:hidden"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
                         <span className="hidden md:inline">Delete</span>
                     </button>
-                    {/* Open: hidden on mobile entirely */}
-                    {isViewable && (
-                        <button onClick={() => onOpen(item)} disabled={isBusy} className="hidden md:inline-flex bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-1 px-3 rounded-md text-sm">Open</button>
+                    {/* Open: hidden on mobile for media, always shown on desktop for viewable + pdf */}
+                    {isOpenable && (
+                        <button onClick={() => onOpen(item)} disabled={isBusy} className="hidden md:inline-flex bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-1 px-3 rounded-md text-sm">{isPdf ? 'Open PDF' : 'Open'}</button>
                     )}
                     {/* Download: icon on mobile, text on desktop */}
                     {!isFolder && (
@@ -1262,72 +1274,135 @@ const DashboardView = () => {
     const filteredItems = items.filter(item => item.fileName.toLowerCase().includes(searchTerm.toLowerCase()));
 
     // --- FILE VIEWER LOGIC ---
-    const handleFileOpen = async (item) => {
-        if (!config?.botToken) return;
+    const registerFileWithSW = async (item) => {
         if (!('serviceWorker' in navigator)) {
-            setFeedbackMessage({ type: 'warning', text: 'Service Workers are not supported in this browser.' });
-            clearFeedback();
-            return;
+            throw new Error('Service Workers not supported');
         }
-        try {
-            const registration = await navigator.serviceWorker.ready;
-            const sw = registration.active;
-            if (!sw) {
-                setFeedbackMessage({ type: 'warning', text: 'Service Worker not active. Try refreshing.' });
-                clearFeedback();
-                return;
+        const registration = await navigator.serviceWorker.ready;
+        const sw = registration.active;
+        if (!sw) throw new Error('Service Worker not active');
+
+        let rawKeyBytes = null;
+        if (zkeEnabled && encryptionKey) {
+            try {
+                rawKeyBytes = await crypto.subtle.exportKey('raw', encryptionKey);
+            } catch (e) {
+                console.error('Failed to export encryption key:', e);
             }
-            // Export the CryptoKey to raw bytes for the SW (CryptoKey can't be serialized)
-            let rawKeyBytes = null;
-            if (zkeEnabled && encryptionKey) {
-                try {
-                    rawKeyBytes = await crypto.subtle.exportKey('raw', encryptionKey);
-                } catch (e) {
-                    console.error('Failed to export encryption key:', e);
-                }
-            }
+        }
+
+        // Use MessageChannel to wait for SW confirmation
+        return new Promise((resolve, reject) => {
+            const channel = new MessageChannel();
+            channel.port1.onmessage = (event) => {
+                if (event.data?.status === 'ok') resolve();
+                else reject(new Error('SW registration failed'));
+            };
             sw.postMessage({
                 type: 'REGISTER_FILE',
                 fileId: item.id,
                 messages: item.messages,
                 botToken: config.botToken,
-                rawKeyBytes: rawKeyBytes, // ArrayBuffer, not CryptoKey
+                rawKeyBytes: rawKeyBytes,
+                isEncrypted: item.encrypted === true,
                 fileSize: item.fileSize,
                 fileType: item.fileType || 'application/octet-stream',
-            });
-            setViewingFile(item);
+            }, [channel.port2]);
+            // Timeout after 5s
+            setTimeout(() => reject(new Error('SW registration timeout')), 5000);
+        });
+    };
+
+    const handleFileOpen = async (item) => {
+        if (!config?.botToken) return;
+        const ext = getFileExt(item.fileName, item.fileType);
+
+        try {
+            setFeedbackMessage({ type: 'info', text: 'Preparing file...' });
+            await registerFileWithSW(item);
+            setFeedbackMessage({ type: '', text: '' });
+
+            // PDFs → open in new tab
+            if (PDF_EXTENSIONS.includes(ext)) {
+                window.open(`/stream/${item.id}`, '_blank');
+            } else {
+                // Images & Videos → show viewer modal
+                setViewingFile(item);
+            }
         } catch (err) {
-            console.error('Service Worker error:', err);
-            setFeedbackMessage({ type: 'warning', text: 'Service Worker not active. Try refreshing.' });
+            console.error('File open error:', err);
+            setFeedbackMessage({ type: 'warning', text: 'Could not open file. Try refreshing the page.' });
             clearFeedback();
         }
     };
 
     const FileViewerModal = ({ file, onClose }) => {
         if (!file) return null;
-        const ext = getFileExt(file.fileName);
+        const ext = getFileExt(file.fileName, file.fileType);
         const url = `/stream/${file.id}`;
-
-        let content = null;
-        if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'].includes(ext)) {
-            content = <img src={url} alt={file.fileName} className="max-w-full max-h-[85vh] object-contain rounded-lg shadow-2xl" />;
-        } else if (['mp4', 'webm', 'ogg', 'mov'].includes(ext)) {
-            content = <video controls autoPlay src={url} className="w-full max-h-[85vh] rounded-lg shadow-2xl" />;
-        } else if (ext === 'pdf') {
-            content = <iframe src={url} className="w-full h-[85vh] bg-white rounded-lg shadow-2xl" title={file.fileName} />;
-        } else {
-            content = <p className="text-gray-400">Unsupported preview type.</p>;
-        }
+        const isImage = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'].includes(ext);
+        const isVideo = ['mp4', 'webm', 'ogg', 'mov'].includes(ext);
+        const [mediaLoaded, setMediaLoaded] = useState(false);
 
         return (
-            <div className="fixed inset-0 bg-black/95 backdrop-blur-md flex items-center justify-center z-[100] font-sans" onClick={onClose}>
-                <div className="absolute top-4 right-4 flex gap-2 z-[101]" onClick={(e) => e.stopPropagation()}>
-                    <button onClick={() => { handleFileDownload(file); onClose(); }} className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded-lg flex items-center gap-2">⬇️ Download</button>
-                    <button onClick={onClose} className="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-lg">&times; Close</button>
+            <div
+                className="fixed inset-0 z-[100] font-sans flex flex-col"
+                style={{ background: 'rgba(0,0,0,0.92)', backdropFilter: 'blur(20px)' }}
+            >
+                {/* Top bar */}
+                <div className="flex items-center justify-between px-4 py-3 md:px-6" onClick={(e) => e.stopPropagation()}>
+                    <button
+                        onClick={onClose}
+                        className="w-10 h-10 flex items-center justify-center rounded-full bg-white/10 hover:bg-white/20 transition-colors"
+                        title="Close"
+                    >
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
+                    </button>
+                    <p className="text-white/70 text-sm truncate max-w-[60%] mx-4">{file.fileName}</p>
+                    <button
+                        onClick={() => { handleFileDownload(file); onClose(); }}
+                        className="w-10 h-10 flex items-center justify-center rounded-full bg-white/10 hover:bg-white/20 transition-colors"
+                        title="Download"
+                    >
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></svg>
+                    </button>
                 </div>
-                <div className="w-full max-w-6xl p-4 flex flex-col items-center" onClick={(e) => e.stopPropagation()}>
-                    {content}
-                    <h3 className="text-gray-300 mt-4 font-semibold text-lg">{file.fileName}</h3>
+
+                {/* Content area */}
+                <div className="flex-1 flex items-center justify-center px-4 pb-4 overflow-hidden" onClick={onClose}>
+                    <div onClick={(e) => e.stopPropagation()} className="relative max-w-full max-h-full flex items-center justify-center">
+                        {/* Loading indicator */}
+                        {!mediaLoaded && (
+                            <div className="absolute inset-0 flex items-center justify-center">
+                                <div className="w-8 h-8 border-2 border-white/20 border-t-white/80 rounded-full animate-spin" />
+                            </div>
+                        )}
+
+                        {isImage && (
+                            <img
+                                src={url}
+                                alt={file.fileName}
+                                onLoad={() => setMediaLoaded(true)}
+                                onError={() => setMediaLoaded(true)}
+                                className={`max-w-full max-h-[88vh] object-contain rounded-md transition-opacity duration-300 ${mediaLoaded ? 'opacity-100' : 'opacity-0'}`}
+                            />
+                        )}
+
+                        {isVideo && (
+                            <video
+                                controls
+                                autoPlay
+                                src={url}
+                                onLoadedData={() => setMediaLoaded(true)}
+                                onError={() => setMediaLoaded(true)}
+                                className={`max-w-full max-h-[88vh] rounded-md transition-opacity duration-300 ${mediaLoaded ? 'opacity-100' : 'opacity-0'}`}
+                            />
+                        )}
+
+                        {!isImage && !isVideo && (
+                            <p className="text-white/50 text-sm">This file type cannot be previewed.</p>
+                        )}
+                    </div>
                 </div>
             </div>
         );

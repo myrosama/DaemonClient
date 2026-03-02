@@ -23,7 +23,7 @@ const MAX_CACHE_ENTRIES = 10;
 // ── Message handler: register files for streaming ──
 self.addEventListener('message', async (event) => {
   if (event.data && event.data.type === 'REGISTER_FILE') {
-    const { fileId, messages, botToken, rawKeyBytes, fileSize, fileType } = event.data;
+    const { fileId, messages, botToken, rawKeyBytes, isEncrypted, fileSize, fileType } = event.data;
 
     // Import raw key bytes as CryptoKey for AES-GCM decryption
     let decryptionKey = null;
@@ -37,8 +37,8 @@ self.addEventListener('message', async (event) => {
       }
     }
 
-    virtualFiles.set(fileId, { messages, botToken, decryptionKey, fileSize, fileType });
-    // Respond back to confirm
+    virtualFiles.set(fileId, { messages, botToken, decryptionKey, isEncrypted, fileSize, fileType });
+    // Send confirmation via MessageChannel
     if (event.ports && event.ports[0]) {
       event.ports[0].postMessage({ status: 'ok' });
     }
@@ -85,7 +85,7 @@ async function handleStreamRequest(request, url) {
     return new Response('File not registered with Service Worker.', { status: 404 });
   }
 
-  const { messages, botToken, decryptionKey, fileSize, fileType } = vFile;
+  const { messages, botToken, decryptionKey, isEncrypted, fileSize, fileType } = vFile;
   const CHUNK_SIZE = 19 * 1024 * 1024; // 19 MB plaintext chunk
 
   // ── Parse Range header ──
@@ -134,8 +134,11 @@ async function handleStreamRequest(request, url) {
 
       let rawData = await fileRes.arrayBuffer();
 
-      // 3. Decrypt if ZKE is active
-      if (decryptionKey) {
+      // 3. Decrypt only if this specific file is actually encrypted
+      if (partData.isEncrypted && decryptionKey) {
+        rawData = await decryptChunk(rawData, decryptionKey);
+      } else if (isEncrypted && decryptionKey) {
+        // Fallback for older chunks logic
         rawData = await decryptChunk(rawData, decryptionKey);
       }
 
