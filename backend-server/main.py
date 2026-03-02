@@ -357,7 +357,24 @@ def get_upload_config():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-# ============================================================================
+@app.route('/api/zke-config', methods=['GET'])
+@check_auth
+def get_zke_config():
+    """Returns the ZKE config (password, salt, enabled) so the CLI can derive the key locally."""
+    try:
+        zke_ref = db.collection(f"artifacts/default-daemon-client/users/{request.user_uid}/config").document("zke")
+        zke_doc = zke_ref.get()
+        if not zke_doc.exists:
+            return jsonify({'enabled': False})
+        data = zke_doc.to_dict()
+        return jsonify({
+            'enabled': data.get('enabled', False),
+            'mode': data.get('mode', 'auto'),
+            'password': data.get('password', ''),
+            'salt': data.get('salt', ''),
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 # --- EXISTING ENDPOINTS ---
 # ============================================================================
 
