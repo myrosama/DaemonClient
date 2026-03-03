@@ -20,6 +20,15 @@ const virtualFiles = new Map();
 const chunkCache = new Map();
 const MAX_CACHE_ENTRIES = 10;
 
+// ── Lifecycle: force install and take control immediately ──
+self.addEventListener('install', (event) => {
+  self.skipWaiting();
+});
+
+self.addEventListener('activate', (event) => {
+  event.waitUntil(self.clients.claim());
+});
+
 // ── Message handler: register files for streaming ──
 self.addEventListener('message', async (event) => {
   if (event.data && event.data.type === 'REGISTER_FILE') {

@@ -566,19 +566,19 @@ const DashboardView = () => {
                 <div className="flex items-center space-x-1 md:space-x-2" onClick={(e) => e.stopPropagation()}>
                     <button onClick={() => onStartRename(item.id, item.fileName)} disabled={isBusy} className="text-blue-400 hover:text-blue-300 disabled:text-gray-600 disabled:cursor-not-allowed p-1" title="Rename"><RenameIcon /></button>
                     {/* Delete: icon on mobile, text on desktop */}
-                    <button onClick={() => onDelete(item)} disabled={isBusy} className="bg-red-600 hover:bg-red-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-1 px-2 md:px-3 rounded-md text-sm" title="Delete">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="md:hidden"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
-                        <span className="hidden md:inline">Delete</span>
+                    <button onClick={() => onDelete(item)} disabled={isBusy} className="bg-red-600 hover:bg-red-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-1.5 px-3 md:py-1 md:px-3 flex items-center justify-center rounded-md text-sm transition-colors" title="Delete">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="block md:hidden"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+                        <span className="hidden md:block">Delete</span>
                     </button>
                     {/* Open: hidden on mobile for media, always shown on desktop for viewable + pdf */}
                     {isOpenable && (
-                        <button onClick={() => onOpen(item)} disabled={isBusy} className="hidden md:inline-flex bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-1 px-3 rounded-md text-sm">{isPdf ? 'Open PDF' : 'Open'}</button>
+                        <button onClick={() => onOpen(item)} disabled={isBusy} className="hidden md:block bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-1 px-4 rounded-md text-sm transition-colors">{isPdf ? 'Open PDF' : 'Open'}</button>
                     )}
                     {/* Download: icon on mobile, text on desktop */}
                     {!isFolder && (
-                        <button onClick={() => onDownload(item)} disabled={isBusy} className="bg-green-600 hover:bg-green-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-1 px-2 md:px-3 rounded-md text-sm" title="Download">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="md:hidden"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
-                            <span className="hidden md:inline">Download</span>
+                        <button onClick={() => onDownload(item)} disabled={isBusy} className="bg-green-600 hover:bg-green-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-1.5 px-3 md:py-1 md:px-3 flex items-center justify-center rounded-md text-sm transition-colors" title="Download">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="block md:hidden"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                            <span className="hidden md:block">Download</span>
                         </button>
                     )}
                 </div>
