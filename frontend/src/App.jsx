@@ -2154,15 +2154,18 @@ const LandingPage = ({ onLaunchApp = () => console.log("Launch") }) => {
 // --- MAIN APP COMPONENT (The Router) ---
 // ============================================================================
 function App() {
+    const isAppDomain = window.location.hostname.startsWith('app.');
     const [user, setUser] = useState(null);
     const [appState, setAppState] = useState('loading');
 
     useEffect(() => {
         const unsubscribe = auth.onAuthStateChanged(async (currentUser) => {
             if (!currentUser) {
-                // Default to 'landing' state when no user is found.
-                // We keep the old logic of defaulting to auth if they hit 'Launch App'
-                setAppState(prevState => prevState === 'auth' ? 'auth' : 'landing');
+                // On app subdomain, go straight to auth. On main domain, show landing.
+                setAppState(prevState => {
+                    if (isAppDomain) return 'auth';
+                    return prevState === 'auth' ? 'auth' : 'landing';
+                });
                 return;
             }
             setUser(currentUser);
@@ -2188,7 +2191,14 @@ function App() {
     }, []);
 
     // HANDLERS PASSED TO CHILDREN
-    const handleLaunchApp = () => { setAppState('auth'); };
+    const handleLaunchApp = () => {
+        // If we're on the main domain, redirect to the app subdomain
+        if (!isAppDomain) {
+            window.location.href = 'https://app.daemonclient.uz';
+        } else {
+            setAppState('auth');
+        }
+    };
     const handleSetupComplete = () => { setAppState('transfer'); };
     const handleOwnershipConfirmed = () => { setAppState('dashboard'); };
 

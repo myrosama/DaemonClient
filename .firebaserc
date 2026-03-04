@@ -1,5 +1,18 @@
 {
   "projects": {
     "default": "daemonclient-c0625"
-  }
+  },
+  "targets": {
+    "daemonclient-c0625": {
+      "hosting": {
+        "main": [
+          "daemonclient-c0625"
+        ],
+        "app": [
+          "daemonclient-app"
+        ]
+      }
+    }
+  },
+  "etags": {}
 }

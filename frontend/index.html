@@ -177,6 +177,19 @@
     }
     </script>
 
+  <!-- Dynamic meta for app subdomain -->
+  <script>
+    if (window.location.hostname.startsWith('app.')) {
+      document.title = 'DaemonClient Dashboard \u2014 Manage Your Files';
+      var d = document.querySelector('meta[name="description"]');
+      if (d) d.content = 'Log in to your DaemonClient dashboard. Upload, manage, and stream your files with zero-knowledge encryption. Free and unlimited.';
+      var ot = document.querySelector('meta[property="og:title"]');
+      if (ot) ot.content = 'DaemonClient Dashboard \u2014 Manage Your Files';
+      var od = document.querySelector('meta[property="og:description"]');
+      if (od) od.content = 'Access your private, encrypted cloud storage dashboard. Upload, download, and stream files securely.';
+    }
+  </script>
+
   <!-- Google AdSense -->
   <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-7486772209560079"
     crossorigin="anonymous"></script>
