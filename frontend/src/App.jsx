@@ -2154,7 +2154,8 @@ const LandingPage = ({ onLaunchApp = () => console.log("Launch") }) => {
 // --- MAIN APP COMPONENT (The Router) ---
 // ============================================================================
 function App() {
-    const isAppDomain = window.location.hostname.startsWith('app.');
+    const hostname = window.location.hostname;
+    const isAppDomain = hostname.startsWith('app.') || hostname === 'daemonclient-app.web.app';
     const [user, setUser] = useState(null);
     const [appState, setAppState] = useState('loading');
 
