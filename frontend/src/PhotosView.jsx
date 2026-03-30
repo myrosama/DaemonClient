@@ -51,21 +51,27 @@ async function extractExifData(file) {
     try {
         const exif = await exifr.parse(file, {
             pick: ['DateTimeOriginal', 'CreateDate', 'GPSLatitude', 'GPSLongitude',
-                   'Make', 'Model', 'ExposureTime', 'FNumber', 'ISO', 'ImageWidth', 'ImageHeight']
+                   'Make', 'Model', 'ExposureTime', 'FNumber', 'ISO', 'ImageWidth', 'ImageHeight',
+                   'FocalLength', 'LensModel', 'Software', 'OffsetTimeOriginal']
         });
-        if (!exif) return {};
+        if (!exif) return { dateTaken: null };
         return {
             dateTaken: exif.DateTimeOriginal || exif.CreateDate || null,
             latitude: exif.GPSLatitude || null,
             longitude: exif.GPSLongitude || null,
+            cameraMake: exif.Make || null,
+            cameraModel: exif.Model || null,
             camera: [exif.Make, exif.Model].filter(Boolean).join(' ') || null,
             exposure: exif.ExposureTime || null,
             aperture: exif.FNumber || null,
             iso: exif.ISO || null,
             width: exif.ImageWidth || null,
             height: exif.ImageHeight || null,
+            focalLength: exif.FocalLength || null,
+            lensModel: exif.LensModel || null,
+            software: exif.Software || null,
         };
-    } catch { return {}; }
+    } catch { return { dateTaken: null }; }
 }
 
 // ============================================================================
@@ -248,16 +254,119 @@ const PhotoLightbox = ({ photo, photos, onClose, onNavigate, onToggleFavorite, o
                         initial={{ x: 300, opacity: 0 }} animate={{ x: 0, opacity: 1 }} exit={{ x: 300, opacity: 0 }}
                         className="fixed right-0 top-0 bottom-0 w-80 bg-gray-900/95 backdrop-blur-xl border-l border-gray-700 p-6 z-20 overflow-y-auto"
                     >
-                        <h3 className="text-lg font-bold text-white mb-4">Details</h3>
-                        <div className="space-y-3 text-sm text-gray-300">
-                            <div><span className="text-gray-500">Name</span><p className="truncate">{current.fileName}</p></div>
-                            <div><span className="text-gray-500">Size</span><p>{(current.fileSize / 1024 / 1024).toFixed(2)} MB</p></div>
-                            <div><span className="text-gray-500">Date</span><p>{dateStr}</p></div>
-                            {current.camera && <div><span className="text-gray-500">Camera</span><p>{current.camera}</p></div>}
-                            {current.width && current.height && <div><span className="text-gray-500">Resolution</span><p>{current.width} × {current.height}</p></div>}
-                            {current.iso && <div><span className="text-gray-500">ISO</span><p>{current.iso}</p></div>}
-                            {current.aperture && <div><span className="text-gray-500">Aperture</span><p>f/{current.aperture}</p></div>}
+                        <div className="flex items-center justify-between mb-6">
+                            <h3 className="text-lg font-bold text-white">Details</h3>
+                            <button onClick={() => setShowInfo(false)} className="text-gray-400 hover:text-white">
+                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                            </button>
                         </div>
+
+                        {/* File info */}
+                        <div className="mb-5">
+                            <p className="text-white font-medium truncate mb-1" title={current.fileName}>{current.fileName}</p>
+                            <p className="text-gray-500 text-xs">{(current.fileSize / 1024 / 1024).toFixed(2)} MB • {current.fileType || 'image'}</p>
+                        </div>
+
+                        {/* Date & Time */}
+                        <div className="mb-5 p-3 bg-gray-800/50 rounded-lg">
+                            <div className="flex items-center gap-2 mb-2">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-indigo-400"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+                                <span className="text-xs font-bold text-gray-400 uppercase tracking-wider">Date & Time</span>
+                            </div>
+                            <p className="text-white text-sm">{dateStr}</p>
+                            {current.dateTaken && (
+                                <p className="text-gray-400 text-xs mt-1">
+                                    {new Date(current.dateTaken.seconds ? current.dateTaken.seconds * 1000 : current.dateTaken)
+                                        .toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                                </p>
+                            )}
+                            {!current.hasExif && <p className="text-yellow-500/70 text-[10px] mt-1">⚠ From file metadata (no EXIF)</p>}
+                        </div>
+
+                        {/* Device / Camera */}
+                        {(current.camera || current.software) && (
+                            <div className="mb-5 p-3 bg-gray-800/50 rounded-lg">
+                                <div className="flex items-center gap-2 mb-2">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-indigo-400"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>
+                                    <span className="text-xs font-bold text-gray-400 uppercase tracking-wider">Device</span>
+                                </div>
+                                {current.cameraMake && <p className="text-gray-400 text-xs">{current.cameraMake}</p>}
+                                {current.cameraModel && <p className="text-white text-sm font-medium">{current.cameraModel}</p>}
+                                {!current.cameraMake && !current.cameraModel && current.camera && <p className="text-white text-sm">{current.camera}</p>}
+                                {current.software && <p className="text-gray-500 text-xs mt-1">Software: {current.software}</p>}
+                                {current.lensModel && <p className="text-gray-500 text-xs mt-1">Lens: {current.lensModel}</p>}
+                            </div>
+                        )}
+
+                        {/* Camera Settings */}
+                        {(current.aperture || current.exposure || current.iso || current.focalLength) && (
+                            <div className="mb-5 p-3 bg-gray-800/50 rounded-lg">
+                                <div className="flex items-center gap-2 mb-3">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-indigo-400"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg>
+                                    <span className="text-xs font-bold text-gray-400 uppercase tracking-wider">Camera Settings</span>
+                                </div>
+                                <div className="grid grid-cols-2 gap-3">
+                                    {current.aperture && (
+                                        <div className="bg-gray-700/50 rounded p-2 text-center">
+                                            <p className="text-white text-sm font-bold">f/{current.aperture}</p>
+                                            <p className="text-gray-500 text-[10px]">Aperture</p>
+                                        </div>
+                                    )}
+                                    {current.exposure && (
+                                        <div className="bg-gray-700/50 rounded p-2 text-center">
+                                            <p className="text-white text-sm font-bold">{current.exposure < 1 ? `1/${Math.round(1/current.exposure)}` : `${current.exposure}`}s</p>
+                                            <p className="text-gray-500 text-[10px]">Shutter</p>
+                                        </div>
+                                    )}
+                                    {current.iso && (
+                                        <div className="bg-gray-700/50 rounded p-2 text-center">
+                                            <p className="text-white text-sm font-bold">{current.iso}</p>
+                                            <p className="text-gray-500 text-[10px]">ISO</p>
+                                        </div>
+                                    )}
+                                    {current.focalLength && (
+                                        <div className="bg-gray-700/50 rounded p-2 text-center">
+                                            <p className="text-white text-sm font-bold">{current.focalLength}mm</p>
+                                            <p className="text-gray-500 text-[10px]">Focal Length</p>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Resolution */}
+                        {current.width && current.height && (
+                            <div className="mb-5 p-3 bg-gray-800/50 rounded-lg">
+                                <div className="flex items-center gap-2 mb-2">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-indigo-400"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/></svg>
+                                    <span className="text-xs font-bold text-gray-400 uppercase tracking-wider">Resolution</span>
+                                </div>
+                                <p className="text-white text-sm">{current.width} × {current.height}</p>
+                                <p className="text-gray-500 text-xs">{((current.width * current.height) / 1000000).toFixed(1)} MP</p>
+                            </div>
+                        )}
+
+                        {/* Location */}
+                        {current.latitude && current.longitude && (
+                            <div className="mb-5 p-3 bg-gray-800/50 rounded-lg">
+                                <div className="flex items-center gap-2 mb-2">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-indigo-400"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+                                    <span className="text-xs font-bold text-gray-400 uppercase tracking-wider">Location</span>
+                                </div>
+                                <p className="text-white text-sm">{typeof current.latitude === 'number' ? current.latitude.toFixed(6) : current.latitude}, {typeof current.longitude === 'number' ? current.longitude.toFixed(6) : current.longitude}</p>
+                                <a href={`https://maps.google.com/?q=${current.latitude},${current.longitude}`}
+                                    target="_blank" rel="noreferrer"
+                                    className="text-indigo-400 text-xs hover:underline mt-1 inline-block">Open in Google Maps ↗</a>
+                            </div>
+                        )}
+
+                        {/* Encryption badge */}
+                        {current.encrypted && (
+                            <div className="mt-4 flex items-center gap-2 p-2 bg-green-900/20 border border-green-800/30 rounded-lg">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-green-400"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                                <span className="text-green-400 text-xs font-medium">Zero-Knowledge Encrypted</span>
+                            </div>
+                        )}
                     </motion.div>
                 )}
             </AnimatePresence>
@@ -394,15 +503,21 @@ const PhotosView = ({ onSwitchToDrive }) => {
                     thumbnail: thumbnail || null,
                     dateTaken: exifData.dateTaken
                         ? firebase.firestore.Timestamp.fromDate(new Date(exifData.dateTaken))
-                        : firebase.firestore.Timestamp.now(),
+                        : firebase.firestore.Timestamp.fromDate(new Date(file.lastModified)),
                     latitude: exifData.latitude || null,
                     longitude: exifData.longitude || null,
+                    cameraMake: exifData.cameraMake || null,
+                    cameraModel: exifData.cameraModel || null,
                     camera: exifData.camera || null,
                     width: exifData.width || null,
                     height: exifData.height || null,
                     iso: exifData.iso || null,
                     aperture: exifData.aperture || null,
                     exposure: exifData.exposure || null,
+                    focalLength: exifData.focalLength || null,
+                    lensModel: exifData.lensModel || null,
+                    software: exifData.software || null,
+                    hasExif: !!exifData.dateTaken,
                     isFavorite: false,
                     uploadedAt: firebase.firestore.Timestamp.now(),
                 });
