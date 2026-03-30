@@ -69,3 +69,4 @@ Thumbs.db
 functions/.env
 
 daemonclient-desktop/node_modules
+daemon-cli/src/daemonclient/config.py
