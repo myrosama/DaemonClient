@@ -44,6 +44,32 @@ async function generateThumbnail(file, maxSize = 320) {
     });
 }
 
+// Generate thumbnail from video file (first frame)
+async function generateVideoThumbnail(file, maxSize = 400) {
+    return new Promise((resolve) => {
+        const video = document.createElement('video');
+        const url = URL.createObjectURL(file);
+        video.muted = true;
+        video.preload = 'metadata';
+        video.onloadeddata = () => {
+            video.currentTime = Math.min(1, video.duration / 4);
+        };
+        video.onseeked = () => {
+            const canvas = document.createElement('canvas');
+            let w = video.videoWidth, h = video.videoHeight;
+            if (w > h) { h = Math.round(h * maxSize / w); w = maxSize; }
+            else { w = Math.round(w * maxSize / h); h = maxSize; }
+            canvas.width = w; canvas.height = h;
+            canvas.getContext('2d').drawImage(video, 0, 0, w, h);
+            const dataUrl = canvas.toDataURL('image/webp', 0.8);
+            URL.revokeObjectURL(url);
+            resolve(dataUrl);
+        };
+        video.onerror = () => { URL.revokeObjectURL(url); resolve(null); };
+        video.src = url;
+    });
+}
+
 // ============================================================================
 // UTILITY: Extract EXIF metadata
 // ============================================================================
@@ -134,50 +160,51 @@ async function uploadPhotoToTelegram(file, botToken, channelId, onProgress, abor
 // ============================================================================
 // LIGHTBOX VIEWER
 // ============================================================================
-const PhotoLightbox = ({ photo, photos, onClose, onNavigate, onToggleFavorite, onDelete }) => {
+const PhotoLightbox = ({ photo, photos, onClose, onToggleFavorite, onDelete, config, encryptionKey }) => {
     const [currentIndex, setCurrentIndex] = useState(() => photos.findIndex(p => p.id === photo.id));
     const current = photos[currentIndex];
-    const [imageUrl, setImageUrl] = useState(null);
+    const [mediaUrl, setMediaUrl] = useState(null);
     const [loading, setLoading] = useState(true);
     const [showInfo, setShowInfo] = useState(false);
+    const isVideo = current?.fileType?.startsWith('video/');
 
     useEffect(() => {
-        if (!current) return;
+        if (!current || !config?.botToken) return;
         setLoading(true);
-        setImageUrl(null);
-        // Register with SW for streaming
-        const loadImage = async () => {
+        setMediaUrl(null);
+        const loadMedia = async () => {
             try {
                 if ('serviceWorker' in navigator) {
                     const registration = await navigator.serviceWorker.ready;
                     const sw = registration.active;
                     if (sw) {
+                        let rawKeyBytes = null;
+                        if (current.encrypted && encryptionKey) {
+                            try { rawKeyBytes = await crypto.subtle.exportKey('raw', encryptionKey); } catch {}
+                        }
+                        const fileId = current.fileRef || current.id;
                         await new Promise((resolve, reject) => {
                             const channel = new MessageChannel();
                             channel.port1.onmessage = (e) => e.data?.status === 'ok' ? resolve() : reject();
-                            const configDoc = db.collection(`artifacts/${appIdentifier}/users/${auth.currentUser.uid}/config`).doc('telegram');
-                            configDoc.get().then(snap => {
-                                const config = snap.data();
-                                sw.postMessage({
-                                    type: 'REGISTER_FILE', fileId: current.fileRef || current.id,
-                                    messages: current.messages, botToken: config.botToken,
-                                    rawKeyBytes: null, isEncrypted: current.encrypted === true,
-                                    fileSize: current.fileSize, fileType: current.fileType || 'image/jpeg',
-                                }, [channel.port2]);
-                            });
-                            setTimeout(() => reject(), 5000);
+                            sw.postMessage({
+                                type: 'REGISTER_FILE', fileId,
+                                messages: current.messages, botToken: config.botToken,
+                                rawKeyBytes, isEncrypted: current.encrypted === true,
+                                fileSize: current.fileSize,
+                                fileType: current.fileType || 'image/jpeg',
+                            }, [channel.port2]);
+                            setTimeout(() => reject(new Error('timeout')), 8000);
                         });
-                        setImageUrl(`/stream/${current.fileRef || current.id}`);
+                        setMediaUrl(`/stream/${fileId}`);
                     }
                 }
             } catch {
-                // Fallback to thumbnail
-                setImageUrl(current.thumbnail || null);
+                setMediaUrl(current.thumbnail || null);
             }
             setLoading(false);
         };
-        loadImage();
-    }, [currentIndex, current]);
+        loadMedia();
+    }, [currentIndex, current, config, encryptionKey]);
 
     useEffect(() => {
         const handleKey = (e) => {
@@ -234,15 +261,25 @@ const PhotoLightbox = ({ photo, photos, onClose, onNavigate, onToggleFavorite, o
                 )}
 
                 {loading && <div className="w-10 h-10 border-2 border-white/20 border-t-white/80 rounded-full animate-spin" />}
-                {imageUrl && (
+                {mediaUrl && !isVideo && (
                     <motion.img
                         key={currentIndex}
-                        src={imageUrl}
+                        src={mediaUrl}
                         alt={current.fileName}
                         initial={{ opacity: 0, scale: 0.95 }}
                         animate={{ opacity: 1, scale: 1 }}
                         className="max-w-full max-h-[85vh] object-contain rounded select-none"
                         draggable={false}
+                    />
+                )}
+                {mediaUrl && isVideo && (
+                    <motion.video
+                        key={currentIndex}
+                        src={mediaUrl}
+                        controls autoPlay
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        className="max-w-full max-h-[85vh] rounded"
                     />
                 )}
             </div>
@@ -458,24 +495,25 @@ const PhotosView = ({ onSwitchToDrive }) => {
     const handleUpload = async (e) => {
         const files = Array.from(e.target.files || []);
         if (!files.length || !config?.botToken) return;
-        const imageFiles = files.filter(f => f.type.startsWith('image/'));
-        if (!imageFiles.length) { alert('Please select image files only.'); return; }
+        const mediaFiles = files.filter(f => f.type.startsWith('image/') || f.type.startsWith('video/'));
+        if (!mediaFiles.length) { alert('Please select image or video files.'); return; }
 
         setUploading(true);
         const uid = auth.currentUser.uid;
         const controller = new AbortController();
         abortRef.current = controller;
 
-        for (let i = 0; i < imageFiles.length; i++) {
+        for (let i = 0; i < mediaFiles.length; i++) {
             if (controller.signal.aborted) break;
-            const file = imageFiles[i];
-            setUploadStatus(`Processing ${i + 1}/${imageFiles.length}: ${file.name}`);
+            const file = mediaFiles[i];
+            setUploadStatus(`Processing ${i + 1}/${mediaFiles.length}: ${file.name}`);
 
             try {
                 // Step 1: Extract EXIF and generate thumbnail in parallel
+                const isVideoFile = file.type.startsWith('video/');
                 const [exifData, thumbnail] = await Promise.all([
-                    extractExifData(file),
-                    generateThumbnail(file)
+                    isVideoFile ? { dateTaken: null } : extractExifData(file),
+                    isVideoFile ? generateVideoThumbnail(file) : generateThumbnail(file)
                 ]);
 
                 // Step 2: Upload to Telegram
@@ -593,7 +631,7 @@ const PhotosView = ({ onSwitchToDrive }) => {
                                 </button>
                             </div>
                             {/* Upload button */}
-                            <input type="file" ref={fileInputRef} onChange={handleUpload} className="hidden" accept="image/*" multiple />
+                            <input type="file" ref={fileInputRef} onChange={handleUpload} className="hidden" accept="image/*,video/*" multiple />
                             <button onClick={() => fileInputRef.current?.click()} disabled={uploading}
                                 className="bg-indigo-600 hover:bg-indigo-500 disabled:bg-gray-600 text-white px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-2 transition-all">
                                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
@@ -689,6 +727,14 @@ const PhotosView = ({ onSwitchToDrive }) => {
                                                     </svg>
                                                 </div>
                                             )}
+                                            {/* Video play icon */}
+                                            {photo.fileType?.startsWith('video/') && (
+                                                <div className="absolute inset-0 flex items-center justify-center">
+                                                    <div className="w-8 h-8 bg-black/50 rounded-full flex items-center justify-center">
+                                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="white" stroke="none"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                                                    </div>
+                                                </div>
+                                            )}
                                             {/* Favorite badge */}
                                             {photo.isFavorite && (
                                                 <div className="absolute top-1 right-1">
@@ -717,6 +763,8 @@ const PhotosView = ({ onSwitchToDrive }) => {
                         onClose={() => setSelectedPhoto(null)}
                         onToggleFavorite={handleToggleFavorite}
                         onDelete={handleDeletePhoto}
+                        config={config}
+                        encryptionKey={encryptionKey}
                     />
                 )}
             </AnimatePresence>
