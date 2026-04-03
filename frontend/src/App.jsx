@@ -1435,7 +1435,7 @@ const DashboardView = () => {
                         <h1 className="hidden sm:block text-3xl font-bold text-indigo-400">DaemonClient</h1>
                     </div>
                     <div className="flex items-center gap-2 sm:gap-4">
-                        <button onClick={() => window.__setAppState?.('photos')} className="bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white py-2 px-3 rounded-lg text-sm font-semibold flex items-center gap-1.5 transition-all" title="Photos">
+                        <button onClick={() => { const photosUrl = window.location.hostname === 'localhost' ? '#photos' : 'https://photos.daemonclient.uz'; if (photosUrl.startsWith('http')) window.location.href = photosUrl; else window.__setAppState?.('photos'); }} className="bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white py-2 px-3 rounded-lg text-sm font-semibold flex items-center gap-1.5 transition-all" title="Photos">
                             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
                             <span className="hidden sm:inline">Photos</span>
                         </button>
@@ -2187,7 +2187,8 @@ function App() {
                 } else {
                     const configData = docSnap.data();
                     if (configData.ownership_transferred) {
-                        setAppState((isPhotosDomain) ? 'photos' : 'dashboard');
+                        // On photos subdomain, go STRAIGHT to photos — never show dashboard
+                        setAppState(isPhotosDomain ? 'photos' : 'dashboard');
                     } else {
                         setAppState('transfer');
                     }
@@ -2231,9 +2232,11 @@ function App() {
         case 'transfer':
             return <OwnershipView onOwnershipConfirmed={handleOwnershipConfirmed} />;
         case 'dashboard':
+            // If on photos domain but somehow got to dashboard, force photos
+            if (isPhotosDomain) return <PhotosView onSwitchToDrive={() => { window.location.href = 'https://app.daemonclient.uz'; }} />;
             return <DashboardView />;
         case 'photos':
-            return <PhotosView onSwitchToDrive={() => setAppState('dashboard')} />;
+            return <PhotosView onSwitchToDrive={() => { if (isPhotosDomain) { window.location.href = 'https://app.daemonclient.uz'; } else { setAppState('dashboard'); }}} />;
         default:
             return <AuthView />;
     }

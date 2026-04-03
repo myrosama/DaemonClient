@@ -127,41 +127,116 @@ export async function uploadToTelegram(blob, fileName, botToken, channelId, onPr
     return { messages: uploadedMessageInfo, encrypted: isEncrypted };
 }
 
-// ── Upload thumbnail to Telegram (single small file, no chunking) ───────────
+// ── Upload thumbnail to Telegram as PHOTO (better caching & serving) ────────
 export async function uploadThumbnailToTelegram(thumbBlob, botToken, channelId) {
     if (!thumbBlob) return null;
     const formData = new FormData();
     formData.append('chat_id', channelId);
-    formData.append('document', thumbBlob, `thumb_${Date.now()}.webp`);
-    const telegramUrl = `https://api.telegram.org/bot${botToken}/sendDocument`;
+    // Use sendPhoto — Telegram auto-creates optimized sizes & serves them faster
+    formData.append('photo', thumbBlob, `thumb_${Date.now()}.webp`);
+    const telegramUrl = `https://api.telegram.org/bot${botToken}/sendPhoto`;
     const proxyUrl = `${PROXY_BASE_URL}?url=${encodeURIComponent(telegramUrl)}`;
     for (let attempt = 1; attempt <= 3; attempt++) {
         try {
             const res = await fetch(proxyUrl, { method: 'POST', body: formData });
             const data = await res.json();
-            if (data.ok) return { message_id: data.result.message_id, file_id: data.result.document.file_id };
+            if (data.ok) {
+                // sendPhoto returns an array of photo sizes — use the smallest for thumbnails
+                const photos = data.result.photo;
+                const smallest = photos[0]; // Telegram sorts by size ascending
+                const largest = photos[photos.length - 1];
+                return {
+                    message_id: data.result.message_id,
+                    file_id: smallest.file_id, // small thumb
+                    file_id_hq: largest.file_id, // higher quality
+                };
+            }
         } catch {}
         await sleep(1500 * attempt);
     }
+    // Fallback: try as document if sendPhoto fails (e.g. for non-image thumbnails)
+    const formData2 = new FormData();
+    formData2.append('chat_id', channelId);
+    formData2.append('document', thumbBlob, `thumb_${Date.now()}.webp`);
+    const telegramUrl2 = `https://api.telegram.org/bot${botToken}/sendDocument`;
+    const proxyUrl2 = `${PROXY_BASE_URL}?url=${encodeURIComponent(telegramUrl2)}`;
+    try {
+        const res = await fetch(proxyUrl2, { method: 'POST', body: formData2 });
+        const data = await res.json();
+        if (data.ok) return { message_id: data.result.message_id, file_id: data.result.document.file_id };
+    } catch {}
     return null;
 }
 
-// ── Resolve thumbnail URL from Telegram file_id ────────────────────────────
-export async function resolveThumbnailUrl(fileId, botToken) {
-    if (!fileId || !botToken) return null;
-    if (thumbUrlCache.has(fileId)) return thumbUrlCache.get(fileId);
+// ── Thumbnail URL caching (localStorage + memory) ──────────────────────────
+const THUMB_CACHE_KEY = 'dc_thumb_urls';
+const THUMB_CACHE_MAX_AGE = 3600 * 1000; // 1 hour (Telegram file URLs expire)
+
+function loadThumbCache() {
     try {
-        const getFileUrl = `https://api.telegram.org/bot${botToken}/getFile?file_id=${fileId}`;
-        const proxyUrl = `${PROXY_BASE_URL}?url=${encodeURIComponent(getFileUrl)}`;
-        const res = await fetch(proxyUrl);
-        const data = await res.json();
-        if (data.ok) {
-            const url = `https://api.telegram.org/file/bot${botToken}/${data.result.file_path}`;
-            thumbUrlCache.set(fileId, url);
-            return url;
-        }
+        const raw = localStorage.getItem(THUMB_CACHE_KEY);
+        if (!raw) return;
+        const data = JSON.parse(raw);
+        const now = Date.now();
+        Object.entries(data).forEach(([fileId, entry]) => {
+            if (now - entry.ts < THUMB_CACHE_MAX_AGE) {
+                thumbUrlCache.set(fileId, entry.url);
+            }
+        });
     } catch {}
-    return null;
+}
+function saveThumbCache() {
+    try {
+        const obj = {};
+        thumbUrlCache.forEach((url, fileId) => { obj[fileId] = { url, ts: Date.now() }; });
+        localStorage.setItem(THUMB_CACHE_KEY, JSON.stringify(obj));
+    } catch {}
+}
+// Load cache on module init
+loadThumbCache();
+
+// ── Rate-limited thumbnail resolver ─────────────────────────────────────────
+// Queue system: resolves thumbnails one at a time with delay to avoid 429s
+const _resolveQueue = [];
+let _resolving = false;
+
+async function _processResolveQueue() {
+    if (_resolving) return;
+    _resolving = true;
+    while (_resolveQueue.length > 0) {
+        const { fileId, botToken, resolve } = _resolveQueue.shift();
+        if (thumbUrlCache.has(fileId)) { resolve(thumbUrlCache.get(fileId)); continue; }
+        try {
+            const getFileUrl = `https://api.telegram.org/bot${botToken}/getFile?file_id=${fileId}`;
+            const proxyUrl = `${PROXY_BASE_URL}?url=${encodeURIComponent(getFileUrl)}`;
+            const res = await fetch(proxyUrl);
+            const data = await res.json();
+            if (data.ok) {
+                const url = `https://api.telegram.org/file/bot${botToken}/${data.result.file_path}`;
+                thumbUrlCache.set(fileId, url);
+                resolve(url);
+            } else {
+                resolve(null);
+                if (data.error_code === 429) {
+                    const wait = (data.parameters?.retry_after || 5) * 1000;
+                    await sleep(wait);
+                }
+            }
+        } catch { resolve(null); }
+        // Small delay between requests to avoid rate limiting
+        await sleep(150);
+    }
+    saveThumbCache(); // Persist to localStorage
+    _resolving = false;
+}
+
+export function resolveThumbnailUrl(fileId, botToken) {
+    if (!fileId || !botToken) return Promise.resolve(null);
+    if (thumbUrlCache.has(fileId)) return Promise.resolve(thumbUrlCache.get(fileId));
+    return new Promise((resolve) => {
+        _resolveQueue.push({ fileId, botToken, resolve });
+        _processResolveQueue();
+    });
 }
 
 // ── Firestore helpers ───────────────────────────────────────────────────────

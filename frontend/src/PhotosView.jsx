@@ -221,19 +221,11 @@ const PhotosView = ({ onSwitchToDrive }) => {
                     zkeEnabled ? encryptionKey : null
                 );
 
-                // Save to files collection
-                const fileRef = getUserFilesRef(uid).doc();
-                await fileRef.set({
-                    id: fileRef.id, fileName: file.name, fileSize: file.size, fileType: file.type,
-                    uploadedAt: firebase.firestore.Timestamp.now(),
-                    messages: uploadResult.messages, encrypted: uploadResult.encrypted,
-                    type: 'file', parentId: 'root',
-                });
-
-                // Save photo metadata (NO base64 thumbnail!)
+                // Save photo metadata ONLY — DO NOT save to files collection
+                // (files collection = Drive view, photos collection = Photos view)
                 const photoRef = getUserPhotosRef(uid).doc();
                 await photoRef.set({
-                    id: photoRef.id, fileRef: fileRef.id,
+                    id: photoRef.id,
                     fileName: file.name, fileSize: file.size, fileType: file.type,
                     messages: uploadResult.messages, encrypted: uploadResult.encrypted,
                     thumbFileId: thumbResult?.file_id || null,
@@ -255,7 +247,7 @@ const PhotosView = ({ onSwitchToDrive }) => {
                 // Update local state immediately
                 setPhotos(prev => {
                     const newPhoto = {
-                        id: photoRef.id, fileRef: fileRef.id, fileName: file.name, fileSize: file.size,
+                        id: photoRef.id, fileName: file.name, fileSize: file.size,
                         fileType: file.type, messages: uploadResult.messages, encrypted: uploadResult.encrypted,
                         thumbFileId: thumbResult?.file_id || null, thumbMessageId: thumbResult?.message_id || null,
                         dateTaken: exifData.dateTaken ? firebase.firestore.Timestamp.fromDate(new Date(exifData.dateTaken)) : firebase.firestore.Timestamp.fromDate(new Date(file.lastModified)),
