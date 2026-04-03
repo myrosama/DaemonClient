@@ -1,10 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { formatDate, formatFileSize, resolveThumbnailUrl } from './utils.js';
-import firebase from 'firebase/compat/app';
-
-const db = firebase.firestore();
-const appIdentifier = 'default-daemon-client';
+// Note: no direct Firestore usage here — all data comes via props
 
 const PhotoLightbox = ({ photo, photos, onClose, onToggleFavorite, onDelete, onDownload, config, encryptionKey }) => {
     const [currentIndex, setCurrentIndex] = useState(() => photos.findIndex(p => p.id === photo.id));

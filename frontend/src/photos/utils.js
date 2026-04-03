@@ -3,8 +3,10 @@ import 'firebase/compat/firestore';
 import { encryptChunk } from '../crypto.js';
 import exifr from 'exifr';
 
-const db = firebase.firestore();
-const auth = firebase.auth;
+// Lazy firebase references — do NOT call firebase.firestore() at module load 
+// time because this file gets imported before App.jsx calls initializeApp().
+let _db = null;
+const getDb = () => { if (!_db) _db = firebase.firestore(); return _db; };
 const appIdentifier = 'default-daemon-client';
 const CHUNK_SIZE = 19 * 1024 * 1024;
 const PROXY_BASE_URL = "https://daemonclient-proxy.sadrikov49.workers.dev";
@@ -164,16 +166,16 @@ export async function resolveThumbnailUrl(fileId, botToken) {
 
 // ── Firestore helpers ───────────────────────────────────────────────────────
 export function getUserPhotosRef(uid) {
-    return db.collection(`artifacts/${appIdentifier}/users/${uid}/photos`);
+    return getDb().collection(`artifacts/${appIdentifier}/users/${uid}/photos`);
 }
 export function getUserAlbumsRef(uid) {
-    return db.collection(`artifacts/${appIdentifier}/users/${uid}/albums`);
+    return getDb().collection(`artifacts/${appIdentifier}/users/${uid}/albums`);
 }
 export function getUserFilesRef(uid) {
-    return db.collection(`artifacts/${appIdentifier}/users/${uid}/files`);
+    return getDb().collection(`artifacts/${appIdentifier}/users/${uid}/files`);
 }
 export function getUserConfigRef(uid) {
-    return db.collection(`artifacts/${appIdentifier}/users/${uid}/config`);
+    return getDb().collection(`artifacts/${appIdentifier}/users/${uid}/config`);
 }
 
 // ── Delete Telegram messages ────────────────────────────────────────────────

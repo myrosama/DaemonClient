@@ -13,8 +13,10 @@ import {
 } from './photos/utils.js';
 import './photos/photos.css';
 
-const auth = firebase.auth();
-const db = firebase.firestore();
+// Lazy Firebase references — these must NOT be called at module load time
+let _auth = null, _db = null;
+const getAuth = () => { if (!_auth) _auth = firebase.auth(); return _auth; };
+const getDb = () => { if (!_db) _db = firebase.firestore(); return _db; };
 const PAGE_SIZE = 60;
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -88,7 +90,7 @@ const PhotosView = ({ onSwitchToDrive }) => {
     const abortRef = useRef(null);
     const loadMoreRef = useRef(null);
 
-    const uid = auth.currentUser?.uid;
+    const uid = getAuth().currentUser?.uid;
 
     // ── Load config + ZKE ───────────────────────────────────────────────
     useEffect(() => {
@@ -336,7 +338,7 @@ const PhotosView = ({ onSwitchToDrive }) => {
 
     const bulkDelete = async () => {
         if (!window.confirm(`Move ${selectedIds.size} items to trash?`)) return;
-        const batch = db.batch();
+        const batch = getDb().batch();
         selectedIds.forEach(id => {
             batch.update(getUserPhotosRef(uid).doc(id), { trashed: true, trashedAt: firebase.firestore.Timestamp.now() });
         });
@@ -346,7 +348,7 @@ const PhotosView = ({ onSwitchToDrive }) => {
     };
 
     const bulkFavorite = async () => {
-        const batch = db.batch();
+        const batch = getDb().batch();
         selectedIds.forEach(id => {
             batch.update(getUserPhotosRef(uid).doc(id), { isFavorite: true });
         });
