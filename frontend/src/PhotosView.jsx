@@ -1,505 +1,198 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import firebase from 'firebase/compat/app';
 import 'firebase/compat/auth';
 import 'firebase/compat/firestore';
 import { motion, AnimatePresence } from 'framer-motion';
-import { deriveKey, encryptChunk, decryptChunk, generateSalt, generatePassword, bytesToBase64, base64ToBytes } from './crypto.js';
-import exifr from 'exifr';
+import { deriveKey, base64ToBytes } from './crypto.js';
+import PhotoLightbox from './photos/Lightbox.jsx';
+import {
+    sleep, generateThumbnail, generateVideoThumbnail, extractExifData,
+    uploadToTelegram, uploadThumbnailToTelegram, resolveThumbnailUrl,
+    getUserPhotosRef, getUserAlbumsRef, getUserFilesRef, getUserConfigRef,
+    deleteTelegramMessages, formatFileSize, getMonthKey, formatDate,
+} from './photos/utils.js';
+import './photos/photos.css';
 
-// Firebase (already initialized by App.jsx, just get references)
-if (!firebase.apps.length) {
-    firebase.initializeApp({
-        apiKey: "AIzaSyBH5diC5M7MnOIuOWaNPmOB1AV6uJVZyS8", authDomain: "daemonclient-c0625.firebaseapp.com",
-        projectId: "daemonclient-c0625", storageBucket: "daemonclient-c0625.firebasestorage.app",
-        messagingSenderId: "424457448611", appId: "1:424457448611:web:bea9f7673fb40f137de316",
-    });
-}
 const auth = firebase.auth();
 const db = firebase.firestore();
-const appIdentifier = 'default-daemon-client';
-const CHUNK_SIZE = 19 * 1024 * 1024;
-const PROXY_BASE_URL = "https://daemonclient-proxy.sadrikov49.workers.dev";
-const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+const PAGE_SIZE = 60;
 
-// ============================================================================
-// UTILITY: Generate thumbnail from image file
-// ============================================================================
-async function generateThumbnail(file, maxSize = 320) {
-    return new Promise((resolve) => {
-        const img = new Image();
-        const url = URL.createObjectURL(file);
-        img.onload = () => {
-            const canvas = document.createElement('canvas');
-            let w = img.width, h = img.height;
-            if (w > h) { h = Math.round(h * maxSize / w); w = maxSize; }
-            else { w = Math.round(w * maxSize / h); h = maxSize; }
-            canvas.width = w; canvas.height = h;
-            canvas.getContext('2d').drawImage(img, 0, 0, w, h);
-            const dataUrl = canvas.toDataURL('image/webp', 0.7);
-            URL.revokeObjectURL(url);
-            resolve(dataUrl);
-        };
-        img.onerror = () => { URL.revokeObjectURL(url); resolve(null); };
-        img.src = url;
-    });
-}
+// ═══════════════════════════════════════════════════════════════════════════
+// Lazy Thumbnail Component with IntersectionObserver
+// ═══════════════════════════════════════════════════════════════════════════
+const LazyThumb = ({ photo, botToken, onClick, selected, onSelect, selectionMode }) => {
+    const ref = useRef(null);
+    const [src, setSrc] = useState(null);
+    const [visible, setVisible] = useState(false);
 
-// Generate thumbnail from video file (first frame)
-async function generateVideoThumbnail(file, maxSize = 400) {
-    return new Promise((resolve) => {
-        const video = document.createElement('video');
-        const url = URL.createObjectURL(file);
-        video.muted = true;
-        video.preload = 'metadata';
-        video.onloadeddata = () => {
-            video.currentTime = Math.min(1, video.duration / 4);
-        };
-        video.onseeked = () => {
-            const canvas = document.createElement('canvas');
-            let w = video.videoWidth, h = video.videoHeight;
-            if (w > h) { h = Math.round(h * maxSize / w); w = maxSize; }
-            else { w = Math.round(w * maxSize / h); h = maxSize; }
-            canvas.width = w; canvas.height = h;
-            canvas.getContext('2d').drawImage(video, 0, 0, w, h);
-            const dataUrl = canvas.toDataURL('image/webp', 0.8);
-            URL.revokeObjectURL(url);
-            resolve(dataUrl);
-        };
-        video.onerror = () => { URL.revokeObjectURL(url); resolve(null); };
-        video.src = url;
-    });
-}
+    useEffect(() => {
+        const el = ref.current;
+        if (!el) return;
+        const obs = new IntersectionObserver(([entry]) => {
+            if (entry.isIntersecting) { setVisible(true); obs.unobserve(el); }
+        }, { rootMargin: '200px' });
+        obs.observe(el);
+        return () => obs.disconnect();
+    }, []);
 
-// ============================================================================
-// UTILITY: Extract EXIF metadata
-// ============================================================================
-async function extractExifData(file) {
-    try {
-        const exif = await exifr.parse(file, {
-            pick: ['DateTimeOriginal', 'CreateDate', 'GPSLatitude', 'GPSLongitude',
-                   'Make', 'Model', 'ExposureTime', 'FNumber', 'ISO', 'ImageWidth', 'ImageHeight',
-                   'FocalLength', 'LensModel', 'Software', 'OffsetTimeOriginal']
-        });
-        if (!exif) return { dateTaken: null };
-        return {
-            dateTaken: exif.DateTimeOriginal || exif.CreateDate || null,
-            latitude: exif.GPSLatitude || null,
-            longitude: exif.GPSLongitude || null,
-            cameraMake: exif.Make || null,
-            cameraModel: exif.Model || null,
-            camera: [exif.Make, exif.Model].filter(Boolean).join(' ') || null,
-            exposure: exif.ExposureTime || null,
-            aperture: exif.FNumber || null,
-            iso: exif.ISO || null,
-            width: exif.ImageWidth || null,
-            height: exif.ImageHeight || null,
-            focalLength: exif.FocalLength || null,
-            lensModel: exif.LensModel || null,
-            software: exif.Software || null,
-        };
-    } catch { return { dateTaken: null }; }
-}
-
-// ============================================================================
-// PHOTO UPLOAD (reuses the existing Telegram chunking)
-// ============================================================================
-async function uploadPhotoToTelegram(file, botToken, channelId, onProgress, abortSignal, encryptionKey = null) {
-    const totalParts = Math.ceil(file.size / CHUNK_SIZE);
-    const uploadedMessageInfo = [];
-    let uploadedBytes = 0;
-    const isEncrypted = encryptionKey !== null;
-
-    for (let i = 0; i < totalParts; i++) {
-        if (abortSignal?.aborted) throw new Error("Upload cancelled.");
-        const partNumber = i + 1;
-        const rawChunk = file.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
-        let chunkToUpload;
-        if (isEncrypted) {
-            const rawData = await rawChunk.arrayBuffer();
-            const encryptedData = await encryptChunk(rawData, encryptionKey);
-            chunkToUpload = new Blob([encryptedData]);
-        } else { chunkToUpload = rawChunk; }
-
-        for (let attempt = 1; attempt <= 10; attempt++) {
-            try {
-                onProgress({ percent: Math.round((uploadedBytes / file.size) * 100), status: `Uploading ${partNumber}/${totalParts}` });
-                const formData = new FormData();
-                formData.append('chat_id', channelId);
-                const displayName = isEncrypted
-                    ? `${Array.from(crypto.getRandomValues(new Uint8Array(8)), b => b.toString(16).padStart(2, '0')).join('')}.part${String(partNumber).padStart(3, '0')}`
-                    : `${file.name}.part${String(partNumber).padStart(3, '0')}`;
-                formData.append('document', chunkToUpload, displayName);
-                const telegramUploadUrl = `https://api.telegram.org/bot${botToken}/sendDocument`;
-                const proxyUrl = `${PROXY_BASE_URL}?url=${encodeURIComponent(telegramUploadUrl)}`;
-                const response = await fetch(proxyUrl, { method: 'POST', body: formData, signal: abortSignal });
-                const result = await response.json();
-                if (result.ok) {
-                    uploadedMessageInfo.push({ message_id: result.result.message_id, file_id: result.result.document.file_id });
-                    uploadedBytes += rawChunk.size;
-                    break;
-                }
-                if (response.status === 429 && result.parameters?.retry_after) {
-                    await sleep(parseInt(result.parameters.retry_after, 10) * 1000 + 500);
-                } else { await sleep(2000 * attempt); }
-            } catch (error) {
-                if (error.name === 'AbortError') throw error;
-                if (attempt >= 10) throw new Error(`Upload failed for part ${partNumber}`);
-                await sleep(3000 * attempt);
-            }
+    useEffect(() => {
+        if (!visible) return;
+        if (photo.thumbnail) { setSrc(photo.thumbnail); return; }
+        if (photo.thumbFileId && botToken) {
+            resolveThumbnailUrl(photo.thumbFileId, botToken).then(url => { if (url) setSrc(url); });
         }
-        if (partNumber < totalParts) await sleep(1000);
-    }
-    onProgress({ percent: 100, status: 'Done!' });
-    return {
-        fileName: file.name, fileSize: file.size, fileType: file.type,
-        uploadedAt: firebase.firestore.Timestamp.now(),
-        messages: uploadedMessageInfo, encrypted: isEncrypted
-    };
-}
+    }, [visible, photo.thumbFileId, photo.thumbnail, botToken]);
 
-// ============================================================================
-// LIGHTBOX VIEWER
-// ============================================================================
-const PhotoLightbox = ({ photo, photos, onClose, onToggleFavorite, onDelete, config, encryptionKey }) => {
-    const [currentIndex, setCurrentIndex] = useState(() => photos.findIndex(p => p.id === photo.id));
-    const current = photos[currentIndex];
-    const [mediaUrl, setMediaUrl] = useState(null);
-    const [loading, setLoading] = useState(true);
-    const [showInfo, setShowInfo] = useState(false);
-    const isVideo = current?.fileType?.startsWith('video/');
-
-    useEffect(() => {
-        if (!current || !config?.botToken) return;
-        setLoading(true);
-        setMediaUrl(null);
-        const loadMedia = async () => {
-            try {
-                if ('serviceWorker' in navigator) {
-                    const registration = await navigator.serviceWorker.ready;
-                    const sw = registration.active;
-                    if (sw) {
-                        let rawKeyBytes = null;
-                        if (current.encrypted && encryptionKey) {
-                            try { rawKeyBytes = await crypto.subtle.exportKey('raw', encryptionKey); } catch {}
-                        }
-                        const fileId = current.fileRef || current.id;
-                        await new Promise((resolve, reject) => {
-                            const channel = new MessageChannel();
-                            channel.port1.onmessage = (e) => e.data?.status === 'ok' ? resolve() : reject();
-                            sw.postMessage({
-                                type: 'REGISTER_FILE', fileId,
-                                messages: current.messages, botToken: config.botToken,
-                                rawKeyBytes, isEncrypted: current.encrypted === true,
-                                fileSize: current.fileSize,
-                                fileType: current.fileType || 'image/jpeg',
-                            }, [channel.port2]);
-                            setTimeout(() => reject(new Error('timeout')), 8000);
-                        });
-                        setMediaUrl(`/stream/${fileId}`);
-                    }
-                }
-            } catch {
-                setMediaUrl(current.thumbnail || null);
-            }
-            setLoading(false);
-        };
-        loadMedia();
-    }, [currentIndex, current, config, encryptionKey]);
-
-    useEffect(() => {
-        const handleKey = (e) => {
-            if (e.key === 'Escape') onClose();
-            if (e.key === 'ArrowLeft' && currentIndex > 0) setCurrentIndex(i => i - 1);
-            if (e.key === 'ArrowRight' && currentIndex < photos.length - 1) setCurrentIndex(i => i + 1);
-        };
-        window.addEventListener('keydown', handleKey);
-        return () => window.removeEventListener('keydown', handleKey);
-    }, [currentIndex, photos.length, onClose]);
-
-    if (!current) return null;
-
-    const dateStr = current.dateTaken
-        ? new Date(current.dateTaken.seconds ? current.dateTaken.seconds * 1000 : current.dateTaken).toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
-        : 'Unknown date';
+    const isVideo = photo.fileType?.startsWith('video/');
 
     return (
-        <div className="fixed inset-0 z-[100] flex flex-col" style={{ background: 'rgba(0,0,0,0.95)' }}>
-            {/* Top bar */}
-            <div className="flex items-center justify-between px-4 py-3 z-10">
-                <button onClick={onClose} className="w-10 h-10 flex items-center justify-center rounded-full bg-white/10 hover:bg-white/20 transition-colors">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                </button>
-                <p className="text-white/60 text-sm">{dateStr}</p>
-                <div className="flex items-center gap-2">
-                    <button onClick={() => setShowInfo(!showInfo)} className="w-10 h-10 flex items-center justify-center rounded-full bg-white/10 hover:bg-white/20">
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
-                    </button>
-                    <button onClick={() => { onToggleFavorite(current); }} className="w-10 h-10 flex items-center justify-center rounded-full bg-white/10 hover:bg-white/20">
-                        {current.isFavorite
-                            ? <svg width="20" height="20" viewBox="0 0 24 24" fill="#ef4444" stroke="#ef4444" strokeWidth="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
-                            : <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
-                        }
-                    </button>
-                    <button onClick={() => { if (window.confirm('Delete this photo permanently?')) { onDelete(current); onClose(); } }} className="w-10 h-10 flex items-center justify-center rounded-full bg-white/10 hover:bg-red-500/40">
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-                    </button>
-                </div>
+        <div ref={ref} className={`photo-tile ${selected ? 'selected' : ''}`} onClick={(e) => {
+            if (e.shiftKey || e.ctrlKey || e.metaKey || selectionMode) { e.preventDefault(); onSelect(photo, e); }
+            else onClick(photo);
+        }}>
+            {src ? <img src={src} alt="" loading="lazy" /> : <div className="photo-tile-placeholder"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg></div>}
+            <div className="photo-overlay" />
+            <div className="photo-select" onClick={(e) => { e.stopPropagation(); onSelect(photo, e); }}>
+                {selected && <svg width="14" height="14" viewBox="0 0 24 24" fill="white" stroke="white" strokeWidth="2"><polyline points="20 6 9 17 4 12"/></svg>}
             </div>
-
-            {/* Main image area */}
-            <div className="flex-1 flex items-center justify-center relative overflow-hidden">
-                {/* Nav arrows */}
-                {currentIndex > 0 && (
-                    <button onClick={() => setCurrentIndex(i => i - 1)} className="absolute left-4 z-10 w-12 h-12 flex items-center justify-center rounded-full bg-black/40 hover:bg-black/60 transition-colors">
-                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg>
-                    </button>
-                )}
-                {currentIndex < photos.length - 1 && (
-                    <button onClick={() => setCurrentIndex(i => i + 1)} className="absolute right-4 z-10 w-12 h-12 flex items-center justify-center rounded-full bg-black/40 hover:bg-black/60 transition-colors">
-                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2"><polyline points="9 18 15 12 9 6"/></svg>
-                    </button>
-                )}
-
-                {loading && <div className="w-10 h-10 border-2 border-white/20 border-t-white/80 rounded-full animate-spin" />}
-                {mediaUrl && !isVideo && (
-                    <motion.img
-                        key={currentIndex}
-                        src={mediaUrl}
-                        alt={current.fileName}
-                        initial={{ opacity: 0, scale: 0.95 }}
-                        animate={{ opacity: 1, scale: 1 }}
-                        className="max-w-full max-h-[85vh] object-contain rounded select-none"
-                        draggable={false}
-                    />
-                )}
-                {mediaUrl && isVideo && (
-                    <motion.video
-                        key={currentIndex}
-                        src={mediaUrl}
-                        controls autoPlay
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        className="max-w-full max-h-[85vh] rounded"
-                    />
-                )}
-            </div>
-
-            {/* Info panel */}
-            <AnimatePresence>
-                {showInfo && (
-                    <motion.div
-                        initial={{ x: 300, opacity: 0 }} animate={{ x: 0, opacity: 1 }} exit={{ x: 300, opacity: 0 }}
-                        className="fixed right-0 top-0 bottom-0 w-80 bg-gray-900/95 backdrop-blur-xl border-l border-gray-700 p-6 z-20 overflow-y-auto"
-                    >
-                        <div className="flex items-center justify-between mb-6">
-                            <h3 className="text-lg font-bold text-white">Details</h3>
-                            <button onClick={() => setShowInfo(false)} className="text-gray-400 hover:text-white">
-                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                            </button>
-                        </div>
-
-                        {/* File info */}
-                        <div className="mb-5">
-                            <p className="text-white font-medium truncate mb-1" title={current.fileName}>{current.fileName}</p>
-                            <p className="text-gray-500 text-xs">{(current.fileSize / 1024 / 1024).toFixed(2)} MB • {current.fileType || 'image'}</p>
-                        </div>
-
-                        {/* Date & Time */}
-                        <div className="mb-5 p-3 bg-gray-800/50 rounded-lg">
-                            <div className="flex items-center gap-2 mb-2">
-                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-indigo-400"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
-                                <span className="text-xs font-bold text-gray-400 uppercase tracking-wider">Date & Time</span>
-                            </div>
-                            <p className="text-white text-sm">{dateStr}</p>
-                            {current.dateTaken && (
-                                <p className="text-gray-400 text-xs mt-1">
-                                    {new Date(current.dateTaken.seconds ? current.dateTaken.seconds * 1000 : current.dateTaken)
-                                        .toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-                                </p>
-                            )}
-                            {!current.hasExif && <p className="text-yellow-500/70 text-[10px] mt-1">⚠ From file metadata (no EXIF)</p>}
-                        </div>
-
-                        {/* Device / Camera */}
-                        {(current.camera || current.software) && (
-                            <div className="mb-5 p-3 bg-gray-800/50 rounded-lg">
-                                <div className="flex items-center gap-2 mb-2">
-                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-indigo-400"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>
-                                    <span className="text-xs font-bold text-gray-400 uppercase tracking-wider">Device</span>
-                                </div>
-                                {current.cameraMake && <p className="text-gray-400 text-xs">{current.cameraMake}</p>}
-                                {current.cameraModel && <p className="text-white text-sm font-medium">{current.cameraModel}</p>}
-                                {!current.cameraMake && !current.cameraModel && current.camera && <p className="text-white text-sm">{current.camera}</p>}
-                                {current.software && <p className="text-gray-500 text-xs mt-1">Software: {current.software}</p>}
-                                {current.lensModel && <p className="text-gray-500 text-xs mt-1">Lens: {current.lensModel}</p>}
-                            </div>
-                        )}
-
-                        {/* Camera Settings */}
-                        {(current.aperture || current.exposure || current.iso || current.focalLength) && (
-                            <div className="mb-5 p-3 bg-gray-800/50 rounded-lg">
-                                <div className="flex items-center gap-2 mb-3">
-                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-indigo-400"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg>
-                                    <span className="text-xs font-bold text-gray-400 uppercase tracking-wider">Camera Settings</span>
-                                </div>
-                                <div className="grid grid-cols-2 gap-3">
-                                    {current.aperture && (
-                                        <div className="bg-gray-700/50 rounded p-2 text-center">
-                                            <p className="text-white text-sm font-bold">f/{current.aperture}</p>
-                                            <p className="text-gray-500 text-[10px]">Aperture</p>
-                                        </div>
-                                    )}
-                                    {current.exposure && (
-                                        <div className="bg-gray-700/50 rounded p-2 text-center">
-                                            <p className="text-white text-sm font-bold">{current.exposure < 1 ? `1/${Math.round(1/current.exposure)}` : `${current.exposure}`}s</p>
-                                            <p className="text-gray-500 text-[10px]">Shutter</p>
-                                        </div>
-                                    )}
-                                    {current.iso && (
-                                        <div className="bg-gray-700/50 rounded p-2 text-center">
-                                            <p className="text-white text-sm font-bold">{current.iso}</p>
-                                            <p className="text-gray-500 text-[10px]">ISO</p>
-                                        </div>
-                                    )}
-                                    {current.focalLength && (
-                                        <div className="bg-gray-700/50 rounded p-2 text-center">
-                                            <p className="text-white text-sm font-bold">{current.focalLength}mm</p>
-                                            <p className="text-gray-500 text-[10px]">Focal Length</p>
-                                        </div>
-                                    )}
-                                </div>
-                            </div>
-                        )}
-
-                        {/* Resolution */}
-                        {current.width && current.height && (
-                            <div className="mb-5 p-3 bg-gray-800/50 rounded-lg">
-                                <div className="flex items-center gap-2 mb-2">
-                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-indigo-400"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/></svg>
-                                    <span className="text-xs font-bold text-gray-400 uppercase tracking-wider">Resolution</span>
-                                </div>
-                                <p className="text-white text-sm">{current.width} × {current.height}</p>
-                                <p className="text-gray-500 text-xs">{((current.width * current.height) / 1000000).toFixed(1)} MP</p>
-                            </div>
-                        )}
-
-                        {/* Location */}
-                        {current.latitude && current.longitude && (
-                            <div className="mb-5 p-3 bg-gray-800/50 rounded-lg">
-                                <div className="flex items-center gap-2 mb-2">
-                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-indigo-400"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
-                                    <span className="text-xs font-bold text-gray-400 uppercase tracking-wider">Location</span>
-                                </div>
-                                <p className="text-white text-sm">{typeof current.latitude === 'number' ? current.latitude.toFixed(6) : current.latitude}, {typeof current.longitude === 'number' ? current.longitude.toFixed(6) : current.longitude}</p>
-                                <a href={`https://maps.google.com/?q=${current.latitude},${current.longitude}`}
-                                    target="_blank" rel="noreferrer"
-                                    className="text-indigo-400 text-xs hover:underline mt-1 inline-block">Open in Google Maps ↗</a>
-                            </div>
-                        )}
-
-                        {/* Encryption badge */}
-                        {current.encrypted && (
-                            <div className="mt-4 flex items-center gap-2 p-2 bg-green-900/20 border border-green-800/30 rounded-lg">
-                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-green-400"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-                                <span className="text-green-400 text-xs font-medium">Zero-Knowledge Encrypted</span>
-                            </div>
-                        )}
-                    </motion.div>
-                )}
-            </AnimatePresence>
-
-            {/* Bottom thumbnails strip */}
-            <div className="h-20 bg-black/60 flex items-center gap-1 px-4 overflow-x-auto">
-                {photos.map((p, i) => (
-                    <button key={p.id} onClick={() => setCurrentIndex(i)}
-                        className={`flex-shrink-0 w-14 h-14 rounded overflow-hidden border-2 transition-all ${i === currentIndex ? 'border-indigo-500 scale-110' : 'border-transparent opacity-60 hover:opacity-100'}`}
-                    >
-                        <img src={p.thumbnail} alt="" className="w-full h-full object-cover" loading="lazy" />
-                    </button>
-                ))}
-            </div>
+            {photo.isFavorite && <div className="photo-fav"><svg width="14" height="14" viewBox="0 0 24 24" fill="#ef4444" stroke="#ef4444" strokeWidth="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg></div>}
+            {isVideo && <div className="photo-video-badge"><svg width="12" height="12" viewBox="0 0 24 24" fill="white"><polygon points="5 3 19 12 5 21"/></svg></div>}
         </div>
     );
 };
 
-// ============================================================================
-// MAIN PHOTOS VIEW COMPONENT
-// ============================================================================
+// ═══════════════════════════════════════════════════════════════════════════
+// MAIN PHOTOS VIEW
+// ═══════════════════════════════════════════════════════════════════════════
 const PhotosView = ({ onSwitchToDrive }) => {
+    // State
     const [photos, setPhotos] = useState([]);
     const [loading, setLoading] = useState(true);
     const [config, setConfig] = useState(null);
+    const [encryptionKey, setEncryptionKey] = useState(null);
+    const [zkeEnabled, setZkeEnabled] = useState(false);
     const [uploading, setUploading] = useState(false);
     const [uploadStatus, setUploadStatus] = useState('');
     const [uploadPercent, setUploadPercent] = useState(0);
     const [selectedPhoto, setSelectedPhoto] = useState(null);
-    const [filter, setFilter] = useState('all'); // 'all' | 'favorites'
-    const [encryptionKey, setEncryptionKey] = useState(null);
-    const [zkeEnabled, setZkeEnabled] = useState(false);
+    const [selectedIds, setSelectedIds] = useState(new Set());
+    const [activeTab, setActiveTab] = useState('photos'); // photos | favorites | albums | search | map
+    const [albums, setAlbums] = useState([]);
+    const [activeAlbum, setActiveAlbum] = useState(null);
+    const [searchQuery, setSearchQuery] = useState('');
+    const [showCreateAlbum, setShowCreateAlbum] = useState(false);
+    const [newAlbumName, setNewAlbumName] = useState('');
+    const [hasMore, setHasMore] = useState(true);
+    const [lastDoc, setLastDoc] = useState(null);
     const fileInputRef = useRef(null);
     const abortRef = useRef(null);
+    const loadMoreRef = useRef(null);
 
-    // Load config + ZKE key
+    const uid = auth.currentUser?.uid;
+
+    // ── Load config + ZKE ───────────────────────────────────────────────
     useEffect(() => {
-        const uid = auth.currentUser?.uid;
         if (!uid) return;
-        const configRef = db.collection(`artifacts/${appIdentifier}/users/${uid}/config`).doc('telegram');
+        const configRef = getUserConfigRef(uid).doc('telegram');
         configRef.get().then(snap => { if (snap.exists) setConfig(snap.data()); });
-
-        const zkeRef = db.collection(`artifacts/${appIdentifier}/users/${uid}/config`).doc('zke');
+        const zkeRef = getUserConfigRef(uid).doc('zke');
         zkeRef.get().then(async (snap) => {
             if (snap.exists) {
-                const data = snap.data();
-                if (data.enabled && data.password && data.salt) {
-                    const salt = base64ToBytes(data.salt);
-                    const key = await deriveKey(data.password, salt);
-                    setEncryptionKey(key);
-                    setZkeEnabled(true);
+                const d = snap.data();
+                if (d.enabled && d.password && d.salt) {
+                    const salt = base64ToBytes(d.salt);
+                    const key = await deriveKey(d.password, salt);
+                    setEncryptionKey(key); setZkeEnabled(true);
                 }
             }
         });
-    }, []);
+    }, [uid]);
 
-    // Load photos (real-time)
-    useEffect(() => {
-        const uid = auth.currentUser?.uid;
+    // ── Load photos (paginated) ─────────────────────────────────────────
+    const loadPhotos = useCallback(async (reset = false) => {
         if (!uid) return;
-        const query = db.collection(`artifacts/${appIdentifier}/users/${uid}/photos`)
-            .orderBy('dateTaken', 'desc');
-        const unsub = query.onSnapshot(snap => {
-            const data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-            setPhotos(data);
+        let q = getUserPhotosRef(uid).where('trashed', '!=', true).orderBy('trashed').orderBy('dateTaken', 'desc').limit(PAGE_SIZE);
+        // Fallback: simpler query if trashed field doesn't exist yet
+        try {
+            if (!reset && lastDoc) q = q.startAfter(lastDoc);
+            const snap = await q.get();
+            const docs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+            if (reset) { setPhotos(docs); } else { setPhotos(prev => [...prev, ...docs]); }
+            setLastDoc(snap.docs[snap.docs.length - 1] || null);
+            setHasMore(docs.length === PAGE_SIZE);
             setLoading(false);
-        }, () => setLoading(false));
-        return () => unsub();
-    }, []);
+        } catch {
+            // Fallback without trashed field
+            let q2 = getUserPhotosRef(uid).orderBy('dateTaken', 'desc').limit(PAGE_SIZE);
+            if (!reset && lastDoc) q2 = q2.startAfter(lastDoc);
+            const snap = await q2.get();
+            const docs = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(d => !d.trashed);
+            if (reset) { setPhotos(docs); } else { setPhotos(prev => [...prev, ...docs]); }
+            setLastDoc(snap.docs[snap.docs.length - 1] || null);
+            setHasMore(snap.docs.length === PAGE_SIZE);
+            setLoading(false);
+        }
+    }, [uid, lastDoc]);
 
-    // Group photos by month
-    const groupedPhotos = React.useMemo(() => {
-        const filtered = filter === 'favorites' ? photos.filter(p => p.isFavorite) : photos;
+    useEffect(() => { loadPhotos(true); }, [uid]);
+
+    // ── Load albums ─────────────────────────────────────────────────────
+    useEffect(() => {
+        if (!uid) return;
+        const unsub = getUserAlbumsRef(uid).orderBy('updatedAt', 'desc').onSnapshot(snap => {
+            setAlbums(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+        }, () => {});
+        return () => unsub();
+    }, [uid]);
+
+    // ── Infinite scroll ─────────────────────────────────────────────────
+    useEffect(() => {
+        const el = loadMoreRef.current;
+        if (!el || !hasMore) return;
+        const obs = new IntersectionObserver(([entry]) => {
+            if (entry.isIntersecting && !loading) loadPhotos(false);
+        });
+        obs.observe(el);
+        return () => obs.disconnect();
+    }, [hasMore, loading, loadPhotos]);
+
+    // ── Grouped photos ──────────────────────────────────────────────────
+    const displayPhotos = useMemo(() => {
+        let list = photos;
+        if (activeTab === 'favorites') list = photos.filter(p => p.isFavorite);
+        if (activeTab === 'search' && searchQuery) {
+            const q = searchQuery.toLowerCase();
+            list = photos.filter(p =>
+                p.fileName?.toLowerCase().includes(q) ||
+                p.camera?.toLowerCase().includes(q) ||
+                p.cameraModel?.toLowerCase().includes(q) ||
+                p.cameraMake?.toLowerCase().includes(q)
+            );
+        }
+        if (activeAlbum) {
+            const albumPhotoIds = new Set(activeAlbum.photoIds || []);
+            list = photos.filter(p => albumPhotoIds.has(p.id));
+        }
+        return list;
+    }, [photos, activeTab, searchQuery, activeAlbum]);
+
+    const groupedPhotos = useMemo(() => {
         const groups = {};
-        filtered.forEach(photo => {
-            let date;
-            if (photo.dateTaken?.seconds) date = new Date(photo.dateTaken.seconds * 1000);
-            else if (photo.dateTaken) date = new Date(photo.dateTaken);
-            else date = photo.uploadedAt?.toDate?.() || new Date();
-            const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
-            const label = date.toLocaleDateString('en-US', { year: 'numeric', month: 'long' });
+        displayPhotos.forEach(photo => {
+            const { key, label } = getMonthKey(photo.dateTaken, photo.uploadedAt);
             if (!groups[key]) groups[key] = { label, photos: [] };
             groups[key].photos.push(photo);
         });
         return Object.entries(groups).sort(([a], [b]) => b.localeCompare(a)).map(([, g]) => g);
-    }, [photos, filter]);
+    }, [displayPhotos]);
 
-    // Upload handler
+    // ── Upload handler ──────────────────────────────────────────────────
     const handleUpload = async (e) => {
         const files = Array.from(e.target.files || []);
         if (!files.length || !config?.botToken) return;
         const mediaFiles = files.filter(f => f.type.startsWith('image/') || f.type.startsWith('video/'));
-        if (!mediaFiles.length) { alert('Please select image or video files.'); return; }
-
+        if (!mediaFiles.length) { alert('Select image or video files.'); return; }
         setUploading(true);
-        const uid = auth.currentUser.uid;
         const controller = new AbortController();
         abortRef.current = controller;
 
@@ -507,269 +200,421 @@ const PhotosView = ({ onSwitchToDrive }) => {
             if (controller.signal.aborted) break;
             const file = mediaFiles[i];
             setUploadStatus(`Processing ${i + 1}/${mediaFiles.length}: ${file.name}`);
-
             try {
-                // Step 1: Extract EXIF and generate thumbnail in parallel
                 const isVideoFile = file.type.startsWith('video/');
-                const [exifData, thumbnail] = await Promise.all([
+                const [exifData, thumbBlob] = await Promise.all([
                     isVideoFile ? { dateTaken: null } : extractExifData(file),
-                    isVideoFile ? generateVideoThumbnail(file) : generateThumbnail(file)
+                    isVideoFile ? generateVideoThumbnail(file) : generateThumbnail(file),
                 ]);
 
-                // Step 2: Upload to Telegram
-                setUploadStatus(`Uploading ${i + 1}/${imageFiles.length}: ${file.name}`);
-                const uploadResult = await uploadPhotoToTelegram(
-                    file, config.botToken, config.channelId,
-                    (p) => setUploadPercent(p.percent),
-                    controller.signal, zkeEnabled ? encryptionKey : null
+                // Upload thumbnail to Telegram separately
+                setUploadStatus(`Uploading thumb ${i + 1}/${mediaFiles.length}`);
+                const thumbResult = await uploadThumbnailToTelegram(thumbBlob, config.botToken, config.channelId);
+
+                // Upload original
+                setUploadStatus(`Uploading ${i + 1}/${mediaFiles.length}: ${file.name}`);
+                const uploadResult = await uploadToTelegram(
+                    file, file.name, config.botToken, config.channelId,
+                    (p) => setUploadPercent(p.percent), controller.signal,
+                    zkeEnabled ? encryptionKey : null
                 );
 
-                // Step 3: Save to files collection (for consistency with Drive)
-                const fileRef = db.collection(`artifacts/${appIdentifier}/users/${uid}/files`).doc();
-                await fileRef.set({ id: fileRef.id, ...uploadResult, type: 'file', parentId: 'root' });
+                // Save to files collection
+                const fileRef = getUserFilesRef(uid).doc();
+                await fileRef.set({
+                    id: fileRef.id, fileName: file.name, fileSize: file.size, fileType: file.type,
+                    uploadedAt: firebase.firestore.Timestamp.now(),
+                    messages: uploadResult.messages, encrypted: uploadResult.encrypted,
+                    type: 'file', parentId: 'root',
+                });
 
-                // Step 4: Save photo metadata
-                const photoRef = db.collection(`artifacts/${appIdentifier}/users/${uid}/photos`).doc();
+                // Save photo metadata (NO base64 thumbnail!)
+                const photoRef = getUserPhotosRef(uid).doc();
                 await photoRef.set({
-                    id: photoRef.id,
-                    fileRef: fileRef.id,
-                    fileName: file.name,
-                    fileSize: file.size,
-                    fileType: file.type,
-                    messages: uploadResult.messages,
-                    encrypted: uploadResult.encrypted,
-                    thumbnail: thumbnail || null,
+                    id: photoRef.id, fileRef: fileRef.id,
+                    fileName: file.name, fileSize: file.size, fileType: file.type,
+                    messages: uploadResult.messages, encrypted: uploadResult.encrypted,
+                    thumbFileId: thumbResult?.file_id || null,
+                    thumbMessageId: thumbResult?.message_id || null,
                     dateTaken: exifData.dateTaken
                         ? firebase.firestore.Timestamp.fromDate(new Date(exifData.dateTaken))
                         : firebase.firestore.Timestamp.fromDate(new Date(file.lastModified)),
-                    latitude: exifData.latitude || null,
-                    longitude: exifData.longitude || null,
-                    cameraMake: exifData.cameraMake || null,
-                    cameraModel: exifData.cameraModel || null,
+                    latitude: exifData.latitude || null, longitude: exifData.longitude || null,
+                    cameraMake: exifData.cameraMake || null, cameraModel: exifData.cameraModel || null,
                     camera: exifData.camera || null,
-                    width: exifData.width || null,
-                    height: exifData.height || null,
-                    iso: exifData.iso || null,
-                    aperture: exifData.aperture || null,
-                    exposure: exifData.exposure || null,
-                    focalLength: exifData.focalLength || null,
-                    lensModel: exifData.lensModel || null,
-                    software: exifData.software || null,
-                    hasExif: !!exifData.dateTaken,
-                    isFavorite: false,
+                    width: exifData.width || null, height: exifData.height || null,
+                    iso: exifData.iso || null, aperture: exifData.aperture || null,
+                    exposure: exifData.exposure || null, focalLength: exifData.focalLength || null,
+                    lensModel: exifData.lensModel || null, software: exifData.software || null,
+                    hasExif: !!exifData.dateTaken, isFavorite: false, trashed: false, archived: false,
                     uploadedAt: firebase.firestore.Timestamp.now(),
+                });
+
+                // Update local state immediately
+                setPhotos(prev => {
+                    const newPhoto = {
+                        id: photoRef.id, fileRef: fileRef.id, fileName: file.name, fileSize: file.size,
+                        fileType: file.type, messages: uploadResult.messages, encrypted: uploadResult.encrypted,
+                        thumbFileId: thumbResult?.file_id || null, thumbMessageId: thumbResult?.message_id || null,
+                        dateTaken: exifData.dateTaken ? firebase.firestore.Timestamp.fromDate(new Date(exifData.dateTaken)) : firebase.firestore.Timestamp.fromDate(new Date(file.lastModified)),
+                        isFavorite: false, trashed: false, archived: false,
+                        latitude: exifData.latitude, longitude: exifData.longitude,
+                        camera: exifData.camera, cameraMake: exifData.cameraMake, cameraModel: exifData.cameraModel,
+                        width: exifData.width, height: exifData.height,
+                        iso: exifData.iso, aperture: exifData.aperture, exposure: exifData.exposure,
+                        focalLength: exifData.focalLength, lensModel: exifData.lensModel, software: exifData.software,
+                        hasExif: !!exifData.dateTaken,
+                        uploadedAt: firebase.firestore.Timestamp.now(),
+                    };
+                    return [newPhoto, ...prev];
                 });
             } catch (err) {
                 if (err.name === 'AbortError' || err.message === 'Upload cancelled.') break;
-                console.error(`Failed to upload ${file.name}:`, err);
+                console.error(`Failed: ${file.name}:`, err);
             }
         }
-        setUploading(false);
-        setUploadStatus('');
-        setUploadPercent(0);
+        setUploading(false); setUploadStatus(''); setUploadPercent(0);
         abortRef.current = null;
         if (fileInputRef.current) fileInputRef.current.value = '';
     };
 
-    // Toggle favorite
-    const handleToggleFavorite = async (photo) => {
-        const uid = auth.currentUser.uid;
+    // ── Actions ─────────────────────────────────────────────────────────
+    const toggleFavorite = async (photo) => {
         try {
-            await db.collection(`artifacts/${appIdentifier}/users/${uid}/photos`).doc(photo.id)
-                .update({ isFavorite: !photo.isFavorite });
-        } catch (err) { console.error('Failed to toggle favorite:', err); }
+            await getUserPhotosRef(uid).doc(photo.id).update({ isFavorite: !photo.isFavorite });
+            setPhotos(prev => prev.map(p => p.id === photo.id ? { ...p, isFavorite: !p.isFavorite } : p));
+        } catch (err) { console.error(err); }
     };
 
-    // Delete photo
-    const handleDeletePhoto = async (photo) => {
-        const uid = auth.currentUser.uid;
+    const trashPhoto = async (photo) => {
         try {
-            // Delete from Telegram
-            if (photo.messages?.length && config?.botToken) {
-                for (const msg of photo.messages) {
-                    try {
-                        await fetch(`https://api.telegram.org/bot${config.botToken}/deleteMessage`, {
-                            method: 'POST', headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ chat_id: config.channelId, message_id: msg.message_id })
-                        });
-                    } catch {}
-                    await sleep(350);
+            await getUserPhotosRef(uid).doc(photo.id).update({ trashed: true, trashedAt: firebase.firestore.Timestamp.now() });
+            setPhotos(prev => prev.filter(p => p.id !== photo.id));
+        } catch (err) { console.error(err); }
+    };
+
+    const downloadPhoto = async (photo) => {
+        if (!config?.botToken || !photo.messages?.length) return;
+        try {
+            const fileId = photo.fileRef || photo.id;
+            if ('serviceWorker' in navigator) {
+                const reg = await navigator.serviceWorker.ready;
+                const sw = reg.active;
+                if (sw) {
+                    let rawKeyBytes = null;
+                    if (photo.encrypted && encryptionKey) {
+                        try { rawKeyBytes = await crypto.subtle.exportKey('raw', encryptionKey); } catch {}
+                    }
+                    await new Promise((resolve, reject) => {
+                        const ch = new MessageChannel();
+                        ch.port1.onmessage = (e) => e.data?.status === 'ok' ? resolve() : reject();
+                        sw.postMessage({
+                            type: 'REGISTER_FILE', fileId, messages: photo.messages,
+                            botToken: config.botToken, rawKeyBytes,
+                            isEncrypted: photo.encrypted === true,
+                            fileSize: photo.fileSize, fileType: photo.fileType || 'image/jpeg',
+                        }, [ch.port2]);
+                        setTimeout(() => reject(), 8000);
+                    });
+                    const a = document.createElement('a');
+                    a.href = `/stream/${fileId}`;
+                    a.download = photo.fileName;
+                    document.body.appendChild(a); a.click(); document.body.removeChild(a);
                 }
             }
-            // Delete from photos collection
-            await db.collection(`artifacts/${appIdentifier}/users/${uid}/photos`).doc(photo.id).delete();
-            // Also delete from files collection if fileRef exists
-            if (photo.fileRef) {
-                try { await db.collection(`artifacts/${appIdentifier}/users/${uid}/files`).doc(photo.fileRef).delete(); } catch {}
-            }
-        } catch (err) { console.error('Failed to delete photo:', err); }
+        } catch (err) { console.error('Download failed:', err); }
     };
 
-    const filteredPhotos = filter === 'favorites' ? photos.filter(p => p.isFavorite) : photos;
+    // ── Selection ───────────────────────────────────────────────────────
+    const toggleSelect = (photo, e) => {
+        setSelectedIds(prev => {
+            const next = new Set(prev);
+            if (next.has(photo.id)) next.delete(photo.id); else next.add(photo.id);
+            return next;
+        });
+    };
 
+    const bulkDelete = async () => {
+        if (!window.confirm(`Move ${selectedIds.size} items to trash?`)) return;
+        const batch = db.batch();
+        selectedIds.forEach(id => {
+            batch.update(getUserPhotosRef(uid).doc(id), { trashed: true, trashedAt: firebase.firestore.Timestamp.now() });
+        });
+        await batch.commit();
+        setPhotos(prev => prev.filter(p => !selectedIds.has(p.id)));
+        setSelectedIds(new Set());
+    };
+
+    const bulkFavorite = async () => {
+        const batch = db.batch();
+        selectedIds.forEach(id => {
+            batch.update(getUserPhotosRef(uid).doc(id), { isFavorite: true });
+        });
+        await batch.commit();
+        setPhotos(prev => prev.map(p => selectedIds.has(p.id) ? { ...p, isFavorite: true } : p));
+        setSelectedIds(new Set());
+    };
+
+    const bulkDownload = () => {
+        const selected = photos.filter(p => selectedIds.has(p.id));
+        selected.forEach(p => downloadPhoto(p));
+        setSelectedIds(new Set());
+    };
+
+    const bulkAddToAlbum = async (albumId) => {
+        const albumDoc = getUserAlbumsRef(uid).doc(albumId);
+        await albumDoc.update({
+            photoIds: firebase.firestore.FieldValue.arrayUnion(...Array.from(selectedIds)),
+            updatedAt: firebase.firestore.Timestamp.now(),
+        });
+        setSelectedIds(new Set());
+    };
+
+    // ── Albums CRUD ─────────────────────────────────────────────────────
+    const createAlbum = async () => {
+        if (!newAlbumName.trim()) return;
+        const ref = getUserAlbumsRef(uid).doc();
+        await ref.set({
+            id: ref.id, name: newAlbumName.trim(), photoIds: [],
+            createdAt: firebase.firestore.Timestamp.now(),
+            updatedAt: firebase.firestore.Timestamp.now(),
+        });
+        setNewAlbumName(''); setShowCreateAlbum(false);
+    };
+
+    const deleteAlbum = async (albumId) => {
+        if (!window.confirm('Delete this album? Photos won\'t be deleted.')) return;
+        await getUserAlbumsRef(uid).doc(albumId).delete();
+        if (activeAlbum?.id === albumId) setActiveAlbum(null);
+    };
+
+    const removeFromAlbum = async (photoId) => {
+        if (!activeAlbum) return;
+        await getUserAlbumsRef(uid).doc(activeAlbum.id).update({
+            photoIds: firebase.firestore.FieldValue.arrayRemove(photoId),
+            updatedAt: firebase.firestore.Timestamp.now(),
+        });
+    };
+
+    const selectionMode = selectedIds.size > 0;
+
+    // ═══════════════════════════════════════════════════════════════════
+    // RENDER
+    // ═══════════════════════════════════════════════════════════════════
     return (
-        <div className="min-h-screen bg-gray-900 text-white font-sans">
+        <div className="photos-app">
             {/* Header */}
-            <div className="sticky top-0 z-40 bg-gray-900/90 backdrop-blur-xl border-b border-gray-800">
-                <div className="max-w-7xl mx-auto px-4 py-3">
-                    <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-4">
-                            <img src="/logo.png" alt="Logo" className="w-8 h-8" />
-                            <h1 className="text-xl font-bold text-white">Photos</h1>
-                        </div>
-                        <div className="flex items-center gap-3">
-                            {/* Filter tabs */}
-                            <div className="hidden sm:flex bg-gray-800 rounded-lg p-0.5">
-                                <button onClick={() => setFilter('all')}
-                                    className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${filter === 'all' ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:text-white'}`}>
-                                    All Photos
+            <div className="photos-header">
+                <div className="photos-header-inner">
+                    <div className="photos-logo">
+                        <img src="/logo.png" alt="" />
+                        <h1>{activeAlbum ? activeAlbum.name : 'Photos'}</h1>
+                    </div>
+                    <div className="photos-header-actions">
+                        {/* Desktop tabs */}
+                        <div className="photos-tabs photos-desktop-tabs">
+                            {['photos','favorites','albums','search'].map(tab => (
+                                <button key={tab} className={`photos-tab ${activeTab === tab ? 'active' : ''}`}
+                                    onClick={() => { setActiveTab(tab); setActiveAlbum(null); setSelectedIds(new Set()); }}>
+                                    {tab === 'photos' && <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>}
+                                    {tab === 'favorites' && <svg viewBox="0 0 24 24" fill={activeTab==='favorites'?'currentColor':'none'} stroke="currentColor" strokeWidth="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>}
+                                    {tab === 'albums' && <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>}
+                                    {tab === 'search' && <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>}
+                                    <span style={{textTransform:'capitalize'}}>{tab}</span>
                                 </button>
-                                <button onClick={() => setFilter('favorites')}
-                                    className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all flex items-center gap-1 ${filter === 'favorites' ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:text-white'}`}>
-                                    <svg width="12" height="12" viewBox="0 0 24 24" fill={filter === 'favorites' ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
-                                    Favorites
-                                </button>
-                            </div>
-                            {/* Upload button */}
-                            <input type="file" ref={fileInputRef} onChange={handleUpload} className="hidden" accept="image/*,video/*" multiple />
-                            <button onClick={() => fileInputRef.current?.click()} disabled={uploading}
-                                className="bg-indigo-600 hover:bg-indigo-500 disabled:bg-gray-600 text-white px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-2 transition-all">
-                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                                Upload
-                            </button>
-                            {/* Switch to Drive */}
-                            <button onClick={onSwitchToDrive}
-                                className="bg-gray-800 hover:bg-gray-700 text-gray-300 px-3 py-2 rounded-lg text-sm font-medium flex items-center gap-2 border border-gray-700">
-                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-                                Drive
-                            </button>
+                            ))}
                         </div>
+                        <input type="file" ref={fileInputRef} onChange={handleUpload} className="hidden" accept="image/*,video/*" multiple style={{display:'none'}} />
+                        <button onClick={() => fileInputRef.current?.click()} disabled={uploading} className="photos-btn photos-btn-primary">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                            Upload
+                        </button>
+                        <button onClick={onSwitchToDrive} className="photos-btn photos-btn-secondary">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+                            Drive
+                        </button>
                     </div>
                 </div>
             </div>
 
             {/* Upload progress */}
             {uploading && (
-                <div className="max-w-7xl mx-auto px-4 py-3">
-                    <div className="bg-indigo-900/30 border border-indigo-500/30 rounded-lg px-4 py-3">
-                        <div className="flex items-center justify-between mb-2">
-                            <span className="text-sm text-indigo-200">{uploadStatus}</span>
-                            <button onClick={() => { abortRef.current?.abort(); setUploading(false); }} className="text-xs text-red-400 hover:text-red-300 font-bold">CANCEL</button>
+                <div className="photos-upload-bar">
+                    <div className="photos-upload-inner">
+                        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                            <span style={{fontSize:13,color:'var(--photos-accent)'}}>{uploadStatus}</span>
+                            <button onClick={() => { abortRef.current?.abort(); setUploading(false); }} className="photos-btn photos-btn-sm" style={{color:'var(--photos-danger)'}}>Cancel</button>
                         </div>
-                        <div className="w-full bg-gray-700 rounded-full h-1.5">
-                            <div className="bg-indigo-500 h-1.5 rounded-full transition-all" style={{ width: `${uploadPercent}%` }}/>
+                        <div className="progress-track"><div className="progress-fill" style={{width:`${uploadPercent}%`}} /></div>
+                    </div>
+                </div>
+            )}
+
+            {/* ── SEARCH TAB ─── */}
+            {activeTab === 'search' && (
+                <div className="photos-search-page">
+                    <div className="photos-search">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                        <input type="text" placeholder="Search by filename, camera, date..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} autoFocus />
+                    </div>
+                    {searchQuery && (
+                        <div className="photos-search-results">
+                            <p style={{fontSize:13,color:'var(--photos-text-dim)',marginBottom:12}}>{displayPhotos.length} results</p>
+                            <div className="photos-grid">
+                                {displayPhotos.map(p => <LazyThumb key={p.id} photo={p} botToken={config?.botToken} onClick={setSelectedPhoto} selected={selectedIds.has(p.id)} onSelect={toggleSelect} selectionMode={selectionMode} />)}
+                            </div>
+                        </div>
+                    )}
+                </div>
+            )}
+
+            {/* ── ALBUMS TAB ─── */}
+            {activeTab === 'albums' && !activeAlbum && (
+                <div className="albums-grid">
+                    <div className="album-card album-create-card" onClick={() => setShowCreateAlbum(true)}>
+                        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                        New Album
+                    </div>
+                    {albums.map(album => (
+                        <div key={album.id} className="album-card" onClick={() => setActiveAlbum(album)}>
+                            <div className="album-card-cover">
+                                {(album.photoIds?.length > 0) ? (
+                                    album.photoIds.slice(0, 4).map((pid, i) => {
+                                        const p = photos.find(x => x.id === pid);
+                                        return p ? <LazyThumb key={i} photo={p} botToken={config?.botToken} onClick={() => {}} selected={false} onSelect={() => {}} selectionMode={false} /> : <div key={i} className="album-cover-placeholder" />;
+                                    })
+                                ) : (
+                                    <div className="album-cover-placeholder"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg></div>
+                                )}
+                            </div>
+                            <div className="album-card-info">
+                                <h3>{album.name}</h3>
+                                <p>{album.photoIds?.length || 0} items</p>
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            )}
+
+            {/* ── ALBUM DETAIL ─── */}
+            {activeTab === 'albums' && activeAlbum && (
+                <>
+                    <div className="album-detail-header">
+                        <div>
+                            <button onClick={() => setActiveAlbum(null)} className="photos-btn photos-btn-secondary photos-btn-sm" style={{marginBottom:8}}>← Back</button>
+                            <div className="album-detail-title">{activeAlbum.name}</div>
+                            <div className="album-detail-meta">{activeAlbum.photoIds?.length || 0} items</div>
+                        </div>
+                        <div style={{display:'flex',gap:8}}>
+                            <button onClick={() => deleteAlbum(activeAlbum.id)} className="photos-btn photos-btn-secondary photos-btn-sm" style={{color:'var(--photos-danger)'}}>Delete Album</button>
+                        </div>
+                    </div>
+                    <div className="photos-content">
+                        <div className="photos-grid">
+                            {displayPhotos.map(p => <LazyThumb key={p.id} photo={p} botToken={config?.botToken} onClick={setSelectedPhoto} selected={selectedIds.has(p.id)} onSelect={toggleSelect} selectionMode={selectionMode} />)}
+                        </div>
+                        {displayPhotos.length === 0 && <div className="photos-empty"><p>No photos in this album yet. Select photos and add them.</p></div>}
+                    </div>
+                </>
+            )}
+
+            {/* ── PHOTOS / FAVORITES TAB ─── */}
+            {(activeTab === 'photos' || activeTab === 'favorites') && (
+                <div className="photos-content">
+                    {loading ? (
+                        <div className="photos-empty"><div className="lb-spinner" /><p style={{marginTop:16}}>Loading photos...</p></div>
+                    ) : displayPhotos.length === 0 ? (
+                        <div className="photos-empty">
+                            <div className="photos-empty-icon"><svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" style={{color:'var(--photos-text-dim)'}}><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg></div>
+                            <h2>{activeTab === 'favorites' ? 'No favorites yet' : 'No photos yet'}</h2>
+                            <p>{activeTab === 'favorites' ? 'Tap the heart icon on a photo to add it here.' : 'Upload your photos & videos. They\'re stored securely with zero-knowledge encryption.'}</p>
+                            {activeTab !== 'favorites' && <button onClick={() => fileInputRef.current?.click()} className="photos-btn photos-btn-primary">Upload Photos</button>}
+                        </div>
+                    ) : (
+                        <div>
+                            {groupedPhotos.map(group => (
+                                <div key={group.label} className="photos-month-group">
+                                    <div className="photos-month-header">
+                                        <h2>{group.label}</h2>
+                                        <span>{group.photos.length} items</span>
+                                    </div>
+                                    <div className="photos-grid">
+                                        {group.photos.map(p => <LazyThumb key={p.id} photo={p} botToken={config?.botToken} onClick={setSelectedPhoto} selected={selectedIds.has(p.id)} onSelect={toggleSelect} selectionMode={selectionMode} />)}
+                                    </div>
+                                </div>
+                            ))}
+                            {hasMore && <div ref={loadMoreRef} style={{height:60,display:'flex',alignItems:'center',justifyContent:'center'}}><div className="lb-spinner" /></div>}
+                        </div>
+                    )}
+                </div>
+            )}
+
+            {/* ── MAP TAB (lazy loaded) ─── */}
+            {activeTab === 'map' && <MapView photos={photos.filter(p => p.latitude && p.longitude)} botToken={config?.botToken} onSelect={setSelectedPhoto} />}
+
+            {/* ── Bulk actions bar ─── */}
+            {selectionMode && (
+                <div className="photos-bulk-bar">
+                    <span>{selectedIds.size} selected</span>
+                    <button onClick={bulkFavorite} className="photos-btn-icon" title="Favorite"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg></button>
+                    <button onClick={bulkDownload} className="photos-btn-icon" title="Download"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></button>
+                    {albums.length > 0 && <select onChange={(e) => { if (e.target.value) bulkAddToAlbum(e.target.value); e.target.value=''; }} style={{background:'var(--photos-surface)',border:'1px solid var(--photos-border)',color:'var(--photos-text)',borderRadius:8,padding:'6px 8px',fontSize:12}}>
+                        <option value="">+ Album</option>
+                        {albums.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+                    </select>}
+                    <button onClick={bulkDelete} className="photos-btn-icon" title="Delete" style={{color:'var(--photos-danger)'}}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>
+                    <button onClick={() => setSelectedIds(new Set())} className="photos-btn-icon" title="Cancel"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+                </div>
+            )}
+
+            {/* ── Mobile bottom tabs ─── */}
+            <div className="photos-mobile-tabs">
+                {[
+                    { id:'photos', label:'Photos', icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg> },
+                    { id:'search', label:'Search', icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg> },
+                    { id:'albums', label:'Albums', icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg> },
+                    { id:'map', label:'Map', icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg> },
+                ].map(t => (
+                    <button key={t.id} className={`photos-mobile-tab ${activeTab === t.id ? 'active' : ''}`} onClick={() => { setActiveTab(t.id); setActiveAlbum(null); }}>
+                        {t.icon}<span>{t.label}</span>
+                    </button>
+                ))}
+            </div>
+
+            {/* ── Create Album Modal ─── */}
+            {showCreateAlbum && (
+                <div className="photos-modal-overlay" onClick={() => setShowCreateAlbum(false)}>
+                    <div className="photos-modal" onClick={e => e.stopPropagation()}>
+                        <h3>Create Album</h3>
+                        <input type="text" placeholder="Album name" value={newAlbumName} onChange={e => setNewAlbumName(e.target.value)} autoFocus onKeyDown={e => e.key === 'Enter' && createAlbum()} />
+                        <div className="photos-modal-actions">
+                            <button onClick={() => setShowCreateAlbum(false)} className="photos-btn photos-btn-secondary">Cancel</button>
+                            <button onClick={createAlbum} className="photos-btn photos-btn-primary">Create</button>
                         </div>
                     </div>
                 </div>
             )}
 
-            {/* Main Content */}
-            <div className="max-w-7xl mx-auto px-4 py-6">
-                {loading ? (
-                    <div className="flex flex-col items-center justify-center py-32">
-                        <div className="w-8 h-8 border-2 border-indigo-500/30 border-t-indigo-500 rounded-full animate-spin" />
-                        <p className="mt-4 text-gray-400">Loading your photos...</p>
-                    </div>
-                ) : filteredPhotos.length === 0 ? (
-                    /* Empty state */
-                    <div className="flex flex-col items-center justify-center py-32">
-                        <div className="w-24 h-24 rounded-full bg-gray-800 flex items-center justify-center mb-6">
-                            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-gray-600">
-                                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>
-                            </svg>
-                        </div>
-                        <h2 className="text-xl font-bold text-white mb-2">
-                            {filter === 'favorites' ? 'No favorites yet' : 'No photos yet'}
-                        </h2>
-                        <p className="text-gray-400 text-center max-w-md mb-6">
-                            {filter === 'favorites'
-                                ? 'Open a photo and tap the heart icon to add it to favorites.'
-                                : 'Upload your photos to store them securely with zero-knowledge encryption. Your photos, your privacy.'}
-                        </p>
-                        {filter !== 'favorites' && (
-                            <button onClick={() => fileInputRef.current?.click()}
-                                className="bg-indigo-600 hover:bg-indigo-500 text-white px-6 py-3 rounded-xl font-semibold flex items-center gap-2">
-                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-                                Upload Photos
-                            </button>
-                        )}
-                    </div>
-                ) : (
-                    /* Photo grid grouped by month */
-                    <div className="space-y-8">
-                        {groupedPhotos.map((group) => (
-                            <div key={group.label}>
-                                <h2 className="text-lg font-bold text-white mb-3 sticky top-16 z-10 bg-gray-900/80 backdrop-blur-sm py-2">
-                                    {group.label}
-                                    <span className="text-gray-500 text-sm font-normal ml-2">{group.photos.length} photos</span>
-                                </h2>
-                                <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-8 gap-1">
-                                    {group.photos.map((photo) => (
-                                        <motion.button
-                                            key={photo.id}
-                                            layoutId={photo.id}
-                                            onClick={() => setSelectedPhoto(photo)}
-                                            className="relative aspect-square overflow-hidden rounded group bg-gray-800"
-                                            whileHover={{ scale: 1.02 }}
-                                            whileTap={{ scale: 0.98 }}
-                                        >
-                                            {photo.thumbnail ? (
-                                                <img
-                                                    src={photo.thumbnail}
-                                                    alt={photo.fileName}
-                                                    className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
-                                                    loading="lazy"
-                                                />
-                                            ) : (
-                                                <div className="w-full h-full flex items-center justify-center bg-gray-800">
-                                                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-gray-600">
-                                                        <rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>
-                                                    </svg>
-                                                </div>
-                                            )}
-                                            {/* Video play icon */}
-                                            {photo.fileType?.startsWith('video/') && (
-                                                <div className="absolute inset-0 flex items-center justify-center">
-                                                    <div className="w-8 h-8 bg-black/50 rounded-full flex items-center justify-center">
-                                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="white" stroke="none"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-                                                    </div>
-                                                </div>
-                                            )}
-                                            {/* Favorite badge */}
-                                            {photo.isFavorite && (
-                                                <div className="absolute top-1 right-1">
-                                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="#ef4444" stroke="#ef4444" strokeWidth="2">
-                                                        <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>
-                                                    </svg>
-                                                </div>
-                                            )}
-                                            {/* Hover overlay */}
-                                            <div className="absolute inset-0 bg-gradient-to-t from-black/50 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
-                                        </motion.button>
-                                    ))}
-                                </div>
-                            </div>
-                        ))}
-                    </div>
-                )}
-            </div>
-
-            {/* Lightbox */}
+            {/* ── Lightbox ─── */}
             <AnimatePresence>
                 {selectedPhoto && (
-                    <PhotoLightbox
-                        photo={selectedPhoto}
-                        photos={filteredPhotos}
-                        onClose={() => setSelectedPhoto(null)}
-                        onToggleFavorite={handleToggleFavorite}
-                        onDelete={handleDeletePhoto}
-                        config={config}
-                        encryptionKey={encryptionKey}
-                    />
+                    <PhotoLightbox photo={selectedPhoto} photos={displayPhotos} onClose={() => setSelectedPhoto(null)}
+                        onToggleFavorite={toggleFavorite} onDelete={trashPhoto} onDownload={downloadPhoto}
+                        config={config} encryptionKey={encryptionKey} />
                 )}
             </AnimatePresence>
         </div>
     );
 };
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MAP VIEW (Leaflet)
+// ═══════════════════════════════════════════════════════════════════════════
+const MapView = React.lazy(() => import('./photos/MapView.jsx'));
+const MapViewWrapper = (props) => (
+    <React.Suspense fallback={<div className="photos-empty"><div className="lb-spinner" /><p style={{marginTop:16}}>Loading map...</p></div>}>
+        <MapView {...props} />
+    </React.Suspense>
+);
 
 export default PhotosView;
