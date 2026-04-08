@@ -140,36 +140,29 @@
               "@type": "SiteNavigationElement",
               "position": 1,
               "name": "Login",
-              "description": "Access your secure cloud dashboard.",
-              "url": "https://daemonclient.uz/#auth"
+              "description": "Log in to your DaemonClient dashboard. Access your free, unlimited, encrypted cloud storage.",
+              "url": "https://daemonclient.uz/login"
             },
             {
               "@type": "SiteNavigationElement",
               "position": 2,
-              "name": "Download CLI",
-              "description": "Get the powerful command-line tool for automation.",
-              "url": "https://daemonclient.uz/#download"
+              "name": "Sign Up",
+              "description": "Create your free DaemonClient account. Unlimited storage with zero-knowledge encryption.",
+              "url": "https://daemonclient.uz/signup"
             },
             {
               "@type": "SiteNavigationElement",
               "position": 3,
-              "name": "Philosophy",
-              "description": "Learn about our Zero-Knowledge architecture.",
-              "url": "https://daemonclient.uz/#philosophy"
+              "name": "Dashboard",
+              "description": "Manage your files with zero-knowledge encryption. Free and unlimited cloud storage.",
+              "url": "https://daemonclient.uz/dashboard"
             },
             {
               "@type": "SiteNavigationElement",
               "position": 4,
-              "name": "Protocol",
-              "description": "Deep dive into how we achieved infinite storage.",
-              "url": "https://daemonclient.uz/#protocol"
-            },
-            {
-              "@type": "SiteNavigationElement",
-              "position": 5,
-              "name": "Features",
-              "description": "Explore DaemonClient's power-user features.",
-              "url": "https://daemonclient.uz/#features"
+              "name": "Photos",
+              "description": "Store and browse your photos securely with zero-knowledge encrypted photo storage.",
+              "url": "https://daemonclient.uz/photos"
             }
           ]
         }
@@ -177,7 +170,7 @@
     }
     </script>
 
-  <!-- Dynamic meta for app subdomain -->
+  <!-- Dynamic meta for app/photos subdomains -->
   <script>
     if (window.location.hostname.startsWith('app.')) {
       document.title = 'DaemonClient Dashboard \u2014 Manage Your Files';
@@ -187,6 +180,14 @@
       if (ot) ot.content = 'DaemonClient Dashboard \u2014 Manage Your Files';
       var od = document.querySelector('meta[property="og:description"]');
       if (od) od.content = 'Access your private, encrypted cloud storage dashboard. Upload, download, and stream files securely.';
+    } else if (window.location.hostname.startsWith('photos.')) {
+      document.title = 'DaemonClient Photos \u2014 Encrypted Photo Storage';
+      var d = document.querySelector('meta[name="description"]');
+      if (d) d.content = 'Store and browse your photos securely with DaemonClient. Free, unlimited, zero-knowledge encrypted photo storage with instant thumbnails and map view.';
+      var ot = document.querySelector('meta[property="og:title"]');
+      if (ot) ot.content = 'DaemonClient Photos \u2014 Encrypted Photo Storage';
+      var od = document.querySelector('meta[property="og:description"]');
+      if (od) od.content = 'Store and browse your photos securely. Free, unlimited, encrypted photo storage with instant thumbnails.';
     }
   </script>
 
