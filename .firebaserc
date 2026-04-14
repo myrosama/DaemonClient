@@ -16,6 +16,9 @@
         ],
         "old": [
           "daemonclient-old"
+        ],
+        "test": [
+          "daemonclient-test"
         ]
       }
     }

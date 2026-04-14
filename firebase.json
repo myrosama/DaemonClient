@@ -135,8 +135,8 @@
       ]
     },
     {
-      "target": "old",
-      "public": "frontend/dist-old",
+      "target": "test",
+      "public": "frontend/dist-new",
       "ignore": [
         "firebase.json",
         "**/.*",
