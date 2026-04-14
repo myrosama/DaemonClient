@@ -11,6 +11,7 @@ import {
     saveUploadSession, getUploadSession, getIncompleteUploads,
     deleteUploadSession, getAllUploadSessions
 } from './idb-store.js';
+import './dashboard.css';
 
 // --- Firebase Initialization ---
 const firebaseConfig = {
@@ -561,6 +562,12 @@ const DashboardView = () => {
     const [uploadQueue, setUploadQueue] = useState([]);
     const [uploadBatchTotal, setUploadBatchTotal] = useState(0);
     const [viewingFile, setViewingFile] = useState(null);
+
+    // New UI state
+    const [sidebarView, setSidebarView] = useState('home'); // 'home' | 'recent' | 'starred' | 'trash'
+    const [contextMenu, setContextMenu] = useState(null);   // { x, y, item }
+    const [detailItem, setDetailItem] = useState(null);     // file/folder for right detail panel
+    const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
     // ZKE (Zero-Knowledge Encryption) State
     const [zkeEnabled, setZkeEnabled] = useState(true);
@@ -1458,6 +1465,91 @@ const DashboardView = () => {
 
     const filteredItems = items.filter(item => item.fileName.toLowerCase().includes(searchTerm.toLowerCase()));
 
+    // Separate folders and files for the new layout
+    const folders = filteredItems.filter(i => i.type === 'folder');
+    const files = filteredItems.filter(i => i.type !== 'folder');
+    const quickAccessFiles = files.slice(0, 4); // 4 most recent files
+
+    // File type icon + color mapping
+    const getFileTypeInfo = (fileName, fileType) => {
+        const ext = getFileExt(fileName, fileType);
+        const map = {
+            // Documents
+            pdf:  { color: 'bg-red-600/20', text: 'text-red-500', label: 'PDF' },
+            doc:  { color: 'bg-blue-600/20', text: 'text-blue-500', label: 'DOC' },
+            docx: { color: 'bg-blue-600/20', text: 'text-blue-500', label: 'DOC' },
+            txt:  { color: 'bg-slate-600/20', text: 'text-slate-400', label: 'TXT' },
+            md:   { color: 'bg-slate-600/20', text: 'text-slate-400', label: 'MD' },
+            // Spreadsheets
+            xls:  { color: 'bg-green-600/20', text: 'text-green-500', label: 'XLS' },
+            xlsx: { color: 'bg-green-600/20', text: 'text-green-500', label: 'XLS' },
+            csv:  { color: 'bg-green-600/20', text: 'text-green-500', label: 'CSV' },
+            // Images
+            jpg:  { color: 'bg-purple-600/20', text: 'text-purple-500', label: 'IMG' },
+            jpeg: { color: 'bg-purple-600/20', text: 'text-purple-500', label: 'IMG' },
+            png:  { color: 'bg-purple-600/20', text: 'text-purple-500', label: 'IMG' },
+            gif:  { color: 'bg-purple-600/20', text: 'text-purple-500', label: 'IMG' },
+            webp: { color: 'bg-purple-600/20', text: 'text-purple-500', label: 'IMG' },
+            svg:  { color: 'bg-purple-600/20', text: 'text-purple-500', label: 'SVG' },
+            // Video
+            mp4:  { color: 'bg-pink-600/20', text: 'text-pink-500', label: 'VID' },
+            webm: { color: 'bg-pink-600/20', text: 'text-pink-500', label: 'VID' },
+            mov:  { color: 'bg-pink-600/20', text: 'text-pink-500', label: 'VID' },
+            // Audio
+            mp3:  { color: 'bg-amber-600/20', text: 'text-amber-500', label: 'MP3' },
+            wav:  { color: 'bg-amber-600/20', text: 'text-amber-500', label: 'WAV' },
+            flac: { color: 'bg-amber-600/20', text: 'text-amber-500', label: 'AUD' },
+            aac:  { color: 'bg-amber-600/20', text: 'text-amber-500', label: 'AUD' },
+            // Code
+            js:   { color: 'bg-yellow-600/20', text: 'text-yellow-500', label: 'JS' },
+            py:   { color: 'bg-sky-600/20', text: 'text-sky-500', label: 'PY' },
+            html: { color: 'bg-orange-600/20', text: 'text-orange-500', label: 'HTML' },
+            css:  { color: 'bg-blue-600/20', text: 'text-blue-400', label: 'CSS' },
+            json: { color: 'bg-yellow-600/20', text: 'text-yellow-400', label: 'JSON' },
+            // Archives
+            zip:  { color: 'bg-yellow-600/20', text: 'text-yellow-500', label: 'ZIP' },
+            rar:  { color: 'bg-yellow-600/20', text: 'text-yellow-500', label: 'RAR' },
+            '7z': { color: 'bg-yellow-600/20', text: 'text-yellow-500', label: '7Z' },
+        };
+        return map[ext] || { color: 'bg-slate-600/20', text: 'text-slate-400', label: ext?.toUpperCase() || 'FILE' };
+    };
+
+    // Context menu handlers
+    const handleContextMenu = (e, item) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const rect = e.currentTarget.closest('table')?.getBoundingClientRect() || { left: 0, top: 0 };
+        setContextMenu({ x: e.clientX, y: e.clientY, item });
+    };
+    const closeContextMenu = () => setContextMenu(null);
+
+    // Close context menu on click outside
+    useEffect(() => {
+        if (!contextMenu) return;
+        const handler = () => closeContextMenu();
+        window.addEventListener('click', handler);
+        return () => window.removeEventListener('click', handler);
+    }, [contextMenu]);
+
+    // Format date for table display
+    const formatDate = (ts) => {
+        if (!ts) return '—';
+        const d = ts?.toDate ? ts.toDate() : new Date(ts);
+        const now = new Date();
+        const diff = now - d;
+        if (diff < 86400000 && d.getDate() === now.getDate()) return 'Today';
+        if (diff < 172800000) return 'Yesterday';
+        return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: d.getFullYear() !== now.getFullYear() ? 'numeric' : undefined });
+    };
+
+    const formatSize = (bytes) => {
+        if (!bytes) return '—';
+        if (bytes < 1024) return `${bytes} B`;
+        if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+        if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+        return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
+    };
+
     // --- FILE VIEWER LOGIC ---
     const registerFileWithSW = async (item) => {
         if (!('serviceWorker' in navigator)) {
@@ -1643,139 +1735,432 @@ const DashboardView = () => {
     };
 
     return (
-        <div className="min-h-screen bg-gray-900 text-white flex items-center justify-center p-4 font-sans"
+        <div className="h-screen flex flex-col bg-[#0f172a] text-white font-sans"
             onDragEnter={handleDragEnter}
             onDragLeave={handleDragLeave}
             onDragOver={handleDragOver}
             onDrop={handleDrop}
         >
-            {/* Drag overlay */}
+            {/* ═══ DRAG OVERLAY ═══ */}
             {isDragging && (
-                <div className="fixed inset-0 bg-indigo-900/60 backdrop-blur-sm z-50 flex items-center justify-center pointer-events-none">
-                    <div className="border-4 border-dashed border-indigo-400 rounded-2xl p-16 text-center">
-                        <svg className="w-16 h-16 mx-auto mb-4 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <div className="fixed inset-0 bg-blue-900/60 backdrop-blur-sm z-50 flex items-center justify-center pointer-events-none">
+                    <div className="border-4 border-dashed border-blue-400 rounded-2xl p-16 text-center">
+                        <svg className="w-16 h-16 mx-auto mb-4 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
                         </svg>
-                        <p className="text-2xl font-bold text-indigo-300">Drop files or folders to upload</p>
-                        <p className="text-indigo-400 mt-2">Folder structure will be preserved</p>
+                        <p className="text-2xl font-bold text-blue-300">Drop files or folders to upload</p>
+                        <p className="text-blue-400 mt-2">Folder structure will be preserved</p>
                     </div>
                 </div>
             )}
-            <div className="w-full max-w-3xl bg-gray-800 rounded-xl shadow-2xl p-4 sm:p-6">
-                <div className="flex justify-between items-center mb-4">
-                    <div className="flex items-center gap-2">
-                        <img src="/logo.png" alt="DC" className="w-7 h-7 sm:hidden" />
-                        <h1 className="hidden sm:block text-3xl font-bold text-indigo-400">DaemonClient</h1>
-                    </div>
-                    <div className="flex items-center gap-2 sm:gap-4">
-                        <button onClick={() => { const photosUrl = window.location.hostname === 'localhost' ? '#photos' : 'https://photos.daemonclient.uz'; if (photosUrl.startsWith('http')) window.location.href = photosUrl; else window.__setAppState?.('photos'); }} className="bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white py-2 px-3 rounded-lg text-sm font-semibold flex items-center gap-1.5 transition-all" title="Photos">
-                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
-                            <span className="hidden sm:inline">Photos</span>
-                        </button>
-                        <button onClick={() => setIsSettingsOpen(true)} className="text-gray-400 hover:text-white p-1" title="Settings"><SettingsIcon /></button>
-                        <button onClick={handleLogout} className="bg-red-500 hover:bg-red-600 text-white py-2 px-3 sm:px-4 rounded-lg text-sm"><span className="hidden sm:inline">Logout</span><svg className="sm:hidden" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></button>
-                    </div>
-                </div>
-                <div className="bg-gray-700 p-4 rounded-lg mb-4">
-                    <h2 className="text-xl font-semibold mb-2">Upload Files</h2>
-                    <input type="file" ref={fileInputRef} onChange={handleFileUpload} className="hidden" disabled={isBusy} multiple />
-                    <input type="file" ref={folderInputRef} onChange={handleFolderInputChange} className="hidden" disabled={isBusy} webkitdirectory="" directory="" multiple />
-                    <input type="file" ref={resumeInputRef} onChange={handleResumeFileSelected} className="hidden" />
-                    <div className="flex gap-2 mt-2">
-                        <button onClick={() => fileInputRef.current.click()} disabled={isBusy} className="flex-1 bg-indigo-500 hover:bg-indigo-600 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-2 px-4 rounded-lg">
-                            {isUploading ? 'Uploading...' : 'Upload Files'}
-                        </button>
-                        <button onClick={() => folderInputRef.current.click()} disabled={isBusy} className="flex-1 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-2 px-4 rounded-lg">
-                            Upload Folder
-                        </button>
-                    </div>
-                    <p className="text-xs text-gray-400 mt-2 text-center">or drag & drop files/folders anywhere</p>
+
+            {/* ═══ HEADER ═══ */}
+            <header className="h-14 flex items-center justify-between px-4 md:px-6 bg-[#0f172a] border-b border-slate-800 sticky top-0 z-40 shrink-0">
+                <div className="flex items-center gap-2 min-w-0">
+                    <button className="md:hidden p-1.5 text-slate-400 hover:text-white rounded" onClick={() => setSidebarCollapsed(c => !c)}>
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" /></svg>
+                    </button>
+                    <span className="text-lg font-bold tracking-tight whitespace-nowrap">DaemonClient</span>
+                    {!isOnline && <span className="ml-2 text-xs bg-yellow-500/20 text-yellow-400 px-2 py-0.5 rounded-full flex items-center gap-1"><span className="w-1.5 h-1.5 bg-yellow-400 rounded-full animate-pulse" />Offline</span>}
                 </div>
 
-                {/* Offline indicator */}
-                {!isOnline && (
-                    <div className="bg-yellow-900/60 border border-yellow-600/40 text-yellow-300 p-3 rounded-lg mb-3 flex items-center gap-2 text-sm">
-                        <span className="w-2 h-2 rounded-full bg-yellow-400 animate-pulse" />
-                        Offline — uploads will auto-resume when connection returns
+                {/* Search */}
+                <div className="flex-1 max-w-xl px-4 hidden md:block">
+                    <div className="relative">
+                        <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+                        <input
+                            type="text"
+                            placeholder="Search in Drive"
+                            value={searchTerm}
+                            onChange={e => setSearchTerm(e.target.value)}
+                            className="block w-full bg-slate-800/80 border-none rounded-lg py-2 pl-10 pr-3 text-sm placeholder-slate-500 focus:ring-2 focus:ring-blue-500 focus:bg-slate-700 transition-all outline-none"
+                        />
                     </div>
-                )}
+                </div>
 
-                {/* Resume incomplete uploads banner */}
-                {incompleteSessions.length > 0 && !isUploading && (
-                    <div className="bg-indigo-900/40 border border-indigo-500/30 rounded-lg p-4 mb-3">
-                        <div className="flex items-center gap-2 mb-2">
-                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#818cf8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
-                            <span className="text-indigo-300 font-medium text-sm">{incompleteSessions.length} incomplete upload{incompleteSessions.length > 1 ? 's' : ''} found</span>
+                {/* Right actions */}
+                <div className="flex items-center gap-2">
+                    <button onClick={() => setIsSettingsOpen(true)} className="p-2 text-slate-400 hover:text-white rounded-full hover:bg-slate-800 transition-colors" title="Settings">
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><circle cx="12" cy="12" r="3" /></svg>
+                    </button>
+                    <button onClick={handleLogout} className="bg-red-500 hover:bg-red-600 text-white px-3 py-1.5 rounded text-sm font-medium transition-colors">Logout</button>
+                </div>
+            </header>
+
+            <div className="flex flex-1 overflow-hidden">
+                {/* ═══ SIDEBAR ═══ */}
+                <aside className={`${sidebarCollapsed ? 'translate-x-0' : '-translate-x-full'} md:translate-x-0 fixed md:relative z-30 w-56 bg-slate-900/95 md:bg-transparent p-4 flex flex-col gap-6 h-[calc(100vh-3.5rem)] border-r border-slate-800/60 transition-transform duration-200`}>
+                    <nav className="space-y-0.5">
+                        {[
+                            { id: 'home', label: 'Home', icon: <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" /></svg> },
+                            { id: 'recent', label: 'Recent', icon: <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg> },
+                            { id: 'starred', label: 'Starred', icon: <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.382-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" /></svg> },
+                            { id: 'trash', label: 'Trash', icon: <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg> },
+                        ].map(nav => (
+                            <button
+                                key={nav.id}
+                                onClick={() => { setSidebarView(nav.id); setSidebarCollapsed(false); }}
+                                className={`dc-nav-item w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium ${sidebarView === nav.id ? 'bg-slate-800 text-white' : 'text-slate-400 hover:bg-slate-800/60 hover:text-white'}`}
+                            >
+                                {nav.icon}
+                                {nav.label}
+                            </button>
+                        ))}
+                    </nav>
+
+                    {/* Storage */}
+                    <div className="mt-auto border-t border-slate-800 pt-6">
+                        <h3 className="text-xs font-semibold text-slate-500 mb-3 px-1 uppercase tracking-wider">Storage</h3>
+                        <div className="px-1">
+                            <div className="h-1.5 w-full bg-slate-700 rounded-full overflow-hidden dc-storage-bar">
+                                <div className="h-full bg-blue-500 rounded-full transition-all duration-500" style={{ width: `${Math.min(100, (totalItems * 19) / 1000 * 100)}%` }} />
+                            </div>
+                            <p className="text-xs text-slate-400 mt-2">{totalItems} files · {formatSize(items.reduce((s, i) => s + (i.fileSize || 0), 0))} used</p>
                         </div>
-                        {incompleteSessions.map(session => {
-                            const pct = Math.round(((session.completedParts?.length || 0) / session.totalParts) * 100);
-                            return (
-                                <div key={session.sessionId} className="flex items-center justify-between bg-gray-800/50 rounded-lg p-3 mt-2">
-                                    <div className="flex-1 min-w-0 mr-3">
-                                        <p className="text-white text-sm font-medium truncate">{session.fileName}</p>
-                                        <div className="flex items-center gap-2 mt-1">
-                                            <div className="flex-1 h-1.5 bg-gray-700 rounded-full overflow-hidden">
-                                                <div className="h-full bg-indigo-500 rounded-full transition-all" style={{ width: `${pct}%` }} />
+                    </div>
+                </aside>
+
+                {/* Mobile sidebar overlay */}
+                {sidebarCollapsed && <div className="fixed inset-0 z-20 bg-black/40 md:hidden" onClick={() => setSidebarCollapsed(false)} />}
+
+                {/* ═══ MAIN CONTENT ═══ */}
+                <main className="flex-1 overflow-y-auto dc-scrollbar bg-slate-900 p-4 md:p-8" onClick={() => { closeContextMenu(); }}>
+                    <div className={`max-w-6xl mx-auto space-y-8 ${detailItem ? 'mr-0 lg:mr-80' : ''} transition-all`}>
+                        
+                        {/* Mobile search */}
+                        <div className="md:hidden">
+                            <div className="relative">
+                                <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+                                <input type="text" placeholder="Search files..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="block w-full bg-slate-800 border-none rounded-lg py-2 pl-10 pr-3 text-sm placeholder-slate-500 focus:ring-2 focus:ring-blue-500 outline-none" />
+                            </div>
+                        </div>
+
+                        {/* Resume banner */}
+                        {incompleteSessions.length > 0 && !isUploading && (
+                            <div className="bg-indigo-900/30 border border-indigo-500/20 rounded-xl p-4">
+                                <div className="flex items-center gap-2 mb-2">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#818cf8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
+                                    <span className="text-indigo-300 font-medium text-sm">{incompleteSessions.length} incomplete upload{incompleteSessions.length > 1 ? 's' : ''}</span>
+                                </div>
+                                {incompleteSessions.map(session => {
+                                    const pct = Math.round(((session.completedParts?.length || 0) / session.totalParts) * 100);
+                                    return (
+                                        <div key={session.sessionId} className="flex items-center justify-between bg-slate-800/50 rounded-lg p-3 mt-2">
+                                            <div className="flex-1 min-w-0 mr-3">
+                                                <p className="text-white text-sm font-medium truncate">{session.fileName}</p>
+                                                <div className="flex items-center gap-2 mt-1">
+                                                    <div className="flex-1 h-1.5 bg-slate-700 rounded-full overflow-hidden"><div className="h-full bg-indigo-500 rounded-full" style={{ width: `${pct}%` }} /></div>
+                                                    <span className="text-xs text-slate-400 whitespace-nowrap">{pct}% · {formatSize(session.fileSize)}</span>
+                                                </div>
                                             </div>
-                                            <span className="text-xs text-gray-400 whitespace-nowrap">{pct}% • {(session.fileSize / 1024 / 1024).toFixed(1)} MB</span>
+                                            <div className="flex gap-2">
+                                                <button onClick={() => handleResumeUpload(session)} className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-medium py-1.5 px-3 rounded-md transition-colors">↻ Resume</button>
+                                                <button onClick={() => handleDismissSession(session.sessionId)} className="bg-slate-700 hover:bg-slate-600 text-white text-xs py-1.5 px-2 rounded-md transition-colors">✕</button>
+                                            </div>
                                         </div>
+                                    );
+                                })}
+                            </div>
+                        )}
+
+                        {/* HOME VIEW */}
+                        {sidebarView === 'home' && (
+                            <>
+                                {/* ── Breadcrumbs + Actions ── */}
+                                <div className="flex items-center justify-between flex-wrap gap-3">
+                                    <div className="flex items-center gap-1 text-sm">
+                                        {folderHierarchy.map((f, i) => (
+                                            <span key={f.id} className="flex items-center">
+                                                {i > 0 && <svg className="w-4 h-4 text-slate-600 mx-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>}
+                                                <button onClick={() => handleBreadcrumbNavigate(f.id)} className={`hover:text-blue-400 transition-colors ${i === folderHierarchy.length - 1 ? 'text-white font-medium' : 'text-slate-400'}`}>
+                                                    {f.name}
+                                                </button>
+                                            </span>
+                                        ))}
                                     </div>
                                     <div className="flex gap-2">
-                                        <button onClick={() => handleResumeUpload(session)} className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-medium py-1.5 px-3 rounded-md transition-colors">↻ Resume</button>
-                                        <button onClick={() => handleDismissSession(session.sessionId)} className="bg-gray-600 hover:bg-gray-500 text-white text-xs py-1.5 px-2 rounded-md transition-colors" title="Dismiss">✕</button>
+                                        <button onClick={handleCreateFolder} disabled={isBusy} className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-sm font-medium transition-all hover:shadow-lg hover:shadow-blue-600/20">New Folder</button>
+                                        <input type="file" ref={fileInputRef} onChange={handleFileUpload} className="hidden" disabled={isBusy} multiple />
+                                        <input type="file" ref={folderInputRef} onChange={handleFolderInputChange} className="hidden" disabled={isBusy} webkitdirectory="" directory="" multiple />
+                                        <input type="file" ref={resumeInputRef} onChange={handleResumeFileSelected} className="hidden" />
+                                        <button onClick={() => fileInputRef.current.click()} disabled={isBusy} className="bg-slate-800 hover:bg-slate-700 border border-slate-700 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-sm font-medium transition-all">Upload Files</button>
+                                        <button onClick={() => folderInputRef.current.click()} disabled={isBusy} className="bg-slate-800 hover:bg-slate-700 border border-slate-700 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-sm font-medium transition-all hidden md:block">Upload Folder</button>
                                     </div>
                                 </div>
-                            );
-                        })}
+
+                                {/* ── Quick Access ── */}
+                                {quickAccessFiles.length > 0 && currentFolderId === 'root' && !searchTerm && (
+                                    <section>
+                                        <h2 className="text-lg font-semibold mb-4">Quick Access</h2>
+                                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                                            {quickAccessFiles.map(file => {
+                                                const info = getFileTypeInfo(file.fileName, file.fileType);
+                                                const ext = getFileExt(file.fileName, file.fileType);
+                                                const isImage = ['jpg','jpeg','png','gif','webp','svg'].includes(ext);
+                                                return (
+                                                    <div key={file.id} className="dc-quick-card bg-slate-800 rounded-xl p-3 border border-slate-700/60 cursor-pointer" onClick={() => setDetailItem(file)} onDoubleClick={() => handleFileOpen(file)}>
+                                                        <div className="aspect-[16/10] bg-slate-700/50 rounded-lg mb-3 overflow-hidden flex items-center justify-center">
+                                                            {isImage ? (
+                                                                <div className="w-full h-full flex items-center justify-center bg-purple-900/20">
+                                                                    <svg className="w-10 h-10 text-purple-400" fill="currentColor" viewBox="0 0 24 24"><path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/></svg>
+                                                                </div>
+                                                            ) : (
+                                                                <div className={`${info.color} p-4 rounded-lg`}>
+                                                                    <span className={`text-lg font-bold ${info.text}`}>{info.label}</span>
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                        <p className="text-sm font-medium text-slate-200 truncate px-1">{file.fileName}</p>
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    </section>
+                                )}
+
+                                {/* ── Folders ── */}
+                                {folders.length > 0 && (
+                                    <section>
+                                        <h2 className="text-lg font-semibold mb-4">Folders</h2>
+                                        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-3">
+                                            {folders.map(folder => (
+                                                <div
+                                                    key={folder.id}
+                                                    className="dc-folder-card bg-slate-800 border border-slate-700/60 rounded-xl p-4 flex flex-col items-center justify-center gap-2 cursor-pointer"
+                                                    onClick={() => handleFolderClick(folder)}
+                                                    onContextMenu={e => handleContextMenu(e, folder)}
+                                                >
+                                                    <svg className="w-10 h-10 text-slate-400 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" /></svg>
+                                                    <span className="text-sm font-medium text-slate-300 truncate max-w-full">{folder.fileName}</span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </section>
+                                )}
+
+                                {/* ── Files Table ── */}
+                                <section>
+                                    <h2 className="text-lg font-semibold mb-4">Files</h2>
+                                    {isLoadingFiles ? (
+                                        <div className="flex items-center justify-center py-12">
+                                            <div className="w-7 h-7 border-2 border-slate-600 border-t-blue-500 rounded-full animate-spin" />
+                                        </div>
+                                    ) : files.length === 0 && folders.length === 0 ? (
+                                        <div className="text-center py-16">
+                                            <svg className="w-16 h-16 mx-auto mb-4 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" /></svg>
+                                            <p className="text-slate-500 text-lg">This folder is empty</p>
+                                            <p className="text-slate-600 text-sm mt-1">Drop files here or click Upload</p>
+                                        </div>
+                                    ) : files.length > 0 ? (
+                                        <div className="w-full overflow-x-auto">
+                                            <table className="w-full text-left text-sm">
+                                                <thead className="text-slate-500 font-medium uppercase text-xs tracking-wider border-b border-slate-800">
+                                                    <tr>
+                                                        <th className="py-3 px-4">Name</th>
+                                                        <th className="py-3 px-4 hidden md:table-cell">Last Modified</th>
+                                                        <th className="py-3 px-4 hidden sm:table-cell">File Size</th>
+                                                        <th className="py-3 px-4 w-10"></th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody className="divide-y divide-slate-800/60">
+                                                    {files.map(file => {
+                                                        const info = getFileTypeInfo(file.fileName, file.fileType);
+                                                        const isSelected = detailItem?.id === file.id;
+                                                        const isEditing = editingFileId === file.id;
+                                                        
+                                                        if (isEditing) {
+                                                            return (
+                                                                <tr key={file.id} className="bg-slate-800/50">
+                                                                    <td colSpan="4" className="py-3 px-4">
+                                                                        <div className="flex items-center gap-2">
+                                                                            <input type="text" value={renameValue} onChange={e => setRenameValue(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') handleSaveRename(file.id, renameValue); if (e.key === 'Escape') handleCancelRename(); }} className="flex-1 p-2 bg-slate-700 border border-blue-500 rounded-lg text-white text-sm outline-none" autoFocus />
+                                                                            <button onClick={() => handleSaveRename(file.id, renameValue)} className="bg-blue-600 hover:bg-blue-700 text-white text-sm py-2 px-3 rounded-lg">Save</button>
+                                                                            <button onClick={handleCancelRename} className="bg-slate-700 hover:bg-slate-600 text-white text-sm py-2 px-3 rounded-lg">Cancel</button>
+                                                                        </div>
+                                                                    </td>
+                                                                </tr>
+                                                            );
+                                                        }
+
+                                                        return (
+                                                            <tr
+                                                                key={file.id}
+                                                                className={`dc-file-row group cursor-pointer ${isSelected ? 'selected' : ''}`}
+                                                                onClick={() => setDetailItem(file)}
+                                                                onDoubleClick={() => handleFileOpen(file)}
+                                                                onContextMenu={e => handleContextMenu(e, file)}
+                                                            >
+                                                                <td className="py-3 px-4">
+                                                                    <div className="flex items-center gap-3">
+                                                                        <div className={`w-8 h-8 rounded-lg ${info.color} flex items-center justify-center shrink-0`}>
+                                                                            <span className={`text-xs font-bold ${info.text}`}>{info.label}</span>
+                                                                        </div>
+                                                                        <span className="font-medium text-slate-200 truncate">{file.fileName}</span>
+                                                                        {file.encrypted && <svg className="w-3.5 h-3.5 text-emerald-500 shrink-0" fill="currentColor" viewBox="0 0 24 24"><path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z"/></svg>}
+                                                                    </div>
+                                                                </td>
+                                                                <td className="py-3 px-4 text-slate-400 hidden md:table-cell">{formatDate(file.uploadedAt)}</td>
+                                                                <td className="py-3 px-4 text-slate-400 hidden sm:table-cell">{formatSize(file.fileSize)}</td>
+                                                                <td className="py-3 px-4">
+                                                                    <button
+                                                                        onClick={e => { e.stopPropagation(); handleContextMenu(e, file); }}
+                                                                        className="text-slate-400 hover:text-white p-1 rounded-full hover:bg-slate-700 opacity-0 group-hover:opacity-100 transition-opacity"
+                                                                    >
+                                                                        <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20"><path d="M10 6a2 2 0 110-4 2 2 0 010 4zM10 12a2 2 0 110-4 2 2 0 010 4zM10 18a2 2 0 110-4 2 2 0 010 4z" /></svg>
+                                                                    </button>
+                                                                </td>
+                                                            </tr>
+                                                        );
+                                                    })}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    ) : null}
+                                </section>
+                            </>
+                        )}
+
+                        {/* PLACEHOLDER VIEWS */}
+                        {sidebarView !== 'home' && (
+                            <div className="flex flex-col items-center justify-center py-24 text-center">
+                                <div className="w-20 h-20 rounded-2xl bg-slate-800 flex items-center justify-center mb-6">
+                                    {sidebarView === 'recent' && <svg className="w-10 h-10 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>}
+                                    {sidebarView === 'starred' && <svg className="w-10 h-10 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.382-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" /></svg>}
+                                    {sidebarView === 'trash' && <svg className="w-10 h-10 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>}
+                                </div>
+                                <h2 className="text-xl font-semibold text-slate-300 mb-2">{sidebarView.charAt(0).toUpperCase() + sidebarView.slice(1)}</h2>
+                                <p className="text-slate-500">Coming soon</p>
+                            </div>
+                        )}
+                    </div>
+                </main>
+
+                {/* ═══ CONTEXT MENU ═══ */}
+                {contextMenu && (
+                    <div
+                        className="dc-context-menu fixed z-50 w-48 bg-slate-800 border border-slate-700 rounded-lg shadow-2xl overflow-hidden"
+                        style={{ left: Math.min(contextMenu.x, window.innerWidth - 200), top: Math.min(contextMenu.y, window.innerHeight - 300) }}
+                        onClick={e => e.stopPropagation()}
+                    >
+                        <ul className="py-1">
+                            {contextMenu.item.type !== 'folder' && (
+                                <>
+                                    <li><button onClick={() => { handleFileOpen(contextMenu.item); closeContextMenu(); }} className="w-full text-left px-4 py-2 hover:bg-slate-700 flex items-center gap-3 text-slate-200 text-sm">
+                                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
+                                        Open
+                                    </button></li>
+                                    <li><button onClick={() => { handleFileDownload(contextMenu.item); closeContextMenu(); }} className="w-full text-left px-4 py-2 hover:bg-slate-700 flex items-center gap-3 text-slate-200 text-sm">
+                                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+                                        Download
+                                    </button></li>
+                                </>
+                            )}
+                            <li className="border-t border-slate-700 my-1" />
+                            <li><button onClick={() => { handleStartRename(contextMenu.item.id, contextMenu.item.fileName); closeContextMenu(); }} className="w-full text-left px-4 py-2 hover:bg-slate-700 flex items-center gap-3 text-slate-200 text-sm">
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
+                                Rename
+                            </button></li>
+                            <li><button onClick={() => { setDetailItem(contextMenu.item); closeContextMenu(); }} className="w-full text-left px-4 py-2 hover:bg-slate-700 flex items-center gap-3 text-slate-200 text-sm">
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                                View Details
+                            </button></li>
+                            <li className="border-t border-slate-700 my-1" />
+                            <li><button onClick={() => { handleFileDelete(contextMenu.item); closeContextMenu(); setDetailItem(null); }} className="w-full text-left px-4 py-2 hover:bg-red-900/40 flex items-center gap-3 text-red-500 text-sm">
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                                Delete
+                            </button></li>
+                        </ul>
                     </div>
                 )}
 
-                {isUploading && <ProgressBar {...uploadProgress} onCancel={handleCancelTransfer} />}
-
-                <div className="bg-gray-700 p-4 rounded-lg mt-4">
-                    <div className="flex justify-between items-center mb-4">
-                        <h2 className="text-xl font-semibold">Your Files</h2>
-                        <div className="flex items-center space-x-2">
-                            <button onClick={handleCreateFolder} disabled={isBusy} className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-1 px-2 rounded-lg text-sm flex items-center" title="Create Folder">
-                                <CreateFolderIcon />
-                                <span className="ml-1">New Folder</span>
+                {/* ═══ DETAIL PANEL ═══ */}
+                {detailItem && (
+                    <div className="dc-detail-panel hidden lg:flex flex-col w-80 border-l border-slate-800 bg-slate-900 p-5 overflow-y-auto dc-scrollbar shrink-0">
+                        <div className="flex items-center justify-between mb-5">
+                            <div className="flex gap-2">
+                                {detailItem.type !== 'folder' && (
+                                    <>
+                                        <button onClick={() => handleFileDownload(detailItem)} className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors" title="Download">
+                                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+                                        </button>
+                                        <button onClick={() => handleFileOpen(detailItem)} className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors" title="Open">
+                                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
+                                        </button>
+                                    </>
+                                )}
+                                <button onClick={() => { handleFileDelete(detailItem); setDetailItem(null); }} className="p-2 rounded-lg bg-slate-800 hover:bg-red-900/50 text-red-400 transition-colors" title="Delete">
+                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                                </button>
+                            </div>
+                            <button onClick={() => setDetailItem(null)} className="p-1.5 text-slate-500 hover:text-white rounded-full hover:bg-slate-800 transition-colors">
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
                             </button>
-                            <input type="text" placeholder="Search files..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full p-2 bg-gray-800 border border-gray-600 rounded-lg text-white text-sm" disabled={isBusy} />
+                        </div>
+
+                        {/* Preview */}
+                        <div className="aspect-[4/3] bg-slate-800 rounded-xl mb-5 flex items-center justify-center overflow-hidden">
+                            {detailItem.type === 'folder' ? (
+                                <svg className="w-16 h-16 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" /></svg>
+                            ) : (() => {
+                                const info = getFileTypeInfo(detailItem.fileName, detailItem.fileType);
+                                return (
+                                    <div className="text-center">
+                                        <div className={`w-16 h-16 mx-auto rounded-xl ${info.color} flex items-center justify-center mb-3`}>
+                                            <span className={`text-xl font-bold ${info.text}`}>{info.label}</span>
+                                        </div>
+                                    </div>
+                                );
+                            })()}
+                        </div>
+
+                        {/* File info */}
+                        <h3 className="text-lg font-semibold mb-4 break-words">{detailItem.fileName}</h3>
+                        <div className="space-y-3 text-sm">
+                            {detailItem.type !== 'folder' && (
+                                <>
+                                    <div className="flex justify-between"><span className="text-slate-400">Type</span><span className="text-slate-200">{getFileTypeInfo(detailItem.fileName, detailItem.fileType).label}</span></div>
+                                    <div className="flex justify-between"><span className="text-slate-400">Size</span><span className="text-slate-200">{formatSize(detailItem.fileSize)}</span></div>
+                                </>
+                            )}
+                            <div className="flex justify-between"><span className="text-slate-400">Modified</span><span className="text-slate-200">{formatDate(detailItem.uploadedAt)}</span></div>
+                            {detailItem.encrypted && (
+                                <div className="flex justify-between"><span className="text-slate-400">Encryption</span><span className="text-emerald-400 flex items-center gap-1"><svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z"/></svg>ZKE Enabled</span></div>
+                            )}
+                            {detailItem.messages && (
+                                <div className="flex justify-between"><span className="text-slate-400">Chunks</span><span className="text-slate-200">{detailItem.messages.length}</span></div>
+                            )}
                         </div>
                     </div>
+                )}
+            </div>
 
-                    <Breadcrumbs hierarchy={folderHierarchy} onNavigate={handleBreadcrumbNavigate} />
-
-                    <div className="mt-2 space-y-2 max-h-60 overflow-y-auto pr-2">
-                        {isLoadingFiles ? (<p className="text-center text-gray-400 py-4">Loading...</p>) :
-                            filteredItems.length > 0 ? (
-                                filteredItems.map(item => (
-                                    <FileItem
-                                        key={item.id}
-                                        item={item}
-                                        isEditing={editingFileId === item.id}
-                                        renameValue={renameValue}
-                                        setRenameValue={setRenameValue}
-                                        onStartRename={handleStartRename}
-                                        onCancelRename={handleCancelRename}
-                                        onSaveRename={handleSaveRename}
-                                        onDownload={handleFileDownload}
-                                        onDelete={handleFileDelete}
-                                        onFolderClick={handleFolderClick}
-                                        onOpen={handleFileOpen}
-                                        isBusy={isBusy && editingFileId !== item.id}
-                                    />
-                                ))
-                            ) : (
-                                <p className="text-center text-gray-400 py-4">This folder is empty.</p>
-                            )
-                        }
+            {/* ═══ FLOATING PROGRESS TOAST ═══ */}
+            {(isUploading || isDownloading) && (
+                <div className="dc-progress-toast fixed bottom-6 right-6 z-40 w-80 bg-slate-800 border border-slate-700 rounded-xl shadow-2xl p-4">
+                    <div className="flex items-center justify-between mb-2">
+                        <span className="text-sm font-medium text-white truncate flex-1 mr-2">{isUploading ? uploadProgress.status : downloadProgress.status}</span>
+                        <button onClick={handleCancelTransfer} className="text-slate-400 hover:text-red-400 p-1 rounded transition-colors" title="Cancel">
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                        </button>
+                    </div>
+                    <div className="h-1.5 bg-slate-700 rounded-full overflow-hidden mb-2">
+                        <div className="h-full bg-blue-500 rounded-full transition-all duration-300" style={{ width: `${isUploading ? uploadProgress.percent : downloadProgress.percent}%` }} />
+                    </div>
+                    <div className="flex justify-between text-xs text-slate-400">
+                        <span>{isUploading ? uploadProgress.percent : downloadProgress.percent}%</span>
+                        <span>{isUploading ? `${uploadProgress.speed || ''} ${uploadProgress.eta ? '· ' + uploadProgress.eta : ''}` : `${downloadProgress.speed || ''}`}</span>
                     </div>
                 </div>
-                {isDownloading && <ProgressBar {...downloadProgress} onCancel={handleCancelTransfer} />}
-                {feedbackMessage.text && <div className={`mt-4 p-3 rounded-lg text-sm text-center ${feedbackMessage.type === 'error' ? 'bg-red-900 text-red-200' : feedbackMessage.type === 'success' ? 'bg-green-900 text-green-200' : 'bg-blue-900 text-blue-200'}`}>{feedbackMessage.text}</div>}
-                {!isUploading && !isDownloading && !feedbackMessage.text && <div className="h-12 mt-4"></div>}
-            </div>
+            )}
+
+            {/* ═══ FEEDBACK TOAST ═══ */}
+            {feedbackMessage.text && !isUploading && !isDownloading && (
+                <div className={`fixed bottom-6 right-6 z-40 max-w-sm px-4 py-3 rounded-xl shadow-2xl text-sm font-medium dc-progress-toast ${feedbackMessage.type === 'error' ? 'bg-red-900/90 text-red-200 border border-red-800' : feedbackMessage.type === 'success' ? 'bg-emerald-900/90 text-emerald-200 border border-emerald-800' : feedbackMessage.type === 'warning' ? 'bg-yellow-900/90 text-yellow-200 border border-yellow-800' : 'bg-blue-900/90 text-blue-200 border border-blue-800'}`}>
+                    {feedbackMessage.text}
+                </div>
+            )}
+
+            {/* ═══ MODALS ═══ */}
             {isSettingsOpen && config && <SettingsModal
                 initialConfig={config}
                 onSave={handleSaveSettings}

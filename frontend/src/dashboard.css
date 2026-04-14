@@ -1,0 +1,96 @@
+/* DaemonClient Dashboard — Custom styles that Tailwind can't handle */
+
+/* ── Custom Scrollbar ─────────────────────────────────────────── */
+.dc-scrollbar::-webkit-scrollbar {
+  width: 6px;
+}
+.dc-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.dc-scrollbar::-webkit-scrollbar-thumb {
+  background: #475569;
+  border-radius: 10px;
+}
+.dc-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #64748b;
+}
+
+/* ── Context Menu Animation ───────────────────────────────────── */
+.dc-context-menu {
+  animation: dc-dropdown-in 0.15s ease-out;
+  transform-origin: top right;
+}
+@keyframes dc-dropdown-in {
+  from { opacity: 0; transform: scale(0.95) translateY(-4px); }
+  to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+/* ── Detail Panel Slide ───────────────────────────────────────── */
+.dc-detail-panel {
+  animation: dc-slide-in 0.2s ease-out;
+}
+@keyframes dc-slide-in {
+  from { opacity: 0; transform: translateX(16px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+/* ── File Row Selection ───────────────────────────────────────── */
+.dc-file-row {
+  transition: background-color 0.1s ease;
+}
+.dc-file-row:hover {
+  background-color: rgba(30, 41, 59, 0.5);
+}
+.dc-file-row.selected {
+  background-color: rgba(59, 130, 246, 0.1);
+}
+
+/* ── Sidebar active indicator ─────────────────────────────────── */
+.dc-nav-item {
+  transition: all 0.15s ease;
+}
+
+/* ── Quick Access card hover ──────────────────────────────────── */
+.dc-quick-card {
+  transition: border-color 0.2s ease, transform 0.15s ease;
+}
+.dc-quick-card:hover {
+  border-color: #3b82f6;
+  transform: translateY(-1px);
+}
+
+/* ── Folder card hover ────────────────────────────────────────── */
+.dc-folder-card {
+  transition: all 0.15s ease;
+}
+.dc-folder-card:hover {
+  background-color: #283548;
+}
+.dc-folder-card:hover svg {
+  color: #60a5fa;
+}
+
+/* ── Progress toast ───────────────────────────────────────────── */
+.dc-progress-toast {
+  animation: dc-toast-in 0.25s ease-out;
+}
+@keyframes dc-toast-in {
+  from { opacity: 0; transform: translateY(16px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Storage bar glow ─────────────────────────────────────────── */
+.dc-storage-bar {
+  position: relative;
+  overflow: hidden;
+}
+.dc-storage-bar::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 8px;
+  background: linear-gradient(to right, transparent, rgba(59, 130, 246, 0.3));
+  border-radius: 0 9999px 9999px 0;
+}
