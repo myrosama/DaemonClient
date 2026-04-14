@@ -6,6 +6,7 @@ import 'firebase/compat/auth';
 import 'firebase/compat/firestore';
 import { deriveKey, encryptChunk, decryptChunk, generateSalt, generatePassword, bytesToBase64, base64ToBytes } from './crypto.js';
 import PhotosView from './PhotosView.jsx';
+import { getSyncEngine, destroySyncEngine } from './manifest-sync.js';
 
 // --- Firebase Initialization ---
 const firebaseConfig = {
@@ -519,6 +520,8 @@ const DashboardView = () => {
 
     // --- HELPER COMPONENTS (defined locally to DashboardView) ---
     const VIEWABLE_EXTENSIONS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'mp4', 'webm', 'ogg', 'mov'];
+    const AUDIO_EXTENSIONS = ['mp3', 'wav', 'flac', 'aac', 'm4a', 'opus', 'wma', 'oga'];
+    const TEXT_EXTENSIONS = ['txt', 'md', 'json', 'csv', 'xml', 'html', 'htm', 'js', 'jsx', 'ts', 'tsx', 'py', 'css', 'scss', 'java', 'cpp', 'c', 'h', 'rs', 'go', 'sh', 'bash', 'yaml', 'yml', 'toml', 'ini', 'cfg', 'log', 'sql', 'rb', 'php', 'swift', 'kt', 'lua', 'r', 'dockerfile', 'env', 'gitignore'];
     const PDF_EXTENSIONS = ['pdf'];
     const getFileExt = (name, type) => {
         const ext = (name || '').split('.').pop().toLowerCase();
@@ -536,7 +539,9 @@ const DashboardView = () => {
         const ext = getFileExt(item.fileName, item.fileType);
         const isViewable = !isFolder && VIEWABLE_EXTENSIONS.includes(ext);
         const isPdf = !isFolder && PDF_EXTENSIONS.includes(ext);
-        const isOpenable = isViewable || isPdf;
+        const isAudio = !isFolder && AUDIO_EXTENSIONS.includes(ext);
+        const isText = !isFolder && TEXT_EXTENSIONS.includes(ext);
+        const isOpenable = isViewable || isPdf || isAudio || isText;
 
         if (isEditing) {
             return (
@@ -560,7 +565,7 @@ const DashboardView = () => {
                     <div>
                         <p className="font-semibold text-white truncate w-32 md:w-52" title={item.fileName}>{item.fileName}</p>
                         {!isFolder && (
-                            <p className="text-xs text-gray-400">{(item.fileSize / 1024 / 1024).toFixed(2)} MB {item.uploadedAt?.toDate ? ` - ${item.uploadedAt.toDate().toLocaleDateString()}` : ''}</p>
+                            <p className="text-xs text-gray-400">{(item.fileSize / 1024 / 1024).toFixed(2)} MB {item.uploadedAt ? ` - ${(item.uploadedAt?.toDate ? item.uploadedAt.toDate() : new Date(item.uploadedAt)).toLocaleDateString()}` : ''}</p>
                         )}
                     </div>
                 </div>
@@ -573,7 +578,7 @@ const DashboardView = () => {
                     </button>
                     {/* Open: hidden on mobile for media, always shown on desktop for viewable + pdf */}
                     {isOpenable && (
-                        <button onClick={() => onOpen(item)} disabled={isBusy} className="hidden md:block bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-1 px-4 rounded-md text-sm transition-colors">{isPdf ? 'Open PDF' : 'Open'}</button>
+                        <button onClick={() => onOpen(item)} disabled={isBusy} className="hidden md:block bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-1 px-4 rounded-md text-sm transition-colors">{isPdf ? 'Open PDF' : isAudio ? '▶ Play' : isText ? 'View' : 'Open'}</button>
                     )}
                     {/* Download: icon on mobile, text on desktop */}
                     {!isFolder && (
@@ -676,26 +681,41 @@ const DashboardView = () => {
             setZkeLoading(false);
         });
 
-        // 2. Fetch Files & Folders for the currentFolderId
+        // 2. Fetch Files & Folders via Sync Engine (IndexedDB-first, ~0 Firestore reads)
         setIsLoadingFiles(true);
-        const itemsQuery = db.collection(`artifacts/${appIdentifier}/users/${currentUserID}/files`)
-            .where('parentId', '==', currentFolderId)
-            .orderBy('type', 'desc')
-            .orderBy('fileName', 'asc');
+        const syncEngine = getSyncEngine(currentUserID);
 
-        const unsubscribe = itemsQuery.onSnapshot(filesSnap => {
-            const filesData = filesSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+        // Initial load: returns from IndexedDB instantly, syncs Firestore in background
+        syncEngine.initialLoad().then(() => {
+            // Load items for current folder from IndexedDB
+            return syncEngine.getItemsInFolder(currentFolderId);
+        }).then(filesData => {
             setItems(filesData);
             setTotalItems(filesData.length);
             setIsLoadingFiles(false);
-        }, error => {
+        }).catch(error => {
             setFeedbackMessage({ type: 'error', text: `Error loading files: ${error.message}` });
             setIsLoadingFiles(false);
-            const timer = setTimeout(() => setFeedbackMessage({ type: '', text: '' }), 5000);
-            return () => clearTimeout(timer);
         });
 
-        return () => unsubscribe();
+        // Subscribe to background sync updates
+        const unsubSync = syncEngine.subscribe(async () => {
+            // Re-read current folder from IndexedDB when sync engine detects remote changes
+            try {
+                const refreshed = await syncEngine.getItemsInFolder(currentFolderId);
+                setItems(refreshed);
+                setTotalItems(refreshed.length);
+            } catch {}
+        });
+
+        // Flush pending writes on page unload
+        const handleBeforeUnload = () => syncEngine.forceSync();
+        window.addEventListener('beforeunload', handleBeforeUnload);
+
+        return () => {
+            unsubSync();
+            window.removeEventListener('beforeunload', handleBeforeUnload);
+        };
 
     }, [currentFolderId]);
 
@@ -727,8 +747,17 @@ const DashboardView = () => {
                     zkeEnabled ? encryptionKey : null
                 );
 
-                const newFileRef = db.collection(`artifacts/${appIdentifier}/users/${auth.currentUser.uid}/files`).doc();
-                await newFileRef.set({ id: newFileRef.id, ...newFileData });
+                // Save via sync engine (IndexedDB immediately + Firestore batched)
+                const newId = db.collection(`artifacts/${appIdentifier}/users/${auth.currentUser.uid}/files`).doc().id;
+                const syncEngine = getSyncEngine(auth.currentUser.uid);
+                const savedItem = await syncEngine.addItem({ id: newId, ...newFileData });
+                // Update local items list immediately (optimistic)
+                setItems(prev => [...prev, savedItem].sort((a, b) => {
+                    if (a.type === 'folder' && b.type !== 'folder') return -1;
+                    if (a.type !== 'folder' && b.type === 'folder') return 1;
+                    return (a.fileName || '').localeCompare(b.fileName || '');
+                }));
+                setTotalItems(prev => prev + 1);
 
                 setFeedbackMessage({ type: 'success', text: `Uploaded '${fileToUpload.name}'` });
 
@@ -819,7 +848,12 @@ const DashboardView = () => {
                 await deleteTelegramMessages(config.botToken, config.channelId, itemToDelete.messages);
             }
 
-            await db.collection(`artifacts/${appIdentifier}/users/${auth.currentUser.uid}/files`).doc(itemToDelete.id).delete();
+            // Delete via sync engine (IndexedDB immediately + Firestore batched)
+            const syncEngine = getSyncEngine(auth.currentUser.uid);
+            await syncEngine.removeItem(itemToDelete.id);
+            // Update local state immediately (optimistic)
+            setItems(prev => prev.filter(i => i.id !== itemToDelete.id));
+            setTotalItems(prev => prev - 1);
 
             setFeedbackMessage({ type: 'success', text: `Successfully deleted '${itemToDelete.fileName}'.` });
         } catch (err) {
@@ -837,14 +871,19 @@ const DashboardView = () => {
         const originalItem = items.find(f => f.id === fileId);
         if (originalItem.fileName === trimmedName) { handleCancelRename(); return; }
         try {
-            const fileRef = db.collection(`artifacts/${appIdentifier}/users/${auth.currentUser.uid}/files`).doc(fileId);
-            await fileRef.update({ fileName: trimmedName });
+            // Rename via sync engine (IndexedDB immediately + Firestore batched)
+            const syncEngine = getSyncEngine(auth.currentUser.uid);
+            await syncEngine.updateItem(fileId, { fileName: trimmedName });
+            // Update local state immediately (optimistic)
+            setItems(prev => prev.map(i => i.id === fileId ? { ...i, fileName: trimmedName } : i));
             setFeedbackMessage({ type: 'success', text: 'Renamed successfully!' });
         } catch (error) {
             setFeedbackMessage({ type: 'error', text: `Failed to rename: ${error.message}` });
         } finally { handleCancelRename(); clearFeedback(); }
     };
     const handleLogout = async () => {
+        // Flush pending Firestore writes before logout
+        try { await destroySyncEngine(); } catch {}
         // Destroy encryption key from memory
         setEncryptionKey(null);
         setZkeEnabled(false);
@@ -915,17 +954,28 @@ const DashboardView = () => {
         setFolderHierarchy(prev => prev.slice(0, index + 1));
     };
 
-    // --- Reusable folder creation helper ---
+    // --- Reusable folder creation helper (via sync engine) ---
     const createFolderInFirestore = async (name, parentId) => {
-        const ref = db.collection(`artifacts/${appIdentifier}/users/${auth.currentUser.uid}/files`).doc();
-        await ref.set({
-            id: ref.id,
+        const folderId = db.collection(`artifacts/${appIdentifier}/users/${auth.currentUser.uid}/files`).doc().id;
+        const syncEngine = getSyncEngine(auth.currentUser.uid);
+        const folderItem = {
+            id: folderId,
             fileName: name,
             type: 'folder',
             parentId: parentId,
-            uploadedAt: firebase.firestore.Timestamp.now()
-        });
-        return ref.id;
+            uploadedAt: Date.now(),
+        };
+        await syncEngine.addItem(folderItem);
+        // Update local UI if the folder is in the current view
+        if (parentId === currentFolderId) {
+            setItems(prev => [folderItem, ...prev].sort((a, b) => {
+                if (a.type === 'folder' && b.type !== 'folder') return -1;
+                if (a.type !== 'folder' && b.type === 'folder') return 1;
+                return (a.fileName || '').localeCompare(b.fileName || '');
+            }));
+            setTotalItems(prev => prev + 1);
+        }
+        return folderId;
     };
 
     const handleCreateFolder = async () => {
@@ -1327,7 +1377,7 @@ const DashboardView = () => {
             if (PDF_EXTENSIONS.includes(ext)) {
                 window.open(`/stream/${item.id}`, '_blank');
             } else {
-                // Images & Videos → show viewer modal
+                // Images, Videos, Audio, Text/Code → show viewer modal
                 setViewingFile(item);
             }
         } catch (err) {
@@ -1343,7 +1393,22 @@ const DashboardView = () => {
         const url = `/stream/${file.id}`;
         const isImage = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'].includes(ext);
         const isVideo = ['mp4', 'webm', 'ogg', 'mov'].includes(ext);
+        const isAudio = AUDIO_EXTENSIONS.includes(ext);
+        const isText = TEXT_EXTENSIONS.includes(ext);
         const [mediaLoaded, setMediaLoaded] = useState(false);
+        const [textContent, setTextContent] = useState(null);
+        const [textLoading, setTextLoading] = useState(false);
+
+        // Load text content when viewing text files
+        useEffect(() => {
+            if (isText && url) {
+                setTextLoading(true);
+                fetch(url)
+                    .then(res => res.text())
+                    .then(text => { setTextContent(text); setMediaLoaded(true); setTextLoading(false); })
+                    .catch(() => { setTextContent('Failed to load file content.'); setMediaLoaded(true); setTextLoading(false); });
+            }
+        }, [isText, url]);
 
         return (
             <div
@@ -1400,7 +1465,41 @@ const DashboardView = () => {
                             />
                         )}
 
-                        {!isImage && !isVideo && (
+                        {isAudio && (
+                            <div className={`w-full max-w-lg p-8 rounded-2xl transition-opacity duration-300 ${mediaLoaded ? 'opacity-100' : 'opacity-0'}`}
+                                style={{ background: 'linear-gradient(135deg, rgba(99,102,241,0.2) 0%, rgba(139,92,246,0.2) 100%)', backdropFilter: 'blur(20px)', border: '1px solid rgba(255,255,255,0.1)' }}>
+                                <div className="text-center mb-6">
+                                    <div className="w-20 h-20 mx-auto mb-4 rounded-2xl flex items-center justify-center" style={{ background: 'linear-gradient(135deg, #6366f1, #8b5cf6)' }}>
+                                        <svg width="32" height="32" viewBox="0 0 24 24" fill="white"><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55C7.79 13 6 14.79 6 17s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/></svg>
+                                    </div>
+                                    <p className="text-white font-medium text-lg truncate" title={file.fileName}>{file.fileName}</p>
+                                    <p className="text-white/40 text-sm mt-1">{(file.fileSize / 1024 / 1024).toFixed(2)} MB • {ext.toUpperCase()}</p>
+                                </div>
+                                <audio
+                                    controls
+                                    autoPlay
+                                    src={url}
+                                    onLoadedData={() => setMediaLoaded(true)}
+                                    onError={() => setMediaLoaded(true)}
+                                    className="w-full"
+                                    style={{ filter: 'invert(1) hue-rotate(180deg)', height: '40px' }}
+                                />
+                            </div>
+                        )}
+
+                        {isText && (
+                            <div className="w-full max-w-4xl max-h-[85vh] overflow-auto rounded-xl" style={{ background: '#1a1b26', border: '1px solid rgba(255,255,255,0.08)' }}>
+                                <div className="flex items-center justify-between px-4 py-2 border-b border-white/5" style={{ background: 'rgba(99,102,241,0.1)' }}>
+                                    <span className="text-white/60 text-xs font-mono">{file.fileName}</span>
+                                    <span className="text-white/30 text-xs">{textContent ? textContent.split('\n').length : 0} lines</span>
+                                </div>
+                                <pre className="p-4 text-sm text-white/80 font-mono whitespace-pre-wrap break-words leading-relaxed" style={{ tabSize: 4 }}>
+                                    {textLoading ? 'Loading...' : textContent}
+                                </pre>
+                            </div>
+                        )}
+
+                        {!isImage && !isVideo && !isAudio && !isText && (
                             <p className="text-white/50 text-sm">This file type cannot be previewed.</p>
                         )}
                     </div>

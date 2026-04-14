@@ -1,6 +1,6 @@
 import firebase from 'firebase/compat/app';
 import 'firebase/compat/firestore';
-import { encryptChunk } from '../crypto.js';
+import { encryptChunk, decryptChunk } from '../crypto.js';
 import exifr from 'exifr';
 
 // Lazy firebase references — do NOT call firebase.firestore() at module load 
@@ -12,8 +12,10 @@ const CHUNK_SIZE = 19 * 1024 * 1024;
 const PROXY_BASE_URL = "https://daemonclient-proxy.sadrikov49.workers.dev";
 export const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-// Thumbnail URL cache (in-memory)
+// Thumbnail blob URL cache (in-memory, never expires since blob URLs are local)
 const thumbUrlCache = new Map();
+// Track in-flight requests to avoid duplicate fetches
+const thumbInflight = new Map();
 
 // ── Thumbnail Generation ────────────────────────────────────────────────────
 export async function generateThumbnail(file, maxSize = 400) {
@@ -127,114 +129,166 @@ export async function uploadToTelegram(blob, fileName, botToken, channelId, onPr
     return { messages: uploadedMessageInfo, encrypted: isEncrypted };
 }
 
-// ── Upload thumbnail to Telegram as PHOTO (better caching & serving) ────────
-export async function uploadThumbnailToTelegram(thumbBlob, botToken, channelId) {
+// ── Upload thumbnail to Telegram (encrypted when ZKE enabled) ───────────────
+export async function uploadThumbnailToTelegram(thumbBlob, botToken, channelId, encryptionKey = null) {
     if (!thumbBlob) return null;
+    const isEncrypted = encryptionKey !== null;
+
+    let blobToUpload = thumbBlob;
+    if (isEncrypted) {
+        // Encrypt the thumbnail just like file chunks
+        const rawData = await thumbBlob.arrayBuffer();
+        const encryptedData = await encryptChunk(rawData, encryptionKey);
+        blobToUpload = new Blob([encryptedData]);
+    }
+
+    // Always use sendDocument for consistency (encrypted blobs aren't valid images)
     const formData = new FormData();
     formData.append('chat_id', channelId);
-    // Use sendPhoto — Telegram auto-creates optimized sizes & serves them faster
-    formData.append('photo', thumbBlob, `thumb_${Date.now()}.webp`);
-    const telegramUrl = `https://api.telegram.org/bot${botToken}/sendPhoto`;
+    const fileName = isEncrypted
+        ? `t_${Array.from(crypto.getRandomValues(new Uint8Array(6)), b => b.toString(16).padStart(2, '0')).join('')}.bin`
+        : `thumb_${Date.now()}.webp`;
+    formData.append('document', blobToUpload, fileName);
+
+    const telegramUrl = `https://api.telegram.org/bot${botToken}/sendDocument`;
     const proxyUrl = `${PROXY_BASE_URL}?url=${encodeURIComponent(telegramUrl)}`;
+
     for (let attempt = 1; attempt <= 3; attempt++) {
         try {
             const res = await fetch(proxyUrl, { method: 'POST', body: formData });
             const data = await res.json();
             if (data.ok) {
-                // sendPhoto returns an array of photo sizes — use the smallest for thumbnails
-                const photos = data.result.photo;
-                const smallest = photos[0]; // Telegram sorts by size ascending
-                const largest = photos[photos.length - 1];
                 return {
                     message_id: data.result.message_id,
-                    file_id: smallest.file_id, // small thumb
-                    file_id_hq: largest.file_id, // higher quality
+                    file_id: data.result.document.file_id,
+                    encrypted: isEncrypted,
                 };
+            }
+            if (data.error_code === 429) {
+                const wait = (data.parameters?.retry_after || 3) * 1000;
+                await sleep(wait + 500);
+                continue;
             }
         } catch {}
         await sleep(1500 * attempt);
     }
-    // Fallback: try as document if sendPhoto fails (e.g. for non-image thumbnails)
-    const formData2 = new FormData();
-    formData2.append('chat_id', channelId);
-    formData2.append('document', thumbBlob, `thumb_${Date.now()}.webp`);
-    const telegramUrl2 = `https://api.telegram.org/bot${botToken}/sendDocument`;
-    const proxyUrl2 = `${PROXY_BASE_URL}?url=${encodeURIComponent(telegramUrl2)}`;
-    try {
-        const res = await fetch(proxyUrl2, { method: 'POST', body: formData2 });
-        const data = await res.json();
-        if (data.ok) return { message_id: data.result.message_id, file_id: data.result.document.file_id };
-    } catch {}
     return null;
 }
 
-// ── Thumbnail URL caching (localStorage + memory) ──────────────────────────
-const THUMB_CACHE_KEY = 'dc_thumb_urls';
-const THUMB_CACHE_MAX_AGE = 3600 * 1000; // 1 hour (Telegram file URLs expire)
-
-function loadThumbCache() {
-    try {
-        const raw = localStorage.getItem(THUMB_CACHE_KEY);
-        if (!raw) return;
-        const data = JSON.parse(raw);
-        const now = Date.now();
-        Object.entries(data).forEach(([fileId, entry]) => {
-            if (now - entry.ts < THUMB_CACHE_MAX_AGE) {
-                thumbUrlCache.set(fileId, entry.url);
-            }
-        });
-    } catch {}
-}
-function saveThumbCache() {
-    try {
-        const obj = {};
-        thumbUrlCache.forEach((url, fileId) => { obj[fileId] = { url, ts: Date.now() }; });
-        localStorage.setItem(THUMB_CACHE_KEY, JSON.stringify(obj));
-    } catch {}
-}
-// Load cache on module init
-loadThumbCache();
-
-// ── Rate-limited thumbnail resolver ─────────────────────────────────────────
-// Queue system: resolves thumbnails one at a time with delay to avoid 429s
+// ── Concurrent thumbnail resolver with decryption support ──────────────────
+// Resolves thumbnails in parallel batches, decrypts if encrypted, caches as
+// local blob URLs (these never expire, unlike raw Telegram URLs).
+const THUMB_CONCURRENCY = 5;
 const _resolveQueue = [];
-let _resolving = false;
+let _activeWorkers = 0;
 
-async function _processResolveQueue() {
-    if (_resolving) return;
-    _resolving = true;
-    while (_resolveQueue.length > 0) {
-        const { fileId, botToken, resolve } = _resolveQueue.shift();
-        if (thumbUrlCache.has(fileId)) { resolve(thumbUrlCache.get(fileId)); continue; }
+async function _fetchAndCacheThumbnail(fileId, botToken, decryptionKey) {
+    // 1. Resolve Telegram file path
+    const getFileUrl = `https://api.telegram.org/bot${botToken}/getFile?file_id=${fileId}`;
+    const proxyUrl = `${PROXY_BASE_URL}?url=${encodeURIComponent(getFileUrl)}`;
+
+    for (let attempt = 1; attempt <= 3; attempt++) {
         try {
-            const getFileUrl = `https://api.telegram.org/bot${botToken}/getFile?file_id=${fileId}`;
-            const proxyUrl = `${PROXY_BASE_URL}?url=${encodeURIComponent(getFileUrl)}`;
             const res = await fetch(proxyUrl);
             const data = await res.json();
+
             if (data.ok) {
-                const url = `https://api.telegram.org/file/bot${botToken}/${data.result.file_path}`;
-                thumbUrlCache.set(fileId, url);
-                resolve(url);
-            } else {
-                resolve(null);
-                if (data.error_code === 429) {
-                    const wait = (data.parameters?.retry_after || 5) * 1000;
-                    await sleep(wait);
+                const tgPath = data.result.file_path;
+                const downloadUrl = `https://api.telegram.org/file/bot${botToken}/${tgPath}`;
+                const fileProxyUrl = `${PROXY_BASE_URL}?url=${encodeURIComponent(downloadUrl)}`;
+
+                // 2. Download the actual thumbnail bytes
+                const fileRes = await fetch(fileProxyUrl);
+                if (!fileRes.ok) throw new Error(`Thumb fetch failed: ${fileRes.status}`);
+                let rawData = await fileRes.arrayBuffer();
+
+                // 3. Decrypt if encrypted
+                if (decryptionKey) {
+                    try {
+                        rawData = await decryptChunk(rawData, decryptionKey);
+                    } catch (e) {
+                        console.warn('[Thumb] Decryption failed, using raw:', e.message);
+                    }
                 }
+
+                // 4. Create a local blob URL (never expires)
+                const blob = new Blob([rawData], { type: 'image/webp' });
+                return URL.createObjectURL(blob);
             }
-        } catch { resolve(null); }
-        // Small delay between requests to avoid rate limiting
-        await sleep(150);
+
+            if (data.error_code === 429) {
+                const wait = (data.parameters?.retry_after || 5) * 1000;
+                await sleep(wait + 500);
+                continue;
+            }
+
+            return null; // Non-retryable error
+        } catch (e) {
+            if (attempt >= 3) return null;
+            await sleep(1000 * attempt);
+        }
     }
-    saveThumbCache(); // Persist to localStorage
-    _resolving = false;
+    return null;
 }
 
-export function resolveThumbnailUrl(fileId, botToken) {
+async function _processResolveQueue() {
+    while (_resolveQueue.length > 0 && _activeWorkers < THUMB_CONCURRENCY) {
+        const task = _resolveQueue.shift();
+        if (!task) break;
+
+        const { fileId, botToken, decryptionKey, resolve } = task;
+
+        // Double-check cache (may have been resolved by another worker)
+        if (thumbUrlCache.has(fileId)) {
+            resolve(thumbUrlCache.get(fileId));
+            continue;
+        }
+
+        // Check if already in flight
+        if (thumbInflight.has(fileId)) {
+            thumbInflight.get(fileId).then(resolve);
+            continue;
+        }
+
+        _activeWorkers++;
+
+        const promise = _fetchAndCacheThumbnail(fileId, botToken, decryptionKey)
+            .then(blobUrl => {
+                if (blobUrl) thumbUrlCache.set(fileId, blobUrl);
+                thumbInflight.delete(fileId);
+                _activeWorkers--;
+                // Kick off next item
+                _processResolveQueue();
+                return blobUrl;
+            })
+            .catch(() => {
+                thumbInflight.delete(fileId);
+                _activeWorkers--;
+                _processResolveQueue();
+                return null;
+            });
+
+        thumbInflight.set(fileId, promise);
+        promise.then(resolve);
+    }
+}
+
+/**
+ * Resolve a thumbnail file_id to a displayable blob URL.
+ * Handles decryption, caching, concurrency limiting, and 429 retry.
+ *
+ * @param {string} fileId - Telegram file_id of the thumbnail
+ * @param {string} botToken - User's bot token
+ * @param {CryptoKey|null} decryptionKey - ZKE key if thumbnail is encrypted
+ * @returns {Promise<string|null>} Blob URL or null
+ */
+export function resolveThumbnailUrl(fileId, botToken, decryptionKey = null) {
     if (!fileId || !botToken) return Promise.resolve(null);
     if (thumbUrlCache.has(fileId)) return Promise.resolve(thumbUrlCache.get(fileId));
+    // Join existing in-flight request
+    if (thumbInflight.has(fileId)) return thumbInflight.get(fileId);
     return new Promise((resolve) => {
-        _resolveQueue.push({ fileId, botToken, resolve });
+        _resolveQueue.push({ fileId, botToken, decryptionKey, resolve });
         _processResolveQueue();
     });
 }

@@ -167,7 +167,7 @@ const PhotoLightbox = ({ photo, photos, onClose, onToggleFavorite, onDelete, onD
             <div className="lb-thumbstrip">
                 {photos.map((p, i) => (
                     <button key={p.id} onClick={() => setCurrentIndex(i)} className={`lb-thumb ${i === currentIndex ? 'lb-thumb-active' : ''}`}>
-                        <ThumbImg photo={p} botToken={config?.botToken} />
+                        <ThumbImg photo={p} botToken={config?.botToken} decryptionKey={encryptionKey} />
                     </button>
                 ))}
             </div>
@@ -176,13 +176,14 @@ const PhotoLightbox = ({ photo, photos, onClose, onToggleFavorite, onDelete, onD
 };
 
 // Small component to lazily load thumb in strip
-const ThumbImg = ({ photo, botToken }) => {
+const ThumbImg = ({ photo, botToken, decryptionKey }) => {
     const [src, setSrc] = useState(photo.thumbnail || null);
     useEffect(() => {
         if (!src && photo.thumbFileId && botToken) {
-            resolveThumbnailUrl(photo.thumbFileId, botToken).then(url => { if (url) setSrc(url); });
+            const key = photo.thumbEncrypted ? decryptionKey : null;
+            resolveThumbnailUrl(photo.thumbFileId, botToken, key).then(url => { if (url) setSrc(url); });
         }
-    }, [photo.thumbFileId, botToken, src]);
+    }, [photo.thumbFileId, photo.thumbEncrypted, botToken, decryptionKey, src]);
     return src ? <img src={src} alt="" loading="lazy" /> : <div className="lb-thumb-placeholder" />;
 };
 

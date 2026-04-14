@@ -22,7 +22,7 @@ const PAGE_SIZE = 60;
 // ═══════════════════════════════════════════════════════════════════════════
 // Lazy Thumbnail Component with IntersectionObserver
 // ═══════════════════════════════════════════════════════════════════════════
-const LazyThumb = ({ photo, botToken, onClick, selected, onSelect, selectionMode }) => {
+const LazyThumb = ({ photo, botToken, decryptionKey, onClick, selected, onSelect, selectionMode }) => {
     const ref = useRef(null);
     const [src, setSrc] = useState(null);
     const [visible, setVisible] = useState(false);
@@ -41,9 +41,10 @@ const LazyThumb = ({ photo, botToken, onClick, selected, onSelect, selectionMode
         if (!visible) return;
         if (photo.thumbnail) { setSrc(photo.thumbnail); return; }
         if (photo.thumbFileId && botToken) {
-            resolveThumbnailUrl(photo.thumbFileId, botToken).then(url => { if (url) setSrc(url); });
+            const key = photo.thumbEncrypted ? decryptionKey : null;
+            resolveThumbnailUrl(photo.thumbFileId, botToken, key).then(url => { if (url) setSrc(url); });
         }
-    }, [visible, photo.thumbFileId, photo.thumbnail, botToken]);
+    }, [visible, photo.thumbFileId, photo.thumbnail, photo.thumbEncrypted, botToken, decryptionKey]);
 
     const isVideo = photo.fileType?.startsWith('video/');
 
@@ -211,7 +212,10 @@ const PhotosView = ({ onSwitchToDrive }) => {
 
                 // Upload thumbnail to Telegram separately
                 setUploadStatus(`Uploading thumb ${i + 1}/${mediaFiles.length}`);
-                const thumbResult = await uploadThumbnailToTelegram(thumbBlob, config.botToken, config.channelId);
+                const thumbResult = await uploadThumbnailToTelegram(
+                    thumbBlob, config.botToken, config.channelId,
+                    zkeEnabled ? encryptionKey : null
+                );
 
                 // Upload original
                 setUploadStatus(`Uploading ${i + 1}/${mediaFiles.length}: ${file.name}`);
@@ -230,6 +234,7 @@ const PhotosView = ({ onSwitchToDrive }) => {
                     messages: uploadResult.messages, encrypted: uploadResult.encrypted,
                     thumbFileId: thumbResult?.file_id || null,
                     thumbMessageId: thumbResult?.message_id || null,
+                    thumbEncrypted: thumbResult?.encrypted || false,
                     dateTaken: exifData.dateTaken
                         ? firebase.firestore.Timestamp.fromDate(new Date(exifData.dateTaken))
                         : firebase.firestore.Timestamp.fromDate(new Date(file.lastModified)),
@@ -250,6 +255,7 @@ const PhotosView = ({ onSwitchToDrive }) => {
                         id: photoRef.id, fileName: file.name, fileSize: file.size,
                         fileType: file.type, messages: uploadResult.messages, encrypted: uploadResult.encrypted,
                         thumbFileId: thumbResult?.file_id || null, thumbMessageId: thumbResult?.message_id || null,
+                        thumbEncrypted: thumbResult?.encrypted || false,
                         dateTaken: exifData.dateTaken ? firebase.firestore.Timestamp.fromDate(new Date(exifData.dateTaken)) : firebase.firestore.Timestamp.fromDate(new Date(file.lastModified)),
                         isFavorite: false, trashed: false, archived: false,
                         latitude: exifData.latitude, longitude: exifData.longitude,
@@ -458,7 +464,7 @@ const PhotosView = ({ onSwitchToDrive }) => {
                         <div className="photos-search-results">
                             <p style={{fontSize:13,color:'var(--photos-text-dim)',marginBottom:12}}>{displayPhotos.length} results</p>
                             <div className="photos-grid">
-                                {displayPhotos.map(p => <LazyThumb key={p.id} photo={p} botToken={config?.botToken} onClick={setSelectedPhoto} selected={selectedIds.has(p.id)} onSelect={toggleSelect} selectionMode={selectionMode} />)}
+                                {displayPhotos.map(p => <LazyThumb key={p.id} photo={p} botToken={config?.botToken} decryptionKey={encryptionKey} onClick={setSelectedPhoto} selected={selectedIds.has(p.id)} onSelect={toggleSelect} selectionMode={selectionMode} />)}
                             </div>
                         </div>
                     )}
@@ -478,7 +484,7 @@ const PhotosView = ({ onSwitchToDrive }) => {
                                 {(album.photoIds?.length > 0) ? (
                                     album.photoIds.slice(0, 4).map((pid, i) => {
                                         const p = photos.find(x => x.id === pid);
-                                        return p ? <LazyThumb key={i} photo={p} botToken={config?.botToken} onClick={() => {}} selected={false} onSelect={() => {}} selectionMode={false} /> : <div key={i} className="album-cover-placeholder" />;
+                                        return p ? <LazyThumb key={i} photo={p} botToken={config?.botToken} decryptionKey={encryptionKey} onClick={() => {}} selected={false} onSelect={() => {}} selectionMode={false} /> : <div key={i} className="album-cover-placeholder" />;
                                     })
                                 ) : (
                                     <div className="album-cover-placeholder"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg></div>
@@ -508,7 +514,7 @@ const PhotosView = ({ onSwitchToDrive }) => {
                     </div>
                     <div className="photos-content">
                         <div className="photos-grid">
-                            {displayPhotos.map(p => <LazyThumb key={p.id} photo={p} botToken={config?.botToken} onClick={setSelectedPhoto} selected={selectedIds.has(p.id)} onSelect={toggleSelect} selectionMode={selectionMode} />)}
+                            {displayPhotos.map(p => <LazyThumb key={p.id} photo={p} botToken={config?.botToken} decryptionKey={encryptionKey} onClick={setSelectedPhoto} selected={selectedIds.has(p.id)} onSelect={toggleSelect} selectionMode={selectionMode} />)}
                         </div>
                         {displayPhotos.length === 0 && <div className="photos-empty"><p>No photos in this album yet. Select photos and add them.</p></div>}
                     </div>
@@ -536,7 +542,7 @@ const PhotosView = ({ onSwitchToDrive }) => {
                                         <span>{group.photos.length} items</span>
                                     </div>
                                     <div className="photos-grid">
-                                        {group.photos.map(p => <LazyThumb key={p.id} photo={p} botToken={config?.botToken} onClick={setSelectedPhoto} selected={selectedIds.has(p.id)} onSelect={toggleSelect} selectionMode={selectionMode} />)}
+                                        {group.photos.map(p => <LazyThumb key={p.id} photo={p} botToken={config?.botToken} decryptionKey={encryptionKey} onClick={setSelectedPhoto} selected={selectedIds.has(p.id)} onSelect={toggleSelect} selectionMode={selectionMode} />)}
                                     </div>
                                 </div>
                             ))}
