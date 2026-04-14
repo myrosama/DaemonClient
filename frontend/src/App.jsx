@@ -7,6 +7,10 @@ import 'firebase/compat/firestore';
 import { deriveKey, encryptChunk, decryptChunk, generateSalt, generatePassword, bytesToBase64, base64ToBytes } from './crypto.js';
 import PhotosView from './PhotosView.jsx';
 import { getSyncEngine, destroySyncEngine } from './manifest-sync.js';
+import {
+    saveUploadSession, getUploadSession, getIncompleteUploads,
+    deleteUploadSession, getAllUploadSessions
+} from './idb-store.js';
 
 // --- Firebase Initialization ---
 const firebaseConfig = {
@@ -51,19 +55,51 @@ function formatETA(seconds) {
     const s = Math.floor(seconds % 60);
     return [h > 0 ? `${h}h` : '', m > 0 ? `${m}m` : '', s > 0 ? `${s}s` : (h === 0 && m === 0 ? '0s' : '')].filter(Boolean).join(' ') || '...';
 }
-
-// --- UPLOAD FUNCTION (With Proxy + ZKE Encryption) ---
-async function uploadFile(file, botToken, channelId, onProgress, abortSignal, parentId, encryptionKey = null) {
+// --- UPLOAD FUNCTION (With Proxy + ZKE Encryption + Resumable Sessions) ---
+async function uploadFile(file, botToken, channelId, onProgress, abortSignal, parentId, encryptionKey = null, existingSession = null) {
     const totalParts = Math.ceil(file.size / CHUNK_SIZE);
-    const uploadedMessageInfo = [];
-    let uploadedBytes = 0;
-    const startTime = Date.now();
     const proxyBaseUrl = "https://daemonclient-proxy.sadrikov49.workers.dev";
     const isEncrypted = encryptionKey !== null;
+
+    // Create or resume upload session
+    const sessionId = existingSession?.sessionId || `upload_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const completedParts = existingSession?.completedParts || [];
+    const uploadedMessageInfo = completedParts.map(p => ({ message_id: p.message_id, file_id: p.file_id }));
+    let uploadedBytes = completedParts.reduce((sum, p) => sum + (p.chunkSize || 0), 0);
+    const startTime = Date.now();
+
+    // Persist session to IndexedDB
+    const fileFingerprint = `${file.name}|${file.size}|${file.lastModified}`;
+    if (!existingSession) {
+        await saveUploadSession({
+            sessionId,
+            fingerprint: fileFingerprint,
+            fileName: file.name,
+            fileSize: file.size,
+            fileType: file.type,
+            parentId,
+            totalParts,
+            completedParts: [],
+            status: 'in_progress',
+            encrypted: isEncrypted,
+            createdAt: Date.now(),
+        });
+    } else {
+        // Mark as resumed
+        await saveUploadSession({ ...existingSession, status: 'in_progress' });
+    }
+
+    const completedPartNums = new Set(completedParts.map(p => p.partNum));
 
     for (let i = 0; i < totalParts; i++) {
         if (abortSignal.aborted) throw new Error("Upload was cancelled by the user.");
         const partNumber = i + 1;
+
+        // Skip already-completed parts (resume)
+        if (completedPartNums.has(partNumber)) {
+            continue;
+        }
+
         const rawChunk = file.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
 
         // Encrypt chunk if ZKE is enabled
@@ -79,6 +115,18 @@ async function uploadFile(file, botToken, channelId, onProgress, abortSignal, pa
 
         for (let attempt = 1; attempt <= UPLOAD_RETRIES; attempt++) {
             if (abortSignal.aborted) throw new Error("Upload was cancelled by the user.");
+
+            // Wait for online if offline
+            if (!navigator.onLine) {
+                onProgress({ percent: Math.round((uploadedBytes / file.size) * 100), status: '⏸ Waiting for connection...', speed: '', eta: '' });
+                await new Promise(resolve => {
+                    const handler = () => { window.removeEventListener('online', handler); resolve(); };
+                    window.addEventListener('online', handler);
+                });
+                onProgress({ percent: Math.round((uploadedBytes / file.size) * 100), status: 'Connection restored! Resuming...', speed: '', eta: '' });
+                await sleep(1000);
+            }
+
             try {
                 const elapsedTime = (Date.now() - startTime) / 1000 || 1;
                 const speed = uploadedBytes / elapsedTime;
@@ -94,7 +142,6 @@ async function uploadFile(file, botToken, channelId, onProgress, abortSignal, pa
 
                 const formData = new FormData();
                 formData.append('chat_id', channelId);
-                // When ZKE is enabled, use a random opaque name so Telegram can't see the real filename
                 const partSuffix = `.part${String(partNumber).padStart(3, '0')}`;
                 const displayName = isEncrypted
                     ? `${Array.from(crypto.getRandomValues(new Uint8Array(8)), b => b.toString(16).padStart(2, '0')).join('')}${partSuffix}`
@@ -113,9 +160,18 @@ async function uploadFile(file, botToken, channelId, onProgress, abortSignal, pa
                 const result = await response.json();
 
                 if (result.ok) {
-                    uploadedMessageInfo.push({ message_id: result.result.message_id, file_id: result.result.document.file_id });
+                    const partInfo = { message_id: result.result.message_id, file_id: result.result.document.file_id };
+                    uploadedMessageInfo.push(partInfo);
                     uploadedBytes += rawChunk.size;
                     success = true;
+
+                    // Persist chunk completion to IndexedDB immediately (crash-safe)
+                    const session = await getUploadSession(sessionId);
+                    if (session) {
+                        session.completedParts.push({ partNum: partNumber, ...partInfo, chunkSize: rawChunk.size });
+                        await saveUploadSession(session);
+                    }
+
                     break;
                 } else {
                     if (response.status === 429 && result.parameters?.retry_after) {
@@ -134,6 +190,9 @@ async function uploadFile(file, botToken, channelId, onProgress, abortSignal, pa
         if (partNumber < totalParts) await sleep(PROACTIVE_DELAY_MS);
     }
     onProgress({ percent: 100, status: `Upload complete!`, speed: '', eta: '' });
+
+    // Mark session as completed and clean up
+    await deleteUploadSession(sessionId);
 
     return {
         fileName: file.name,
@@ -511,12 +570,84 @@ const DashboardView = () => {
 
     const fileInputRef = useRef(null);
     const folderInputRef = useRef(null);
+    const resumeInputRef = useRef(null);
     const [isDragging, setIsDragging] = useState(false);
     const dragCounter = useRef(0);
     const isUploading = uploadProgress.active;
     const isDownloading = downloadProgress.active;
     const isRenaming = editingFileId !== null;
     const isBusy = isUploading || isDownloading || isRenaming;
+
+    // Resumable upload state
+    const [incompleteSessions, setIncompleteSessions] = useState([]);
+    const [isOnline, setIsOnline] = useState(navigator.onLine);
+
+    // --- EFFECT: Online/Offline detection ---
+    useEffect(() => {
+        const goOnline = () => setIsOnline(true);
+        const goOffline = () => { setIsOnline(false); setFeedbackMessage({ type: 'warning', text: '⚠️ Connection lost. Uploads will auto-resume when back online.' }); };
+        window.addEventListener('online', goOnline);
+        window.addEventListener('offline', goOffline);
+        return () => { window.removeEventListener('online', goOnline); window.removeEventListener('offline', goOffline); };
+    }, []);
+
+    // --- EFFECT: Detect incomplete upload sessions on load ---
+    useEffect(() => {
+        getIncompleteUploads().then(sessions => {
+            if (sessions.length > 0) {
+                setIncompleteSessions(sessions);
+            }
+        }).catch(() => {});
+    }, []);
+
+    // --- EFFECT: Warn on page unload during uploads ---
+    useEffect(() => {
+        if (!isUploading) return;
+        const handler = (e) => {
+            e.preventDefault();
+            e.returnValue = 'Upload in progress! Your upload will resume when you return, but it\'s faster to stay.';
+        };
+        window.addEventListener('beforeunload', handler);
+        return () => window.removeEventListener('beforeunload', handler);
+    }, [isUploading]);
+
+    // --- Resume upload handler ---
+    const handleResumeUpload = async (session) => {
+        // User needs to re-select the original file so we can read it
+        resumeInputRef.current._resumeSession = session;
+        resumeInputRef.current.click();
+    };
+
+    const handleResumeFileSelected = async (e) => {
+        const file = e.target.files?.[0];
+        const session = resumeInputRef.current._resumeSession;
+        if (!file || !session) return;
+        resumeInputRef.current.value = '';
+
+        // Verify file matches
+        const fingerprint = `${file.name}|${file.size}|${file.lastModified}`;
+        if (fingerprint !== session.fingerprint) {
+            setFeedbackMessage({ type: 'error', text: `File doesn't match. Expected: ${session.fileName} (${(session.fileSize / 1024 / 1024).toFixed(1)} MB)` });
+            clearFeedback();
+            return;
+        }
+
+        // Remove from incomplete list
+        setIncompleteSessions(prev => prev.filter(s => s.sessionId !== session.sessionId));
+
+        const completedCount = session.completedParts?.length || 0;
+        const pct = Math.round((completedCount / session.totalParts) * 100);
+        setFeedbackMessage({ type: 'info', text: `Resuming upload of '${file.name}' from ${pct}% (${completedCount}/${session.totalParts} chunks)` });
+
+        // Queue the resume
+        setUploadQueue(prev => [{ file, parentId: session.parentId, resumeSession: session }, ...prev]);
+        setUploadBatchTotal(prev => prev + 1);
+    };
+
+    const handleDismissSession = async (sessionId) => {
+        await deleteUploadSession(sessionId);
+        setIncompleteSessions(prev => prev.filter(s => s.sessionId !== sessionId));
+    };
 
     // --- HELPER COMPONENTS (defined locally to DashboardView) ---
     const VIEWABLE_EXTENSIONS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'mp4', 'webm', 'ogg', 'mov'];
@@ -725,13 +856,15 @@ const DashboardView = () => {
 
         const startNextUpload = async () => {
             const queueItem = uploadQueue[0];
-            const fileToUpload = queueItem.file || queueItem; // support both {file, parentId} and raw File
+            const fileToUpload = queueItem.file || queueItem;
             const targetParentId = queueItem.parentId || currentFolderId;
+            const resumeSession = queueItem.resumeSession || null;
             const controller = new AbortController();
             setAbortController(controller);
 
             const currentFileNumber = uploadBatchTotal - uploadQueue.length + 1;
-            const statusPrefix = `Uploading '${fileToUpload.name}' (${currentFileNumber}/${uploadBatchTotal})`;
+            const resumeLabel = resumeSession ? ' [↻ Resuming]' : '';
+            const statusPrefix = `Uploading '${fileToUpload.name}' (${currentFileNumber}/${uploadBatchTotal})${resumeLabel}`;
 
             setUploadProgress({ active: true, percent: 0, status: statusPrefix, speed: '', eta: '' });
             setFeedbackMessage({ type: '', text: '' });
@@ -744,7 +877,8 @@ const DashboardView = () => {
                     (p) => setUploadProgress(prev => ({ ...prev, ...p, status: `${statusPrefix} - ${p.status}`, active: true })),
                     controller.signal,
                     targetParentId,
-                    zkeEnabled ? encryptionKey : null
+                    zkeEnabled ? encryptionKey : null,
+                    resumeSession   // Pass existing session for resume
                 );
 
                 // Save via sync engine (IndexedDB immediately + Firestore batched)
@@ -1546,6 +1680,7 @@ const DashboardView = () => {
                     <h2 className="text-xl font-semibold mb-2">Upload Files</h2>
                     <input type="file" ref={fileInputRef} onChange={handleFileUpload} className="hidden" disabled={isBusy} multiple />
                     <input type="file" ref={folderInputRef} onChange={handleFolderInputChange} className="hidden" disabled={isBusy} webkitdirectory="" directory="" multiple />
+                    <input type="file" ref={resumeInputRef} onChange={handleResumeFileSelected} className="hidden" />
                     <div className="flex gap-2 mt-2">
                         <button onClick={() => fileInputRef.current.click()} disabled={isBusy} className="flex-1 bg-indigo-500 hover:bg-indigo-600 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-2 px-4 rounded-lg">
                             {isUploading ? 'Uploading...' : 'Upload Files'}
@@ -1556,6 +1691,44 @@ const DashboardView = () => {
                     </div>
                     <p className="text-xs text-gray-400 mt-2 text-center">or drag & drop files/folders anywhere</p>
                 </div>
+
+                {/* Offline indicator */}
+                {!isOnline && (
+                    <div className="bg-yellow-900/60 border border-yellow-600/40 text-yellow-300 p-3 rounded-lg mb-3 flex items-center gap-2 text-sm">
+                        <span className="w-2 h-2 rounded-full bg-yellow-400 animate-pulse" />
+                        Offline — uploads will auto-resume when connection returns
+                    </div>
+                )}
+
+                {/* Resume incomplete uploads banner */}
+                {incompleteSessions.length > 0 && !isUploading && (
+                    <div className="bg-indigo-900/40 border border-indigo-500/30 rounded-lg p-4 mb-3">
+                        <div className="flex items-center gap-2 mb-2">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#818cf8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
+                            <span className="text-indigo-300 font-medium text-sm">{incompleteSessions.length} incomplete upload{incompleteSessions.length > 1 ? 's' : ''} found</span>
+                        </div>
+                        {incompleteSessions.map(session => {
+                            const pct = Math.round(((session.completedParts?.length || 0) / session.totalParts) * 100);
+                            return (
+                                <div key={session.sessionId} className="flex items-center justify-between bg-gray-800/50 rounded-lg p-3 mt-2">
+                                    <div className="flex-1 min-w-0 mr-3">
+                                        <p className="text-white text-sm font-medium truncate">{session.fileName}</p>
+                                        <div className="flex items-center gap-2 mt-1">
+                                            <div className="flex-1 h-1.5 bg-gray-700 rounded-full overflow-hidden">
+                                                <div className="h-full bg-indigo-500 rounded-full transition-all" style={{ width: `${pct}%` }} />
+                                            </div>
+                                            <span className="text-xs text-gray-400 whitespace-nowrap">{pct}% • {(session.fileSize / 1024 / 1024).toFixed(1)} MB</span>
+                                        </div>
+                                    </div>
+                                    <div className="flex gap-2">
+                                        <button onClick={() => handleResumeUpload(session)} className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-medium py-1.5 px-3 rounded-md transition-colors">↻ Resume</button>
+                                        <button onClick={() => handleDismissSession(session.sessionId)} className="bg-gray-600 hover:bg-gray-500 text-white text-xs py-1.5 px-2 rounded-md transition-colors" title="Dismiss">✕</button>
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </div>
+                )}
 
                 {isUploading && <ProgressBar {...uploadProgress} onCancel={handleCancelTransfer} />}
 
