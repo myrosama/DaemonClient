@@ -1460,9 +1460,6 @@ const DashboardView = () => {
         );
     };
 
-    if (isLoadingConfig) return <FullScreenLoader message="Loading Configuration..." />;
-    if (configError) return (<div className="min-h-screen bg-gray-900 text-white flex items-center justify-center p-4"><div className="w-full max-w-3xl bg-gray-800 rounded-xl shadow-2xl p-6"><div className="flex justify-between items-center mb-4"><h1 className="text-3xl font-bold text-indigo-400">DaemonClient</h1><button onClick={handleLogout} className="bg-red-500 hover:bg-red-600 text-white py-2 px-4 rounded-lg text-sm">Logout</button></div><div className="p-4 bg-red-700 text-red-100 rounded-lg"><h2 className="text-xl font-semibold mb-2">Configuration Error</h2><p>{configError}</p><p className="mt-2">Try logging out and back in.</p></div></div></div>);
-
     const filteredItems = items.filter(item => item.fileName.toLowerCase().includes(searchTerm.toLowerCase()));
 
     // Separate folders and files for the new layout
@@ -1549,6 +1546,10 @@ const DashboardView = () => {
         if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
         return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
     };
+
+    // Early returns (after all hooks)
+    if (isLoadingConfig) return <FullScreenLoader message="Loading Configuration..." />;
+    if (configError) return (<div className="min-h-screen bg-gray-900 text-white flex items-center justify-center p-4"><div className="w-full max-w-3xl bg-gray-800 rounded-xl shadow-2xl p-6"><div className="flex justify-between items-center mb-4"><h1 className="text-3xl font-bold text-indigo-400">DaemonClient</h1><button onClick={handleLogout} className="bg-red-500 hover:bg-red-600 text-white py-2 px-4 rounded-lg text-sm">Logout</button></div><div className="p-4 bg-red-700 text-red-100 rounded-lg"><h2 className="text-xl font-semibold mb-2">Configuration Error</h2><p>{configError}</p><p className="mt-2">Try logging out and back in.</p></div></div></div>);
 
     // --- FILE VIEWER LOGIC ---
     const registerFileWithSW = async (item) => {
