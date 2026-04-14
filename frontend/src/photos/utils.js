@@ -18,10 +18,22 @@ const thumbUrlCache = new Map();
 const thumbInflight = new Map();
 
 // ── Thumbnail Generation ────────────────────────────────────────────────────
+import heic2any from 'heic2any';
+
 export async function generateThumbnail(file, maxSize = 400) {
-    return new Promise((resolve) => {
+    return new Promise(async (resolve) => {
+        let inputFile = file;
+        try {
+            if (file.name?.toLowerCase().endsWith('.heic') || file.type === 'image/heic') {
+                const converted = await heic2any({ blob: file, toType: 'image/jpeg', quality: 0.8 });
+                inputFile = new Blob([Array.isArray(converted) ? converted[0] : converted], { type: 'image/jpeg' });
+            }
+        } catch (err) {
+            console.error('HEIC conversion failed', err);
+        }
+
         const img = new Image();
-        const url = URL.createObjectURL(file);
+        const url = URL.createObjectURL(inputFile);
         img.onload = () => {
             const canvas = document.createElement('canvas');
             let w = img.width, h = img.height;

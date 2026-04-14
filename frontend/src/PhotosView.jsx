@@ -193,7 +193,7 @@ const PhotosView = ({ onSwitchToDrive }) => {
     const handleUpload = async (e) => {
         const files = Array.from(e.target.files || []);
         if (!files.length || !config?.botToken) return;
-        const mediaFiles = files.filter(f => f.type.startsWith('image/') || f.type.startsWith('video/'));
+        const mediaFiles = files.filter(f => f.type.startsWith('image/') || f.type.startsWith('video/') || f.name.toLowerCase().endsWith('.heic'));
         if (!mediaFiles.length) { alert('Select image or video files.'); return; }
         setUploading(true);
         const controller = new AbortController();

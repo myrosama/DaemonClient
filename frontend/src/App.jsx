@@ -538,6 +538,154 @@ const AuthView = () => {
 };
 
 // --- DASHBOARD VIEW ---
+// --- PREMIUM AUDIO PLAYER WITH VISUALIZER ---
+const AudioPlayerCard = ({ file, url, ext, onMediaLoaded, mediaLoaded }) => {
+    const audioRef = useRef(null);
+    const canvasRef = useRef(null);
+    const [isPlaying, setIsPlaying] = useState(false);
+    const [currentTime, setCurrentTime] = useState(0);
+    const [duration, setDuration] = useState(0);
+    const [volume, setVolume] = useState(1);
+    const [analyser, setAnalyser] = useState(null);
+    const animFrameRef = useRef(null);
+    const audioCtxRef = useRef(null);
+
+    const fmtTime = (s) => { const m = Math.floor(s / 60); return `${m}:${String(Math.floor(s % 60)).padStart(2, '0')}`; };
+
+    const initVisualizer = () => {
+        if (audioCtxRef.current || !audioRef.current) return;
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const src = ctx.createMediaElementSource(audioRef.current);
+        const an = ctx.createAnalyser();
+        an.fftSize = 128;
+        src.connect(an);
+        an.connect(ctx.destination);
+        audioCtxRef.current = ctx;
+        setAnalyser(an);
+    };
+
+    useEffect(() => {
+        if (!analyser || !canvasRef.current) return;
+        const canvas = canvasRef.current;
+        const c = canvas.getContext('2d');
+        const bufLen = analyser.frequencyBinCount;
+        const data = new Uint8Array(bufLen);
+
+        const draw = () => {
+            animFrameRef.current = requestAnimationFrame(draw);
+            analyser.getByteFrequencyData(data);
+            const w = canvas.width; const h = canvas.height;
+            c.clearRect(0, 0, w, h);
+            const barW = (w / bufLen) * 2;
+            const gap = 2;
+            for (let i = 0; i < bufLen; i++) {
+                const barH = (data[i] / 255) * h * 0.9;
+                const x = i * (barW + gap);
+                const grad = c.createLinearGradient(x, h, x, h - barH);
+                grad.addColorStop(0, '#6366f1');
+                grad.addColorStop(0.5, '#a78bfa');
+                grad.addColorStop(1, '#c4b5fd');
+                c.fillStyle = grad;
+                c.beginPath();
+                c.roundRect(x, h - barH, barW, barH, [4, 4, 0, 0]);
+                c.fill();
+                c.fillStyle = 'rgba(99,102,241,0.1)';
+                c.fillRect(x, h, barW, barH * 0.3);
+            }
+        };
+        draw();
+        return () => cancelAnimationFrame(animFrameRef.current);
+    }, [analyser]);
+
+    // Cleanup audio context on unmount
+    useEffect(() => {
+        return () => {
+            cancelAnimationFrame(animFrameRef.current);
+            if (audioCtxRef.current) { try { audioCtxRef.current.close(); } catch(e) {} }
+        };
+    }, []);
+
+    const pct = (currentTime / (duration || 1)) * 100;
+
+    return (
+        <div className="w-full max-w-md md:max-w-lg"
+            style={{ background: 'linear-gradient(145deg, rgba(15,23,42,0.95) 0%, rgba(30,20,60,0.95) 100%)', backdropFilter: 'blur(40px)', border: '1px solid rgba(139,92,246,0.2)', borderRadius: '24px', padding: '32px 24px', boxShadow: '0 25px 60px rgba(99,102,241,0.15), 0 0 120px rgba(139,92,246,0.05)' }}>
+
+            {/* Visualizer */}
+            <div className="relative mb-6 rounded-2xl overflow-hidden" style={{ background: 'rgba(0,0,0,0.3)', height: '160px' }}>
+                <canvas ref={canvasRef} width={500} height={160} className="w-full h-full" />
+                {!isPlaying && (
+                    <div className="absolute inset-0 flex items-center justify-center">
+                        <div className="w-16 h-16 rounded-full flex items-center justify-center cursor-pointer transition-transform hover:scale-110"
+                            style={{ background: 'linear-gradient(135deg, #6366f1, #a78bfa)', boxShadow: '0 0 30px rgba(99,102,241,0.5)' }}
+                            onClick={() => { initVisualizer(); audioRef.current?.play(); }}>
+                            <svg width="24" height="24" viewBox="0 0 24 24" fill="white"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                        </div>
+                    </div>
+                )}
+            </div>
+
+            {/* Song info */}
+            <div className="text-center mb-5">
+                <p className="text-white font-semibold text-lg truncate" title={file.fileName}>{file.fileName.replace(/\.[^.]+$/, '')}</p>
+                <p className="text-white/30 text-xs mt-1">{(file.fileSize / 1024 / 1024).toFixed(2)} MB · {ext.toUpperCase()}</p>
+            </div>
+
+            {/* Progress scrubber */}
+            <div className="mb-4">
+                <input type="range" min="0" max={duration || 1} step="0.1" value={currentTime}
+                    onChange={(e) => { if (audioRef.current) audioRef.current.currentTime = e.target.value; }}
+                    className="dc-audio-range w-full h-1.5 rounded-full appearance-none cursor-pointer"
+                    style={{ background: `linear-gradient(to right, #a78bfa ${pct}%, rgba(255,255,255,0.1) ${pct}%)` }} />
+                <div className="flex justify-between text-xs text-white/30 mt-1">
+                    <span>{fmtTime(currentTime)}</span>
+                    <span>{fmtTime(duration)}</span>
+                </div>
+            </div>
+
+            {/* Transport controls */}
+            <div className="flex items-center justify-center gap-6">
+                <button onClick={() => { if (audioRef.current) audioRef.current.currentTime = Math.max(0, audioRef.current.currentTime - 10); }}
+                    className="text-white/50 hover:text-white transition-colors p-2" title="Back 10s">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M1 4v6h6"/><path d="M3.51 15a9 9 0 105.64-8.36L1 10"/></svg>
+                </button>
+                <button onClick={() => { initVisualizer(); if (audioRef.current) { if (isPlaying) audioRef.current.pause(); else audioRef.current.play(); } }}
+                    className="w-14 h-14 rounded-full flex items-center justify-center transition-transform hover:scale-105 active:scale-95"
+                    style={{ background: 'linear-gradient(135deg, #6366f1, #a78bfa)', boxShadow: '0 0 20px rgba(99,102,241,0.4)' }}>
+                    {isPlaying ? (
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="white"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>
+                    ) : (
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="white"><polygon points="6 3 20 12 6 21 6 3"/></svg>
+                    )}
+                </button>
+                <button onClick={() => { if (audioRef.current) audioRef.current.currentTime = Math.min(duration, audioRef.current.currentTime + 10); }}
+                    className="text-white/50 hover:text-white transition-colors p-2" title="Forward 10s">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M23 4v6h-6"/><path d="M20.49 15a9 9 0 11-5.64-8.36L23 10"/></svg>
+                </button>
+            </div>
+
+            {/* Volume */}
+            <div className="flex items-center justify-center gap-3 mt-4">
+                <svg className="w-4 h-4 text-white/30" fill="currentColor" viewBox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9H3z"/></svg>
+                <input type="range" min="0" max="1" step="0.01" value={volume}
+                    onChange={(e) => { const v = parseFloat(e.target.value); setVolume(v); if (audioRef.current) audioRef.current.volume = v; }}
+                    className="dc-audio-range w-24 h-1 rounded-full appearance-none cursor-pointer"
+                    style={{ background: `linear-gradient(to right, #a78bfa ${volume * 100}%, rgba(255,255,255,0.1) ${volume * 100}%)` }} />
+                <svg className="w-4 h-4 text-white/30" fill="currentColor" viewBox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/></svg>
+            </div>
+
+            {/* Hidden audio element */}
+            <audio ref={audioRef} src={url} preload="metadata" crossOrigin="anonymous"
+                onPlay={() => { setIsPlaying(true); onMediaLoaded?.(); }}
+                onPause={() => setIsPlaying(false)}
+                onTimeUpdate={() => setCurrentTime(audioRef.current?.currentTime || 0)}
+                onLoadedMetadata={() => { setDuration(audioRef.current?.duration || 0); onMediaLoaded?.(); }}
+                onError={() => onMediaLoaded?.()}
+            />
+        </div>
+    );
+};
+
 const DashboardView = () => {
     const [config, setConfig] = useState(null);
     const [isLoadingConfig, setIsLoadingConfig] = useState(true);
@@ -1693,25 +1841,7 @@ const DashboardView = () => {
                         )}
 
                         {isAudio && (
-                            <div className={`w-full max-w-lg p-8 rounded-2xl transition-opacity duration-300 ${mediaLoaded ? 'opacity-100' : 'opacity-0'}`}
-                                style={{ background: 'linear-gradient(135deg, rgba(99,102,241,0.2) 0%, rgba(139,92,246,0.2) 100%)', backdropFilter: 'blur(20px)', border: '1px solid rgba(255,255,255,0.1)' }}>
-                                <div className="text-center mb-6">
-                                    <div className="w-20 h-20 mx-auto mb-4 rounded-2xl flex items-center justify-center" style={{ background: 'linear-gradient(135deg, #6366f1, #8b5cf6)' }}>
-                                        <svg width="32" height="32" viewBox="0 0 24 24" fill="white"><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55C7.79 13 6 14.79 6 17s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/></svg>
-                                    </div>
-                                    <p className="text-white font-medium text-lg truncate" title={file.fileName}>{file.fileName}</p>
-                                    <p className="text-white/40 text-sm mt-1">{(file.fileSize / 1024 / 1024).toFixed(2)} MB • {ext.toUpperCase()}</p>
-                                </div>
-                                <audio
-                                    controls
-                                    autoPlay
-                                    src={url}
-                                    onLoadedData={() => setMediaLoaded(true)}
-                                    onError={() => setMediaLoaded(true)}
-                                    className="w-full"
-                                    style={{ filter: 'invert(1) hue-rotate(180deg)', height: '40px' }}
-                                />
-                            </div>
+                            <AudioPlayerCard file={file} url={url} ext={ext} onMediaLoaded={() => setMediaLoaded(true)} mediaLoaded={mediaLoaded} />
                         )}
 
                         {isText && (
@@ -2825,7 +2955,7 @@ const LandingPage = ({ onLaunchApp = () => console.log("Launch") }) => {
 // ============================================================================
 function App() {
     const hostname = window.location.hostname;
-    const isAppDomain = hostname.startsWith('app.') || hostname === 'daemonclient-app.web.app';
+    const isAppDomain = hostname.startsWith('app.') || hostname === 'daemonclient-app.web.app' || hostname === 'daemonclient-test.web.app';
     const isPhotosDomain = hostname.startsWith('photos.') || hostname === 'daemonclient-photos.web.app';
     const [user, setUser] = useState(null);
     const [appState, setAppState] = useState('loading');

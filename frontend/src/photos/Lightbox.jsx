@@ -16,6 +16,8 @@ const PhotoLightbox = ({ photo, photos, onClose, onToggleFavorite, onDelete, onD
     useEffect(() => {
         if (!current || !config?.botToken) return;
         setLoading(true); setMediaUrl(null);
+        let active = true;
+        
         const load = async () => {
             try {
                 if ('serviceWorker' in navigator) {
@@ -38,19 +40,42 @@ const PhotoLightbox = ({ photo, photos, onClose, onToggleFavorite, onDelete, onD
                             }, [ch.port2]);
                             setTimeout(() => reject(new Error('timeout')), 8000);
                         });
-                        setMediaUrl(`/stream/${fileId}`);
+                        
+                        const streamUrl = `/stream/${fileId}`;
+                        
+                        // Handle HEIC conversion on the fly for viewing
+                        if (current.fileName?.toLowerCase().endsWith('.heic') || current.fileType === 'image/heic') {
+                            try {
+                                const { default: heic2any } = await import('heic2any');
+                                const res = await fetch(streamUrl);
+                                const blob = await res.blob();
+                                const converted = await heic2any({ blob, toType: "image/jpeg", quality: 0.85 });
+                                if (active) setMediaUrl(URL.createObjectURL(Array.isArray(converted) ? converted[0] : converted));
+                                if (active) setLoading(false);
+                                return;
+                            } catch (e) {
+                                console.error('HEIC playback conversion failed', e);
+                                // Fallback just in case but it likely won't render
+                                if (active) setMediaUrl(streamUrl);
+                            }
+                        } else {
+                            if (active) setMediaUrl(streamUrl);
+                        }
                     }
                 }
             } catch {
                 // Fallback: resolve thumbnail
-                if (current.thumbFileId) {
-                    const url = await resolveThumbnailUrl(current.thumbFileId, config.botToken);
-                    setMediaUrl(url);
-                } else if (current.thumbnail) { setMediaUrl(current.thumbnail); }
+                if (active) {
+                    if (current.thumbFileId) {
+                        const url = await resolveThumbnailUrl(current.thumbFileId, config.botToken);
+                        if (active) setMediaUrl(url);
+                    } else if (current.thumbnail) { setMediaUrl(current.thumbnail); }
+                }
             }
-            setLoading(false);
+            if (active) setLoading(false);
         };
         load();
+        return () => { active = false; };
     }, [currentIndex, current, config, encryptionKey]);
 
     // Keyboard nav
