@@ -6,7 +6,7 @@ import 'firebase/compat/firestore';
 import {
     sleep, generateThumbnail, generateVideoThumbnail, extractExifData,
     uploadToTelegram, uploadThumbnailToTelegram,
-    getUserPhotosRef, formatFileSize,
+    getUserPhotosRef, formatFileSize, convertHeicToJpeg,
 } from './utils.js';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -255,9 +255,9 @@ const GooglePhotosImport = ({ onClose, config, encryptionKey, zkeEnabled, uid, o
             const { zipReader, entry: zipEntry, entries } = meta;
             const path = zipEntry.filename;
             const size = zipEntry.uncompressedSize;
-            const fileName = getFileName(path);
+            let fileName = getFileName(path);
             const ext = getExt(fileName);
-            const mimeType = MIME_MAP[ext] || 'application/octet-stream';
+            let mimeType = MIME_MAP[ext] || 'application/octet-stream';
             const isVideo = mimeType.startsWith('video/');
 
             processedCount++;
@@ -279,7 +279,21 @@ const GooglePhotosImport = ({ onClose, config, encryptionKey, zkeEnabled, uid, o
             }
 
             try {
-                const blob = await zipEntry.getData(new BlobWriter(mimeType));
+                let blob = await zipEntry.getData(new BlobWriter(mimeType));
+
+                // Convert HEIC/HEIF → JPEG at upload time for universal compatibility
+                const extLower = ext.toLowerCase();
+                if (extLower === 'heic' || extLower === 'heif') {
+                    try {
+                        blob = await convertHeicToJpeg(blob, fileName);
+                        mimeType = 'image/jpeg';
+                        fileName = fileName.replace(/\.(heic|heif)$/i, '.jpg');
+                        log(`⟳ Converted HEIC → JPEG: ${fileName}`, 'info');
+                    } catch (convErr) {
+                        log(`⚠ HEIC conversion failed, uploading as-is: ${convErr.message}`, 'warn');
+                    }
+                }
+
                 const file = new File([blob], fileName, { type: mimeType, lastModified: Date.now() });
 
                 // Parse JSON sidecar for metadata

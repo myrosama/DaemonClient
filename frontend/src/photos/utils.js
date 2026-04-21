@@ -2,6 +2,25 @@ import firebase from 'firebase/compat/app';
 import 'firebase/compat/firestore';
 import { encryptChunk, decryptChunk } from '../crypto.js';
 import exifr from 'exifr';
+import heic2any from 'heic2any';
+
+const HEIC_TYPES = new Set(['image/heic', 'image/heif']);
+const HEIC_EXTS = new Set(['heic', 'heif']);
+
+/** Convert HEIC/HEIF blob to JPEG blob. Returns original if not HEIC or conversion fails. */
+export async function convertHeicToJpeg(blob, fileName = '') {
+    const ext = fileName.split('.').pop()?.toLowerCase() || '';
+    const isHeic = HEIC_TYPES.has(blob.type) || HEIC_EXTS.has(ext);
+    if (!isHeic) return blob;
+    try {
+        const result = await heic2any({ blob, toType: 'image/jpeg', quality: 0.92 });
+        // heic2any can return an array for multi-image HEIC; take the first
+        return Array.isArray(result) ? result[0] : result;
+    } catch (e) {
+        console.warn('[HEIC] Conversion failed:', e.message);
+        return blob;
+    }
+}
 
 // Lazy firebase references — do NOT call firebase.firestore() at module load 
 // time because this file gets imported before App.jsx calls initializeApp().
@@ -19,9 +38,15 @@ const thumbInflight = new Map();
 
 // ── Thumbnail Generation ────────────────────────────────────────────────────
 export async function generateThumbnail(file, maxSize = 400) {
+    // Convert HEIC/HEIF to JPEG first so the browser can render it
+    let renderableBlob = file;
+    try {
+        renderableBlob = await convertHeicToJpeg(file, file.name || '');
+    } catch {}
+
     return new Promise((resolve) => {
         const img = new Image();
-        const url = URL.createObjectURL(file);
+        const url = URL.createObjectURL(renderableBlob);
         img.onload = () => {
             const canvas = document.createElement('canvas');
             let w = img.width, h = img.height;
@@ -347,4 +372,85 @@ export function getMonthKey(dateTaken, uploadedAt) {
         label: date.toLocaleDateString('en-US', { year: 'numeric', month: 'long' }),
         date,
     };
+}
+
+// ── Repair missing thumbnails ───────────────────────────────────────────────
+/**
+ * Find all photos without thumbnails, download from Telegram, generate thumb,
+ * upload thumb, and update Firestore. Returns { repaired, failed, total }.
+ */
+export async function repairMissingThumbnails(uid, botToken, channelId, encryptionKey, onProgress) {
+    const snap = await getUserPhotosRef(uid).where('thumbFileId', '==', null).get();
+    if (snap.empty) return { repaired: 0, failed: 0, total: 0 };
+
+    const docs = snap.docs.map(d => ({ id: d.id, ref: d.ref, ...d.data() }));
+    let repaired = 0, failed = 0;
+
+    for (let i = 0; i < docs.length; i++) {
+        const photo = docs[i];
+        if (onProgress) onProgress({ current: i + 1, total: docs.length, fileName: photo.fileName, repaired, failed });
+
+        try {
+            // Download first chunk from Telegram to generate thumbnail
+            const firstMsg = photo.messages?.[0];
+            if (!firstMsg?.file_id) { failed++; continue; }
+
+            // Get Telegram file path
+            const getFileUrl = `https://api.telegram.org/bot${botToken}/getFile?file_id=${firstMsg.file_id}`;
+            const proxyUrl = `${PROXY_BASE_URL}?url=${encodeURIComponent(getFileUrl)}`;
+            const fileRes = await fetch(proxyUrl);
+            const fileData = await fileRes.json();
+            if (!fileData.ok) { failed++; continue; }
+
+            const tgPath = fileData.result.file_path;
+            const downloadUrl = `https://api.telegram.org/file/bot${botToken}/${tgPath}`;
+            const dlProxy = `${PROXY_BASE_URL}?url=${encodeURIComponent(downloadUrl)}`;
+            const dlRes = await fetch(dlProxy);
+            if (!dlRes.ok) { failed++; continue; }
+
+            let rawData = await dlRes.arrayBuffer();
+
+            // Decrypt if encrypted
+            if (photo.encrypted && encryptionKey) {
+                try { rawData = await decryptChunk(rawData, encryptionKey); } catch { failed++; continue; }
+            }
+
+            // Create a File object for thumbnail generation
+            const blob = new Blob([rawData], { type: photo.fileType || 'application/octet-stream' });
+            const file = new File([blob], photo.fileName || 'photo', { type: blob.type });
+
+            // Generate thumbnail (convertHeicToJpeg is now built into generateThumbnail)
+            const isVideo = (photo.fileType || '').startsWith('video/');
+            const thumbBlob = isVideo
+                ? await generateVideoThumbnail(file)
+                : await generateThumbnail(file);
+
+            if (!thumbBlob) { failed++; continue; }
+
+            // Upload thumbnail to Telegram
+            const thumbResult = await uploadThumbnailToTelegram(
+                thumbBlob, botToken, channelId,
+                encryptionKey || null
+            );
+
+            if (!thumbResult) { failed++; continue; }
+
+            // Update Firestore
+            await photo.ref.update({
+                thumbFileId: thumbResult.file_id,
+                thumbMessageId: thumbResult.message_id,
+                thumbEncrypted: thumbResult.encrypted || false,
+            });
+
+            repaired++;
+        } catch (e) {
+            console.error(`[Repair] Failed for ${photo.fileName}:`, e);
+            failed++;
+        }
+
+        // Rate limit delay
+        await sleep(1200);
+    }
+
+    return { repaired, failed, total: docs.length };
 }

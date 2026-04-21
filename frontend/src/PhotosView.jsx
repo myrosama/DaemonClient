@@ -11,6 +11,7 @@ import {
     uploadToTelegram, uploadThumbnailToTelegram, resolveThumbnailUrl,
     getUserPhotosRef, getUserAlbumsRef, getUserFilesRef, getUserConfigRef,
     deleteTelegramMessages, formatFileSize, getMonthKey, formatDate,
+    repairMissingThumbnails, convertHeicToJpeg,
 } from './photos/utils.js';
 import './photos/photos.css';
 
@@ -94,6 +95,8 @@ const PhotosView = ({ onSwitchToDrive }) => {
     const fileInputRef = useRef(null);
     const abortRef = useRef(null);
     const loadMoreRef = useRef(null);
+    const [repairing, setRepairing] = useState(false);
+    const [repairProgress, setRepairProgress] = useState(null);
 
     const uid = getAuth().currentUser?.uid;
 
@@ -218,9 +221,19 @@ const PhotosView = ({ onSwitchToDrive }) => {
 
         for (let i = 0; i < mediaFiles.length; i++) {
             if (controller.signal.aborted) break;
-            const file = mediaFiles[i];
+            let file = mediaFiles[i];
             setUploadStatus(`Processing ${i + 1}/${mediaFiles.length}: ${file.name}`);
             try {
+                // Convert HEIC/HEIF → JPEG before uploading
+                const extLower = file.name.split('.').pop()?.toLowerCase();
+                if (extLower === 'heic' || extLower === 'heif') {
+                    try {
+                        const jpegBlob = await convertHeicToJpeg(file, file.name);
+                        const jpegName = file.name.replace(/\.(heic|heif)$/i, '.jpg');
+                        file = new File([jpegBlob], jpegName, { type: 'image/jpeg', lastModified: file.lastModified });
+                    } catch {}
+                }
+
                 const isVideoFile = file.type.startsWith('video/');
                 const [exifData, thumbBlob] = await Promise.all([
                     isVideoFile ? { dateTaken: null } : extractExifData(file),
@@ -477,6 +490,29 @@ const PhotosView = ({ onSwitchToDrive }) => {
                                                 <span className="photos-upload-menu-sub">Via Google Takeout</span>
                                             </div>
                                         </button>
+                                        <div className="photos-upload-menu-divider" />
+                                        <button onClick={() => {
+                                            setShowUploadMenu(false);
+                                            if (repairing) return;
+                                            setRepairing(true);
+                                            setRepairProgress({ current: 0, total: 0, fileName: 'Scanning...', repaired: 0, failed: 0 });
+                                            repairMissingThumbnails(
+                                                uid, config?.botToken, config?.channelId,
+                                                zkeEnabled ? encryptionKey : null,
+                                                (p) => setRepairProgress(p)
+                                            ).then((result) => {
+                                                setRepairing(false);
+                                                setRepairProgress(null);
+                                                if (result.repaired > 0) loadPhotos(true);
+                                                alert(`Repair complete: ${result.repaired} fixed, ${result.failed} failed out of ${result.total}`);
+                                            }).catch(() => { setRepairing(false); setRepairProgress(null); });
+                                        }} className="photos-upload-menu-item" disabled={repairing}>
+                                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
+                                            <div className="photos-upload-menu-text">
+                                                <span>{repairing ? 'Repairing...' : 'Repair Thumbnails'}</span>
+                                                <span className="photos-upload-menu-sub">Fix missing HEIC previews</span>
+                                            </div>
+                                        </button>
                                     </motion.div>
                                 )}
                             </AnimatePresence>
@@ -501,6 +537,25 @@ const PhotosView = ({ onSwitchToDrive }) => {
                             <button onClick={() => { abortRef.current?.abort(); setUploading(false); }} className="photos-btn photos-btn-sm" style={{color:'var(--photos-danger)'}}>Cancel</button>
                         </div>
                         <div className="progress-track"><div className="progress-fill" style={{width:`${uploadPercent}%`}} /></div>
+                    </div>
+                </div>
+            )}
+
+            {/* Repair progress */}
+            {repairing && repairProgress && (
+                <div className="photos-upload-bar">
+                    <div className="photos-upload-inner">
+                        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                            <span style={{fontSize:13,color:'var(--photos-accent)'}}>
+                                🔧 Repairing thumbnails: {repairProgress.current}/{repairProgress.total} — {repairProgress.fileName}
+                            </span>
+                            <span style={{fontSize:12,color:'var(--photos-muted)'}}>
+                                ✓{repairProgress.repaired} ✗{repairProgress.failed}
+                            </span>
+                        </div>
+                        <div className="progress-track">
+                            <div className="progress-fill" style={{width: repairProgress.total > 0 ? `${(repairProgress.current / repairProgress.total) * 100}%` : '0%'}} />
+                        </div>
                     </div>
                 </div>
             )}

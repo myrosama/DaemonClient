@@ -1,7 +1,15 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { formatDate, formatFileSize, resolveThumbnailUrl } from './utils.js';
+import { formatDate, formatFileSize, resolveThumbnailUrl, convertHeicToJpeg } from './utils.js';
 // Note: no direct Firestore usage here — all data comes via props
+
+const HEIC_TYPES = new Set(['image/heic', 'image/heif']);
+const HEIC_EXTS = new Set(['heic', 'heif']);
+function isHeicFile(photo) {
+    if (HEIC_TYPES.has(photo.fileType)) return true;
+    const ext = (photo.fileName || '').split('.').pop()?.toLowerCase();
+    return HEIC_EXTS.has(ext);
+}
 
 const PhotoLightbox = ({ photo, photos, onClose, onToggleFavorite, onDelete, onDownload, config, encryptionKey }) => {
     const [currentIndex, setCurrentIndex] = useState(() => photos.findIndex(p => p.id === photo.id));
@@ -16,6 +24,7 @@ const PhotoLightbox = ({ photo, photos, onClose, onToggleFavorite, onDelete, onD
     useEffect(() => {
         if (!current || !config?.botToken) return;
         setLoading(true); setMediaUrl(null);
+        let revokePrev = null;
         const load = async () => {
             try {
                 if ('serviceWorker' in navigator) {
@@ -38,7 +47,22 @@ const PhotoLightbox = ({ photo, photos, onClose, onToggleFavorite, onDelete, onD
                             }, [ch.port2]);
                             setTimeout(() => reject(new Error('timeout')), 8000);
                         });
-                        setMediaUrl(`/stream/${fileId}`);
+
+                        // For HEIC files, fetch the streamed blob and convert to JPEG
+                        if (!isVideo && isHeicFile(current)) {
+                            try {
+                                const resp = await fetch(`/stream/${fileId}`);
+                                const rawBlob = await resp.blob();
+                                const jpegBlob = await convertHeicToJpeg(rawBlob, current.fileName || '');
+                                const blobUrl = URL.createObjectURL(jpegBlob);
+                                revokePrev = blobUrl;
+                                setMediaUrl(blobUrl);
+                            } catch {
+                                setMediaUrl(`/stream/${fileId}`);
+                            }
+                        } else {
+                            setMediaUrl(`/stream/${fileId}`);
+                        }
                     }
                 }
             } catch {
@@ -51,6 +75,7 @@ const PhotoLightbox = ({ photo, photos, onClose, onToggleFavorite, onDelete, onD
             setLoading(false);
         };
         load();
+        return () => { if (revokePrev) URL.revokeObjectURL(revokePrev); };
     }, [currentIndex, current, config, encryptionKey]);
 
     // Keyboard nav
