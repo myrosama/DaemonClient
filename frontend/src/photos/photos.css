@@ -57,13 +57,13 @@
 /* ── Upload Dropdown Menu ─────────────────────────────────────────────────── */
 .photos-upload-dropdown { position: relative; }
 .photos-upload-menu {
-    position: absolute; top: calc(100% + 6px); right: 0; z-index: 60;
+    position: absolute; top: calc(100% + 6px); left: 50%; margin-left: -120px; z-index: 60;
     min-width: 240px; padding: 6px;
     background: var(--photos-surface);
     border: 1px solid var(--photos-border);
     border-radius: 12px;
     box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.04) inset;
-    transform-origin: top right;
+    transform-origin: top center;
 }
 .photos-upload-menu-item {
     display: flex; align-items: center; gap: 12px;
