@@ -1,6 +1,6 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { unzipSync, strFromU8 } from 'fflate';
+import { ZipReader, BlobReader, BlobWriter, TextWriter } from '@zip.js/zip.js';
 import firebase from 'firebase/compat/app';
 import 'firebase/compat/firestore';
 import {
@@ -88,23 +88,25 @@ function parseTakeoutJson(jsonStr) {
 function findJsonSidecar(mediaPath, entries) {
     // Google Takeout typically names it: photo.jpg.json
     const jsonPath1 = mediaPath + '.json';
-    if (entries[jsonPath1]) return entries[jsonPath1];
+    const match1 = entries.find(e => e.filename === jsonPath1);
+    if (match1) return match1;
 
     // Sometimes it's: photo.json (without original extension)
     const lastDot = mediaPath.lastIndexOf('.');
     if (lastDot >= 0) {
         const jsonPath2 = mediaPath.slice(0, lastDot) + '.json';
-        if (entries[jsonPath2]) return entries[jsonPath2];
+        const match2 = entries.find(e => e.filename === jsonPath2);
+        if (match2) return match2;
     }
 
     // Sometimes with edited suffix: photo.jpg(1).json
     const baseName = getFileName(mediaPath);
-    for (const key of Object.keys(entries)) {
-        if (!key.endsWith('.json')) continue;
-        const jsonBaseName = getFileName(key);
+    for (const entry of entries) {
+        if (!entry.filename.endsWith('.json')) continue;
+        const jsonBaseName = getFileName(entry.filename);
         // Check if JSON references this media file
         if (jsonBaseName.startsWith(baseName.replace(/\.[^.]+$/, ''))) {
-            return entries[key];
+            return entry;
         }
     }
 
@@ -190,8 +192,8 @@ const GooglePhotosImport = ({ onClose, config, encryptionKey, zkeEnabled, uid, o
 
         // 1. First pass: count all media files across all ZIPs
         log('Scanning ZIP archives...', 'info');
-        const allMediaEntries = []; // { zipIndex, path, size }
-        const allEntries = [];      // unzipped data per ZIP
+        const allMediaEntries = []; // { zipReader, entry, entries }
+        const zipReadersToClose = [];
 
         for (let zi = 0; zi < zipFiles.length; zi++) {
             if (cancelledRef.current) break;
@@ -199,22 +201,22 @@ const GooglePhotosImport = ({ onClose, config, encryptionKey, zkeEnabled, uid, o
             log(`Reading ${zipFile.name} (${formatFileSize(zipFile.size)})...`, 'info');
 
             try {
-                const buffer = await zipFile.arrayBuffer();
-                const unzipped = unzipSync(new Uint8Array(buffer));
-                allEntries[zi] = unzipped;
+                const zipReader = new ZipReader(new BlobReader(zipFile));
+                zipReadersToClose.push(zipReader);
+                const entries = await zipReader.getEntries();
 
-                for (const path of Object.keys(unzipped)) {
-                    if (isMediaFile(path) && unzipped[path].length > 0) {
-                        allMediaEntries.push({ zipIndex: zi, path, size: unzipped[path].length });
+                for (const entry of entries) {
+                    if (!entry.directory && isMediaFile(entry.filename) && entry.uncompressedSize > 0) {
+                        allMediaEntries.push({ zipReader, entry, entries });
                     }
                 }
-                log(`Found ${Object.keys(unzipped).length} entries in ${zipFile.name}`, 'info');
+                log(`Found ${entries.length} entries in ${zipFile.name}`, 'info');
             } catch (err) {
                 log(`Failed to read ${zipFile.name}: ${err.message}`, 'error');
             }
         }
 
-        const totalBytes = allMediaEntries.reduce((sum, e) => sum + e.size, 0);
+        const totalBytes = allMediaEntries.reduce((sum, e) => sum + e.entry.uncompressedSize, 0);
         setImportStats(prev => ({ ...prev, total: allMediaEntries.length, totalBytes }));
         log(`Found ${allMediaEntries.length} media files (${formatFileSize(totalBytes)})`, 'info');
 
@@ -241,7 +243,7 @@ const GooglePhotosImport = ({ onClose, config, encryptionKey, zkeEnabled, uid, o
         let processedBytes = 0;
         const importedPhotos = [];
 
-        for (const entry of allMediaEntries) {
+        for (const meta of allMediaEntries) {
             if (cancelledRef.current) {
                 log('Import cancelled by user.', 'warn');
                 break;
@@ -250,7 +252,9 @@ const GooglePhotosImport = ({ onClose, config, encryptionKey, zkeEnabled, uid, o
             await waitWhilePaused();
             if (cancelledRef.current) break;
 
-            const { zipIndex, path, size } = entry;
+            const { zipReader, entry: zipEntry, entries } = meta;
+            const path = zipEntry.filename;
+            const size = zipEntry.uncompressedSize;
             const fileName = getFileName(path);
             const ext = getExt(fileName);
             const mimeType = MIME_MAP[ext] || 'application/octet-stream';
@@ -275,16 +279,15 @@ const GooglePhotosImport = ({ onClose, config, encryptionKey, zkeEnabled, uid, o
             }
 
             try {
-                const rawData = allEntries[zipIndex][path];
-                const blob = new Blob([rawData], { type: mimeType });
+                const blob = await zipEntry.getData(new BlobWriter(mimeType));
                 const file = new File([blob], fileName, { type: mimeType, lastModified: Date.now() });
 
                 // Parse JSON sidecar for metadata
-                const jsonSidecar = findJsonSidecar(path, allEntries[zipIndex]);
+                const jsonSidecar = findJsonSidecar(path, entries);
                 let takeoutMeta = {};
                 if (jsonSidecar) {
                     try {
-                        const jsonStr = strFromU8(jsonSidecar);
+                        const jsonStr = await jsonSidecar.getData(new TextWriter());
                         takeoutMeta = parseTakeoutJson(jsonStr);
                     } catch {}
                 }
@@ -379,6 +382,11 @@ const GooglePhotosImport = ({ onClose, config, encryptionKey, zkeEnabled, uid, o
             if (processedCount < allMediaEntries.length) {
                 await sleep(800);
             }
+        }
+
+        // Clean up memory
+        for (const reader of zipReadersToClose) {
+            try { await reader.close(); } catch {}
         }
 
         // Done
