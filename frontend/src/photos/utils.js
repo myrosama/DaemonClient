@@ -4,22 +4,59 @@ import { encryptChunk, decryptChunk } from '../crypto.js';
 import exifr from 'exifr';
 import heic2any from 'heic2any';
 
-const HEIC_TYPES = new Set(['image/heic', 'image/heif']);
-const HEIC_EXTS = new Set(['heic', 'heif']);
+// Formats that need conversion → JPEG for universal browser compatibility
+const CONVERT_EXTS = new Set(['heic', 'heif', 'bmp', 'tiff', 'tif']);
+const CONVERT_TYPES = new Set(['image/heic', 'image/heif', 'image/bmp', 'image/tiff']);
 
-/** Convert HEIC/HEIF blob to JPEG blob. Returns original if not HEIC or conversion fails. */
-export async function convertHeicToJpeg(blob, fileName = '') {
+/**
+ * Normalize problematic image formats → JPEG at upload time.
+ * Returns { blob, fileName, mimeType } with converted or original values.
+ */
+export async function normalizeImageFormat(blob, fileName = '') {
     const ext = fileName.split('.').pop()?.toLowerCase() || '';
-    const isHeic = HEIC_TYPES.has(blob.type) || HEIC_EXTS.has(ext);
-    if (!isHeic) return blob;
+    const needsConvert = CONVERT_EXTS.has(ext) || CONVERT_TYPES.has(blob.type);
+    if (!needsConvert) return { blob, fileName, mimeType: blob.type };
+
+    const isHeic = ext === 'heic' || ext === 'heif' || blob.type === 'image/heic' || blob.type === 'image/heif';
+
     try {
-        const result = await heic2any({ blob, toType: 'image/jpeg', quality: 0.92 });
-        // heic2any can return an array for multi-image HEIC; take the first
-        return Array.isArray(result) ? result[0] : result;
+        let jpegBlob;
+        if (isHeic) {
+            // Use heic2any for HEIC/HEIF
+            const result = await heic2any({ blob, toType: 'image/jpeg', quality: 0.92 });
+            jpegBlob = Array.isArray(result) ? result[0] : result;
+        } else {
+            // BMP, TIFF → Canvas → JPEG
+            jpegBlob = await canvasConvertToJpeg(blob);
+        }
+        const newName = fileName.replace(/\.(heic|heif|bmp|tiff|tif)$/i, '.jpg');
+        return { blob: jpegBlob, fileName: newName, mimeType: 'image/jpeg' };
     } catch (e) {
-        console.warn('[HEIC] Conversion failed:', e.message);
-        return blob;
+        console.warn(`[Format] Conversion failed for ${fileName}:`, e.message);
+        return { blob, fileName, mimeType: blob.type };
     }
+}
+
+/** Convert any browser-renderable image blob to JPEG via Canvas */
+async function canvasConvertToJpeg(blob) {
+    return new Promise((resolve, reject) => {
+        const img = new Image();
+        const url = URL.createObjectURL(blob);
+        img.onload = () => {
+            const canvas = document.createElement('canvas');
+            canvas.width = img.width; canvas.height = img.height;
+            canvas.getContext('2d').drawImage(img, 0, 0);
+            canvas.toBlob((b) => { URL.revokeObjectURL(url); b ? resolve(b) : reject(new Error('Canvas toBlob failed')); }, 'image/jpeg', 0.92);
+        };
+        img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Image load failed')); };
+        img.src = url;
+    });
+}
+
+/** @deprecated Use normalizeImageFormat instead */
+export async function convertHeicToJpeg(blob, fileName = '') {
+    const result = await normalizeImageFormat(blob, fileName);
+    return result.blob;
 }
 
 // Lazy firebase references — do NOT call firebase.firestore() at module load 

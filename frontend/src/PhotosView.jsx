@@ -11,7 +11,7 @@ import {
     uploadToTelegram, uploadThumbnailToTelegram, resolveThumbnailUrl,
     getUserPhotosRef, getUserAlbumsRef, getUserFilesRef, getUserConfigRef,
     deleteTelegramMessages, formatFileSize, getMonthKey, formatDate,
-    repairMissingThumbnails, convertHeicToJpeg,
+    repairMissingThumbnails, normalizeImageFormat,
 } from './photos/utils.js';
 import './photos/photos.css';
 
@@ -28,6 +28,8 @@ const LazyThumb = ({ photo, botToken, decryptionKey, onClick, selected, onSelect
     const ref = useRef(null);
     const [src, setSrc] = useState(null);
     const [visible, setVisible] = useState(false);
+    const [loaded, setLoaded] = useState(false);
+    const longPressTimer = useRef(null);
 
     useEffect(() => {
         const el = ref.current;
@@ -50,12 +52,29 @@ const LazyThumb = ({ photo, botToken, decryptionKey, onClick, selected, onSelect
 
     const isVideo = photo.fileType?.startsWith('video/');
 
+    // Long-press for mobile selection
+    const handlePointerDown = (e) => {
+        if (e.pointerType !== 'touch') return;
+        longPressTimer.current = setTimeout(() => {
+            if (navigator.vibrate) navigator.vibrate(50);
+            onSelect(photo, e);
+        }, 500);
+    };
+    const handlePointerUp = () => clearTimeout(longPressTimer.current);
+    const handlePointerCancel = () => clearTimeout(longPressTimer.current);
+
     return (
-        <div ref={ref} className={`photo-tile ${selected ? 'selected' : ''}`} onClick={(e) => {
-            if (e.shiftKey || e.ctrlKey || e.metaKey || selectionMode) { e.preventDefault(); onSelect(photo, e); }
-            else onClick(photo);
-        }}>
-            {src ? <img src={src} alt="" loading="lazy" /> : <div className="photo-tile-placeholder"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg></div>}
+        <div ref={ref} className={`photo-tile ${selected ? 'selected' : ''} ${selectionMode ? 'selection-active' : ''}`}
+            onClick={(e) => {
+                if (e.shiftKey || e.ctrlKey || e.metaKey || selectionMode) { e.preventDefault(); onSelect(photo, e); }
+                else onClick(photo);
+            }}
+            onPointerDown={handlePointerDown}
+            onPointerUp={handlePointerUp}
+            onPointerCancel={handlePointerCancel}
+            onContextMenu={(e) => { if (selectionMode) e.preventDefault(); }}
+        >
+            {src ? <img src={src} alt="" loading="lazy" className={loaded ? 'loaded' : ''} onLoad={() => setLoaded(true)} /> : <div className="photo-tile-skeleton" />}
             <div className="photo-overlay" />
             <div className="photo-select" onClick={(e) => { e.stopPropagation(); onSelect(photo, e); }}>
                 {selected && <svg width="14" height="14" viewBox="0 0 24 24" fill="white" stroke="white" strokeWidth="2"><polyline points="20 6 9 17 4 12"/></svg>}
@@ -97,6 +116,9 @@ const PhotosView = ({ onSwitchToDrive }) => {
     const loadMoreRef = useRef(null);
     const [repairing, setRepairing] = useState(false);
     const [repairProgress, setRepairProgress] = useState(null);
+    const [showScrollTop, setShowScrollTop] = useState(false);
+    const lastSelectedRef = useRef(null);
+    const scrollContainerRef = useRef(null);
 
     const uid = getAuth().currentUser?.uid;
 
@@ -155,31 +177,7 @@ const PhotosView = ({ onSwitchToDrive }) => {
         return () => unsub();
     }, [uid]);
 
-
-    // ── Close upload menu on outside click ──────────────────────────────
-    useEffect(() => {
-        if (!showUploadMenu) return;
-        const handler = (e) => {
-            if (uploadMenuRef.current && !uploadMenuRef.current.contains(e.target)) {
-                setShowUploadMenu(false);
-            }
-        };
-        document.addEventListener('mousedown', handler);
-        return () => document.removeEventListener('mousedown', handler);
-    }, [showUploadMenu]);
-
-    // ── Infinite scroll ─────────────────────────────────────────────────
-    useEffect(() => {
-        const el = loadMoreRef.current;
-        if (!el || !hasMore) return;
-        const obs = new IntersectionObserver(([entry]) => {
-            if (entry.isIntersecting && !loading) loadPhotos(false);
-        });
-        obs.observe(el);
-        return () => obs.disconnect();
-    }, [hasMore, loading, loadPhotos]);
-
-    // ── Grouped photos ──────────────────────────────────────────────────
+    // ── Grouped photos (must be defined before useEffects that reference it) ─
     const displayPhotos = useMemo(() => {
         let list = photos;
         if (activeTab === 'favorites') list = photos.filter(p => p.isFavorite);
@@ -209,6 +207,51 @@ const PhotosView = ({ onSwitchToDrive }) => {
         return Object.entries(groups).sort(([a], [b]) => b.localeCompare(a)).map(([, g]) => g);
     }, [displayPhotos]);
 
+    // ── Keyboard shortcuts (Ctrl+A, Escape) ──────────────────────────────
+    useEffect(() => {
+        const handleKeyboard = (e) => {
+            if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
+                e.preventDefault();
+                setSelectedIds(new Set(displayPhotos.map(p => p.id)));
+            }
+            if (e.key === 'Escape' && selectedIds.size > 0) {
+                setSelectedIds(new Set());
+            }
+        };
+        window.addEventListener('keydown', handleKeyboard);
+        return () => window.removeEventListener('keydown', handleKeyboard);
+    }, [displayPhotos, selectedIds.size]);
+
+    // ── Scroll-to-top visibility ─────────────────────────────────────────
+    useEffect(() => {
+        const handler = () => setShowScrollTop(window.scrollY > 600);
+        window.addEventListener('scroll', handler, { passive: true });
+        return () => window.removeEventListener('scroll', handler);
+    }, []);
+
+    // ── Close upload menu on outside click ──────────────────────────────
+    useEffect(() => {
+        if (!showUploadMenu) return;
+        const handler = (e) => {
+            if (uploadMenuRef.current && !uploadMenuRef.current.contains(e.target)) {
+                setShowUploadMenu(false);
+            }
+        };
+        document.addEventListener('mousedown', handler);
+        return () => document.removeEventListener('mousedown', handler);
+    }, [showUploadMenu]);
+
+    // ── Infinite scroll ─────────────────────────────────────────────────
+    useEffect(() => {
+        const el = loadMoreRef.current;
+        if (!el || !hasMore) return;
+        const obs = new IntersectionObserver(([entry]) => {
+            if (entry.isIntersecting && !loading) loadPhotos(false);
+        });
+        obs.observe(el);
+        return () => obs.disconnect();
+    }, [hasMore, loading, loadPhotos]);
+
     // ── Upload handler ──────────────────────────────────────────────────
     const handleUpload = async (e) => {
         const files = Array.from(e.target.files || []);
@@ -224,14 +267,12 @@ const PhotosView = ({ onSwitchToDrive }) => {
             let file = mediaFiles[i];
             setUploadStatus(`Processing ${i + 1}/${mediaFiles.length}: ${file.name}`);
             try {
-                // Convert HEIC/HEIF → JPEG before uploading
-                const extLower = file.name.split('.').pop()?.toLowerCase();
-                if (extLower === 'heic' || extLower === 'heif') {
-                    try {
-                        const jpegBlob = await convertHeicToJpeg(file, file.name);
-                        const jpegName = file.name.replace(/\.(heic|heif)$/i, '.jpg');
-                        file = new File([jpegBlob], jpegName, { type: 'image/jpeg', lastModified: file.lastModified });
-                    } catch {}
+                // Convert problematic formats (HEIC, BMP, TIFF) → JPEG
+                if (!file.type.startsWith('video/')) {
+                    const { blob, fileName, mimeType } = await normalizeImageFormat(file, file.name);
+                    if (fileName !== file.name) {
+                        file = new File([blob], fileName, { type: mimeType, lastModified: file.lastModified });
+                    }
                 }
 
                 const isVideoFile = file.type.startsWith('video/');
@@ -355,14 +396,25 @@ const PhotosView = ({ onSwitchToDrive }) => {
         } catch (err) { console.error('Download failed:', err); }
     };
 
-    // ── Selection ───────────────────────────────────────────────────────
-    const toggleSelect = (photo, e) => {
+    // ── Selection (with Shift+click range select) ────────────────────────
+    const toggleSelect = useCallback((photo, e) => {
         setSelectedIds(prev => {
             const next = new Set(prev);
+            // Shift+click range select
+            if (e?.shiftKey && lastSelectedRef.current) {
+                const lastIdx = displayPhotos.findIndex(p => p.id === lastSelectedRef.current);
+                const curIdx = displayPhotos.findIndex(p => p.id === photo.id);
+                if (lastIdx !== -1 && curIdx !== -1) {
+                    const [start, end] = lastIdx < curIdx ? [lastIdx, curIdx] : [curIdx, lastIdx];
+                    for (let i = start; i <= end; i++) next.add(displayPhotos[i].id);
+                    return next;
+                }
+            }
             if (next.has(photo.id)) next.delete(photo.id); else next.add(photo.id);
             return next;
         });
-    };
+        lastSelectedRef.current = photo.id;
+    }, [displayPhotos]);
 
     const bulkDelete = async () => {
         if (!window.confirm(`Move ${selectedIds.size} items to trash?`)) return;
@@ -439,6 +491,7 @@ const PhotosView = ({ onSwitchToDrive }) => {
                     <div className="photos-logo">
                         <img src="/logo.png" alt="" />
                         <h1>{activeAlbum ? activeAlbum.name : 'Photos'}</h1>
+                        {!activeAlbum && photos.length > 0 && <span className="photos-count-badge">{photos.length.toLocaleString()}</span>}
                     </div>
                     <div className="photos-header-actions">
                         {/* Desktop tabs */}
@@ -632,7 +685,9 @@ const PhotosView = ({ onSwitchToDrive }) => {
             {(activeTab === 'photos' || activeTab === 'favorites') && (
                 <div className="photos-content">
                     {loading ? (
-                        <div className="photos-empty"><div className="lb-spinner" /><p style={{marginTop:16}}>Loading photos...</p></div>
+                        <div className="photos-skeleton-grid">
+                            {Array.from({length: 24}).map((_, i) => <div key={i} className="photo-tile-skeleton" />)}
+                        </div>
                     ) : displayPhotos.length === 0 ? (
                         <div className="photos-empty">
                             <div className="photos-empty-icon"><svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" style={{color:'var(--photos-text-dim)'}}><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg></div>
@@ -676,6 +731,21 @@ const PhotosView = ({ onSwitchToDrive }) => {
                     <button onClick={() => setSelectedIds(new Set())} className="photos-btn-icon" title="Cancel"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
                 </div>
             )}
+
+            {/* ── Scroll-to-top button ─── */}
+            <AnimatePresence>
+                {showScrollTop && (
+                    <motion.button
+                        initial={{ opacity: 0, y: 20 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: 20 }}
+                        className="photos-scroll-top"
+                        onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
+                    >
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="18 15 12 9 6 15"/></svg>
+                    </motion.button>
+                )}
+            </AnimatePresence>
 
             {/* ── Mobile bottom tabs ─── */}
             <div className="photos-mobile-tabs">

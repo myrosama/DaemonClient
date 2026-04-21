@@ -6,7 +6,7 @@ import 'firebase/compat/firestore';
 import {
     sleep, generateThumbnail, generateVideoThumbnail, extractExifData,
     uploadToTelegram, uploadThumbnailToTelegram,
-    getUserPhotosRef, formatFileSize, convertHeicToJpeg,
+    getUserPhotosRef, formatFileSize, normalizeImageFormat,
 } from './utils.js';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -281,18 +281,14 @@ const GooglePhotosImport = ({ onClose, config, encryptionKey, zkeEnabled, uid, o
             try {
                 let blob = await zipEntry.getData(new BlobWriter(mimeType));
 
-                // Convert HEIC/HEIF → JPEG at upload time for universal compatibility
-                const extLower = ext.toLowerCase();
-                if (extLower === 'heic' || extLower === 'heif') {
-                    try {
-                        blob = await convertHeicToJpeg(blob, fileName);
-                        mimeType = 'image/jpeg';
-                        fileName = fileName.replace(/\.(heic|heif)$/i, '.jpg');
-                        log(`⟳ Converted HEIC → JPEG: ${fileName}`, 'info');
-                    } catch (convErr) {
-                        log(`⚠ HEIC conversion failed, uploading as-is: ${convErr.message}`, 'warn');
-                    }
+                // Convert problematic formats (HEIC, BMP, TIFF) → JPEG
+                const normalized = await normalizeImageFormat(blob, fileName);
+                if (normalized.fileName !== fileName) {
+                    log(`⟳ Converted ${ext.toUpperCase()} → JPEG: ${normalized.fileName}`, 'info');
                 }
+                blob = normalized.blob;
+                fileName = normalized.fileName;
+                mimeType = normalized.mimeType || mimeType;
 
                 const file = new File([blob], fileName, { type: mimeType, lastModified: Date.now() });
 
