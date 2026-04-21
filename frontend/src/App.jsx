@@ -1592,11 +1592,12 @@ const DashboardView = () => {
                             <video
                                 controls
                                 autoPlay
-                                src={url}
                                 onLoadedData={() => setMediaLoaded(true)}
                                 onError={() => setMediaLoaded(true)}
                                 className={`max-w-full max-h-[88vh] rounded-md transition-opacity duration-300 ${mediaLoaded ? 'opacity-100' : 'opacity-0'}`}
-                            />
+                            >
+                                <source src={url} type={ext === 'mkv' ? 'video/webm' : `video/${ext}`} />
+                            </video>
                         )}
 
                         {isAudio && (
@@ -1612,12 +1613,13 @@ const DashboardView = () => {
                                 <audio
                                     controls
                                     autoPlay
-                                    src={url}
                                     onLoadedData={() => setMediaLoaded(true)}
                                     onError={() => setMediaLoaded(true)}
                                     className="w-full"
                                     style={{ filter: 'invert(1) hue-rotate(180deg)', height: '40px' }}
-                                />
+                                >
+                                    <source src={url} type={ext === 'mp3' ? 'audio/mpeg' : ext === 'm4a' ? 'audio/mp4' : `audio/${ext}`} />
+                                </audio>
                             </div>
                         )}
 

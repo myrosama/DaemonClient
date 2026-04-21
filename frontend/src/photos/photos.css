@@ -54,6 +54,33 @@
 .photos-btn-icon:hover { background:var(--photos-surface-2); color:var(--photos-text); }
 .photos-btn-sm { padding:5px 10px; font-size:11px; border-radius:6px; }
 
+/* ── Upload Dropdown Menu ─────────────────────────────────────────────────── */
+.photos-upload-dropdown { position: relative; }
+.photos-upload-menu {
+    position: absolute; top: calc(100% + 6px); right: 0; z-index: 60;
+    min-width: 240px; padding: 6px;
+    background: var(--photos-surface);
+    border: 1px solid var(--photos-border);
+    border-radius: 12px;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.04) inset;
+    transform-origin: top right;
+}
+.photos-upload-menu-item {
+    display: flex; align-items: center; gap: 12px;
+    width: 100%; padding: 10px 12px; border-radius: 8px;
+    border: none; background: none; cursor: pointer;
+    text-align: left; color: var(--photos-text);
+    transition: background 0.15s;
+}
+.photos-upload-menu-item:hover { background: rgba(255, 255, 255, 0.06); }
+.photos-upload-menu-item svg { flex-shrink: 0; color: var(--photos-text-muted); }
+.photos-upload-menu-import svg { color: unset; }
+.photos-upload-menu-text { display: flex; flex-direction: column; gap: 1px; }
+.photos-upload-menu-text span:first-child { font-size: 13px; font-weight: 600; }
+.photos-upload-menu-sub { font-size: 11px; color: var(--photos-text-dim); font-weight: 400; }
+.photos-upload-menu-divider { height: 1px; background: var(--photos-border); margin: 4px 8px; }
+
+
 /* ── Upload progress ──────────────────────────────────────────────────────── */
 .photos-upload-bar { max-width:1400px; margin:0 auto; padding:12px 16px; }
 .photos-upload-inner { background:rgba(79,70,229,0.1); border:1px solid rgba(79,70,229,0.25); border-radius:10px; padding:12px 16px; }
@@ -190,3 +217,289 @@
 .photos-modal input { width:100%; padding:10px 14px; border-radius:8px; border:1px solid var(--photos-border); background:var(--photos-bg); color:var(--photos-text); font-size:14px; outline:none; box-sizing:border-box; }
 .photos-modal input:focus { border-color:var(--photos-accent); }
 .photos-modal-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:16px; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   GOOGLE PHOTOS IMPORT MODAL
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Overlay */
+.gpi-overlay {
+    position: fixed; inset: 0; z-index: 200;
+    background: rgba(0, 0, 0, 0.75);
+    backdrop-filter: blur(8px);
+    display: flex; align-items: center; justify-content: center;
+    padding: 20px;
+    animation: gpi-fade-in 0.2s ease;
+}
+@keyframes gpi-fade-in { from { opacity: 0; } to { opacity: 1; } }
+
+/* Modal container */
+.gpi-modal {
+    width: 100%; max-width: 640px; max-height: 90vh;
+    background: var(--photos-surface);
+    border: 1px solid var(--photos-border);
+    border-radius: 20px;
+    display: flex; flex-direction: column;
+    overflow: hidden;
+    box-shadow: 0 24px 80px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.03) inset;
+}
+
+/* Header */
+.gpi-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 20px 24px 16px;
+    border-bottom: 1px solid var(--photos-border);
+}
+.gpi-header-title { display: flex; align-items: center; gap: 14px; }
+.gpi-google-icon {
+    width: 42px; height: 42px; border-radius: 12px;
+    background: rgba(255, 255, 255, 0.06);
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+}
+.gpi-header-title h2 { font-size: 17px; font-weight: 700; margin: 0; color: var(--photos-text); }
+.gpi-subtitle { font-size: 12px; color: var(--photos-text-dim); margin: 2px 0 0; }
+.gpi-close-btn {
+    width: 32px; height: 32px; border-radius: 8px; border: none;
+    background: rgba(255, 255, 255, 0.05); color: var(--photos-text-muted);
+    cursor: pointer; display: flex; align-items: center; justify-content: center;
+    transition: all 0.2s;
+}
+.gpi-close-btn:hover { background: rgba(255, 255, 255, 0.1); color: var(--photos-text); }
+
+/* Step indicator */
+.gpi-steps {
+    display: flex; align-items: center; justify-content: center;
+    gap: 32px; padding: 16px 24px;
+    border-bottom: 1px solid var(--photos-border);
+    position: relative;
+}
+.gpi-step {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 12px; font-weight: 500;
+    color: var(--photos-text-dim);
+    transition: color 0.3s;
+    z-index: 1;
+}
+.gpi-step.active { color: var(--photos-text-muted); }
+.gpi-step.current { color: var(--photos-accent); }
+.gpi-step-num {
+    width: 26px; height: 26px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px; font-weight: 700;
+    background: var(--photos-surface-2);
+    border: 2px solid var(--photos-border);
+    transition: all 0.3s;
+}
+.gpi-step.active .gpi-step-num { border-color: var(--photos-text-dim); }
+.gpi-step.current .gpi-step-num {
+    background: var(--photos-accent); border-color: var(--photos-accent); color: white;
+}
+.gpi-step-line {
+    position: absolute; left: 50%; top: 50%;
+    transform: translate(-50%, -50%);
+    height: 2px; background: var(--photos-accent);
+    transition: width 0.5s ease;
+    z-index: 0;
+    border-radius: 1px;
+    display: none; /* hidden on narrow screens */
+}
+
+/* Body */
+.gpi-body {
+    flex: 1; overflow-y: auto; padding: 20px 24px 24px;
+    display: flex; flex-direction: column; gap: 20px;
+}
+
+/* ── Step 1: Instructions ─── */
+.gpi-instructions { display: flex; flex-direction: column; gap: 16px; }
+.gpi-inst-item {
+    display: flex; align-items: flex-start; gap: 14px;
+    padding: 14px 16px; border-radius: 12px;
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid var(--photos-border);
+    transition: border-color 0.2s;
+}
+.gpi-inst-item:hover { border-color: rgba(79, 70, 229, 0.3); }
+.gpi-inst-num {
+    width: 28px; height: 28px; border-radius: 8px; flex-shrink: 0;
+    background: linear-gradient(135deg, var(--photos-accent), #7c3aed);
+    color: white; font-size: 13px; font-weight: 700;
+    display: flex; align-items: center; justify-content: center;
+}
+.gpi-inst-item h4 { font-size: 14px; font-weight: 600; margin: 0 0 4px; color: var(--photos-text); }
+.gpi-inst-item p { font-size: 13px; color: var(--photos-text-muted); margin: 0; line-height: 1.5; }
+.gpi-inst-item a { color: var(--photos-accent); text-decoration: none; font-weight: 500; }
+.gpi-inst-item a:hover { text-decoration: underline; }
+
+.gpi-info-box {
+    display: flex; align-items: flex-start; gap: 10px;
+    padding: 12px 16px; border-radius: 10px;
+    background: rgba(79, 70, 229, 0.06);
+    border: 1px solid rgba(79, 70, 229, 0.15);
+    font-size: 12px; color: var(--photos-text-muted); line-height: 1.5;
+}
+.gpi-info-box svg { flex-shrink: 0; color: var(--photos-accent); margin-top: 1px; }
+.gpi-info-box strong { color: var(--photos-text); }
+.gpi-zke-badge { color: var(--photos-success); font-weight: 600; }
+
+/* ── Step 2: Drag & Drop ─── */
+.gpi-dropzone {
+    border: 2px dashed var(--photos-border);
+    border-radius: 16px; padding: 40px 20px;
+    display: flex; flex-direction: column; align-items: center;
+    justify-content: center; gap: 12px;
+    cursor: pointer; transition: all 0.3s;
+    background: rgba(255, 255, 255, 0.01);
+    min-height: 180px;
+}
+.gpi-dropzone:hover { border-color: var(--photos-accent); background: rgba(79, 70, 229, 0.04); }
+.gpi-dropzone.dragging {
+    border-color: var(--photos-accent);
+    background: rgba(79, 70, 229, 0.08);
+    border-style: solid;
+    animation: gpi-pulse 1.5s ease infinite;
+}
+@keyframes gpi-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(79, 70, 229, 0.2); }
+    50% { box-shadow: 0 0 0 12px rgba(79, 70, 229, 0); }
+}
+.gpi-dropzone.has-files { min-height: 120px; padding: 24px 20px; }
+.gpi-drop-icon { color: var(--photos-text-dim); transition: color 0.2s; }
+.gpi-dropzone:hover .gpi-drop-icon, .gpi-dropzone.dragging .gpi-drop-icon { color: var(--photos-accent); }
+.gpi-drop-text { font-size: 15px; font-weight: 600; color: var(--photos-text-muted); text-align: center; }
+.gpi-drop-sub { font-size: 12px; color: var(--photos-text-dim); }
+
+.gpi-file-list { display: flex; flex-direction: column; gap: 0; }
+.gpi-file-list-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 0; font-size: 12px; font-weight: 600;
+    color: var(--photos-text-muted);
+}
+.gpi-file-total { color: var(--photos-text-dim); }
+.gpi-file-item {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 12px; border-radius: 10px;
+    background: var(--photos-surface-2);
+    margin-bottom: 4px; transition: background 0.2s;
+}
+.gpi-file-item svg { color: var(--photos-text-dim); flex-shrink: 0; }
+.gpi-file-info { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; }
+.gpi-file-name { font-size: 13px; font-weight: 500; color: var(--photos-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gpi-file-size { font-size: 11px; color: var(--photos-text-dim); flex-shrink: 0; }
+.gpi-file-remove {
+    width: 28px; height: 28px; border-radius: 6px; border: none;
+    background: none; color: var(--photos-text-dim);
+    cursor: pointer; display: flex; align-items: center; justify-content: center;
+    transition: all 0.2s;
+}
+.gpi-file-remove:hover { background: rgba(239, 68, 68, 0.1); color: var(--photos-danger); }
+
+/* ── Step 3: Progress ─── */
+.gpi-stats-grid {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px;
+}
+.gpi-stat {
+    background: var(--photos-surface-2); border-radius: 10px;
+    padding: 12px; text-align: center;
+    display: flex; flex-direction: column; gap: 4px;
+}
+.gpi-stat-val { font-size: 18px; font-weight: 800; color: var(--photos-text); }
+.gpi-stat-val.gpi-stat-error { color: var(--photos-danger); }
+.gpi-stat-label { font-size: 10px; font-weight: 600; color: var(--photos-text-dim); text-transform: uppercase; letter-spacing: 0.5px; }
+
+.gpi-progress-section { display: flex; flex-direction: column; gap: 6px; }
+.gpi-progress-labels { display: flex; justify-content: space-between; font-size: 12px; }
+.gpi-progress-labels span:first-child { font-weight: 600; color: var(--photos-text); }
+.gpi-progress-labels span:last-child { color: var(--photos-accent); font-weight: 700; }
+.gpi-progress-track {
+    width: 100%; height: 6px; border-radius: 3px;
+    background: var(--photos-surface-2); overflow: hidden;
+}
+.gpi-progress-fill {
+    height: 100%; border-radius: 3px;
+    background: linear-gradient(90deg, var(--photos-accent), #7c3aed);
+    transition: width 0.4s ease;
+    position: relative;
+}
+.gpi-progress-fill::after {
+    content: ''; position: absolute; inset: 0;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
+    animation: gpi-shimmer 2s infinite;
+}
+@keyframes gpi-shimmer { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+.gpi-progress-fill.paused { background: var(--photos-warn); }
+.gpi-progress-fill.paused::after { animation: none; }
+.gpi-progress-fill.complete { background: linear-gradient(90deg, var(--photos-success), #16a34a); }
+.gpi-progress-fill.complete::after { animation: none; }
+.gpi-progress-sub { font-size: 11px; color: var(--photos-text-dim); text-align: right; }
+
+.gpi-current-file {
+    background: rgba(79, 70, 229, 0.06);
+    border: 1px solid rgba(79, 70, 229, 0.15);
+    border-radius: 10px; padding: 10px 14px;
+}
+.gpi-current-file-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+.gpi-current-file-name {
+    font-size: 12px; font-weight: 600; color: var(--photos-accent);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 70%;
+}
+.gpi-current-file-size { font-size: 11px; color: var(--photos-text-dim); }
+.gpi-file-progress-track { width: 100%; height: 3px; border-radius: 1.5px; background: rgba(79, 70, 229, 0.15); overflow: hidden; }
+.gpi-file-progress-fill { height: 100%; border-radius: 1.5px; background: var(--photos-accent); transition: width 0.3s; }
+
+/* Activity log */
+.gpi-log {
+    border: 1px solid var(--photos-border);
+    border-radius: 10px; overflow: hidden;
+    background: var(--photos-bg);
+}
+.gpi-log-header {
+    padding: 8px 14px; font-size: 11px; font-weight: 700;
+    color: var(--photos-text-dim); text-transform: uppercase;
+    letter-spacing: 0.5px; border-bottom: 1px solid var(--photos-border);
+    background: var(--photos-surface-2);
+}
+.gpi-log-scroll { max-height: 160px; overflow-y: auto; padding: 6px 0; }
+.gpi-log-scroll::-webkit-scrollbar { width: 4px; }
+.gpi-log-scroll::-webkit-scrollbar-thumb { background: var(--photos-border); border-radius: 2px; }
+.gpi-log-entry { display: flex; gap: 8px; padding: 3px 14px; font-size: 11px; font-family: 'SF Mono', 'Fira Code', monospace; }
+.gpi-log-time { color: var(--photos-text-dim); flex-shrink: 0; }
+.gpi-log-msg { color: var(--photos-text-muted); word-break: break-all; }
+.gpi-log-success .gpi-log-msg { color: var(--photos-success); }
+.gpi-log-error .gpi-log-msg { color: var(--photos-danger); }
+.gpi-log-warn .gpi-log-msg { color: var(--photos-warn); }
+.gpi-log-empty { padding: 20px; text-align: center; color: var(--photos-text-dim); font-size: 12px; }
+
+/* Actions bar */
+.gpi-actions {
+    display: flex; justify-content: flex-end; gap: 8px;
+    padding-top: 4px; border-top: 1px solid var(--photos-border);
+    margin-top: auto;
+}
+
+/* Mobile adjustments */
+@media (max-width: 480px) {
+    .gpi-modal { max-width: 100%; border-radius: 14px; }
+    .gpi-header { padding: 16px 18px 12px; }
+    .gpi-body { padding: 16px 18px 20px; }
+    .gpi-steps { gap: 16px; padding: 12px 16px; }
+    .gpi-step span { display: none; }
+    .gpi-stats-grid { grid-template-columns: repeat(2, 1fr); }
+    .gpi-dropzone { min-height: 140px; padding: 28px 16px; }
+    .gpi-inst-item { padding: 12px; }
+}
+
+/* Import button accent (in header) */
+.photos-btn-import {
+    background: linear-gradient(135deg, #4285F4 0%, #34A853 33%, #FBBC05 66%, #EA4335 100%);
+    background-size: 300% 300%;
+    animation: gpi-gradient 8s ease infinite;
+    color: white; font-weight: 700; border: none;
+}
+.photos-btn-import:hover { opacity: 0.9; }
+@keyframes gpi-gradient {
+    0% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
+    100% { background-position: 0% 50%; }
+}
