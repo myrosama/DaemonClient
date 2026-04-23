@@ -123,6 +123,8 @@
 }
 .gp-tile:hover .gp-check, .gp-selected .gp-check { opacity:1; }
 .gp-selected { box-shadow: inset 0 0 0 3px var(--photos-accent); }
+.gp-focused { box-shadow: inset 0 0 0 3px rgba(255,255,255,0.7); }
+.gp-selected.gp-focused { box-shadow: inset 0 0 0 3px var(--photos-accent), inset 0 0 0 6px rgba(255,255,255,0.5); }
 
 /* Selection mode: always show checkboxes */
 .gp-selection-active .gp-check { opacity:1; }

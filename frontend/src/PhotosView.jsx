@@ -24,7 +24,7 @@ const getDb = () => { if (!_db) _db = firebase.firestore(); return _db; };
 // ═══════════════════════════════════════════════════════════════════════════
 // Google Photos-style Lazy Thumbnail — flex-based, aspect-ratio-aware
 // ═══════════════════════════════════════════════════════════════════════════
-const LazyThumb = ({ photo, botToken, decryptionKey, onClick, selected, onSelect, selectionMode }) => {
+const LazyThumb = ({ photo, botToken, decryptionKey, onClick, selected, onSelect, selectionMode, isFocused }) => {
     const ref = useRef(null);
     const [src, setSrc] = useState(null);
     const [visible, setVisible] = useState(false);
@@ -67,7 +67,7 @@ const LazyThumb = ({ photo, botToken, decryptionKey, onClick, selected, onSelect
     return (
         <div ref={ref}
             data-photo-id={photo.id}
-            className={`gp-tile ${selected ? 'gp-selected' : ''} ${selectionMode ? 'gp-selection-active' : ''}`}
+            className={`gp-tile ${selected ? 'gp-selected' : ''} ${selectionMode ? 'gp-selection-active' : ''} ${isFocused ? 'gp-focused' : ''}`}
             style={{ flexGrow: ar, flexBasis: `${Math.round(ar * 200)}px` }}
             onClick={(e) => {
                 if (e.shiftKey || e.ctrlKey || e.metaKey || selectionMode) { e.preventDefault(); onSelect(photo, e); }

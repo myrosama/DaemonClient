@@ -51,7 +51,7 @@ export async function normalizeImageFormat(blob, fileName = '') {
         if (isHeic) {
             // Use heic2any for HEIC/HEIF
             console.log(`[Format] Converting HEIC → JPEG: ${fileName}`);
-            const result = await heic2any({ blob, toType: 'image/jpeg', quality: 0.92 });
+            const result = await heic2any({ blob: new Blob([blob]), toType: 'image/jpeg', quality: 0.92 });
             jpegBlob = Array.isArray(result) ? result[0] : result;
         } else {
             // BMP, TIFF → Canvas → JPEG
@@ -157,11 +157,7 @@ const thumbInflight = new Map();
 
 // ── Thumbnail Generation ────────────────────────────────────────────────────
 export async function generateThumbnail(file, maxSize = 400) {
-    // Convert HEIC/HEIF to JPEG first so the browser can render it
     let renderableBlob = file;
-    try {
-        renderableBlob = await convertHeicToJpeg(file, file.name || '');
-    } catch {}
 
     return new Promise((resolve) => {
         const img = new Image();
