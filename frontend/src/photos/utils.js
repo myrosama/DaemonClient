@@ -9,31 +9,61 @@ const CONVERT_EXTS = new Set(['heic', 'heif', 'bmp', 'tiff', 'tif']);
 const CONVERT_TYPES = new Set(['image/heic', 'image/heif', 'image/bmp', 'image/tiff']);
 
 /**
+ * Check if a blob is actually HEIC/HEIF by reading its magic bytes.
+ * iOS often sends HEIC files with type: '' or type: 'application/octet-stream'.
+ * HEIC magic: bytes 4-11 contain 'ftyp' followed by a brand like 'heic', 'heix', 'mif1', etc.
+ */
+async function isHeicByMagicBytes(blob) {
+    try {
+        const header = await blob.slice(0, 12).arrayBuffer();
+        const view = new Uint8Array(header);
+        // Check for 'ftyp' at offset 4
+        if (view[4] === 0x66 && view[5] === 0x74 && view[6] === 0x79 && view[7] === 0x70) {
+            // Read brand (bytes 8-11)
+            const brand = String.fromCharCode(view[8], view[9], view[10], view[11]);
+            const heicBrands = ['heic', 'heix', 'hevc', 'hevx', 'heim', 'heis', 'mif1', 'msf1', 'avif'];
+            return heicBrands.includes(brand.toLowerCase());
+        }
+    } catch {}
+    return false;
+}
+
+/**
  * Normalize problematic image formats → JPEG at upload time.
  * Returns { blob, fileName, mimeType } with converted or original values.
+ * Uses magic-bytes detection to catch HEIC files that iOS sends with blank mime types.
  */
 export async function normalizeImageFormat(blob, fileName = '') {
     const ext = fileName.split('.').pop()?.toLowerCase() || '';
-    const needsConvert = CONVERT_EXTS.has(ext) || CONVERT_TYPES.has(blob.type);
-    if (!needsConvert) return { blob, fileName, mimeType: blob.type };
+    let needsConvert = CONVERT_EXTS.has(ext) || CONVERT_TYPES.has(blob.type);
+    let isHeic = ext === 'heic' || ext === 'heif' || blob.type === 'image/heic' || blob.type === 'image/heif';
 
-    const isHeic = ext === 'heic' || ext === 'heif' || blob.type === 'image/heic' || blob.type === 'image/heif';
+    // Magic-bytes fallback: catch HEIC files with blank/wrong mime types
+    if (!needsConvert && !blob.type.startsWith('video/')) {
+        const magicHeic = await isHeicByMagicBytes(blob);
+        if (magicHeic) { isHeic = true; needsConvert = true; }
+    }
+
+    if (!needsConvert) return { blob, fileName, mimeType: blob.type || 'image/jpeg' };
 
     try {
         let jpegBlob;
         if (isHeic) {
             // Use heic2any for HEIC/HEIF
+            console.log(`[Format] Converting HEIC → JPEG: ${fileName}`);
             const result = await heic2any({ blob, toType: 'image/jpeg', quality: 0.92 });
             jpegBlob = Array.isArray(result) ? result[0] : result;
         } else {
             // BMP, TIFF → Canvas → JPEG
             jpegBlob = await canvasConvertToJpeg(blob);
         }
-        const newName = fileName.replace(/\.(heic|heif|bmp|tiff|tif)$/i, '.jpg');
+        const newName = fileName.replace(/\.[^.]+$/i, '.jpg');
+        console.log(`[Format] Converted ${fileName} → ${newName} (${formatFileSize(jpegBlob.size)})`);
         return { blob: jpegBlob, fileName: newName, mimeType: 'image/jpeg' };
     } catch (e) {
-        console.warn(`[Format] Conversion failed for ${fileName}:`, e.message);
-        return { blob, fileName, mimeType: blob.type };
+        console.error(`[Format] Conversion FAILED for ${fileName}:`, e);
+        // Still try to serve it - don't silently pass broken files
+        return { blob, fileName, mimeType: blob.type || 'application/octet-stream' };
     }
 }
 
@@ -50,6 +80,58 @@ async function canvasConvertToJpeg(blob) {
         };
         img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Image load failed')); };
         img.src = url;
+    });
+}
+
+/**
+ * Generate a micro-thumbnail (tiny 8×8 JPEG data URL, ~200 bytes).
+ * Stored directly in Firestore metadata for instant placeholder rendering.
+ */
+export async function generateMicroThumb(file) {
+    try {
+        // If it's a video, try generating from frame
+        if (file.type?.startsWith('video/')) {
+            return await _microThumbFromVideo(file);
+        }
+        return await _microThumbFromImage(file);
+    } catch {
+        return null;
+    }
+}
+
+async function _microThumbFromImage(blob) {
+    return new Promise((resolve) => {
+        const img = new Image();
+        const url = URL.createObjectURL(blob);
+        img.onload = () => {
+            const canvas = document.createElement('canvas');
+            canvas.width = 8; canvas.height = 8;
+            canvas.getContext('2d').drawImage(img, 0, 0, 8, 8);
+            const dataUrl = canvas.toDataURL('image/jpeg', 0.5);
+            URL.revokeObjectURL(url);
+            resolve(dataUrl);
+        };
+        img.onerror = () => { URL.revokeObjectURL(url); resolve(null); };
+        img.src = url;
+    });
+}
+
+async function _microThumbFromVideo(file) {
+    return new Promise((resolve) => {
+        const video = document.createElement('video');
+        const url = URL.createObjectURL(file);
+        video.muted = true; video.preload = 'metadata';
+        video.onloadeddata = () => { video.currentTime = Math.min(1, video.duration / 4); };
+        video.onseeked = () => {
+            const canvas = document.createElement('canvas');
+            canvas.width = 8; canvas.height = 8;
+            canvas.getContext('2d').drawImage(video, 0, 0, 8, 8);
+            const dataUrl = canvas.toDataURL('image/jpeg', 0.5);
+            URL.revokeObjectURL(url);
+            resolve(dataUrl);
+        };
+        video.onerror = () => { URL.revokeObjectURL(url); resolve(null); };
+        video.src = url;
     });
 }
 

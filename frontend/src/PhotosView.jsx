@@ -19,7 +19,7 @@ import './photos/photos.css';
 let _auth = null, _db = null;
 const getAuth = () => { if (!_auth) _auth = firebase.auth(); return _auth; };
 const getDb = () => { if (!_db) _db = firebase.firestore(); return _db; };
-const PAGE_SIZE = 60;
+// All metadata loaded upfront for instant timeline navigation
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Lazy Thumbnail Component with IntersectionObserver
@@ -109,11 +109,10 @@ const PhotosView = ({ onSwitchToDrive }) => {
     const uploadMenuRef = useRef(null);
     const [showCreateAlbum, setShowCreateAlbum] = useState(false);
     const [newAlbumName, setNewAlbumName] = useState('');
-    const [hasMore, setHasMore] = useState(true);
-    const [lastDoc, setLastDoc] = useState(null);
+    const [allLoaded, setAllLoaded] = useState(false);
     const fileInputRef = useRef(null);
     const abortRef = useRef(null);
-    const loadMoreRef = useRef(null);
+
     const [repairing, setRepairing] = useState(false);
     const [repairProgress, setRepairProgress] = useState(null);
     const [showScrollTop, setShowScrollTop] = useState(false);
@@ -140,33 +139,31 @@ const PhotosView = ({ onSwitchToDrive }) => {
         });
     }, [uid]);
 
-    // ── Load photos (paginated) ─────────────────────────────────────────
-    const loadPhotos = useCallback(async (reset = false) => {
+    // ── Load ALL photos metadata upfront ──────────────────────────────────
+    // Metadata is tiny (~0.5KB/doc), so 12K photos = ~6MB — loads in <2s.
+    // This gives instant timeline access (scroll/jump to any date).
+    const loadPhotos = useCallback(async () => {
         if (!uid) return;
-        let q = getUserPhotosRef(uid).where('trashed', '!=', true).orderBy('trashed').orderBy('dateTaken', 'desc').limit(PAGE_SIZE);
-        // Fallback: simpler query if trashed field doesn't exist yet
+        setLoading(true);
         try {
-            if (!reset && lastDoc) q = q.startAfter(lastDoc);
-            const snap = await q.get();
-            const docs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-            if (reset) { setPhotos(docs); } else { setPhotos(prev => [...prev, ...docs]); }
-            setLastDoc(snap.docs[snap.docs.length - 1] || null);
-            setHasMore(docs.length === PAGE_SIZE);
-            setLoading(false);
+            const snap = await getUserPhotosRef(uid)
+                .where('trashed', '!=', true)
+                .orderBy('trashed')
+                .orderBy('dateTaken', 'desc')
+                .get();
+            setPhotos(snap.docs.map(d => ({ id: d.id, ...d.data() })));
         } catch {
             // Fallback without trashed field
-            let q2 = getUserPhotosRef(uid).orderBy('dateTaken', 'desc').limit(PAGE_SIZE);
-            if (!reset && lastDoc) q2 = q2.startAfter(lastDoc);
-            const snap = await q2.get();
-            const docs = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(d => !d.trashed);
-            if (reset) { setPhotos(docs); } else { setPhotos(prev => [...prev, ...docs]); }
-            setLastDoc(snap.docs[snap.docs.length - 1] || null);
-            setHasMore(snap.docs.length === PAGE_SIZE);
-            setLoading(false);
+            const snap = await getUserPhotosRef(uid)
+                .orderBy('dateTaken', 'desc')
+                .get();
+            setPhotos(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(d => !d.trashed));
         }
-    }, [uid, lastDoc]);
+        setLoading(false);
+        setAllLoaded(true);
+    }, [uid]);
 
-    useEffect(() => { loadPhotos(true); }, [uid]);
+    useEffect(() => { loadPhotos(); }, [uid]);
 
     // ── Load albums ─────────────────────────────────────────────────────
     useEffect(() => {
@@ -241,16 +238,7 @@ const PhotosView = ({ onSwitchToDrive }) => {
         return () => document.removeEventListener('mousedown', handler);
     }, [showUploadMenu]);
 
-    // ── Infinite scroll ─────────────────────────────────────────────────
-    useEffect(() => {
-        const el = loadMoreRef.current;
-        if (!el || !hasMore) return;
-        const obs = new IntersectionObserver(([entry]) => {
-            if (entry.isIntersecting && !loading) loadPhotos(false);
-        });
-        obs.observe(el);
-        return () => obs.disconnect();
-    }, [hasMore, loading, loadPhotos]);
+
 
     // ── Upload handler ──────────────────────────────────────────────────
     const handleUpload = async (e) => {
@@ -697,18 +685,21 @@ const PhotosView = ({ onSwitchToDrive }) => {
                         </div>
                     ) : (
                         <div>
-                            {groupedPhotos.map(group => (
-                                <div key={group.label} className="photos-month-group">
-                                    <div className="photos-month-header">
-                                        <h2>{group.label}</h2>
-                                        <span>{group.photos.length} items</span>
+                            {groupedPhotos.map(group => {
+                                // Estimate height for content-visibility: ~(ceil(count/cols) * tileSize + headerH)
+                                const estH = Math.ceil(group.photos.length / 5) * 150 + 48;
+                                return (
+                                    <div key={group.label} className="photos-month-group" style={{ contentVisibility: 'auto', containIntrinsicBlockSize: `auto ${estH}px` }}>
+                                        <div className="photos-month-header">
+                                            <h2>{group.label}</h2>
+                                            <span>{group.photos.length} items</span>
+                                        </div>
+                                        <div className="photos-grid">
+                                            {group.photos.map(p => <LazyThumb key={p.id} photo={p} botToken={config?.botToken} decryptionKey={encryptionKey} onClick={setSelectedPhoto} selected={selectedIds.has(p.id)} onSelect={toggleSelect} selectionMode={selectionMode} />)}
+                                        </div>
                                     </div>
-                                    <div className="photos-grid">
-                                        {group.photos.map(p => <LazyThumb key={p.id} photo={p} botToken={config?.botToken} decryptionKey={encryptionKey} onClick={setSelectedPhoto} selected={selectedIds.has(p.id)} onSelect={toggleSelect} selectionMode={selectionMode} />)}
-                                    </div>
-                                </div>
-                            ))}
-                            {hasMore && <div ref={loadMoreRef} style={{height:60,display:'flex',alignItems:'center',justifyContent:'center'}}><div className="lb-spinner" /></div>}
+                                );
+                            })}
                         </div>
                     )}
                 </div>

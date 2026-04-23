@@ -10,7 +10,7 @@ function isHeicFile(photo) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// PHOTO LIGHTBOX — Native-feeling viewer with zoom, swipe, video controls
+// PHOTO LIGHTBOX — iPhone Photos-style viewer
 // ═══════════════════════════════════════════════════════════════════════════
 const PhotoLightbox = ({ photo, photos, onClose, onToggleFavorite, onDelete, onDownload, config, encryptionKey }) => {
     const [currentIndex, setCurrentIndex] = useState(() => photos.findIndex(p => p.id === photo.id));
@@ -26,19 +26,24 @@ const PhotoLightbox = ({ photo, photos, onClose, onToggleFavorite, onDelete, onD
     const [translate, setTranslate] = useState({ x: 0, y: 0 });
     const isZoomed = scale > 1.05;
 
+    // Swipe state — photo follows finger
+    const [swipeX, setSwipeX] = useState(0);
+    const [swiping, setSwiping] = useState(false);
+
     // Refs
-    const touchRef = useRef({ startX: 0, startY: 0, lastDist: 0, isPinch: false });
+    const touchRef = useRef({ startX: 0, startY: 0, lastDist: 0, isPinch: false, startScale: 1 });
     const panRef = useRef({ startX: 0, startY: 0, lastX: 0, lastY: 0, panning: false });
     const dismissRef = useRef({ startY: 0, currentY: 0, isDismissing: false });
-    const toolbarTimer = useRef(null);
+    const inactivityTimer = useRef(null);
     const mediaAreaRef = useRef(null);
     const imgRef = useRef(null);
+    const thumbStripRef = useRef(null);
 
     // ── Load media ───────────────────────────────────────────────────────
     useEffect(() => {
         if (!current || !config?.botToken) return;
         setLoading(true); setMediaUrl(null);
-        setScale(1); setTranslate({ x: 0, y: 0 });
+        setScale(1); setTranslate({ x: 0, y: 0 }); setSwipeX(0);
         let revokePrev = null;
         const load = async () => {
             try {
@@ -63,7 +68,7 @@ const PhotoLightbox = ({ photo, photos, onClose, onToggleFavorite, onDelete, onD
                             setTimeout(() => reject(new Error('timeout')), 8000);
                         });
 
-                        // HEIC conversion for viewing
+                        // HEIC conversion for viewing old files
                         if (!isVideo && isHeicFile(current)) {
                             try {
                                 const resp = await fetch(`/stream/${fileId}`);
@@ -90,17 +95,30 @@ const PhotoLightbox = ({ photo, photos, onClose, onToggleFavorite, onDelete, onD
         return () => { if (revokePrev) URL.revokeObjectURL(revokePrev); };
     }, [currentIndex, current, config, encryptionKey]);
 
-    // ── Auto-hide toolbar ────────────────────────────────────────────────
-    const resetToolbarTimer = useCallback(() => {
+    // ── Toolbar: hide on inactivity (no movement), not a fixed timer ─────
+    const resetInactivity = useCallback(() => {
         setToolbarVisible(true);
-        clearTimeout(toolbarTimer.current);
-        toolbarTimer.current = setTimeout(() => setToolbarVisible(false), 3500);
+        clearTimeout(inactivityTimer.current);
+        inactivityTimer.current = setTimeout(() => setToolbarVisible(false), 2500);
     }, []);
 
+    // Show toolbar initially, listen for ANY movement
     useEffect(() => {
-        resetToolbarTimer();
-        return () => clearTimeout(toolbarTimer.current);
-    }, [currentIndex]);
+        resetInactivity();
+        const onMove = () => resetInactivity();
+        window.addEventListener('mousemove', onMove, { passive: true });
+        window.addEventListener('touchmove', onMove, { passive: true });
+        window.addEventListener('keydown', onMove, { passive: true });
+        return () => {
+            clearTimeout(inactivityTimer.current);
+            window.removeEventListener('mousemove', onMove);
+            window.removeEventListener('touchmove', onMove);
+            window.removeEventListener('keydown', onMove);
+        };
+    }, [resetInactivity]);
+
+    // Reset inactivity on photo change
+    useEffect(() => { resetInactivity(); }, [currentIndex, resetInactivity]);
 
     // ── Preload adjacent media ───────────────────────────────────────────
     useEffect(() => {
@@ -108,7 +126,6 @@ const PhotoLightbox = ({ photo, photos, onClose, onToggleFavorite, onDelete, onD
         const preload = async (p) => {
             if (!p) return;
             const type = p.fileType || 'image/jpeg';
-            
             try {
                 if ('serviceWorker' in navigator) {
                     const reg = await navigator.serviceWorker.ready;
@@ -130,22 +147,26 @@ const PhotoLightbox = ({ photo, photos, onClose, onToggleFavorite, onDelete, onD
                             }, [ch.port2]);
                             setTimeout(resolve, 3000);
                         });
-                        
-                        // Prefetch quietly
-                        if (!type.startsWith('video/')) {
-                            const img = new Image();
-                            img.src = `/stream/${fileId}`;
-                        }
+                        if (!type.startsWith('video/')) { const img = new Image(); img.src = `/stream/${fileId}`; }
                     }
                 }
-            } catch (err) {}
+            } catch {}
         };
-
         const nextP = currentIndex < photos.length - 1 ? photos[currentIndex + 1] : null;
         const prevP = currentIndex > 0 ? photos[currentIndex - 1] : null;
         preload(nextP);
         preload(prevP);
     }, [currentIndex, photos, config, encryptionKey]);
+
+    // ── Sync thumbnail strip to current photo ────────────────────────────
+    useEffect(() => {
+        if (thumbStripRef.current) {
+            const activeThumb = thumbStripRef.current.querySelector('.lb-thumb-active');
+            if (activeThumb) {
+                activeThumb.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+            }
+        }
+    }, [currentIndex]);
 
     // ── Keyboard navigation ──────────────────────────────────────────────
     useEffect(() => {
@@ -166,14 +187,13 @@ const PhotoLightbox = ({ photo, photos, onClose, onToggleFavorite, onDelete, onD
     const handleWheel = useCallback((e) => {
         if (isVideo) return;
         e.preventDefault();
-        resetToolbarTimer();
         const delta = e.deltaY > 0 ? -0.15 : 0.15;
         setScale(s => {
             const next = Math.max(1, Math.min(5, s + delta));
             if (next <= 1) setTranslate({ x: 0, y: 0 });
             return next;
         });
-    }, [isVideo, resetToolbarTimer]);
+    }, [isVideo]);
 
     useEffect(() => {
         const el = mediaAreaRef.current;
@@ -194,14 +214,12 @@ const PhotoLightbox = ({ photo, photos, onClose, onToggleFavorite, onDelete, onD
     }, [isVideo, isZoomed]);
 
     const handleMediaClick = (e) => {
-        resetToolbarTimer();
         const now = Date.now();
         if (now - lastTapRef.current < 300) {
             handleDoubleTap();
             lastTapRef.current = 0;
         } else {
             lastTapRef.current = now;
-            // Single tap toggles toolbar visibility
             setTimeout(() => {
                 if (lastTapRef.current !== 0) {
                     setToolbarVisible(v => !v);
@@ -211,7 +229,7 @@ const PhotoLightbox = ({ photo, photos, onClose, onToggleFavorite, onDelete, onD
         }
     };
 
-    // ── Touch gestures (pinch-to-zoom, pan, swipe nav, swipe dismiss) ───
+    // ── Touch gestures: pinch-to-zoom, pan, FLUID swipe nav, dismiss ────
     const handleTouchStart = (e) => {
         if (e.touches.length === 2) {
             // Pinch start
@@ -219,37 +237,48 @@ const PhotoLightbox = ({ photo, photos, onClose, onToggleFavorite, onDelete, onD
                 e.touches[0].clientX - e.touches[1].clientX,
                 e.touches[0].clientY - e.touches[1].clientY
             );
-            touchRef.current = { ...touchRef.current, lastDist: dist, isPinch: true };
+            touchRef.current = { ...touchRef.current, lastDist: dist, isPinch: true, startScale: scale };
         } else if (e.touches.length === 1) {
             const t = e.touches[0];
             touchRef.current = { ...touchRef.current, startX: t.clientX, startY: t.clientY, isPinch: false };
             panRef.current = { startX: t.clientX, startY: t.clientY, lastX: translate.x, lastY: translate.y, panning: isZoomed };
             dismissRef.current = { startY: t.clientY, currentY: t.clientY, isDismissing: false };
+            setSwiping(false);
         }
     };
 
     const handleTouchMove = (e) => {
         if (e.touches.length === 2 && touchRef.current.isPinch) {
-            // Pinch zoom
+            // Pinch zoom — continuous scaling
+            e.preventDefault();
             const dist = Math.hypot(
                 e.touches[0].clientX - e.touches[1].clientX,
                 e.touches[0].clientY - e.touches[1].clientY
             );
-            const delta = dist / touchRef.current.lastDist;
+            const ratio = dist / touchRef.current.lastDist;
             touchRef.current.lastDist = dist;
-            setScale(s => Math.max(1, Math.min(5, s * delta)));
+            setScale(s => Math.max(1, Math.min(5, s * ratio)));
         } else if (e.touches.length === 1) {
             const t = e.touches[0];
+            const dx = t.clientX - touchRef.current.startX;
+            const dy = t.clientY - touchRef.current.startY;
+
             if (isZoomed && panRef.current.panning) {
                 // Pan while zoomed
-                const dx = t.clientX - panRef.current.startX;
-                const dy = t.clientY - panRef.current.startY;
+                e.preventDefault();
                 setTranslate({ x: panRef.current.lastX + dx, y: panRef.current.lastY + dy });
             } else if (!isZoomed) {
-                // Track for swipe dismiss
+                // Fluid horizontal swipe — photo follows finger in real-time
+                if (Math.abs(dx) > 10 && Math.abs(dx) > Math.abs(dy)) {
+                    e.preventDefault();
+                    setSwiping(true);
+                    setSwipeX(dx);
+                }
+                // Track vertical dismiss
                 dismissRef.current.currentY = t.clientY;
-                const dy = t.clientY - dismissRef.current.startY;
-                if (Math.abs(dy) > 30) dismissRef.current.isDismissing = true;
+                if (Math.abs(dy) > 30 && Math.abs(dy) > Math.abs(dx)) {
+                    dismissRef.current.isDismissing = true;
+                }
             }
         }
     };
@@ -260,7 +289,7 @@ const PhotoLightbox = ({ photo, photos, onClose, onToggleFavorite, onDelete, onD
             if (scale <= 1) { setScale(1); setTranslate({ x: 0, y: 0 }); }
             return;
         }
-        if (isZoomed) return; // Don't navigate while zoomed
+        if (isZoomed) return;
 
         const dx = e.changedTouches[0].clientX - touchRef.current.startX;
         const dy = e.changedTouches[0].clientY - touchRef.current.startY;
@@ -268,14 +297,22 @@ const PhotoLightbox = ({ photo, photos, onClose, onToggleFavorite, onDelete, onD
         // Swipe dismiss (vertical)
         if (dismissRef.current.isDismissing && Math.abs(dy) > 120 && Math.abs(dy) > Math.abs(dx) * 1.5) {
             onClose();
+            setSwiping(false); setSwipeX(0);
             return;
         }
 
-        // Swipe navigate (horizontal)
-        if (Math.abs(dx) > 80 && Math.abs(dy) < 100) {
-            if (dx > 0 && currentIndex > 0) setCurrentIndex(i => i - 1);
-            if (dx < 0 && currentIndex < photos.length - 1) setCurrentIndex(i => i + 1);
+        // Swipe navigate — if dragged far enough, switch photo
+        if (swiping && Math.abs(dx) > 60) {
+            if (dx > 0 && currentIndex > 0) {
+                setCurrentIndex(i => i - 1);
+            } else if (dx < 0 && currentIndex < photos.length - 1) {
+                setCurrentIndex(i => i + 1);
+            }
         }
+
+        // Spring back
+        setSwiping(false);
+        setSwipeX(0);
     };
 
     // ── Video state ──────────────────────────────────────────────────────
@@ -293,9 +330,10 @@ const PhotoLightbox = ({ photo, photos, onClose, onToggleFavorite, onDelete, onD
     const dateStr = formatDate(current.dateTaken);
 
     const imgStyle = {
-        transform: `scale(${scale}) translate(${translate.x / scale}px, ${translate.y / scale}px)`,
-        transition: touchRef.current.isPinch || panRef.current.panning ? 'none' : 'transform 0.25s ease-out',
+        transform: `translateX(${swipeX}px) scale(${scale}) translate(${translate.x / scale}px, ${translate.y / scale}px)`,
+        transition: swiping ? 'none' : 'transform 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94)',
         cursor: isZoomed ? 'grab' : 'default',
+        willChange: 'transform',
     };
 
     return (
@@ -304,7 +342,7 @@ const PhotoLightbox = ({ photo, photos, onClose, onToggleFavorite, onDelete, onD
             onTouchMove={handleTouchMove}
             onTouchEnd={handleTouchEnd}
         >
-            {/* Top bar — auto-hide */}
+            {/* Top bar — hides on inactivity */}
             <div className={`lb-topbar ${toolbarVisible ? '' : 'lb-toolbar-hidden'}`}>
                 <button onClick={onClose} className="lb-btn"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
                 <p className="lb-date">{dateStr}</p>
@@ -329,7 +367,7 @@ const PhotoLightbox = ({ photo, photos, onClose, onToggleFavorite, onDelete, onD
 
             {/* Main media area */}
             <div className="lb-media-area" ref={mediaAreaRef} onClick={handleMediaClick}>
-                {/* Nav arrows — desktop only, hidden when zoomed */}
+                {/* Nav arrows — desktop only */}
                 {!isZoomed && currentIndex > 0 && <button onClick={(e) => { e.stopPropagation(); setCurrentIndex(i => i - 1); }} className={`lb-nav lb-nav-left ${toolbarVisible ? '' : 'lb-toolbar-hidden'}`}><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg></button>}
                 {!isZoomed && currentIndex < photos.length - 1 && <button onClick={(e) => { e.stopPropagation(); setCurrentIndex(i => i + 1); }} className={`lb-nav lb-nav-right ${toolbarVisible ? '' : 'lb-toolbar-hidden'}`}><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2"><polyline points="9 18 15 12 9 6"/></svg></button>}
                 
@@ -344,6 +382,7 @@ const PhotoLightbox = ({ photo, photos, onClose, onToggleFavorite, onDelete, onD
                         alt={current.fileName}
                         initial={{ opacity: 0, scale: 0.95 }}
                         animate={{ opacity: 1, scale: 1 }}
+                        transition={{ duration: 0.2, ease: 'easeOut' }}
                         className="lb-image"
                         style={imgStyle}
                         draggable={false}
@@ -429,8 +468,8 @@ const PhotoLightbox = ({ photo, photos, onClose, onToggleFavorite, onDelete, onD
                 )}
             </AnimatePresence>
 
-            {/* Bottom thumbnail strip — auto-hide */}
-            <div className={`lb-thumbstrip ${toolbarVisible ? '' : 'lb-toolbar-hidden'}`}>
+            {/* Bottom thumbnail strip — synced to current photo */}
+            <div ref={thumbStripRef} className={`lb-thumbstrip ${toolbarVisible ? '' : 'lb-toolbar-hidden'}`}>
                 {photos.map((p, i) => (
                     <button key={p.id} onClick={() => setCurrentIndex(i)} className={`lb-thumb ${i === currentIndex ? 'lb-thumb-active' : ''}`}>
                         <ThumbImg photo={p} botToken={config?.botToken} decryptionKey={encryptionKey} />
