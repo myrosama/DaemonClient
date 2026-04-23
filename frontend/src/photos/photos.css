@@ -1,7 +1,6 @@
 /* ═══════════════════════════════════════════════════════════════════════════
    PHOTOS MODULE – Immich-inspired design
    ═══════════════════════════════════════════════════════════════════════════ */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
 
 :root {
     --photos-bg: #0f0f14;
@@ -19,7 +18,7 @@
 }
 
 /* ── Main Layout ──────────────────────────────────────────────────────────── */
-.photos-app { min-height:100vh; background:var(--photos-bg); color:var(--photos-text); font-family:'Inter',sans-serif; }
+.photos-app { min-height:100vh; background:var(--photos-bg); color:var(--photos-text); font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Helvetica Neue", Arial, sans-serif; }
 .photos-header { position:sticky; top:0; z-index:40; background:rgba(15,15,20,0.92); backdrop-filter:blur(20px); border-bottom:1px solid var(--photos-border); }
 .photos-header-inner { max-width:1400px; margin:0 auto; padding:12px 16px; display:flex; align-items:center; justify-content:space-between; gap:12px; }
 .photos-logo { display:flex; align-items:center; gap:10px; }
