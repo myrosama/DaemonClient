@@ -318,7 +318,9 @@ export async function uploadThumbnailToTelegram(thumbBlob, botToken, channelId, 
 // ── Concurrent thumbnail resolver with decryption support ──────────────────
 // Resolves thumbnails in parallel batches, decrypts if encrypted, caches as
 // local blob URLs (these never expire, unlike raw Telegram URLs).
-const THUMB_CONCURRENCY = 12;
+// Concurrency is kept low (3) so it doesn't exhaust the browser's max concurrent 
+// connections (6 per domain) and freeze foreground requests like Lightbox full images.
+const THUMB_CONCURRENCY = 3;
 const _resolveQueue = [];
 let _activeWorkers = 0;
 

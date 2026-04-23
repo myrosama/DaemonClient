@@ -171,13 +171,26 @@
 }
 .gp-month-dot:hover .gp-dot { background:var(--photos-text); transform:scale(1.5); }
 .gp-month-label {
-    position:absolute; right:100%; margin-right:6px; white-space:nowrap;
+    position:absolute; right:120%; margin-right:6px; white-space:nowrap;
     font-size:11px; color:var(--photos-text); background:var(--photos-surface);
     padding:2px 8px; border-radius:6px; box-shadow:0 2px 8px rgba(0,0,0,0.4);
-    pointer-events:none; animation:gp-fadeIn .12s ease;
+    pointer-events:none; opacity:0; visibility:hidden; transition:opacity .15s, visibility .15s;
 }
-@keyframes gp-fadeIn { from { opacity:0; transform:translateX(4px); } to { opacity:1; transform:translateX(0); } }
-@media (max-width:768px) { .gp-year-scrubber { display:none; } }
+
+/* Hover year container: show all */
+.gp-year-segment:hover .gp-month-label { opacity:1; visibility:visible; }
+
+/* Override: When hovering the dots container specifically, hide all EXCEPT the one being hovered */
+.gp-month-dots:hover .gp-month-label { opacity:0; visibility:hidden; }
+.gp-month-dot:hover .gp-month-label { opacity:1; visibility:visible; z-index:10; }
+
+@media (max-width:768px) {
+    .gp-year-scrubber {
+        position:fixed; top:70px; right:0; bottom:20px; z-index:30; width:36px; padding:0;
+        height:auto; 
+    }
+    .gp-month-label { right:100%; margin-right:4px; font-size:10px; padding:1px 6px; }
+}
 
 /* Timeline needs relative for drag overlay */
 .gp-timeline { padding-bottom:80px; position:relative; user-select:none; }

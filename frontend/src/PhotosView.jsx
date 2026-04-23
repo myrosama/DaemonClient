@@ -135,9 +135,6 @@ const PhotosView = ({ onSwitchToDrive }) => {
     const [dragSelecting, setDragSelecting] = useState(false);
     const [dragRect, setDragRect] = useState(null);
     const dragStartRef = useRef(null);
-    // Year scrubber hover
-    const [scrubberHoverYear, setScrubberHoverYear] = useState(null);
-
     const uid = getAuth().currentUser?.uid;
 
     // ── Load config + ZKE ───────────────────────────────────────────────
@@ -915,8 +912,6 @@ const PhotosView = ({ onSwitchToDrive }) => {
                             {scrubberData.map(yd => (
                                 <div key={yd.year} className="gp-year-segment"
                                     style={{ flex: yd.fraction }}
-                                    onMouseEnter={() => setScrubberHoverYear(yd.year)}
-                                    onMouseLeave={() => setScrubberHoverYear(null)}
                                 >
                                     <button className="gp-year-mark" onClick={() => scrollToYear(yd.year)}>
                                         {yd.year}
@@ -929,9 +924,7 @@ const PhotosView = ({ onSwitchToDrive }) => {
                                                 title={`${m.label} ${yd.year}`}
                                             >
                                                 <div className="gp-dot" />
-                                                {scrubberHoverYear === yd.year && (
-                                                    <span className="gp-month-label">{m.label}</span>
-                                                )}
+                                                <span className="gp-month-label">{m.label}</span>
                                             </div>
                                         ))}
                                     </div>
