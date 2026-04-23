@@ -155,10 +155,8 @@
 
 /* Skeleton loading */
 .gp-tile-skeleton {
-    height:220px; background:linear-gradient(110deg, #2a2a2e 8%, #333338 18%, #2a2a2e 33%);
-    background-size:200% 100%; animation:skeleton-shimmer 1.5s ease-in-out infinite;
+    height:220px; background:#2a2a2e;
 }
-@keyframes skeleton-shimmer { to { background-position-x: -200%; } }
 .gp-skeleton-grid { display:flex; flex-wrap:wrap; gap:3px; padding:0 12px; }
 .gp-skeleton-grid::after { content:''; flex-grow:999; }
 
