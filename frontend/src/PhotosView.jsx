@@ -68,7 +68,7 @@ const LazyThumb = ({ photo, botToken, decryptionKey, onClick, selected, onSelect
         <div ref={ref}
             data-photo-id={photo.id}
             className={`gp-tile ${selected ? 'gp-selected' : ''} ${selectionMode ? 'gp-selection-active' : ''} ${isFocused ? 'gp-focused' : ''}`}
-            style={{ flexGrow: ar, flexBasis: `${Math.round(ar * 200)}px` }}
+            style={{ flexGrow: ar, flexBasis: `calc(var(--gp-row-height, 220px) * ${ar})` }}
             onClick={(e) => {
                 if (e.shiftKey || e.ctrlKey || e.metaKey || selectionMode) { e.preventDefault(); onSelect(photo, e); }
                 else onClick(photo);
@@ -855,7 +855,10 @@ const PhotosView = ({ onSwitchToDrive }) => {
                     <div className="gp-main">
                         {loading ? (
                             <div className="gp-skeleton-grid">
-                                {Array.from({length: 24}).map((_, i) => <div key={i} className="gp-tile-skeleton" style={{flexGrow: [1.33, 0.75, 1, 1.5, 0.8][i % 5], flexBasis: `${[1.33, 0.75, 1, 1.5, 0.8][i % 5] * 200}px`}} />)}
+                                {Array.from({length: 24}).map((_, i) => {
+                                    const ar = [1.33, 0.75, 1, 1.5, 0.8][i % 5];
+                                    return <div key={i} className="gp-tile-skeleton" style={{flexGrow: ar, flexBasis: `calc(var(--gp-row-height, 220px) * ${ar})`}} />
+                                })}
                             </div>
                         ) : displayPhotos.length === 0 ? (
                             <div className="photos-empty">

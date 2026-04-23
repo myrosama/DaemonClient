@@ -107,12 +107,16 @@
 @media (max-width:480px) { .gp-grid { gap:2px; } }
 
 /* Photo tile — Google Photos style */
+:root {
+  --gp-row-height: 220px;
+}
+@media (max-width:768px) { :root { --gp-row-height: 160px; } }
+@media (max-width:480px) { :root { --gp-row-height: 120px; } }
+
 .gp-tile {
-    height:220px; position:relative; overflow:hidden; cursor:pointer;
+    height: var(--gp-row-height); position:relative; overflow:hidden; cursor:pointer;
     background:#2a2a2a; min-width:80px;
 }
-@media (max-width:768px) { .gp-tile { height:160px; } }
-@media (max-width:480px) { .gp-tile { height:120px; } }
 .gp-tile img { height:100%; width:100%; object-fit:cover; }
 
 /* Ghost checkbox — invisible at rest, appears on hover */
