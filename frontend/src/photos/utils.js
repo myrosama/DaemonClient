@@ -394,12 +394,14 @@ async function _processResolveQueue() {
 
         _activeWorkers++;
 
+        // Add a micro-delay to prevent bursting the proxy if tasks complete instantly
+        await sleep(50);
+
         const promise = _fetchAndCacheThumbnail(fileId, botToken, decryptionKey)
             .then(blobUrl => {
                 if (blobUrl) thumbUrlCache.set(fileId, blobUrl);
                 thumbInflight.delete(fileId);
                 _activeWorkers--;
-                // Kick off next item
                 _processResolveQueue();
                 return blobUrl;
             })
@@ -427,8 +429,14 @@ async function _processResolveQueue() {
 export function resolveThumbnailUrl(fileId, botToken, decryptionKey = null) {
     if (!fileId || !botToken) return Promise.resolve(null);
     if (thumbUrlCache.has(fileId)) return Promise.resolve(thumbUrlCache.get(fileId));
-    // Join existing in-flight request
     if (thumbInflight.has(fileId)) return thumbInflight.get(fileId);
+    
+    // Hardcap the queue size to prevent massive backlogs when scrolling infinitely
+    if (_resolveQueue.length > 50) {
+        // Discard the oldest requested thumbnail to prioritize the ones currently on screen
+        _resolveQueue.shift(); 
+    }
+    
     return new Promise((resolve) => {
         _resolveQueue.push({ fileId, botToken, decryptionKey, resolve });
         _processResolveQueue();
