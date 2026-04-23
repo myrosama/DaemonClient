@@ -10,7 +10,7 @@ import {
     sleep, generateThumbnail, generateVideoThumbnail, extractExifData,
     uploadToTelegram, uploadThumbnailToTelegram, resolveThumbnailUrl,
     getUserPhotosRef, getUserAlbumsRef, getUserFilesRef, getUserConfigRef,
-    deleteTelegramMessages, formatFileSize, getMonthKey, formatDate,
+    deleteTelegramMessages, formatFileSize, getMonthKey, getDayKey, formatDate,
     repairMissingThumbnails, normalizeImageFormat,
 } from './photos/utils.js';
 import './photos/photos.css';
@@ -22,7 +22,7 @@ const getDb = () => { if (!_db) _db = firebase.firestore(); return _db; };
 // All metadata loaded upfront for instant timeline navigation
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Lazy Thumbnail Component with IntersectionObserver
+// Google Photos-style Lazy Thumbnail — flex-based, aspect-ratio-aware
 // ═══════════════════════════════════════════════════════════════════════════
 const LazyThumb = ({ photo, botToken, decryptionKey, onClick, selected, onSelect, selectionMode }) => {
     const ref = useRef(null);
@@ -36,7 +36,7 @@ const LazyThumb = ({ photo, botToken, decryptionKey, onClick, selected, onSelect
         if (!el) return;
         const obs = new IntersectionObserver(([entry]) => {
             if (entry.isIntersecting) { setVisible(true); obs.unobserve(el); }
-        }, { rootMargin: '200px' });
+        }, { rootMargin: '400px' });
         obs.observe(el);
         return () => obs.disconnect();
     }, []);
@@ -51,6 +51,8 @@ const LazyThumb = ({ photo, botToken, decryptionKey, onClick, selected, onSelect
     }, [visible, photo.thumbFileId, photo.thumbnail, photo.thumbEncrypted, botToken, decryptionKey]);
 
     const isVideo = photo.fileType?.startsWith('video/');
+    // Compute flex sizing from aspect ratio — preserves native proportions
+    const ar = (photo.width && photo.height) ? photo.width / photo.height : 1.33;
 
     // Long-press for mobile selection
     const handlePointerDown = (e) => {
@@ -64,7 +66,9 @@ const LazyThumb = ({ photo, botToken, decryptionKey, onClick, selected, onSelect
     const handlePointerCancel = () => clearTimeout(longPressTimer.current);
 
     return (
-        <div ref={ref} className={`photo-tile ${selected ? 'selected' : ''} ${selectionMode ? 'selection-active' : ''}`}
+        <div ref={ref}
+            className={`gp-tile ${selected ? 'gp-selected' : ''} ${selectionMode ? 'gp-selection-active' : ''}`}
+            style={{ flexGrow: ar, flexBasis: `${Math.round(ar * 200)}px` }}
             onClick={(e) => {
                 if (e.shiftKey || e.ctrlKey || e.metaKey || selectionMode) { e.preventDefault(); onSelect(photo, e); }
                 else onClick(photo);
@@ -74,13 +78,23 @@ const LazyThumb = ({ photo, botToken, decryptionKey, onClick, selected, onSelect
             onPointerCancel={handlePointerCancel}
             onContextMenu={(e) => { if (selectionMode) e.preventDefault(); }}
         >
-            {src ? <img src={src} alt="" loading="lazy" className={loaded ? 'loaded' : ''} onLoad={() => setLoaded(true)} /> : <div className="photo-tile-skeleton" />}
-            <div className="photo-overlay" />
-            <div className="photo-select" onClick={(e) => { e.stopPropagation(); onSelect(photo, e); }}>
-                {selected && <svg width="14" height="14" viewBox="0 0 24 24" fill="white" stroke="white" strokeWidth="2"><polyline points="20 6 9 17 4 12"/></svg>}
+            {src ? <img src={src} alt="" className={loaded ? 'loaded' : ''} onLoad={() => setLoaded(true)} /> : <div className="gp-tile-skeleton" />}
+            {/* Ghost checkbox — appears on hover, fills when selected */}
+            <div className="gp-check" onClick={(e) => { e.stopPropagation(); onSelect(photo, e); }}>
+                {selected
+                    ? <svg width="18" height="18" viewBox="0 0 24 24"><circle cx="12" cy="12" r="11" fill="#4f46e5" stroke="white" strokeWidth="1.5"/><polyline points="7 12 10.5 15.5 17 9" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                    : <svg width="18" height="18" viewBox="0 0 24 24"><circle cx="12" cy="12" r="11" fill="rgba(0,0,0,0.3)" stroke="white" strokeWidth="1.5"/></svg>
+                }
             </div>
-            {photo.isFavorite && <div className="photo-fav"><svg width="14" height="14" viewBox="0 0 24 24" fill="#ef4444" stroke="#ef4444" strokeWidth="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg></div>}
-            {isVideo && <div className="photo-video-badge"><svg width="12" height="12" viewBox="0 0 24 24" fill="white"><polygon points="5 3 19 12 5 21"/></svg></div>}
+            {/* Favorite indicator */}
+            {photo.isFavorite && <div className="gp-fav">♥</div>}
+            {/* Video badge — duration + play icon, Google Photos style */}
+            {isVideo && (
+                <div className="gp-video-badge">
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="white"><polygon points="5 3 19 12 5 21"/></svg>
+                    {photo.duration ? <span>{photo.duration}</span> : null}
+                </div>
+            )}
         </div>
     );
 };
@@ -194,15 +208,42 @@ const PhotosView = ({ onSwitchToDrive }) => {
         return list;
     }, [photos, activeTab, searchQuery, activeAlbum]);
 
+    // Group photos by DAY (Google Photos style)
     const groupedPhotos = useMemo(() => {
         const groups = {};
         displayPhotos.forEach(photo => {
-            const { key, label } = getMonthKey(photo.dateTaken, photo.uploadedAt);
-            if (!groups[key]) groups[key] = { label, photos: [] };
+            const { key, label, year } = getDayKey(photo.dateTaken, photo.uploadedAt);
+            if (!groups[key]) groups[key] = { key, label, year, photos: [] };
             groups[key].photos.push(photo);
         });
         return Object.entries(groups).sort(([a], [b]) => b.localeCompare(a)).map(([, g]) => g);
     }, [displayPhotos]);
+
+    // Unique years for the year scrubber
+    const uniqueYears = useMemo(() => {
+        const years = new Set(groupedPhotos.map(g => g.year));
+        return [...years].sort((a, b) => b - a);
+    }, [groupedPhotos]);
+
+    // Scroll to year (for year scrubber)
+    const scrollToYear = useCallback((year) => {
+        const el = document.querySelector(`[data-year-start="${year}"]`);
+        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, []);
+
+    // Select all photos in a day group
+    const selectDayGroup = useCallback((group) => {
+        setSelectedIds(prev => {
+            const next = new Set(prev);
+            const allSelected = group.photos.every(p => next.has(p.id));
+            if (allSelected) {
+                group.photos.forEach(p => next.delete(p.id));
+            } else {
+                group.photos.forEach(p => next.add(p.id));
+            }
+            return next;
+        });
+    }, []);
 
     // ── Keyboard shortcuts (Ctrl+A, Escape) ──────────────────────────────
     useEffect(() => {
@@ -241,10 +282,31 @@ const PhotosView = ({ onSwitchToDrive }) => {
 
 
     // ── Upload handler ──────────────────────────────────────────────────
+    // ── Drag-and-drop upload ─────────────────────────────────────────────
+    const [isDragging, setIsDragging] = useState(false);
+    const dragCounter = useRef(0);
+    const handleDragEnter = (e) => { e.preventDefault(); dragCounter.current++; setIsDragging(true); };
+    const handleDragLeave = (e) => { e.preventDefault(); dragCounter.current--; if (dragCounter.current <= 0) { setIsDragging(false); dragCounter.current = 0; } };
+    const handleDragOver = (e) => { e.preventDefault(); };
+    const handleDrop = (e) => {
+        e.preventDefault(); setIsDragging(false); dragCounter.current = 0;
+        const files = e.dataTransfer?.files;
+        if (files?.length) processUpload(Array.from(files));
+    };
+
     const handleUpload = async (e) => {
         const files = Array.from(e.target.files || []);
+        if (files.length) processUpload(files);
+    };
+
+    const processUpload = async (files) => {
         if (!files.length || !config?.botToken) return;
-        const mediaFiles = files.filter(f => f.type.startsWith('image/') || f.type.startsWith('video/'));
+        // Accept files by type OR by extension (HEIC often has blank type)
+        const mediaFiles = files.filter(f => {
+            if (f.type.startsWith('image/') || f.type.startsWith('video/')) return true;
+            const ext = f.name?.split('.').pop()?.toLowerCase();
+            return ['heic', 'heif', 'bmp', 'tiff', 'tif', 'webp', 'avif'].includes(ext);
+        });
         if (!mediaFiles.length) { alert('Select image or video files.'); return; }
         setUploading(true);
         const controller = new AbortController();
@@ -472,7 +534,22 @@ const PhotosView = ({ onSwitchToDrive }) => {
     // RENDER
     // ═══════════════════════════════════════════════════════════════════
     return (
-        <div className="photos-app">
+        <div className="photos-app"
+            onDragEnter={handleDragEnter}
+            onDragLeave={handleDragLeave}
+            onDragOver={handleDragOver}
+            onDrop={handleDrop}
+        >
+            {/* Drag-to-upload overlay */}
+            {isDragging && (
+                <div className="gp-drop-overlay">
+                    <div className="gp-drop-inner">
+                        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                        <h2>Drop photos & videos here</h2>
+                        <p>They'll be uploaded and encrypted automatically</p>
+                    </div>
+                </div>
+            )}
             {/* Header */}
             <div className="photos-header">
                 <div className="photos-header-inner">
@@ -495,7 +572,7 @@ const PhotosView = ({ onSwitchToDrive }) => {
                                 </button>
                             ))}
                         </div>
-                        <input type="file" ref={fileInputRef} onChange={handleUpload} className="hidden" accept="image/*,video/*" multiple style={{display:'none'}} />
+                        <input type="file" ref={fileInputRef} onChange={handleUpload} className="hidden" accept="image/*,video/*,.heic,.heif,image/heic,image/heif" multiple style={{display:'none'}} />
                         <div className="photos-upload-dropdown" ref={uploadMenuRef}>
                             <button onClick={() => setShowUploadMenu(prev => !prev)} disabled={uploading} className="photos-btn photos-btn-primary">
                                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
@@ -669,37 +746,55 @@ const PhotosView = ({ onSwitchToDrive }) => {
                 </>
             )}
 
-            {/* ── PHOTOS / FAVORITES TAB ─── */}
+            {/* ── PHOTOS / FAVORITES TAB — Google Photos layout ─── */}
             {(activeTab === 'photos' || activeTab === 'favorites') && (
-                <div className="photos-content">
-                    {loading ? (
-                        <div className="photos-skeleton-grid">
-                            {Array.from({length: 24}).map((_, i) => <div key={i} className="photo-tile-skeleton" />)}
-                        </div>
-                    ) : displayPhotos.length === 0 ? (
-                        <div className="photos-empty">
-                            <div className="photos-empty-icon"><svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" style={{color:'var(--photos-text-dim)'}}><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg></div>
-                            <h2>{activeTab === 'favorites' ? 'No favorites yet' : 'No photos yet'}</h2>
-                            <p>{activeTab === 'favorites' ? 'Tap the heart icon on a photo to add it here.' : 'Upload your photos & videos. They\'re stored securely with zero-knowledge encryption.'}</p>
-                            {activeTab !== 'favorites' && <button onClick={() => fileInputRef.current?.click()} className="photos-btn photos-btn-primary">Upload Photos</button>}
-                        </div>
-                    ) : (
-                        <div>
-                            {groupedPhotos.map(group => {
-                                // Estimate height for content-visibility: ~(ceil(count/cols) * tileSize + headerH)
-                                const estH = Math.ceil(group.photos.length / 5) * 150 + 48;
-                                return (
-                                    <div key={group.label} className="photos-month-group" style={{ contentVisibility: 'auto', containIntrinsicBlockSize: `auto ${estH}px` }}>
-                                        <div className="photos-month-header">
-                                            <h2>{group.label}</h2>
-                                            <span>{group.photos.length} items</span>
+                <div className="gp-layout">
+                    <div className="gp-main">
+                        {loading ? (
+                            <div className="gp-skeleton-grid">
+                                {Array.from({length: 24}).map((_, i) => <div key={i} className="gp-tile-skeleton" style={{flexGrow: [1.33, 0.75, 1, 1.5, 0.8][i % 5], flexBasis: `${[1.33, 0.75, 1, 1.5, 0.8][i % 5] * 200}px`}} />)}
+                            </div>
+                        ) : displayPhotos.length === 0 ? (
+                            <div className="photos-empty">
+                                <div className="photos-empty-icon"><svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" style={{color:'var(--photos-text-dim)'}}><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg></div>
+                                <h2>{activeTab === 'favorites' ? 'No favorites yet' : 'No photos yet'}</h2>
+                                <p>{activeTab === 'favorites' ? 'Tap the heart icon on a photo to add it here.' : 'Upload your photos & videos. They\'re stored securely with zero-knowledge encryption.'}</p>
+                                {activeTab !== 'favorites' && <button onClick={() => fileInputRef.current?.click()} className="photos-btn photos-btn-primary">Upload Photos</button>}
+                            </div>
+                        ) : (
+                            <div className="gp-timeline">
+                                {groupedPhotos.map((group, gi) => {
+                                    const isFirstOfYear = gi === 0 || groupedPhotos[gi - 1]?.year !== group.year;
+                                    const allSelected = group.photos.every(p => selectedIds.has(p.id));
+                                    return (
+                                        <div key={group.key} className="gp-day-group"
+                                            data-year-start={isFirstOfYear ? group.year : undefined}
+                                            style={{ contentVisibility: 'auto', containIntrinsicBlockSize: `auto ${Math.ceil(group.photos.length / 5) * 220 + 40}px` }}
+                                        >
+                                            <div className="gp-day-header" onClick={() => selectDayGroup(group)}>
+                                                <div className="gp-day-check">
+                                                    {allSelected
+                                                        ? <svg width="18" height="18" viewBox="0 0 24 24"><circle cx="12" cy="12" r="11" fill="#4f46e5" stroke="white" strokeWidth="1.5"/><polyline points="7 12 10.5 15.5 17 9" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                                                        : <svg width="18" height="18" viewBox="0 0 24 24"><circle cx="12" cy="12" r="11" fill="none" stroke="rgba(255,255,255,0.3)" strokeWidth="1.5"/></svg>
+                                                    }
+                                                </div>
+                                                <span className="gp-day-label">{group.label}</span>
+                                            </div>
+                                            <div className="gp-grid">
+                                                {group.photos.map(p => <LazyThumb key={p.id} photo={p} botToken={config?.botToken} decryptionKey={encryptionKey} onClick={setSelectedPhoto} selected={selectedIds.has(p.id)} onSelect={toggleSelect} selectionMode={selectionMode} />)}
+                                            </div>
                                         </div>
-                                        <div className="photos-grid">
-                                            {group.photos.map(p => <LazyThumb key={p.id} photo={p} botToken={config?.botToken} decryptionKey={encryptionKey} onClick={setSelectedPhoto} selected={selectedIds.has(p.id)} onSelect={toggleSelect} selectionMode={selectionMode} />)}
-                                        </div>
-                                    </div>
-                                );
-                            })}
+                                    );
+                                })}
+                            </div>
+                        )}
+                    </div>
+                    {/* Year scrubber — right edge */}
+                    {groupedPhotos.length > 0 && uniqueYears.length > 1 && (
+                        <div className="gp-year-scrubber">
+                            {uniqueYears.map(y => (
+                                <button key={y} className="gp-year-mark" onClick={() => scrollToYear(y)}>{y}</button>
+                            ))}
                         </div>
                     )}
                 </div>

@@ -322,7 +322,7 @@ export async function uploadThumbnailToTelegram(thumbBlob, botToken, channelId, 
 // ── Concurrent thumbnail resolver with decryption support ──────────────────
 // Resolves thumbnails in parallel batches, decrypts if encrypted, caches as
 // local blob URLs (these never expire, unlike raw Telegram URLs).
-const THUMB_CONCURRENCY = 5;
+const THUMB_CONCURRENCY = 12;
 const _resolveQueue = [];
 let _activeWorkers = 0;
 
@@ -377,7 +377,7 @@ async function _fetchAndCacheThumbnail(fileId, botToken, decryptionKey) {
 
 async function _processResolveQueue() {
     while (_resolveQueue.length > 0 && _activeWorkers < THUMB_CONCURRENCY) {
-        const task = _resolveQueue.shift();
+        const task = _resolveQueue.pop(); // LIFO: prioritize most recently requested (nearest to scroll position)
         if (!task) break;
 
         const { fileId, botToken, decryptionKey, resolve } = task;
@@ -491,6 +491,26 @@ export function getMonthKey(dateTaken, uploadedAt) {
         label: date.toLocaleDateString('en-US', { year: 'numeric', month: 'long' }),
         date,
     };
+}
+
+export function getDayKey(dateTaken, uploadedAt) {
+    let d;
+    if (dateTaken?.seconds) d = new Date(dateTaken.seconds * 1000);
+    else if (dateTaken) d = new Date(dateTaken);
+    else d = uploadedAt?.toDate?.() || new Date();
+
+    const key = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+    const today = new Date();
+    const yesterday = new Date(); yesterday.setDate(yesterday.getDate() - 1);
+    const oneWeekAgo = new Date(); oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
+
+    let label;
+    if (d.toDateString() === today.toDateString()) label = 'Today';
+    else if (d.toDateString() === yesterday.toDateString()) label = 'Yesterday';
+    else if (d > oneWeekAgo) label = d.toLocaleDateString('en-US', { weekday: 'long' });
+    else label = d.toLocaleDateString('en-US', { weekday: 'short', day: 'numeric', month: 'short', year: d.getFullYear() !== today.getFullYear() ? 'numeric' : undefined });
+
+    return { key, label, year: d.getFullYear(), date: d };
 }
 
 // ── Repair missing thumbnails ───────────────────────────────────────────────
