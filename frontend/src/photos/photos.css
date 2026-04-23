@@ -89,7 +89,7 @@
 /* ── Google Photos Layout ─────────────────────────────────────────────────── */
 .gp-layout { display:flex; position:relative; max-width:1600px; margin:0 auto; padding:0 12px; }
 .gp-main { flex:1; min-width:0; }
-.gp-timeline { padding-bottom:80px; }
+
 
 /* Day group */
 .gp-day-group { margin-bottom:4px; }
@@ -113,8 +113,7 @@
 }
 @media (max-width:768px) { .gp-tile { height:160px; } }
 @media (max-width:480px) { .gp-tile { height:120px; } }
-.gp-tile img { height:100%; width:100%; object-fit:cover; transition:opacity .3s; opacity:0; }
-.gp-tile img.loaded { opacity:1; }
+.gp-tile img { height:100%; width:100%; object-fit:cover; }
 
 /* Ghost checkbox — invisible at rest, appears on hover */
 .gp-check {
@@ -140,18 +139,46 @@
     font-size:11px; color:white; font-weight:500; z-index:1;
 }
 
-/* Year scrubber — right edge */
+/* Year scrubber — proportional full-height, right edge */
 .gp-year-scrubber {
-    position:sticky; top:60px; width:40px; flex-shrink:0;
-    display:flex; flex-direction:column; align-items:center; gap:4px;
-    padding-top:20px; height:fit-content;
+    position:sticky; top:60px; width:48px; flex-shrink:0;
+    display:flex; flex-direction:column;
+    height:calc(100vh - 80px); padding:8px 0;
+}
+.gp-year-segment {
+    display:flex; flex-direction:column; align-items:center; justify-content:flex-start;
+    min-height:28px; position:relative;
 }
 .gp-year-mark {
     font-size:11px; color:var(--photos-text-dim); background:none; border:none;
-    cursor:pointer; padding:4px 2px; transition:color .2s; writing-mode:horizontal-tb;
+    cursor:pointer; padding:2px 4px; transition:color .2s; white-space:nowrap;
+    font-weight:500;
 }
 .gp-year-mark:hover { color:var(--photos-text); }
+.gp-month-dots {
+    display:flex; flex-direction:column; align-items:center; flex:1; width:100%;
+    gap:1px;
+}
+.gp-month-dot {
+    display:flex; align-items:center; justify-content:center; gap:4px;
+    cursor:pointer; min-height:6px; position:relative; width:100%;
+}
+.gp-dot {
+    width:4px; height:4px; border-radius:50%; background:var(--photos-text-dim);
+    transition:background .15s;
+}
+.gp-month-dot:hover .gp-dot { background:var(--photos-text); transform:scale(1.5); }
+.gp-month-label {
+    position:absolute; right:100%; margin-right:6px; white-space:nowrap;
+    font-size:11px; color:var(--photos-text); background:var(--photos-surface);
+    padding:2px 8px; border-radius:6px; box-shadow:0 2px 8px rgba(0,0,0,0.4);
+    pointer-events:none; animation:gp-fadeIn .12s ease;
+}
+@keyframes gp-fadeIn { from { opacity:0; transform:translateX(4px); } to { opacity:1; transform:translateX(0); } }
 @media (max-width:768px) { .gp-year-scrubber { display:none; } }
+
+/* Timeline needs relative for drag overlay */
+.gp-timeline { padding-bottom:80px; position:relative; user-select:none; }
 
 /* Skeleton loading */
 .gp-tile-skeleton {

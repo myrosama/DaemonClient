@@ -28,7 +28,6 @@ const LazyThumb = ({ photo, botToken, decryptionKey, onClick, selected, onSelect
     const ref = useRef(null);
     const [src, setSrc] = useState(null);
     const [visible, setVisible] = useState(false);
-    const [loaded, setLoaded] = useState(false);
     const longPressTimer = useRef(null);
 
     useEffect(() => {
@@ -67,6 +66,7 @@ const LazyThumb = ({ photo, botToken, decryptionKey, onClick, selected, onSelect
 
     return (
         <div ref={ref}
+            data-photo-id={photo.id}
             className={`gp-tile ${selected ? 'gp-selected' : ''} ${selectionMode ? 'gp-selection-active' : ''}`}
             style={{ flexGrow: ar, flexBasis: `${Math.round(ar * 200)}px` }}
             onClick={(e) => {
@@ -78,7 +78,7 @@ const LazyThumb = ({ photo, botToken, decryptionKey, onClick, selected, onSelect
             onPointerCancel={handlePointerCancel}
             onContextMenu={(e) => { if (selectionMode) e.preventDefault(); }}
         >
-            {src ? <img src={src} alt="" className={loaded ? 'loaded' : ''} onLoad={() => setLoaded(true)} /> : <div className="gp-tile-skeleton" />}
+            {src ? <img src={src} alt="" /> : <div className="gp-tile-skeleton" />}
             {/* Ghost checkbox — appears on hover, fills when selected */}
             <div className="gp-check" onClick={(e) => { e.stopPropagation(); onSelect(photo, e); }}>
                 {selected
@@ -86,9 +86,7 @@ const LazyThumb = ({ photo, botToken, decryptionKey, onClick, selected, onSelect
                     : <svg width="18" height="18" viewBox="0 0 24 24"><circle cx="12" cy="12" r="11" fill="rgba(0,0,0,0.3)" stroke="white" strokeWidth="1.5"/></svg>
                 }
             </div>
-            {/* Favorite indicator */}
             {photo.isFavorite && <div className="gp-fav">♥</div>}
-            {/* Video badge — duration + play icon, Google Photos style */}
             {isVideo && (
                 <div className="gp-video-badge">
                     <svg width="10" height="10" viewBox="0 0 24 24" fill="white"><polygon points="5 3 19 12 5 21"/></svg>
@@ -132,6 +130,13 @@ const PhotosView = ({ onSwitchToDrive }) => {
     const [showScrollTop, setShowScrollTop] = useState(false);
     const lastSelectedRef = useRef(null);
     const scrollContainerRef = useRef(null);
+    const [focusedIndex, setFocusedIndex] = useState(-1);
+    // Drag-select
+    const [dragSelecting, setDragSelecting] = useState(false);
+    const [dragRect, setDragRect] = useState(null);
+    const dragStartRef = useRef(null);
+    // Year scrubber hover
+    const [scrubberHoverYear, setScrubberHoverYear] = useState(null);
 
     const uid = getAuth().currentUser?.uid;
 
@@ -219,15 +224,40 @@ const PhotosView = ({ onSwitchToDrive }) => {
         return Object.entries(groups).sort(([a], [b]) => b.localeCompare(a)).map(([, g]) => g);
     }, [displayPhotos]);
 
-    // Unique years for the year scrubber
-    const uniqueYears = useMemo(() => {
-        const years = new Set(groupedPhotos.map(g => g.year));
-        return [...years].sort((a, b) => b - a);
-    }, [groupedPhotos]);
+    // Year scrubber data — proportional to photo count, with months
+    const scrubberData = useMemo(() => {
+        const yearMap = {};
+        groupedPhotos.forEach(g => {
+            if (!yearMap[g.year]) yearMap[g.year] = { year: g.year, count: 0, months: {} };
+            yearMap[g.year].count += g.photos.length;
+            const month = g.date?.getMonth?.() ?? new Date(g.key).getMonth();
+            const mKey = month;
+            if (!yearMap[g.year].months[mKey]) yearMap[g.year].months[mKey] = { month: mKey, count: 0 };
+            yearMap[g.year].months[mKey].count += g.photos.length;
+        });
+        const total = displayPhotos.length || 1;
+        return Object.values(yearMap)
+            .sort((a, b) => b.year - a.year)
+            .map(y => ({
+                ...y,
+                fraction: y.count / total,
+                monthList: Object.values(y.months).sort((a, b) => b.month - a.month).map(m => ({
+                    ...m, fraction: m.count / y.count,
+                    label: ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][m.month]
+                }))
+            }));
+    }, [groupedPhotos, displayPhotos.length]);
 
     // Scroll to year (for year scrubber)
     const scrollToYear = useCallback((year) => {
         const el = document.querySelector(`[data-year-start="${year}"]`);
+        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, []);
+
+    const scrollToMonth = useCallback((year, monthIdx) => {
+        // find the day group for this year+month
+        const prefix = `${year}-${String(monthIdx + 1).padStart(2, '0')}`;
+        const el = document.querySelector(`[data-day-key^="${prefix}"]`);
         if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }, []);
 
@@ -245,20 +275,96 @@ const PhotosView = ({ onSwitchToDrive }) => {
         });
     }, []);
 
-    // ── Keyboard shortcuts (Ctrl+A, Escape) ──────────────────────────────
+    // ── Keyboard shortcuts (Ctrl+A, Escape, Shift+Arrows) ─────────────
     useEffect(() => {
         const handleKeyboard = (e) => {
             if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
                 e.preventDefault();
                 setSelectedIds(new Set(displayPhotos.map(p => p.id)));
+                return;
             }
-            if (e.key === 'Escape' && selectedIds.size > 0) {
-                setSelectedIds(new Set());
+            if (e.key === 'Escape') {
+                if (selectedIds.size > 0) setSelectedIds(new Set());
+                setFocusedIndex(-1);
+                return;
+            }
+            // Arrow key navigation + Shift for selection
+            if (['ArrowRight','ArrowLeft','ArrowDown','ArrowUp'].includes(e.key)) {
+                e.preventDefault();
+                const cols = Math.max(1, Math.round(window.innerWidth / 250));
+                setFocusedIndex(prev => {
+                    let next = prev;
+                    if (e.key === 'ArrowRight') next = Math.min(prev + 1, displayPhotos.length - 1);
+                    if (e.key === 'ArrowLeft') next = Math.max(prev - 1, 0);
+                    if (e.key === 'ArrowDown') next = Math.min(prev + cols, displayPhotos.length - 1);
+                    if (e.key === 'ArrowUp') next = Math.max(prev - cols, 0);
+                    if (next < 0) next = 0;
+                    // Shift held = extend selection
+                    if (e.shiftKey && displayPhotos[next]) {
+                        setSelectedIds(sel => {
+                            const ns = new Set(sel);
+                            ns.add(displayPhotos[next].id);
+                            return ns;
+                        });
+                    }
+                    // Scroll the focused tile into view
+                    const tile = document.querySelector(`[data-photo-id="${displayPhotos[next]?.id}"]`);
+                    if (tile) tile.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+                    return next;
+                });
+            }
+            // Enter to open focused photo
+            if (e.key === 'Enter' && focusedIndex >= 0 && focusedIndex < displayPhotos.length) {
+                setSelectedPhoto(displayPhotos[focusedIndex]);
             }
         };
         window.addEventListener('keydown', handleKeyboard);
         return () => window.removeEventListener('keydown', handleKeyboard);
-    }, [displayPhotos, selectedIds.size]);
+    }, [displayPhotos, selectedIds.size, focusedIndex]);
+
+    // ── Mouse drag-to-select ──────────────────────────────────────────────
+    const handleDragSelectStart = useCallback((e) => {
+        // Only left click on empty area (not on tiles directly)
+        if (e.button !== 0 || e.target.closest('.gp-tile') || e.target.closest('.gp-day-header') || e.target.closest('.gp-year-scrubber')) return;
+        dragStartRef.current = { x: e.clientX, y: e.clientY, scrollY: window.scrollY };
+    }, []);
+
+    const handleDragSelectMove = useCallback((e) => {
+        if (!dragStartRef.current) return;
+        const dx = Math.abs(e.clientX - dragStartRef.current.x);
+        const dy = Math.abs(e.clientY - dragStartRef.current.y);
+        if (dx < 5 && dy < 5) return; // deadzone
+        setDragSelecting(true);
+        const sx = dragStartRef.current.x;
+        const sy = dragStartRef.current.y - dragStartRef.current.scrollY + window.scrollY;
+        const cx = e.clientX;
+        const cy = e.clientY;
+        const rect = {
+            left: Math.min(sx, cx), top: Math.min(sy, cy),
+            right: Math.max(sx, cx), bottom: Math.max(sy, cy),
+            width: Math.abs(cx - sx), height: Math.abs(cy - sy)
+        };
+        setDragRect(rect);
+        // Find tiles that intersect the drag rect
+        const tiles = document.querySelectorAll('.gp-tile');
+        const newSel = new Set();
+        tiles.forEach(tile => {
+            const tr = tile.getBoundingClientRect();
+            const tileTop = tr.top + window.scrollY;
+            const tileBottom = tr.bottom + window.scrollY;
+            if (tr.left < rect.right && tr.right > rect.left && tileTop < rect.bottom && tileBottom > rect.top) {
+                const pid = tile.getAttribute('data-photo-id');
+                if (pid) newSel.add(pid);
+            }
+        });
+        setSelectedIds(newSel);
+    }, []);
+
+    const handleDragSelectEnd = useCallback(() => {
+        dragStartRef.current = null;
+        setDragSelecting(false);
+        setDragRect(null);
+    }, []);
 
     // ── Scroll-to-top visibility ─────────────────────────────────────────
     useEffect(() => {
@@ -762,14 +868,19 @@ const PhotosView = ({ onSwitchToDrive }) => {
                                 {activeTab !== 'favorites' && <button onClick={() => fileInputRef.current?.click()} className="photos-btn photos-btn-primary">Upload Photos</button>}
                             </div>
                         ) : (
-                            <div className="gp-timeline">
+                            <div className="gp-timeline"
+                                onMouseDown={handleDragSelectStart}
+                                onMouseMove={handleDragSelectMove}
+                                onMouseUp={handleDragSelectEnd}
+                                onMouseLeave={handleDragSelectEnd}
+                            >
                                 {groupedPhotos.map((group, gi) => {
                                     const isFirstOfYear = gi === 0 || groupedPhotos[gi - 1]?.year !== group.year;
                                     const allSelected = group.photos.every(p => selectedIds.has(p.id));
                                     return (
                                         <div key={group.key} className="gp-day-group"
                                             data-year-start={isFirstOfYear ? group.year : undefined}
-                                            style={{ contentVisibility: 'auto', containIntrinsicBlockSize: `auto ${Math.ceil(group.photos.length / 5) * 220 + 40}px` }}
+                                            data-day-key={group.key}
                                         >
                                             <div className="gp-day-header" onClick={() => selectDayGroup(group)}>
                                                 <div className="gp-day-check">
@@ -786,14 +897,45 @@ const PhotosView = ({ onSwitchToDrive }) => {
                                         </div>
                                     );
                                 })}
+                                {/* Drag-select rectangle overlay */}
+                                {dragSelecting && dragRect && (
+                                    <div className="gp-drag-rect" style={{
+                                        position: 'absolute', left: dragRect.left, top: dragRect.top - (window.scrollY || 0),
+                                        width: dragRect.width, height: dragRect.height,
+                                        border: '1px solid rgba(79,70,229,0.7)', background: 'rgba(79,70,229,0.12)',
+                                        pointerEvents: 'none', zIndex: 50
+                                    }} />
+                                )}
                             </div>
                         )}
                     </div>
-                    {/* Year scrubber — right edge */}
-                    {groupedPhotos.length > 0 && uniqueYears.length > 1 && (
+                    {/* Proportional year scrubber — right edge */}
+                    {scrubberData.length > 1 && (
                         <div className="gp-year-scrubber">
-                            {uniqueYears.map(y => (
-                                <button key={y} className="gp-year-mark" onClick={() => scrollToYear(y)}>{y}</button>
+                            {scrubberData.map(yd => (
+                                <div key={yd.year} className="gp-year-segment"
+                                    style={{ flex: yd.fraction }}
+                                    onMouseEnter={() => setScrubberHoverYear(yd.year)}
+                                    onMouseLeave={() => setScrubberHoverYear(null)}
+                                >
+                                    <button className="gp-year-mark" onClick={() => scrollToYear(yd.year)}>
+                                        {yd.year}
+                                    </button>
+                                    <div className="gp-month-dots">
+                                        {yd.monthList.map(m => (
+                                            <div key={m.month} className="gp-month-dot"
+                                                style={{ flex: m.fraction }}
+                                                onClick={() => scrollToMonth(yd.year, m.month)}
+                                                title={`${m.label} ${yd.year}`}
+                                            >
+                                                <div className="gp-dot" />
+                                                {scrubberHoverYear === yd.year && (
+                                                    <span className="gp-month-label">{m.label}</span>
+                                                )}
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
                             ))}
                         </div>
                     )}
