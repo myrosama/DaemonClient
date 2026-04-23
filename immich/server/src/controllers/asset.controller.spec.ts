@@ -1,0 +1,432 @@
+import { AssetController } from 'src/controllers/asset.controller';
+import { AssetMetadataKey } from 'src/enum';
+import { AssetService } from 'src/services/asset.service';
+import request from 'supertest';
+import { factory } from 'test/small.factory';
+import { ControllerContext, controllerSetup, mockBaseService } from 'test/utils';
+
+describe(AssetController.name, () => {
+  let ctx: ControllerContext;
+  const service = mockBaseService(AssetService);
+
+  beforeAll(async () => {
+    ctx = await controllerSetup(AssetController, [{ provide: AssetService, useValue: service }]);
+    return () => ctx.close();
+  });
+
+  beforeEach(() => {
+    ctx.reset();
+    service.resetAllMocks();
+  });
+
+  describe('PUT /assets', () => {
+    it('should be an authenticated route', async () => {
+      await request(ctx.getHttpServer()).put(`/assets`);
+      expect(ctx.authenticate).toHaveBeenCalled();
+    });
+
+    it('should require a valid uuid', async () => {
+      const { status, body } = await request(ctx.getHttpServer())
+        .put(`/assets`)
+        .send({ ids: ['123'] });
+
+      expect(status).toBe(400);
+      expect(body).toEqual(factory.responses.badRequest(['[ids.0] Invalid UUID']));
+    });
+
+    it('should require duplicateId to be a string', async () => {
+      const id = factory.uuid();
+      const { status, body } = await request(ctx.getHttpServer())
+        .put(`/assets`)
+        .send({ ids: [id], duplicateId: true });
+
+      expect(status).toBe(400);
+      expect(body).toEqual(
+        factory.responses.badRequest(['[duplicateId] Invalid input: expected string, received boolean']),
+      );
+    });
+
+    it('should accept a null duplicateId', async () => {
+      const id = factory.uuid();
+      await request(ctx.getHttpServer())
+        .put(`/assets`)
+        .send({ ids: [id], duplicateId: null });
+
+      expect(service.updateAll).toHaveBeenCalledWith(undefined, expect.objectContaining({ duplicateId: null }));
+    });
+  });
+
+  describe('DELETE /assets', () => {
+    it('should be an authenticated route', async () => {
+      await request(ctx.getHttpServer())
+        .delete(`/assets`)
+        .send({ ids: [factory.uuid()] });
+      expect(ctx.authenticate).toHaveBeenCalled();
+    });
+
+    it('should require a valid uuid', async () => {
+      const { status, body } = await request(ctx.getHttpServer())
+        .delete(`/assets`)
+        .send({ ids: ['123'] });
+
+      expect(status).toBe(400);
+      expect(body).toEqual(factory.responses.badRequest(['[ids.0] Invalid UUID']));
+    });
+  });
+
+  describe('GET /assets/:id', () => {
+    it('should be an authenticated route', async () => {
+      await request(ctx.getHttpServer()).get(`/assets/${factory.uuid()}`);
+      expect(ctx.authenticate).toHaveBeenCalled();
+    });
+
+    it('should require a valid id', async () => {
+      const { status, body } = await request(ctx.getHttpServer()).get(`/assets/123`);
+      expect(status).toBe(400);
+      expect(body).toEqual(factory.responses.badRequest(['[id] Invalid UUID']));
+    });
+  });
+
+  describe('PUT /assets/copy', () => {
+    it('should be an authenticated route', async () => {
+      await request(ctx.getHttpServer()).get(`/assets/copy`);
+      expect(ctx.authenticate).toHaveBeenCalled();
+    });
+
+    it('should require target and source id', async () => {
+      const { status, body } = await request(ctx.getHttpServer()).put('/assets/copy').send({});
+      expect(status).toBe(400);
+      expect(body).toEqual(
+        factory.responses.badRequest(
+          expect.arrayContaining([
+            '[sourceId] Invalid input: expected string, received undefined',
+            '[targetId] Invalid input: expected string, received undefined',
+          ]),
+        ),
+      );
+    });
+
+    it('should work', async () => {
+      const { status } = await request(ctx.getHttpServer())
+        .put('/assets/copy')
+        .send({ sourceId: factory.uuid(), targetId: factory.uuid() });
+      expect(status).toBe(204);
+    });
+  });
+
+  describe('PUT /assets/metadata', () => {
+    it('should be an authenticated route', async () => {
+      await request(ctx.getHttpServer()).put(`/assets/metadata`);
+      expect(ctx.authenticate).toHaveBeenCalled();
+    });
+
+    it('should require a valid assetId', async () => {
+      const { status, body } = await request(ctx.getHttpServer())
+        .put('/assets/metadata')
+        .send({ items: [{ assetId: '123', key: 'test', value: {} }] });
+      expect(status).toBe(400);
+      expect(body).toEqual(factory.responses.badRequest(expect.arrayContaining(['[items.0.assetId] Invalid UUID'])));
+    });
+
+    it('should require a key', async () => {
+      const { status, body } = await request(ctx.getHttpServer())
+        .put('/assets/metadata')
+        .send({ items: [{ assetId: factory.uuid(), value: {} }] });
+      expect(status).toBe(400);
+      expect(body).toEqual(
+        factory.responses.badRequest(
+          expect.arrayContaining(['[items.0.key] Invalid input: expected string, received undefined']),
+        ),
+      );
+    });
+
+    it('should work', async () => {
+      const { status } = await request(ctx.getHttpServer())
+        .put('/assets/metadata')
+        .send({ items: [{ assetId: factory.uuid(), key: AssetMetadataKey.MobileApp, value: { iCloudId: '123' } }] });
+      expect(status).toBe(200);
+    });
+  });
+
+  describe('DELETE /assets/metadata', () => {
+    it('should be an authenticated route', async () => {
+      await request(ctx.getHttpServer()).delete(`/assets/metadata`);
+      expect(ctx.authenticate).toHaveBeenCalled();
+    });
+
+    it('should require a valid assetId', async () => {
+      const { status, body } = await request(ctx.getHttpServer())
+        .delete('/assets/metadata')
+        .send({ items: [{ assetId: '123', key: 'test' }] });
+      expect(status).toBe(400);
+      expect(body).toEqual(factory.responses.badRequest(expect.arrayContaining(['[items.0.assetId] Invalid UUID'])));
+    });
+
+    it('should require a key', async () => {
+      const { status, body } = await request(ctx.getHttpServer())
+        .delete('/assets/metadata')
+        .send({ items: [{ assetId: factory.uuid() }] });
+      expect(status).toBe(400);
+      expect(body).toEqual(
+        factory.responses.badRequest(
+          expect.arrayContaining(['[items.0.key] Invalid input: expected string, received undefined']),
+        ),
+      );
+    });
+
+    it('should work', async () => {
+      const { status } = await request(ctx.getHttpServer())
+        .delete('/assets/metadata')
+        .send({ items: [{ assetId: factory.uuid(), key: AssetMetadataKey.MobileApp }] });
+      expect(status).toBe(204);
+    });
+  });
+
+  describe('PUT /assets/:id', () => {
+    it('should be an authenticated route', async () => {
+      await request(ctx.getHttpServer()).get(`/assets/123`);
+      expect(ctx.authenticate).toHaveBeenCalled();
+    });
+
+    it('should require a valid id', async () => {
+      const { status, body } = await request(ctx.getHttpServer()).put(`/assets/123`);
+      expect(status).toBe(400);
+      expect(body).toEqual(factory.responses.badRequest(['Invalid input: expected object, received undefined']));
+    });
+
+    it('should reject invalid gps coordinates', async () => {
+      for (const test of [
+        { latitude: 12 },
+        { longitude: 12 },
+        { latitude: 12, longitude: 'abc' },
+        { latitude: 'abc', longitude: 12 },
+        { latitude: null, longitude: 12 },
+        { latitude: 12, longitude: null },
+        { latitude: 91, longitude: 12 },
+        { latitude: -91, longitude: 12 },
+        { latitude: 12, longitude: -181 },
+        { latitude: 12, longitude: 181 },
+      ]) {
+        const { status, body } = await request(ctx.getHttpServer()).put(`/assets/${factory.uuid()}`).send(test);
+        expect(status).toBe(400);
+        expect(body).toEqual(factory.responses.badRequest());
+      }
+    });
+
+    it('should reject invalid rating', async () => {
+      for (const test of [{ rating: 7 }, { rating: 3.5 }, { rating: -2 }]) {
+        const { status, body } = await request(ctx.getHttpServer()).put(`/assets/${factory.uuid()}`).send(test);
+        expect(status).toBe(400);
+        expect(body).toEqual(factory.responses.badRequest());
+      }
+    });
+
+    it('should convert rating 0 to null', async () => {
+      const assetId = factory.uuid();
+      const { status } = await request(ctx.getHttpServer()).put(`/assets/${assetId}`).send({ rating: 0 });
+      expect(service.update).toHaveBeenCalledWith(undefined, assetId, { rating: null });
+      expect(status).toBe(200);
+    });
+
+    it('should leave correct ratings as-is', async () => {
+      const assetId = factory.uuid();
+      for (const test of [{ rating: -1 }, { rating: 1 }, { rating: 5 }]) {
+        const { status } = await request(ctx.getHttpServer()).put(`/assets/${assetId}`).send(test);
+        expect(service.update).toHaveBeenCalledWith(undefined, assetId, test);
+        expect(status).toBe(200);
+      }
+    });
+  });
+
+  describe('GET /assets/statistics', () => {
+    it('should be an authenticated route', async () => {
+      await request(ctx.getHttpServer()).get(`/assets/statistics`);
+      expect(ctx.authenticate).toHaveBeenCalled();
+    });
+  });
+
+  describe('GET /assets/:id/metadata', () => {
+    it('should be an authenticated route', async () => {
+      await request(ctx.getHttpServer()).get(`/assets/${factory.uuid()}/metadata`);
+      expect(ctx.authenticate).toHaveBeenCalled();
+    });
+  });
+
+  describe('PUT /assets/:id/metadata', () => {
+    it('should be an authenticated route', async () => {
+      await request(ctx.getHttpServer()).put(`/assets/${factory.uuid()}/metadata`).send({ items: [] });
+      expect(ctx.authenticate).toHaveBeenCalled();
+    });
+
+    it('should require a valid id', async () => {
+      const { status, body } = await request(ctx.getHttpServer()).put(`/assets/123/metadata`).send({ items: [] });
+      expect(status).toBe(400);
+      expect(body).toEqual(factory.responses.badRequest(expect.arrayContaining(['[id] Invalid UUID'])));
+    });
+
+    it('should require items to be an array', async () => {
+      const { status, body } = await request(ctx.getHttpServer()).put(`/assets/${factory.uuid()}/metadata`).send({});
+      expect(status).toBe(400);
+      expect(body).toEqual(factory.responses.badRequest(['[items] Invalid input: expected array, received undefined']));
+    });
+
+    it('should require each item to have a valid key', async () => {
+      const { status, body } = await request(ctx.getHttpServer())
+        .put(`/assets/${factory.uuid()}/metadata`)
+        .send({ items: [{ value: { some: 'value' } }] });
+      expect(status).toBe(400);
+      expect(body).toEqual(
+        factory.responses.badRequest(['[items.0.key] Invalid input: expected string, received undefined']),
+      );
+    });
+
+    it('should require each item to have a value', async () => {
+      const { status, body } = await request(ctx.getHttpServer())
+        .put(`/assets/${factory.uuid()}/metadata`)
+        .send({ items: [{ key: 'mobile-app', value: null }] });
+      expect(status).toBe(400);
+      expect(body).toEqual(
+        factory.responses.badRequest(
+          expect.arrayContaining(['[items.0.value] Invalid input: expected record, received null']),
+        ),
+      );
+    });
+
+    describe(AssetMetadataKey.MobileApp, () => {
+      it('should accept valid data and pass to service correctly', async () => {
+        const assetId = factory.uuid();
+        const { status } = await request(ctx.getHttpServer())
+          .put(`/assets/${assetId}/metadata`)
+          .send({ items: [{ key: 'mobile-app', value: { iCloudId: '123' } }] });
+        expect(service.upsertMetadata).toHaveBeenCalledWith(undefined, assetId, {
+          items: [{ key: 'mobile-app', value: { iCloudId: '123' } }],
+        });
+        expect(status).toBe(200);
+      });
+
+      it('should work without iCloudId', async () => {
+        const assetId = factory.uuid();
+        const { status } = await request(ctx.getHttpServer())
+          .put(`/assets/${assetId}/metadata`)
+          .send({ items: [{ key: 'mobile-app', value: {} }] });
+        expect(service.upsertMetadata).toHaveBeenCalledWith(undefined, assetId, {
+          items: [{ key: 'mobile-app', value: {} }],
+        });
+        expect(status).toBe(200);
+      });
+    });
+  });
+
+  describe('GET /assets/:id/metadata/:key', () => {
+    it('should be an authenticated route', async () => {
+      await request(ctx.getHttpServer()).get(`/assets/${factory.uuid()}/metadata/mobile-app`);
+      expect(ctx.authenticate).toHaveBeenCalled();
+    });
+
+    it('should require a valid id', async () => {
+      const { status, body } = await request(ctx.getHttpServer()).get(`/assets/123/metadata/mobile-app`);
+      expect(status).toBe(400);
+      expect(body).toEqual(factory.responses.badRequest(expect.arrayContaining(['[id] Invalid UUID'])));
+    });
+  });
+
+  describe('PUT /assets/:id/edits', () => {
+    it('should be an authenticated route', async () => {
+      await request(ctx.getHttpServer()).put(`/assets/${factory.uuid()}/edits`).send({ edits: [] });
+      expect(ctx.authenticate).toHaveBeenCalled();
+    });
+
+    it('should accept valid edits and pass to service correctly', async () => {
+      const edits = [
+        {
+          action: 'crop',
+          parameters: {
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 100,
+          },
+        },
+      ];
+
+      const assetId = factory.uuid();
+      const { status } = await request(ctx.getHttpServer()).put(`/assets/${assetId}/edits`).send({
+        edits,
+      });
+
+      expect(service.editAsset).toHaveBeenCalledWith(undefined, assetId, { edits });
+      expect(status).toBe(200);
+    });
+
+    it('should require a valid id', async () => {
+      const { status, body } = await request(ctx.getHttpServer())
+        .put(`/assets/123/edits`)
+        .send({
+          edits: [
+            {
+              action: 'crop',
+              parameters: {
+                x: 0,
+                y: 0,
+                width: 100,
+                height: 100,
+              },
+            },
+          ],
+        });
+
+      expect(status).toBe(400);
+      expect(body).toEqual(factory.responses.badRequest(expect.arrayContaining(['[id] Invalid UUID'])));
+    });
+
+    it('should check the action and parameters discriminator', async () => {
+      const { status, body } = await request(ctx.getHttpServer())
+        .put(`/assets/${factory.uuid()}/edits`)
+        .send({
+          edits: [
+            {
+              action: 'rotate',
+              parameters: {
+                x: 0,
+                y: 0,
+                width: 100,
+                height: 100,
+              },
+            },
+          ],
+        });
+
+      expect(status).toBe(400);
+      expect(body).toEqual(
+        factory.responses.badRequest(
+          expect.arrayContaining([
+            expect.stringContaining(
+              "[edits.0.parameters] Invalid parameters for action 'rotate', expecting keys: angle",
+            ),
+          ]),
+        ),
+      );
+    });
+
+    it('should require at least one edit', async () => {
+      const { status, body } = await request(ctx.getHttpServer())
+        .put(`/assets/${factory.uuid()}/edits`)
+        .send({ edits: [] });
+      expect(status).toBe(400);
+      expect(body).toEqual(factory.responses.badRequest(['[edits] Too small: expected array to have >=1 items']));
+    });
+  });
+
+  describe('DELETE /assets/:id/metadata/:key', () => {
+    it('should be an authenticated route', async () => {
+      await request(ctx.getHttpServer()).delete(`/assets/${factory.uuid()}/metadata/mobile-app`);
+      expect(ctx.authenticate).toHaveBeenCalled();
+    });
+
+    it('should require a valid id', async () => {
+      const { status, body } = await request(ctx.getHttpServer()).delete(`/assets/123/metadata/mobile-app`);
+      expect(status).toBe(400);
+      expect(body).toEqual(factory.responses.badRequest(['[id] Invalid UUID']));
+    });
+  });
+});

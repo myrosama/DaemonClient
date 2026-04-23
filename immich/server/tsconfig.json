@@ -1,0 +1,32 @@
+{
+  "compilerOptions": {
+    "module": "node20",
+    "strict": true,
+    "declaration": true,
+    "removeComments": true,
+    "emitDecoratorMetadata": true,
+    "experimentalDecorators": true,
+    "allowSyntheticDefaultImports": true,
+    "resolveJsonModule": true,
+    "target": "es2022",
+    "moduleResolution": "node16",
+    "lib": ["dom", "es2023"],
+    "sourceMap": true,
+    "outDir": "./dist",
+    "incremental": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "preserveWatchOutput": true,
+    "paths": {
+      "src/*": ["./src/*"],
+      "test/*": ["./test/*"]
+    },
+    "rootDir": ".",
+    "jsx": "react",
+    "types": ["vitest/globals"],
+    "tsBuildInfoFile": "./dist/tsconfig.tsbuildinfo",
+    "noErrorTruncation": true
+  },
+  "include": ["src", "test"],
+  "exclude": ["dist", "node_modules", "upload"]
+}

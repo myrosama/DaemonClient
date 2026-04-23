@@ -1,0 +1,49 @@
+experimental_monorepo_root = true
+
+[monorepo]
+config_roots = [
+  "plugins",
+  "server",
+  "cli",
+  "deployment",
+  "mobile",
+  "e2e",
+  "web",
+  "docs",
+  ".github",
+]
+
+[tools]
+node = "24.15.0"
+flutter = "3.41.6"
+pnpm = "10.33.0"
+terragrunt = "1.0.1"
+opentofu = "1.11.6"
+java = "21.0.2"
+
+[tools."github:CQLabs/homebrew-dcm"]
+version = "1.35.1"
+bin = "dcm"
+postinstall = "chmod +x $MISE_TOOL_INSTALL_PATH/dcm"
+
+[settings]
+experimental = true
+pin = true
+
+# SDK tasks
+[tasks."sdk:install"]
+dir = "open-api/typescript-sdk"
+run = "pnpm install --filter @immich/sdk --frozen-lockfile"
+
+[tasks."sdk:build"]
+dir = "open-api/typescript-sdk"
+run = "pnpm run build"
+
+# i18n tasks
+[tasks."i18n:format"]
+dir = "i18n"
+run = "pnpm run format"
+
+[tasks."i18n:format-fix"]
+dir = "i18n"
+run = "pnpm run format:fix"

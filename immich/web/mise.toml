@@ -1,0 +1,52 @@
+[tasks.install]
+run = "pnpm install --filter immich-web --frozen-lockfile"
+
+[tasks.build]
+run = "pnpm run build"
+
+[tasks."build-stats"]
+run = "pnpm run build:stats"
+
+[tasks.preview]
+run = "pnpm run preview"
+
+[tasks.start]
+depends = [":install", "//:sdk:install", "//:sdk:build"]
+run = "pnpm run dev"
+
+[tasks."start-demo"]
+env.IMMICH_SERVER_URL = "https://demo.immich.app"
+run = { task = ":start" }
+
+[tasks.test]
+run = "pnpm run test"
+
+[tasks.format]
+run = "pnpm run format"
+
+[tasks."format-fix"]
+run = "pnpm run format:fix"
+
+[tasks.lint]
+run = "pnpm run lint"
+
+[tasks."lint-fix"]
+run = "pnpm run lint:fix"
+
+[tasks.check-typescript]
+run = "pnpm run check:typescript"
+
+[tasks."check-svelte"]
+run = "pnpm run check:svelte"
+
+[tasks.check]
+run = { tasks = [":check-typescript", ":check-svelte"] }
+
+[tasks.checklist]
+run = [
+  { task = ":install" },
+  { task = ":format" },
+  { task = ":check" },
+  { task = ":test --run" },
+  { task = ":lint" },
+]

@@ -1,0 +1,93 @@
+import 'dart:async';
+import 'dart:io';
+
+import 'package:easy_localization/easy_localization.dart';
+import 'package:fake_async/fake_async.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:immich_mobile/domain/models/asset/base_asset.model.dart' as domain;
+
+import 'mock_http_override.dart';
+
+abstract final class TestUtils {
+  const TestUtils._();
+
+  static void init() {
+    // Turn off easy localization logging
+    EasyLocalization.logger.enableBuildModes = [];
+    WidgetController.hitTestWarningShouldBeFatal = true;
+    HttpOverrides.global = MockHttpOverrides();
+  }
+
+  // Workaround till the following issue is resolved
+  // https://github.com/dart-lang/test/issues/2307
+  static T fakeAsync<T>(Future<T> Function(FakeAsync _) callback, {DateTime? initialTime}) {
+    late final T result;
+    Object? error;
+    StackTrace? stack;
+    FakeAsync(initialTime: initialTime).run((FakeAsync async) {
+      bool shouldPump = true;
+      unawaited(
+        callback(async)
+            .then<void>(
+              (value) => result = value,
+              onError: (e, s) {
+                error = e;
+                stack = s;
+              },
+            )
+            .whenComplete(() => shouldPump = false),
+      );
+
+      while (shouldPump) {
+        async.flushMicrotasks();
+      }
+    });
+
+    if (error != null) {
+      Error.throwWithStackTrace(error!, stack!);
+    }
+    return result;
+  }
+
+  static domain.RemoteAsset createRemoteAsset({required String id, int? width, int? height, String? ownerId}) {
+    return domain.RemoteAsset(
+      id: id,
+      checksum: 'checksum1',
+      ownerId: ownerId ?? 'owner1',
+      name: 'test.jpg',
+      type: domain.AssetType.image,
+      createdAt: DateTime(2024, 1, 1),
+      updatedAt: DateTime(2024, 1, 1),
+      durationMs: 0,
+      isFavorite: false,
+      width: width,
+      height: height,
+      isEdited: false,
+    );
+  }
+
+  static domain.LocalAsset createLocalAsset({
+    required String id,
+    String? remoteId,
+    int? width,
+    int? height,
+    int orientation = 0,
+  }) {
+    return domain.LocalAsset(
+      id: id,
+      remoteId: remoteId,
+      checksum: 'checksum1',
+      name: 'test.jpg',
+      type: domain.AssetType.image,
+      createdAt: DateTime(2024, 1, 1),
+      updatedAt: DateTime(2024, 1, 1),
+      durationMs: 0,
+      isFavorite: false,
+      width: width,
+      height: height,
+      orientation: orientation,
+      playbackStyle: domain.AssetPlaybackStyle.image,
+      isEdited: false,
+    );
+  }
+}

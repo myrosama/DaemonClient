@@ -1,0 +1,44 @@
+{
+  "background_color": "#ffffff",
+  "description": "DaemonClient Photos — Your Secure Cloud Photos with Zero-Knowledge Encryption.",
+  "dir": "auto",
+  "display": "standalone",
+  "icons": [
+    {
+      "purpose": "any",
+      "sizes": "192x192",
+      "src": "manifest-icon-192.maskable.png",
+      "type": "image/png"
+    },
+    {
+      "purpose": "any",
+      "sizes": "512x512",
+      "src": "manifest-icon-512.maskable.png",
+      "type": "image/png"
+    },
+    {
+      "purpose": "maskable",
+      "sizes": "512x512",
+      "src": "manifest-icon-512.maskable.png",
+      "type": "image/png"
+    }
+  ],
+  "lang": "en",
+  "name": "DaemonClient Photos",
+  "short_name": "DC Photos",
+  "shortcuts": [
+    {
+      "name": "Photos",
+      "url": "/photos"
+    },
+    {
+      "name": "Albums",
+      "url": "/albums"
+    },
+    {
+      "name": "Map",
+      "url": "/map"
+    }
+  ],
+  "start_url": "/"
+}

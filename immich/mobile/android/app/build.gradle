@@ -1,0 +1,115 @@
+plugins {
+  alias(libs.plugins.android.application)
+  alias(libs.plugins.kotlin.android)
+  id "dev.flutter.flutter-gradle-plugin"
+  alias(libs.plugins.ksp)
+  alias(libs.plugins.kotlin.serialization)
+  alias(libs.plugins.kotlin.compose)
+}
+
+def keystoreProperties = new Properties()
+def keystorePropertiesFile = rootProject.file('key.properties')
+if (keystorePropertiesFile.exists()) {
+  keystorePropertiesFile.withInputStream { keystoreProperties.load(it) }
+}
+
+android {
+  compileSdk = flutter.compileSdkVersion
+  ndkVersion = flutter.ndkVersion
+
+  compileOptions {
+    sourceCompatibility JavaVersion.VERSION_17
+    targetCompatibility JavaVersion.VERSION_17
+    coreLibraryDesugaringEnabled true
+  }
+
+  kotlinOptions {
+    jvmTarget = '17'
+  }
+
+  sourceSets {
+    main.java.srcDirs += 'src/main/kotlin'
+  }
+
+  buildFeatures {
+    buildConfig true
+    compose true
+  }
+
+  defaultConfig {
+    applicationId "app.alextran.immich"
+    minSdk = 26
+    targetSdk = flutter.targetSdkVersion
+    versionCode flutter.versionCode
+    versionName flutter.versionName
+  }
+
+  signingConfigs {
+    release {
+      def keyAliasVal = System.getenv("ALIAS")
+      def keyPasswordVal = System.getenv("ANDROID_KEY_PASSWORD")
+      def storePasswordVal = System.getenv("ANDROID_STORE_PASSWORD")
+
+      keyAlias keyAliasVal ?: keystoreProperties['keyAlias']
+      keyPassword keyPasswordVal ?: keystoreProperties['keyPassword']
+      storeFile file("../key.jks").exists() ? file("../key.jks") : file(keystoreProperties['storeFile'] ?: '../key.jks')
+      storePassword storePasswordVal ?: keystoreProperties['storePassword']
+    }
+  }
+
+  buildTypes {
+    debug {
+      applicationIdSuffix '.debug'
+      versionNameSuffix '-DEBUG'
+    }
+
+    release {
+      signingConfig signingConfigs.release
+      proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+    }
+  }
+  namespace 'app.alextran.immich'
+
+  externalNativeBuild {
+    cmake {
+      path "CMakeLists.txt"
+    }
+  }
+}
+
+flutter {
+  source '../..'
+}
+
+dependencies {
+  implementation libs.okhttp
+  implementation libs.cronet.embedded
+  implementation libs.media3.datasource.okhttp
+  implementation libs.media3.datasource.cronet
+  implementation libs.kotlinx.coroutines.android
+  implementation libs.work.runtime.ktx
+  implementation libs.concurrent.futures
+  implementation libs.guava
+  implementation libs.glide
+  implementation libs.kotlinx.serialization.json
+
+  ksp libs.glide.ksp
+  coreLibraryDesugaring libs.desugar.jdk.libs
+
+  //Glance Widget
+  implementation libs.glance.appwidget
+  implementation libs.gson
+
+  // Glance Configure
+  implementation libs.activity.compose
+  implementation libs.compose.ui
+  implementation libs.compose.ui.tooling
+  implementation libs.compose.material3
+  implementation libs.lifecycle.runtime.ktx
+  implementation libs.material
+}
+
+// This is uncommented in F-Droid build script
+//f configurations.all {
+//f     exclude group: 'com.google.android.gms'
+//f }

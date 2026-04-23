@@ -1,0 +1,155 @@
+import { MemoryController } from 'src/controllers/memory.controller';
+import { MemoryService } from 'src/services/memory.service';
+import request from 'supertest';
+import { errorDto } from 'test/medium/responses';
+import { factory } from 'test/small.factory';
+import { ControllerContext, controllerSetup, mockBaseService } from 'test/utils';
+
+describe(MemoryController.name, () => {
+  let ctx: ControllerContext;
+  const service = mockBaseService(MemoryService);
+
+  beforeAll(async () => {
+    ctx = await controllerSetup(MemoryController, [{ provide: MemoryService, useValue: service }]);
+    return () => ctx.close();
+  });
+
+  beforeEach(() => {
+    service.resetAllMocks();
+    ctx.reset();
+  });
+
+  describe('GET /memories', () => {
+    it('should be an authenticated route', async () => {
+      await request(ctx.getHttpServer()).get('/memories');
+      expect(ctx.authenticate).toHaveBeenCalled();
+    });
+
+    it('should not require any parameters', async () => {
+      await request(ctx.getHttpServer()).get('/memories').query({});
+      expect(service.search).toHaveBeenCalled();
+    });
+  });
+
+  describe('POST /memories', () => {
+    it('should be an authenticated route', async () => {
+      await request(ctx.getHttpServer()).post('/memories');
+      expect(ctx.authenticate).toHaveBeenCalled();
+    });
+
+    it('should validate data when type is on this day', async () => {
+      const { status, body } = await request(ctx.getHttpServer())
+        .post('/memories')
+        .send({
+          type: 'on_this_day',
+          data: {},
+          memoryAt: new Date(2021).toISOString(),
+        });
+
+      expect(status).toBe(400);
+      expect(body).toEqual(errorDto.badRequest(['[data.year] Invalid input: expected number, received undefined']));
+    });
+
+    it('should accept showAt and hideAt', async () => {
+      const { status } = await request(ctx.getHttpServer())
+        .post('/memories')
+        .send({
+          type: 'on_this_day',
+          data: { year: 2020 },
+          memoryAt: new Date(2021).toISOString(),
+          showAt: new Date(2022).toISOString(),
+          hideAt: new Date(2023).toISOString(),
+        });
+
+      expect(status).toBe(201);
+    });
+  });
+
+  describe('GET /memories/statistics', () => {
+    it('should be an authenticated route', async () => {
+      await request(ctx.getHttpServer()).get('/memories/statistics');
+      expect(ctx.authenticate).toHaveBeenCalled();
+    });
+  });
+
+  describe('GET /memories/:id', () => {
+    it('should be an authenticated route', async () => {
+      await request(ctx.getHttpServer()).get(`/memories/${factory.uuid()}`);
+      expect(ctx.authenticate).toHaveBeenCalled();
+    });
+
+    it('should require a valid id', async () => {
+      const { status, body } = await request(ctx.getHttpServer()).get(`/memories/invalid`);
+      expect(status).toBe(400);
+      expect(body).toEqual(errorDto.badRequest(['[id] Invalid UUID']));
+    });
+  });
+
+  describe('PUT /memories/:id', () => {
+    it('should be an authenticated route', async () => {
+      await request(ctx.getHttpServer()).put(`/memories/${factory.uuid()}`);
+      expect(ctx.authenticate).toHaveBeenCalled();
+    });
+
+    it('should require a valid id', async () => {
+      const { status, body } = await request(ctx.getHttpServer()).put(`/memories/invalid`);
+      expect(status).toBe(400);
+      expect(body).toEqual(errorDto.badRequest(['Invalid input: expected object, received undefined']));
+    });
+
+    it('should require at least one field', async () => {
+      const { status, body } = await request(ctx.getHttpServer()).put(`/memories/${factory.uuid()}`).send({});
+      expect(status).toBe(400);
+      expect(body).toEqual(errorDto.badRequest(['At least one field must be provided']));
+    });
+  });
+
+  describe('DELETE /memories/:id', () => {
+    it('should be an authenticated route', async () => {
+      await request(ctx.getHttpServer()).delete(`/memories/${factory.uuid()}`);
+      expect(ctx.authenticate).toHaveBeenCalled();
+    });
+  });
+
+  describe('PUT /memories/:id/assets', () => {
+    it('should be an authenticated route', async () => {
+      await request(ctx.getHttpServer()).put(`/memories/${factory.uuid()}/assets`);
+      expect(ctx.authenticate).toHaveBeenCalled();
+    });
+
+    it('should require a valid id', async () => {
+      const { status, body } = await request(ctx.getHttpServer()).put(`/memories/invalid/assets`).send({ ids: [] });
+      expect(status).toBe(400);
+      expect(body).toEqual(errorDto.badRequest(['[id] Invalid UUID']));
+    });
+
+    it('should require a valid asset id', async () => {
+      const { status, body } = await request(ctx.getHttpServer())
+        .put(`/memories/${factory.uuid()}/assets`)
+        .send({ ids: ['invalid'] });
+      expect(status).toBe(400);
+      expect(body).toEqual(errorDto.badRequest(['[ids.0] Invalid UUID']));
+    });
+  });
+
+  describe('DELETE /memories/:id/assets', () => {
+    it('should be an authenticated route', async () => {
+      await request(ctx.getHttpServer()).delete(`/memories/${factory.uuid()}/assets`);
+      expect(ctx.authenticate).toHaveBeenCalled();
+    });
+
+    it('should require a valid id', async () => {
+      const { status, body } = await request(ctx.getHttpServer()).delete(`/memories/invalid/assets`);
+      expect(status).toBe(400);
+      expect(body).toEqual(errorDto.badRequest(['[id] Invalid UUID']));
+    });
+
+    it('should require a valid asset id', async () => {
+      const { status, body } = await request(ctx.getHttpServer())
+        .delete(`/memories/${factory.uuid()}/assets`)
+        .send({ ids: ['invalid'] });
+      expect(status).toBe(400);
+      expect(body).toEqual(errorDto.badRequest(['[ids.0] Invalid UUID']));
+    });
+  });
+});

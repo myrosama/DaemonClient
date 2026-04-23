@@ -1,0 +1,177 @@
+@import 'tailwindcss';
+@import '@immich/ui/theme/default.css';
+@source "../node_modules/@immich/ui";
+/* @import '../../../ui/packages/ui/dist/theme/default.css'; */
+
+@utility immich-form-input {
+  @apply bg-gray-100 ring-1 ring-gray-200 transition outline-none focus-within:ring-1 disabled:cursor-not-allowed dark:bg-gray-800 dark:ring-neutral-900 flex w-full items-center rounded-lg disabled:bg-gray-300 disabled:text-dark dark:disabled:bg-gray-900 dark:disabled:text-gray-200 flex-1 py-2.5 text-base pl-4 pr-4;
+}
+
+@utility immich-form-label {
+  @apply font-medium text-gray-500 dark:text-gray-300;
+}
+
+@utility immich-scrollbar {
+  /* width */
+  scrollbar-width: thin;
+}
+
+@utility scrollbar-hidden {
+  /* Hidden scrollbar */
+  /* width */
+  scrollbar-width: none;
+}
+
+@utility scrollbar-stable {
+  scrollbar-gutter: stable both-edges;
+}
+
+@utility grid-auto-fit-* {
+  grid-template-columns: repeat(auto-fit, minmax(min(calc(var(--spacing) * --value(number)), 100%), 1fr));
+}
+
+@utility grid-auto-fill-* {
+  grid-template-columns: repeat(auto-fill, minmax(min(calc(var(--spacing) * --value(number)), 100%), 1fr));
+}
+
+@custom-variant dark (&:where(.dark, .dark *):not(.light));
+
+@theme inline {
+  --color-immich-primary: rgb(var(--immich-primary));
+  --color-immich-bg: rgb(var(--immich-bg));
+  --color-immich-fg: rgb(var(--immich-fg));
+  --color-immich-gray: rgb(var(--immich-gray));
+
+  --color-immich-dark-primary: rgb(var(--immich-dark-primary));
+  --color-immich-dark-bg: rgb(var(--immich-dark-bg));
+  --color-immich-dark-fg: rgb(var(--immich-dark-fg));
+  --color-immich-dark-gray: rgb(var(--immich-dark-gray));
+}
+
+@theme {
+  --font-sans: 'GoogleSans', sans-serif;
+  --font-mono: 'GoogleSansCode', monospace;
+
+  --spacing-18: 4.5rem;
+
+  --breakpoint-tall: 800px;
+  --breakpoint-2xl: 1535px;
+  --breakpoint-xl: 1279px;
+  --breakpoint-lg: 1023px;
+  --breakpoint-md: 767px;
+  --breakpoint-sm: 639px;
+  --breakpoint-sidebar: 850px;
+}
+
+@layer base {
+  :root {
+    /* light */
+    --immich-primary: 66 80 175;
+    --immich-bg: 255 255 255;
+    --immich-fg: 0 0 0;
+
+    /* dark */
+    --immich-dark-primary: 172 203 250;
+    --immich-dark-bg: 10 10 10;
+    --immich-dark-fg: 229 231 235;
+    --immich-dark-gray: 33 33 33;
+  }
+
+  button:not(:disabled),
+  [role='button']:not(:disabled) {
+    cursor: pointer;
+  }
+}
+
+@layer utilities {
+  @font-face {
+    font-family: 'GoogleSans';
+    src: url('$lib/assets/fonts/GoogleSans/GoogleSans.ttf') format('truetype-variations');
+    font-weight: 410 900;
+    font-style: normal;
+    ascent-override: 106.25%;
+    size-adjust: 106.25%;
+  }
+
+  @font-face {
+    font-family: 'GoogleSansCode';
+    src: url('$lib/assets/fonts/GoogleSansCode/GoogleSansCode.ttf') format('truetype-variations');
+    font-weight: 1 900;
+    font-style: monospace;
+  }
+
+  :root {
+    font-family: var(--font-sans);
+    letter-spacing: 0.1px;
+
+    /* Used by layouts to ensure proper spacing between navbar and content */
+    --navbar-height: calc(4.5rem + 4px);
+    --navbar-height-md: calc(4.5rem + 4px - 14px);
+  }
+
+  :root.dark {
+    color-scheme: dark;
+  }
+
+  :root:not(.dark) {
+    color-scheme: light;
+  }
+
+  html {
+    height: 100%;
+    width: 100%;
+  }
+
+  html::-webkit-scrollbar {
+    width: 8px;
+  }
+
+  /* Track */
+  html::-webkit-scrollbar-track {
+    background-color: var(--immich-ui-light-100);
+    border-radius: 4px;
+  }
+
+  /* Handle */
+  html::-webkit-scrollbar-thumb {
+    background-color: color-mix(in oklab, var(--immich-ui-light-600) 40%, transparent);
+    border-radius: 4px;
+  }
+
+  /* Handle on hover */
+  html::-webkit-scrollbar-thumb:hover {
+    background-color: color-mix(in oklab, var(--immich-ui-primary-500) 70%, transparent);
+  }
+
+  body {
+    margin: 0;
+    color: var(--immich-ui-dark);
+  }
+
+  body.asset-viewer-open {
+    background-color: black;
+  }
+
+  input:focus-visible {
+    outline-offset: 0px !important;
+    outline: none !important;
+  }
+
+  .text-white-shadow {
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+  }
+
+  .icon-white-drop-shadow {
+    filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.8));
+  }
+}
+
+.maplibregl-popup {
+  .maplibregl-popup-tip {
+    @apply border-t-subtle! translate-y-[-1px];
+  }
+
+  .maplibregl-popup-content {
+    @apply bg-subtle rounded-lg;
+  }
+}

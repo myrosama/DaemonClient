@@ -281,10 +281,12 @@ export default function LandingPage({ onLaunchApp }) {
             <a href="#features" className="text-sm font-medium text-gray-400 hover:text-white transition-colors">Power Users</a>
             <a href="https://github.com/myrosama/DaemonClient" target="_blank" className="text-gray-400 hover:text-white transition-colors">GitHub</a>
             <button onClick={onLaunchApp} className="bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-2 rounded-lg text-sm font-semibold transition-all shadow-lg shadow-indigo-900/20 hover:-translate-y-0.5">Launch App</button>
+            <a href={typeof window !== 'undefined' && window.location.hostname === 'localhost' ? 'http://localhost:3000' : 'https://photos.daemonclient.uz'} className="bg-gradient-to-r from-pink-600 to-rose-600 hover:from-pink-500 hover:to-rose-500 text-white px-5 py-2 rounded-lg text-sm font-semibold transition-all shadow-lg shadow-pink-900/20 hover:-translate-y-0.5">Immich Photos</a>
           </div>
           {/* Mobile Menu Button (Visible only on mobile) */}
-          <div className="md:hidden">
-             <button onClick={onLaunchApp} className="text-indigo-500 font-semibold">Launch App</button>
+          <div className="md:hidden flex items-center gap-4">
+             <button onClick={onLaunchApp} className="text-indigo-500 font-semibold text-sm">Launch App</button>
+             <a href={typeof window !== 'undefined' && window.location.hostname === 'localhost' ? 'http://localhost:3000' : 'https://photos.daemonclient.uz'} className="text-pink-500 font-semibold text-sm">Photos</a>
           </div>
         </div>
       </nav>

@@ -5,7 +5,7 @@ import firebase from 'firebase/compat/app';
 import 'firebase/compat/auth';
 import 'firebase/compat/firestore';
 import { deriveKey, encryptChunk, decryptChunk, generateSalt, generatePassword, bytesToBase64, base64ToBytes } from './crypto.js';
-import PhotosView from './PhotosView.jsx';
+
 import { getSyncEngine, destroySyncEngine } from './manifest-sync.js';
 import {
     saveUploadSession, getUploadSession, getIncompleteUploads,
@@ -2507,10 +2507,11 @@ function App() {
             return <OwnershipView onOwnershipConfirmed={handleOwnershipConfirmed} />;
         case 'dashboard':
             // If on photos domain but somehow got to dashboard, force photos
-            if (isPhotosDomain) return <PhotosView onSwitchToDrive={() => { window.location.href = 'https://app.daemonclient.uz'; }} />;
+            if (isPhotosDomain) return <div className="text-white text-center mt-20 text-xl">Redirecting to Immich Photos Backend...</div>;
             return <DashboardView />;
         case 'photos':
-            return <PhotosView onSwitchToDrive={() => { if (isPhotosDomain) { window.location.href = 'https://app.daemonclient.uz'; } else { setAppState('dashboard'); }}} />;
+            window.location.href = window.location.hostname === 'localhost' ? 'http://localhost:2283' : 'https://photos.daemonclient.uz';
+            return <div className="text-white text-center mt-20 text-xl">Redirecting to Immich Photos App...</div>;
         default:
             return <AuthView />;
     }
