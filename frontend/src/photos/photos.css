@@ -18,7 +18,8 @@
 }
 
 /* ── Main Layout ──────────────────────────────────────────────────────────── */
-.photos-app { min-height:100vh; background:var(--photos-bg); color:var(--photos-text); font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Helvetica Neue", Arial, sans-serif; }
+.photos-app { min-height:100vh; background:var(--photos-bg); color:var(--photos-text); font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Helvetica Neue", Arial, sans-serif; scrollbar-width:none; }
+.photos-app::-webkit-scrollbar { display:none; }
 .photos-header { position:sticky; top:0; z-index:40; background:rgba(15,15,20,0.92); backdrop-filter:blur(20px); border-bottom:1px solid var(--photos-border); }
 .photos-header-inner { max-width:1400px; margin:0 auto; padding:12px 16px; display:flex; align-items:center; justify-content:space-between; gap:12px; }
 .photos-logo { display:flex; align-items:center; gap:10px; }
@@ -95,7 +96,6 @@
 .gp-day-group { margin-bottom:4px; }
 .gp-day-header {
     display:flex; align-items:center; gap:10px; padding:16px 4px 8px; cursor:pointer;
-    position:sticky; top:52px; z-index:10; background:rgba(26,26,26,0.92); backdrop-filter:blur(8px);
 }
 .gp-day-check { flex-shrink:0; opacity:0; transition:opacity .2s; }
 .gp-day-header:hover .gp-day-check { opacity:1; }
