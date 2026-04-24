@@ -2572,13 +2572,7 @@ function App() {
                 } else {
                     const configData = docSnap.data();
                     if (configData.ownership_transferred) {
-                        if (isPhotosDomain) {
-                            // Check if user has photos bot configured
-                            const photosDoc = await db.collection(`artifacts/${appIdentifier}/users/${currentUser.uid}/config`).doc('photos_telegram').get();
-                            setAppState(photosDoc.exists ? 'photos' : 'photos_setup');
-                        } else {
-                            setAppState('dashboard');
-                        }
+                        setAppState(isPhotosDomain ? 'photos' : 'dashboard');
                     } else {
                         setAppState('transfer');
                     }
@@ -2623,8 +2617,6 @@ function App() {
             return <OwnershipView onOwnershipConfirmed={handleOwnershipConfirmed} />;
         case 'dashboard':
             return <DashboardView />;
-        case 'photos_setup':
-            return <PhotosSetupView onSetupComplete={() => setAppState('photos')} />;
         case 'photos':
             return <PhotoGalleryView />;
         default:

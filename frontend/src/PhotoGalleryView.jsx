@@ -77,7 +77,7 @@ export default function PhotoGalleryView() {
   useEffect(() => {
     if (!uid) return;
     const loadConfig = async () => {
-      const doc = await getDb().collection(`artifacts/${appId}/users/${uid}/config`).doc('photos_telegram').get();
+      const doc = await getDb().collection(`artifacts/${appId}/users/${uid}/config`).doc('telegram').get();
       if (doc.exists) setConfig(doc.data());
       // ZKE
       const zkeDoc = await getDb().collection(`artifacts/${appId}/users/${uid}/config`).doc('zke').get();
