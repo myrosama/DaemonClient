@@ -127,16 +127,16 @@
 </script>
 
 <AuthPageLayout title={data.meta.title}>
-  <Stack gap={4}>
+  <Stack gap={3}>
     {#if serverConfig.loginPageMessage}
-      <Alert color="primary" class="mb-6">
+      <Alert color="primary" class="mb-2">
         <!-- eslint-disable-next-line svelte/no-at-html-tags -->
         {@html serverConfig.loginPageMessage}
       </Alert>
     {/if}
 
     {#if !oauthLoading && featureFlagsManager.value.passwordLogin}
-      <form {onsubmit} class="flex flex-col gap-4">
+      <form {onsubmit} class="flex flex-col gap-3">
         {#if errorMessage}
           <Alert color="danger" title={errorMessage} closable />
         {/if}
@@ -149,14 +149,14 @@
           <PasswordInput id="password" bind:value={password} autocomplete="current-password" />
         </Field>
 
-        <Button type="submit" size="large" shape="round" fullWidth {loading} class="mt-6">{$t('to_login')}</Button>
+        <Button type="submit" size="medium" shape="round" fullWidth {loading} class="mt-4">{$t('to_login')}</Button>
       </form>
     {/if}
 
     {#if featureFlagsManager.value.oauth}
       {#if featureFlagsManager.value.passwordLogin}
-        <div class="inline-flex w-full items-center justify-center my-4">
-          <hr class="my-4 h-px w-3/4 border-0 bg-gray-200 dark:bg-gray-600" />
+        <div class="inline-flex w-full items-center justify-center my-2">
+          <hr class="my-2 h-px w-3/4 border-0 bg-gray-200 dark:bg-gray-600" />
           <span
             class="absolute start-1/2 -translate-x-1/2 bg-gray-50 px-3 font-medium text-gray-900 dark:bg-neutral-900 dark:text-white uppercase"
           >
@@ -171,7 +171,7 @@
         shape="round"
         loading={loading || oauthLoading}
         disabled={loading || oauthLoading}
-        size="large"
+        size="medium"
         fullWidth
         color={featureFlagsManager.value.passwordLogin ? 'secondary' : 'primary'}
         onclick={handleOAuthLogin}
@@ -184,14 +184,14 @@
       <Alert color="warning" title={$t('login_has_been_disabled')} />
     {/if}
 
-    <div class="inline-flex w-full items-center justify-center mt-2 mb-2">
-      <hr class="my-4 h-px w-3/4 border-0 bg-gray-200 dark:bg-gray-600" />
+    <div class="inline-flex w-full items-center justify-center">
+      <hr class="my-2 h-px w-3/4 border-0 bg-gray-200 dark:bg-gray-600" />
     </div>
     
-    <div class="flex flex-col items-center justify-center gap-2">
-      <span class="text-sm text-gray-500 dark:text-gray-400">Don't have an account?</span>
+    <div class="flex flex-col items-center justify-center gap-1">
+      <span class="text-xs text-gray-500 dark:text-gray-400">Don't have an account?</span>
       <a href="https://app.daemonclient.uz" target="_blank" class="w-full">
-        <Button shape="round" size="large" fullWidth color="secondary" class="border-2 border-immich-primary text-immich-primary hover:bg-immich-primary/10">
+        <Button shape="round" size="medium" fullWidth color="secondary" class="border-2 border-immich-primary text-immich-primary hover:bg-immich-primary/10">
           Create Account
         </Button>
       </a>
