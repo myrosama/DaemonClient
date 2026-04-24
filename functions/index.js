@@ -37,12 +37,13 @@ exports.immichApiProxy = onRequest({ cors: false }, async (req, res) => {
     if (req.headers['origin']) headers['Origin'] = req.headers['origin'];
 
     try {
+        logger.info(`Proxying ${req.method} ${url.toString()}, content-type: ${headers['Content-Type']}, rawBody length: ${req.rawBody ? req.rawBody.length : 'undefined'}`);
         const workerRes = await fetch(url.toString(), {
             method: req.method,
             headers,
-            // Use rawBody to preserve the original request body as-is
-            // (JSON.stringify breaks multipart/form-data uploads)
-            body: ['GET', 'HEAD'].includes(req.method) ? undefined : req.rawBody,
+            // Pipe the raw request stream directly to preserve multipart/form-data
+            // and avoid memory limits with large files
+            body: ['GET', 'HEAD'].includes(req.method) ? undefined : req,
         });
 
         const contentType = workerRes.headers.get('content-type') || '';

@@ -5,9 +5,10 @@ admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
 async function run() {
   const users = await admin.firestore().collection('artifacts/default-daemon-client/users').get();
   for (const doc of users.docs) {
-    console.log('User:', doc.id);
     const tg = await doc.ref.collection('config').doc('telegram').get();
-    console.log('Telegram Config exists:', tg.exists, tg.data());
+    if (tg.exists) {
+        console.log('User:', doc.id, tg.data());
+    }
   }
 }
 run().catch(console.error).then(() => process.exit(0));
