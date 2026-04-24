@@ -499,6 +499,110 @@ def register_file():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+@app.route("/addPhotosBot", methods=["POST"])
+def add_photos_bot_endpoint():
+    """
+    Takes a user-provided bot token and adds it as admin to their existing channel.
+    This gives the photos feature its own bot for rate-limit separation.
+    """
+    data = request.get_json().get("data", {})
+    user_id = data.get("uid")
+    photos_bot_token = data.get("bot_token")
+
+    if not user_id or not photos_bot_token:
+        return jsonify({"error": {"message": "Missing uid or bot_token."}}), 400
+
+    # Validate the bot token format
+    if ":" not in photos_bot_token:
+        return jsonify({"error": {"message": "Invalid bot token format."}}), 400
+
+    async def run_add_bot():
+        # 1. Get user's existing channel config
+        config_ref = db.collection(f"artifacts/default-daemon-client/users/{user_id}/config").document("telegram")
+        config_doc = config_ref.get()
+        if not config_doc.exists:
+            return jsonify({"error": {"message": "No storage channel found. Complete the main setup first."}}), 404
+
+        config_data = config_doc.to_dict()
+        channel_id = config_data.get("channelId")
+        if not channel_id:
+            return jsonify({"error": {"message": "Channel ID not found in config."}}), 404
+
+        # 2. Extract bot username from token via Telegram API
+        import requests as http_requests
+        try:
+            bot_info_resp = http_requests.get(f"https://api.telegram.org/bot{photos_bot_token}/getMe", timeout=10)
+            bot_info = bot_info_resp.json()
+            if not bot_info.get("ok"):
+                return jsonify({"error": {"message": "Invalid bot token — could not reach the bot."}}), 400
+            photos_bot_username = bot_info["result"]["username"]
+        except Exception as e:
+            return jsonify({"error": {"message": f"Could not validate bot token: {e}"}}), 400
+
+        # 3. Use a userbot to add the photos bot to the channel as admin
+        available_bots = get_available_bots()
+        if not available_bots:
+            return jsonify({"error": {"message": "No available worker bots."}}), 500
+
+        for bot_creds in available_bots:
+            bot_doc_id = bot_creds["doc_id"]
+            client = TelegramClient(StringSession(bot_creds["session_string"]), bot_creds["api_id"], bot_creds["api_hash"])
+            try:
+                await client.start(password=lambda: TELETHON_2FA_PASSWORD)
+
+                # Add the photos bot as admin to the channel
+                await client(
+                    EditAdminRequest(
+                        channel=int(channel_id),
+                        user_id=photos_bot_username,
+                        admin_rights=ChatAdminRights(
+                            post_messages=True,
+                            edit_messages=True,
+                            delete_messages=True,
+                        ),
+                        rank="photos",
+                    )
+                )
+
+                # Start the bot (so it can access the channel)
+                await client.send_message(photos_bot_username, "/start")
+
+                # 4. Save photos bot config to Firestore
+                photos_config_ref = db.collection(
+                    f"artifacts/default-daemon-client/users/{user_id}/config"
+                ).document("photos_telegram")
+                photos_config_ref.set({
+                    "botToken": photos_bot_token,
+                    "botUsername": photos_bot_username,
+                    "channelId": channel_id,
+                    "setupTimestamp": firestore.SERVER_TIMESTAMP,
+                })
+
+                db.collection("userbots").document(bot_doc_id).update({
+                    'last_used': firestore.SERVER_TIMESTAMP, 'status': 'healthy'
+                })
+
+                print(f"✅ Photos bot @{photos_bot_username} added to channel {channel_id} for user {user_id}")
+                return jsonify({"status": "success", "bot_username": photos_bot_username})
+
+            except UserDeactivatedBanError:
+                db.collection("userbots").document(bot_doc_id).update({'is_active': False, 'status': 'banned'})
+                continue
+            except Exception as e:
+                print(f"❌ Failed to add photos bot with worker {bot_doc_id}: {e}")
+                db.collection("userbots").document(bot_doc_id).update({
+                    'status': f'error: {str(e)[:200]}',
+                    'error_count': firestore.Increment(1),
+                })
+                continue
+            finally:
+                if client.is_connected():
+                    await client.disconnect()
+
+        return jsonify({"error": {"message": "All worker bots failed to add the photos bot."}}), 500
+
+    return asyncio.run(run_add_bot())
+
 if __name__ == "__main__":
     print("Starting local development server...")
     app.run(host="0.0.0.0", port=8080, debug=True, use_reloader=False)

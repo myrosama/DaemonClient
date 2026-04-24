@@ -7,6 +7,7 @@ import 'firebase/compat/firestore';
 import { deriveKey, encryptChunk, decryptChunk, generateSalt, generatePassword, bytesToBase64, base64ToBytes } from './crypto.js';
 
 import { getSyncEngine, destroySyncEngine } from './manifest-sync.js';
+import PhotoGalleryView from './PhotoGalleryView.jsx';
 import {
     saveUploadSession, getUploadSession, getIncompleteUploads,
     deleteUploadSession, getAllUploadSessions
@@ -597,7 +598,7 @@ const DashboardView = () => {
             if (sessions.length > 0) {
                 setIncompleteSessions(sessions);
             }
-        }).catch(() => {});
+        }).catch(() => { });
     }, []);
 
     // --- EFFECT: Warn on page unload during uploads ---
@@ -836,7 +837,7 @@ const DashboardView = () => {
                 const refreshed = await syncEngine.getItemsInFolder(currentFolderId);
                 setItems(refreshed);
                 setTotalItems(refreshed.length);
-            } catch {}
+            } catch { }
         });
 
         // Flush pending writes on page unload
@@ -1017,7 +1018,7 @@ const DashboardView = () => {
     };
     const handleLogout = async () => {
         // Flush pending Firestore writes before logout
-        try { await destroySyncEngine(); } catch {}
+        try { await destroySyncEngine(); } catch { }
         // Destroy encryption key from memory
         setEncryptionKey(null);
         setZkeEnabled(false);
@@ -1605,7 +1606,7 @@ const DashboardView = () => {
                                 style={{ background: 'linear-gradient(135deg, rgba(99,102,241,0.2) 0%, rgba(139,92,246,0.2) 100%)', backdropFilter: 'blur(20px)', border: '1px solid rgba(255,255,255,0.1)' }}>
                                 <div className="text-center mb-6">
                                     <div className="w-20 h-20 mx-auto mb-4 rounded-2xl flex items-center justify-center" style={{ background: 'linear-gradient(135deg, #6366f1, #8b5cf6)' }}>
-                                        <svg width="32" height="32" viewBox="0 0 24 24" fill="white"><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55C7.79 13 6 14.79 6 17s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/></svg>
+                                        <svg width="32" height="32" viewBox="0 0 24 24" fill="white"><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55C7.79 13 6 14.79 6 17s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z" /></svg>
                                     </div>
                                     <p className="text-white font-medium text-lg truncate" title={file.fileName}>{file.fileName}</p>
                                     <p className="text-white/40 text-sm mt-1">{(file.fileSize / 1024 / 1024).toFixed(2)} MB • {ext.toUpperCase()}</p>
@@ -1671,11 +1672,11 @@ const DashboardView = () => {
                     </div>
                     <div className="flex items-center gap-2 sm:gap-4">
                         <button onClick={() => { const photosUrl = window.location.hostname === 'localhost' ? '#photos' : 'https://photos.daemonclient.uz'; if (photosUrl.startsWith('http')) window.location.href = photosUrl; else window.__setAppState?.('photos'); }} className="bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white py-2 px-3 rounded-lg text-sm font-semibold flex items-center gap-1.5 transition-all" title="Photos">
-                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2" /><circle cx="8.5" cy="8.5" r="1.5" /><polyline points="21 15 16 10 5 21" /></svg>
                             <span className="hidden sm:inline">Photos</span>
                         </button>
                         <button onClick={() => setIsSettingsOpen(true)} className="text-gray-400 hover:text-white p-1" title="Settings"><SettingsIcon /></button>
-                        <button onClick={handleLogout} className="bg-red-500 hover:bg-red-600 text-white py-2 px-3 sm:px-4 rounded-lg text-sm"><span className="hidden sm:inline">Logout</span><svg className="sm:hidden" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></button>
+                        <button onClick={handleLogout} className="bg-red-500 hover:bg-red-600 text-white py-2 px-3 sm:px-4 rounded-lg text-sm"><span className="hidden sm:inline">Logout</span><svg className="sm:hidden" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><polyline points="16 17 21 12 16 7" /><line x1="21" y1="12" x2="9" y2="12" /></svg></button>
                     </div>
                 </div>
                 <div className="bg-gray-700 p-4 rounded-lg mb-4">
@@ -1706,7 +1707,7 @@ const DashboardView = () => {
                 {incompleteSessions.length > 0 && !isUploading && (
                     <div className="bg-indigo-900/40 border border-indigo-500/30 rounded-lg p-4 mb-3">
                         <div className="flex items-center gap-2 mb-2">
-                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#818cf8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#818cf8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="1 4 1 10 7 10" /><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" /></svg>
                             <span className="text-indigo-300 font-medium text-sm">{incompleteSessions.length} incomplete upload{incompleteSessions.length > 1 ? 's' : ''} found</span>
                         </div>
                         {incompleteSessions.map(session => {
@@ -1806,7 +1807,7 @@ const SetupView = ({ onSetupComplete }) => {
         setError('');
         setIsLoading(true);
         try {
-            const response = await fetch('https://daemonclient.onrender.com/startSetup', {
+            const response = await fetch('https://daemonclient-elnj.onrender.com/startSetup', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ data: { uid: auth.currentUser.uid, email: auth.currentUser.email, } })
@@ -1986,7 +1987,7 @@ const OwnershipView = ({ onOwnershipConfirmed }) => {
             channel: { status: 'pending', message: 'Attempting to transfer channel ownership...' }
         });
         try {
-            const response = await fetch('https://daemonclient.onrender.com/finalizeTransfer', {
+            const response = await fetch('https://daemonclient-elnj.onrender.com/finalizeTransfer', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ data: { uid: auth.currentUser.uid } })
@@ -2433,6 +2434,116 @@ const LandingPage = ({ onLaunchApp = () => console.log("Launch") }) => {
 };
 
 // ============================================================================
+// --- PHOTOS SETUP VIEW (Bot configuration for DaemonPhotos) ---
+// ============================================================================
+const PhotosSetupView = ({ onSetupComplete }) => {
+    const [botToken, setBotToken] = useState('');
+    const [error, setError] = useState('');
+    const [isLoading, setIsLoading] = useState(false);
+    const [statusMessage, setStatusMessage] = useState('');
+    const [step, setStep] = useState(1);
+
+    const handleConnectBot = async () => {
+        if (!botToken.trim()) { setError('Please paste your bot token.'); return; }
+        if (!botToken.includes(':')) { setError('Invalid token format. It should look like: 123456:ABC-DEF...'); return; }
+        setIsLoading(true); setError(''); setStatusMessage('Connecting your bot...');
+        try {
+            const response = await fetch('https://daemonclient-elnj.onrender.com/addPhotosBot', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ data: { uid: auth.currentUser.uid, bot_token: botToken.trim() } })
+            });
+            const result = await response.json();
+            if (!response.ok) throw new Error(result.error?.message || 'Failed to connect bot.');
+            setStatusMessage(`✅ Bot @${result.bot_username} connected! Loading your photo gallery...`);
+            setTimeout(() => onSetupComplete(), 1500);
+        } catch (err) {
+            setStatusMessage('');
+            setError(err.message || 'An unexpected error occurred.');
+        } finally { setIsLoading(false); }
+    };
+
+    return (
+        <div className="min-h-screen bg-gray-900 text-white flex flex-col items-center justify-center p-4 font-sans">
+            <div className="w-full max-w-2xl">
+                <div className="bg-gray-800 rounded-xl shadow-2xl p-6 md:p-8">
+                    <div className="text-center mb-6">
+                        <h1 className="text-3xl font-bold text-indigo-400">📷 DaemonPhotos Setup</h1>
+                        <p className="text-gray-400 mt-2">One more step — create a dedicated bot for your photo gallery.</p>
+                    </div>
+
+                    {/* Step-by-step guide */}
+                    <div className="space-y-4 mb-6">
+                        <div className={`p-4 rounded-lg border ${step >= 1 ? 'bg-gray-900 border-indigo-500' : 'bg-gray-700 border-gray-600'}`}>
+                            <h3 className="font-semibold text-white flex items-center">
+                                <span className="bg-indigo-600 text-white text-xs font-bold w-6 h-6 rounded-full flex items-center justify-center mr-3">1</span>
+                                Open @BotFather on Telegram
+                            </h3>
+                            <p className="text-gray-400 text-sm mt-2 ml-9">
+                                Open <a href="https://t.me/BotFather" target="_blank" rel="noopener noreferrer" className="text-indigo-400 hover:text-indigo-300 underline">@BotFather</a> in Telegram and send <code className="bg-gray-700 px-1.5 py-0.5 rounded text-sm">/newbot</code>
+                            </p>
+                        </div>
+
+                        <div className={`p-4 rounded-lg border ${step >= 2 ? 'bg-gray-900 border-indigo-500' : 'bg-gray-700 border-gray-600'}`}>
+                            <h3 className="font-semibold text-white flex items-center">
+                                <span className="bg-indigo-600 text-white text-xs font-bold w-6 h-6 rounded-full flex items-center justify-center mr-3">2</span>
+                                Name your bot
+                            </h3>
+                            <p className="text-gray-400 text-sm mt-2 ml-9">
+                                Give it any name (e.g., "My Photos Bot") and username (e.g., <code className="bg-gray-700 px-1.5 py-0.5 rounded text-sm">my_photos_12345_bot</code>).
+                            </p>
+                        </div>
+
+                        <div className={`p-4 rounded-lg border ${step >= 3 ? 'bg-gray-900 border-indigo-500' : 'bg-gray-700 border-gray-600'}`}>
+                            <h3 className="font-semibold text-white flex items-center">
+                                <span className="bg-indigo-600 text-white text-xs font-bold w-6 h-6 rounded-full flex items-center justify-center mr-3">3</span>
+                                Copy and paste the bot token below
+                            </h3>
+                            <p className="text-gray-400 text-sm mt-2 ml-9">
+                                BotFather will give you a token that looks like <code className="bg-gray-700 px-1.5 py-0.5 rounded text-sm">123456789:ABCdef...</code>
+                            </p>
+                        </div>
+                    </div>
+
+                    {/* Token input */}
+                    <div className="space-y-4">
+                        <div>
+                            <label htmlFor="photos-bot-token" className="block text-sm font-medium text-gray-300 mb-1">Bot Token</label>
+                            <input
+                                id="photos-bot-token"
+                                type="password"
+                                value={botToken}
+                                onChange={(e) => { setBotToken(e.target.value); setStep(3); setError(''); }}
+                                onFocus={() => setStep(3)}
+                                className="w-full p-3 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-500"
+                                placeholder="Paste your bot token from @BotFather"
+                            />
+                        </div>
+                        {error && <p className="text-red-400 text-sm text-center">{error}</p>}
+                        {statusMessage && (
+                            <div className="p-3 bg-gray-900 rounded-lg flex items-center justify-center">
+                                {isLoading && <LoaderComponent small={true} />}
+                                <p className={`${isLoading ? 'ml-3' : ''} text-indigo-300 text-sm`}>{statusMessage}</p>
+                            </div>
+                        )}
+                        <button
+                            onClick={handleConnectBot}
+                            disabled={isLoading || !botToken.trim()}
+                            className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-700 disabled:cursor-not-allowed text-white font-bold py-3 px-4 rounded-lg text-lg transition-colors"
+                        >
+                            {isLoading ? <LoaderComponent small={true} /> : 'Connect Bot & Continue'}
+                        </button>
+                    </div>
+                </div>
+                <div className="text-center mt-6">
+                    <button onClick={() => auth.signOut()} className="text-sm text-gray-500 hover:text-gray-300">Logout</button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+// ============================================================================
 // --- MAIN APP COMPONENT (The Router) ---
 // ============================================================================
 function App() {
@@ -2461,8 +2572,13 @@ function App() {
                 } else {
                     const configData = docSnap.data();
                     if (configData.ownership_transferred) {
-                        // On photos subdomain, go STRAIGHT to photos — never show dashboard
-                        setAppState(isPhotosDomain ? 'photos' : 'dashboard');
+                        if (isPhotosDomain) {
+                            // Check if user has photos bot configured
+                            const photosDoc = await db.collection(`artifacts/${appIdentifier}/users/${currentUser.uid}/config`).doc('photos_telegram').get();
+                            setAppState(photosDoc.exists ? 'photos' : 'photos_setup');
+                        } else {
+                            setAppState('dashboard');
+                        }
                     } else {
                         setAppState('transfer');
                     }
@@ -2506,12 +2622,11 @@ function App() {
         case 'transfer':
             return <OwnershipView onOwnershipConfirmed={handleOwnershipConfirmed} />;
         case 'dashboard':
-            // If on photos domain but somehow got to dashboard, force photos
-            if (isPhotosDomain) return <div className="text-white text-center mt-20 text-xl">Redirecting to Immich Photos Backend...</div>;
             return <DashboardView />;
+        case 'photos_setup':
+            return <PhotosSetupView onSetupComplete={() => setAppState('photos')} />;
         case 'photos':
-            window.location.href = window.location.hostname === 'localhost' ? 'http://localhost:2283' : 'https://photos.daemonclient.uz';
-            return <div className="text-white text-center mt-20 text-xl">Redirecting to Immich Photos App...</div>;
+            return <PhotoGalleryView />;
         default:
             return <AuthView />;
     }
