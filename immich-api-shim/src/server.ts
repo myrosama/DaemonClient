@@ -78,8 +78,16 @@ function serverAbout() {
 
 function mediaTypes() {
   return {
-    image: ['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/heic', 'image/heif', 'image/avif', 'image/svg+xml'],
+    image: [
+      '.jpg', '.jpeg', '.png', '.webp', '.gif', '.heic', '.heif', '.avif',
+      '.tiff', '.tif', '.bmp', '.svg', '.ico', '.raw', '.cr2', '.nef',
+      '.arw', '.dng', '.raf', '.orf', '.rw2', '.pef', '.srw', '.x3f',
+      '.3fr', '.rwl', '.cap', '.iiq', '.erf', '.nrw', '.jxl',
+    ],
     sidecar: ['.xmp'],
-    video: ['video/mp4', 'video/quicktime', 'video/webm'],
+    video: [
+      '.mp4', '.mov', '.webm', '.avi', '.mkv', '.m4v', '.3gp',
+      '.mpg', '.mpeg', '.wmv', '.flv', '.mts', '.m2ts',
+    ],
   };
 }

@@ -49,6 +49,20 @@ export async function handleAssets(request: Request, env: Env, path: string, url
     return handleBulkUpdate(request, env, uid, idToken);
   }
 
+  // POST /api/assets/bulk-upload-check (duplicate detection)
+  if (path === '/api/assets/bulk-upload-check' && request.method === 'POST') {
+    const body = await request.json() as any;
+    const assets = body.assets || [];
+    return json({
+      results: assets.map((a: any) => ({
+        id: a.id,
+        action: 'accept',
+        assetId: null,
+        isTrashed: false,
+      })),
+    });
+  }
+
   // POST /api/assets (upload)
   if (path === '/api/assets' && request.method === 'POST') {
     return handleUpload(request, env, uid, idToken);
