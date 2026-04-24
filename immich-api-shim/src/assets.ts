@@ -202,6 +202,15 @@ async function handleUpload(request: Request, env: Env, uid: string, idToken: st
     const key = isServerZke ? await getEncryptionKey(env, uid, idToken) : null;
     const isEncryptedByServer = key !== null;
     
+    const file = formData.get('assetData') as File;
+    if (!file) {
+      console.log('Upload failed: No file provided in formData keys:', Array.from(formData.keys()));
+      return json({ message: 'No file provided' }, 400);
+    }
+    
+    const width = parseInt(formData.get('width') as string) || 0;
+    const height = parseInt(formData.get('height') as string) || 0;
+    
     const buffer = await file.arrayBuffer();
     const fileBytes = new Uint8Array(buffer);
     const fileSize = fileBytes.byteLength;
@@ -222,7 +231,12 @@ async function handleUpload(request: Request, env: Env, uid: string, idToken: st
         chunkData = await encryptChunk(chunkData, key);
       }
 
-      const partName = totalChunks === 1 ? fileName : `${fileName}.part${String(i + 1).padStart(3, '0')}`;
+      let partName: string;
+      if (isEncryptedByServer || isClientZke) {
+        partName = totalChunks === 1 ? 'blob.bin' : `blob.bin.part${String(i + 1).padStart(3, '0')}`;
+      } else {
+        partName = totalChunks === 1 ? fileName : `${fileName}.part${String(i + 1).padStart(3, '0')}`;
+      }
 
       const tgForm = new FormData();
       tgForm.append('chat_id', channelId);
@@ -258,7 +272,7 @@ async function handleUpload(request: Request, env: Env, uid: string, idToken: st
     const metadata: Record<string, any> = {
       originalFileName: fileName,
       type: mimeType.startsWith('video') ? 'VIDEO' : 'IMAGE',
-      mimeType, fileSize, width: 0, height: 0, ratio: 1,
+      mimeType, fileSize, width, height, ratio: (width && height) ? (width / height) : 1,
       fileCreatedAt: now, uploadedAt: now, localOffsetHours: 0,
       isFavorite: false, isTrashed: false, visibility: 'timeline',
       encrypted: isServerZke || isClientZke,
@@ -445,3 +459,4 @@ function toAssetResponseDto(photo: any, ownerId: string): any {
     unassignedFaces: [], duplicateId: null, checksum: '', libraryId: null, profileImagePath: '',
   };
 }
+
