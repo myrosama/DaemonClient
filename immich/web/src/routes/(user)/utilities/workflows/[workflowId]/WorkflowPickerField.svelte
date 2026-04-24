@@ -5,7 +5,7 @@
   import { fetchPickerMetadata, type PickerMetadata } from '$lib/services/workflow.service';
   import type { ComponentConfig } from '$lib/utils/workflow';
   import type { AlbumResponseDto, PersonResponseDto } from '@immich/sdk';
-  import {Button, Field, modalManager} from '@immich/ui';
+  import { Button, Field, modalManager } from '@immich/ui';
   import { mdiPlus } from '@mdi/js';
   import { t } from 'svelte-i18n';
 

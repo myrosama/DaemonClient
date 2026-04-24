@@ -1,0 +1,94 @@
+import type { Env } from './index';
+import { json } from './helpers';
+
+export async function handleAuth(request: Request, env: Env, path: string): Promise<Response> {
+  if (path === '/api/auth/login' && request.method === 'POST') {
+    return handleLogin(request, env);
+  }
+  if (path === '/api/auth/logout' && request.method === 'POST') {
+    return handleLogout();
+  }
+  if (path === '/api/auth/status') {
+    return handleAuthStatus(request);
+  }
+  return json({ message: 'Not found' }, 404);
+}
+
+async function handleLogin(request: Request, env: Env): Promise<Response> {
+  const body = await request.json() as any;
+  const { email, password } = body.loginCredentialDto || body;
+
+  // Validate against Firebase Auth REST API
+  const res = await fetch(
+    `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${env.FIREBASE_API_KEY}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password, returnSecureToken: true }),
+    }
+  );
+
+  const data = await res.json() as any;
+  if (data.error) {
+    return json({ message: data.error.message || 'Invalid credentials' }, 401);
+  }
+
+  // Create session token
+  const sessionToken = btoa(JSON.stringify({
+    uid: data.localId,
+    email: data.email,
+    idToken: data.idToken,
+    refreshToken: data.refreshToken,
+    exp: Date.now() + 7 * 24 * 60 * 60 * 1000,
+  }));
+
+  const userResponse = {
+    accessToken: sessionToken,
+    userId: data.localId,
+    userEmail: data.email,
+    name: data.displayName || email.split('@')[0],
+    isAdmin: true,
+    shouldChangePassword: false,
+    isOnboarded: true,
+    profileImagePath: '',
+    quotaSizeInBytes: null,
+    quotaUsageInBytes: null,
+  };
+
+  const response = json(userResponse);
+  // Set cookie for subsequent requests
+  const newHeaders = new Headers(response.headers);
+  newHeaders.set('Set-Cookie',
+    `immich_access_token=${sessionToken}; Path=/; HttpOnly; SameSite=None; Secure; Max-Age=${7 * 24 * 60 * 60}`
+  );
+  return new Response(response.body, { status: 200, headers: newHeaders });
+}
+
+function handleLogout(): Response {
+  const response = json({ successful: true, redirectUri: '/auth/login' });
+  const newHeaders = new Headers(response.headers);
+  newHeaders.set('Set-Cookie', 'immich_access_token=; Path=/; Max-Age=0');
+  return new Response(response.body, { status: 200, headers: newHeaders });
+}
+
+function handleAuthStatus(request: Request): Response {
+  const cookie = request.headers.get('Cookie') || '';
+  const match = cookie.match(/immich_access_token=([^;]+)/);
+  let token = match ? match[1] : null;
+  if (!token) {
+    const auth = request.headers.get('Authorization') || '';
+    if (auth.startsWith('Bearer ')) token = auth.slice(7);
+  }
+  if (!token) return json({ authenticated: false }, 401);
+  try {
+    const data = JSON.parse(atob(token));
+    if (data.exp && data.exp < Date.now()) return json({ authenticated: false }, 401);
+  } catch { return json({ authenticated: false }, 401); }
+
+  return json({
+    authenticated: true,
+    pinCode: false,
+    password: true,
+    isElevated: true,
+  });
+}

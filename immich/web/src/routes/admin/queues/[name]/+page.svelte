@@ -4,7 +4,18 @@
   import { queueManager } from '$lib/managers/queue-manager.svelte';
   import { Route } from '$lib/route';
   import { asQueueItem, getQueueActions } from '$lib/services/queue.service';
-  import {Badge, Card, CardBody, CardHeader, CardTitle, Container, Heading, Icon, MenuItemType, Text} from '@immich/ui';
+  import {
+    Badge,
+    Card,
+    CardBody,
+    CardHeader,
+    CardTitle,
+    Container,
+    Heading,
+    Icon,
+    MenuItemType,
+    Text,
+  } from '@immich/ui';
   import { mdiClockTimeTwoOutline } from '@mdi/js';
   import { onMount } from 'svelte';
   import { t } from 'svelte-i18n';

@@ -8,7 +8,7 @@
   import FormatMessage from '$lib/elements/FormatMessage.svelte';
   import { featureFlagsManager } from '$lib/managers/feature-flags-manager.svelte';
   import { systemConfigManager } from '$lib/managers/system-config-manager.svelte';
-  import {Button, IconButton} from '@immich/ui';
+  import { Button, IconButton } from '@immich/ui';
   import { mdiPlus, mdiTrashCanOutline } from '@mdi/js';
   import { isEqual } from 'lodash-es';
   import { t } from 'svelte-i18n';

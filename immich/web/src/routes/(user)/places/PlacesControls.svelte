@@ -10,7 +10,7 @@
     getSelectedPlacesGroupOption,
     groupOptionsMetadata,
   } from '$lib/utils/places-utils';
-  import {IconButton} from '@immich/ui';
+  import { IconButton } from '@immich/ui';
   import {
     mdiFolderArrowUpOutline,
     mdiFolderRemoveOutline,

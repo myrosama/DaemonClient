@@ -4,7 +4,7 @@
   import VersionAnnouncementModal from '$lib/modals/VersionAnnouncementModal.svelte';
   import type { ReleaseEvent } from '$lib/types';
   import { getReleaseType, semverToName } from '$lib/utils';
-  import {modalManager} from '@immich/ui';
+  import { modalManager } from '@immich/ui';
 
   let modal = $state<{
     onClose: Promise<void>;

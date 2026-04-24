@@ -11,7 +11,7 @@
   import { handlePromiseError } from '$lib/utils';
   import { delay } from '$lib/utils/asset-utils';
   import { navigate } from '$lib/utils/navigation';
-  import {LoadingSpinner} from '@immich/ui';
+  import { LoadingSpinner } from '@immich/ui';
   import { onDestroy } from 'svelte';
   import type { PageData } from './$types';
 

@@ -18,7 +18,7 @@
     VideoCodec,
     VideoContainer,
   } from '@immich/sdk';
-  import {Icon, Link} from '@immich/ui';
+  import { Icon, Link } from '@immich/ui';
   import { mdiHelpCircleOutline } from '@mdi/js';
   import { isEqual, sortBy } from 'lodash-es';
   import { t } from 'svelte-i18n';

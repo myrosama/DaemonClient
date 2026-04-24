@@ -101,7 +101,7 @@
     },
     {
       "target": "photos",
-      "public": "frontend/dist",
+      "public": "immich/web/build",
       "ignore": [
         "firebase.json",
         "**/.*",

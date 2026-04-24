@@ -2,7 +2,7 @@
   import UserPageLayout from '$lib/components/layouts/UserPageLayout.svelte';
   import UserSettingsList from './UserSettingsList.svelte';
   import { getKeyboardActions } from '$lib/services/keyboard.service';
-  import {Container} from '@immich/ui';
+  import { Container } from '@immich/ui';
   import { t } from 'svelte-i18n';
   import type { PageData } from './$types';
 

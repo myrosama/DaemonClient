@@ -5,7 +5,7 @@
   import { handleCreateUserAdmin } from '$lib/services/user-admin.service';
   import { userInteraction } from '$lib/stores/user.svelte';
   import { ByteUnit, convertToBytes } from '$lib/utils/byte-units';
-  import {Field, FormModal, HelperText, Input, PasswordInput, Stack, Switch} from '@immich/ui';
+  import { Field, FormModal, HelperText, Input, PasswordInput, Stack, Switch } from '@immich/ui';
   import { t } from 'svelte-i18n';
 
   let success = $state(false);

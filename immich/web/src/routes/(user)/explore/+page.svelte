@@ -7,7 +7,7 @@
   import { Route } from '$lib/route';
   import { getAssetMediaUrl, getPeopleThumbnailUrl } from '$lib/utils';
   import { AssetMediaSize, type SearchExploreResponseDto } from '@immich/sdk';
-  import {Icon} from '@immich/ui';
+  import { Icon } from '@immich/ui';
   import { mdiHeart } from '@mdi/js';
   import { t } from 'svelte-i18n';
   import type { PageData } from './$types';

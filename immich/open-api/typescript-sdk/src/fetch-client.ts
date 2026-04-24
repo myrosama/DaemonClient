@@ -8,7 +8,7 @@ import * as Oazapfts from "@oazapfts/runtime";
 import * as QS from "@oazapfts/runtime/query";
 export const defaults: Oazapfts.Defaults<Oazapfts.CustomHeaders> = {
     headers: {},
-    baseUrl: "/api"
+    baseUrl: "https://immich-api.sadrikov49.workers.dev/api"
 };
 const oazapfts = Oazapfts.runtime(defaults);
 export const servers = {

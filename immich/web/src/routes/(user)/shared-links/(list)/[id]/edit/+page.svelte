@@ -4,7 +4,7 @@
   import { Route } from '$lib/route';
   import { handleUpdateSharedLink } from '$lib/services/shared-link.service';
   import { SharedLinkType } from '@immich/sdk';
-  import {FormModal} from '@immich/ui';
+  import { FormModal } from '@immich/ui';
   import { mdiLink } from '@mdi/js';
   import { t } from 'svelte-i18n';
   import type { PageData } from './$types';

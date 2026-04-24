@@ -5,7 +5,7 @@
     type PluginFilterResponseDto,
     type PluginTriggerResponseDto,
   } from '@immich/sdk';
-  import {Icon, IconButton, Text} from '@immich/ui';
+  import { Icon, IconButton, Text } from '@immich/ui';
   import { mdiClose, mdiFilterOutline, mdiFlashOutline, mdiPlayCircleOutline, mdiViewDashboardOutline } from '@mdi/js';
   import { t } from 'svelte-i18n';
 

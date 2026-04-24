@@ -7,7 +7,7 @@
   import { getPeopleThumbnailUrl } from '$lib/utils';
   import { handleError } from '$lib/utils/handle-error';
   import { updatePeople, type PersonResponseDto } from '@immich/sdk';
-  import {Button, IconButton, toastManager} from '@immich/ui';
+  import { Button, IconButton, toastManager } from '@immich/ui';
   import { mdiClose, mdiEye, mdiEyeOff, mdiEyeSettings, mdiRestart } from '@mdi/js';
   import { t } from 'svelte-i18n';
   import { SvelteMap } from 'svelte/reactivity';

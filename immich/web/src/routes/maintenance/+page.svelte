@@ -5,7 +5,7 @@
   import { handleSetMaintenanceMode } from '$lib/services/maintenance.service';
   import { maintenanceStore } from '$lib/stores/maintenance.store';
   import { MaintenanceAction } from '@immich/sdk';
-  import {Button, Heading, Link, ProgressBar, Scrollable, Text} from '@immich/ui';
+  import { Button, Heading, Link, ProgressBar, Scrollable, Text } from '@immich/ui';
   import { t } from 'svelte-i18n';
   import type { PageData } from './$types';
 

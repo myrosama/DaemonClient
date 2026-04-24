@@ -3,7 +3,7 @@
   import { Route } from '$lib/route';
   import { handleError } from '$lib/utils/handle-error';
   import { getAllPeople, getPerson, mergePerson, type PersonResponseDto } from '@immich/sdk';
-  import {Button, Icon, IconButton, modalManager, toastManager} from '@immich/ui';
+  import { Button, Icon, IconButton, modalManager, toastManager } from '@immich/ui';
   import { mdiCallMerge, mdiMerge, mdiSwapHorizontal } from '@mdi/js';
   import { onMount } from 'svelte';
   import { t } from 'svelte-i18n';

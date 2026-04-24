@@ -1,6 +1,17 @@
 <script lang="ts">
   import type { WorkflowPayload } from '$lib/services/workflow.service';
-  import {Button, Card, CardBody, CardDescription, CardHeader, CardTitle, Icon, Theme, themeManager, VStack} from '@immich/ui';
+  import {
+    Button,
+    Card,
+    CardBody,
+    CardDescription,
+    CardHeader,
+    CardTitle,
+    Icon,
+    Theme,
+    themeManager,
+    VStack,
+  } from '@immich/ui';
   import { mdiCodeJson } from '@mdi/js';
   import { JSONEditor, Mode, type Content, type OnChangeStatus } from 'svelte-jsoneditor';
 

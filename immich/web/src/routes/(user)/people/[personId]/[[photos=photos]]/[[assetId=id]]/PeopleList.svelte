@@ -4,7 +4,7 @@
   import { t } from 'svelte-i18n';
   import FaceThumbnail from './FaceThumbnail.svelte';
   import { mdiSwapVertical } from '@mdi/js';
-  import {IconButton} from '@immich/ui';
+  import { IconButton } from '@immich/ui';
 
   interface Props {
     screenHeight: number;

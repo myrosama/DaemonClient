@@ -3,7 +3,7 @@
   import { authManager } from '$lib/managers/auth-manager.svelte';
   import { Route } from '$lib/route';
   import { handleCreateLibrary } from '$lib/services/library.service';
-  import {Field, FormModal, HelperText, Select} from '@immich/ui';
+  import { Field, FormModal, HelperText, Select } from '@immich/ui';
   import { mdiFolderSync } from '@mdi/js';
   import { t } from 'svelte-i18n';
   import { type PageData } from './$types';

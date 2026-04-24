@@ -23,7 +23,25 @@
   } from '$lib/services/workflow.service';
   import { handleError } from '$lib/utils/handle-error';
   import type { PluginActionResponseDto, PluginFilterResponseDto, PluginTriggerResponseDto } from '@immich/sdk';
-  import {Button, Card, CardBody, CardDescription, CardHeader, CardTitle, Container, Field, HStack, Icon, Input, Switch, Text, Textarea, VStack, modalManager, toastManager} from '@immich/ui';
+  import {
+    Button,
+    Card,
+    CardBody,
+    CardDescription,
+    CardHeader,
+    CardTitle,
+    Container,
+    Field,
+    HStack,
+    Icon,
+    Input,
+    Switch,
+    Text,
+    Textarea,
+    VStack,
+    modalManager,
+    toastManager,
+  } from '@immich/ui';
   import {
     mdiArrowLeft,
     mdiCodeJson,

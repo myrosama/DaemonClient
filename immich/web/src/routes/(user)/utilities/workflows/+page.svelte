@@ -12,7 +12,20 @@
     type WorkflowPayload,
   } from '$lib/services/workflow.service';
   import { type PluginFilterResponseDto, type WorkflowResponseDto } from '@immich/sdk';
-  import {Button, Card, CardBody, CardDescription, CardHeader, CardTitle, CodeBlock, IconButton, MenuItemType, menuManager, Text, VStack} from '@immich/ui';
+  import {
+    Button,
+    Card,
+    CardBody,
+    CardDescription,
+    CardHeader,
+    CardTitle,
+    CodeBlock,
+    IconButton,
+    MenuItemType,
+    menuManager,
+    Text,
+    VStack,
+  } from '@immich/ui';
   import { mdiClose, mdiDotsVertical } from '@mdi/js';
   import { t } from 'svelte-i18n';
   import { SvelteMap, SvelteSet } from 'svelte/reactivity';

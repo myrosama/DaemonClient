@@ -2,7 +2,7 @@
   import { authManager } from '$lib/managers/auth-manager.svelte';
   import { handleError } from '$lib/utils/handle-error';
   import { updateMyUser } from '@immich/sdk';
-  import {Button, Field, Input, toastManager} from '@immich/ui';
+  import { Button, Field, Input, toastManager } from '@immich/ui';
   import { cloneDeep } from 'lodash-es';
   import { t } from 'svelte-i18n';
   import { createBubbler, preventDefault } from 'svelte/legacy';

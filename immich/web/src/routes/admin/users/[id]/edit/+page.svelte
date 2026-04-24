@@ -5,7 +5,7 @@
   import { handleUpdateUserAdmin } from '$lib/services/user-admin.service';
   import { userInteraction } from '$lib/stores/user.svelte';
   import { ByteUnit, convertFromBytes, convertToBytes } from '$lib/utils/byte-units';
-  import {Field, FormModal, Input, Link, NumberInput, Switch, Text} from '@immich/ui';
+  import { Field, FormModal, Input, Link, NumberInput, Switch, Text } from '@immich/ui';
   import { mdiAccountEditOutline } from '@mdi/js';
   import { t } from 'svelte-i18n';
   import type { PageData } from './$types';

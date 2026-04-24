@@ -15,7 +15,7 @@
     getLibraryFolderActions,
   } from '$lib/services/library.service';
   import { getBytesWithUnit } from '$lib/utils/byte-units';
-  import {Code, CommandPaletteDefaultProvider, Container, Heading, modalManager} from '@immich/ui';
+  import { Code, CommandPaletteDefaultProvider, Container, Heading, modalManager } from '@immich/ui';
   import { mdiCameraIris, mdiChartPie, mdiFilterMinusOutline, mdiFolderOutline, mdiPlayCircle } from '@mdi/js';
   import type { Snippet } from 'svelte';
   import { t } from 'svelte-i18n';

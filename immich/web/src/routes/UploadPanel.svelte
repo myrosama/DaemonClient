@@ -2,7 +2,7 @@
   import { locale } from '$lib/stores/preferences.store';
   import { uploadAssetsStore } from '$lib/stores/upload';
   import { uploadExecutionQueue } from '$lib/utils/file-uploader';
-  import {Icon, IconButton, toastManager} from '@immich/ui';
+  import { Icon, IconButton, toastManager } from '@immich/ui';
   import { mdiCancel, mdiCloudUploadOutline, mdiCog, mdiWindowMinimize } from '@mdi/js';
   import { t } from 'svelte-i18n';
   import { quartInOut } from 'svelte/easing';

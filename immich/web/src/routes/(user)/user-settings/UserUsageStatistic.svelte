@@ -7,7 +7,7 @@
     type AlbumStatisticsResponseDto,
     type AssetStatsResponseDto,
   } from '@immich/sdk';
-  import {Heading, Table, TableBody, TableCell, TableHeader, TableHeading, TableRow} from '@immich/ui';
+  import { Heading, Table, TableBody, TableCell, TableHeader, TableHeading, TableRow } from '@immich/ui';
   import { onMount } from 'svelte';
   import { t } from 'svelte-i18n';
 

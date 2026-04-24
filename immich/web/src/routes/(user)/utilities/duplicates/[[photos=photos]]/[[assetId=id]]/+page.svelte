@@ -13,7 +13,7 @@
   import { handleError } from '$lib/utils/handle-error';
   import type { AssetResponseDto } from '@immich/sdk';
   import { createStack, deleteDuplicates, resolveDuplicates, updateAssets } from '@immich/sdk';
-  import {Button, HStack, IconButton, modalManager, Text, toastManager} from '@immich/ui';
+  import { Button, HStack, IconButton, modalManager, Text, toastManager } from '@immich/ui';
   import {
     mdiCheckOutline,
     mdiChevronLeft,

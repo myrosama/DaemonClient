@@ -8,7 +8,7 @@
   import { locale } from '$lib/stores/preferences.store';
   import { transformToTitleCase } from '$lib/utils';
   import { QueueCommand, type QueueCommandDto, type QueueResponseDto } from '@immich/sdk';
-  import {Icon, IconButton, Link} from '@immich/ui';
+  import { Icon, IconButton, Link } from '@immich/ui';
   import {
     mdiAlertCircle,
     mdiAllInclusive,

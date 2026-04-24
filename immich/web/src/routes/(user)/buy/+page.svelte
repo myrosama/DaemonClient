@@ -6,7 +6,7 @@
   import SupporterBadge from './SupporterBadge.svelte';
   import { authManager } from '$lib/managers/auth-manager.svelte';
   import { Route } from '$lib/route';
-  import {Alert, Container, Stack} from '@immich/ui';
+  import { Alert, Container, Stack } from '@immich/ui';
   import { mdiAlertCircleOutline } from '@mdi/js';
   import { t } from 'svelte-i18n';
   import type { PageData } from './$types';

@@ -12,7 +12,7 @@
     type PartnerResponseDto,
     type UserResponseDto,
   } from '@immich/sdk';
-  import {Button, Icon, IconButton, modalManager, Text} from '@immich/ui';
+  import { Button, Icon, IconButton, modalManager, Text } from '@immich/ui';
   import { mdiCheck, mdiClose } from '@mdi/js';
   import { onMount } from 'svelte';
   import { t } from 'svelte-i18n';

@@ -8,7 +8,19 @@
   import { locale } from '$lib/stores/preferences.store';
   import { getBytesWithUnit } from '$lib/utils/byte-units';
   import { type LibraryResponseDto } from '@immich/sdk';
-  import {CommandPaletteDefaultProvider, Container, ContextMenuButton, Link, MenuItemType, Table, TableBody, TableCell, TableHeader, TableHeading, TableRow} from '@immich/ui';
+  import {
+    CommandPaletteDefaultProvider,
+    Container,
+    ContextMenuButton,
+    Link,
+    MenuItemType,
+    Table,
+    TableBody,
+    TableCell,
+    TableHeader,
+    TableHeading,
+    TableRow,
+  } from '@immich/ui';
   import type { Snippet } from 'svelte';
   import { t } from 'svelte-i18n';
   import { fade } from 'svelte/transition';

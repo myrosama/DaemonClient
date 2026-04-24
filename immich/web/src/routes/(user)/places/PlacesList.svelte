@@ -7,7 +7,7 @@
   import PlacesCardGroup from './PlacesCardGroup.svelte';
 
   import { type PlacesGroup, getSelectedPlacesGroupOption } from '$lib/utils/places-utils';
-  import {Icon} from '@immich/ui';
+  import { Icon } from '@immich/ui';
   import { t } from 'svelte-i18n';
 
   interface Props {

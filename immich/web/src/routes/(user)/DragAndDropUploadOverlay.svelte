@@ -5,7 +5,7 @@
   import { dragAndDropFilesStore } from '$lib/stores/drag-and-drop-files.store';
   import { fileUploadHandler } from '$lib/utils/file-uploader';
   import { isAlbumsRoute, isLockedFolderRoute } from '$lib/utils/navigation';
-  
+  import { Logo } from '@immich/ui';
   import { t } from 'svelte-i18n';
   import { fade } from 'svelte/transition';
 
@@ -185,7 +185,7 @@
     transition:fade={{ duration: 250 }}
     ondragover={onDragOver}
   >
-    <img src="/daemonclient-logo.png" alt="DaemonClient" class="m-16 animate-bounce h-24 w-auto" />
+    <Logo variant="icon" size="giant" class="m-16 animate-bounce" />
     <div class="text-2xl">{$t('drop_files_to_upload')}</div>
   </div>
 {/if}

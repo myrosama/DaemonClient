@@ -1,4 +1,4 @@
-import {commandPaletteManager} from '@immich/ui';
+import { commandPaletteManager } from '@immich/ui';
 import { goto } from '$app/navigation';
 import { serverConfigManager } from '$lib/managers/server-config-manager.svelte';
 import { maintenanceCreateUrl, maintenanceReturnUrl, maintenanceShouldRedirect } from '$lib/utils/maintenance';

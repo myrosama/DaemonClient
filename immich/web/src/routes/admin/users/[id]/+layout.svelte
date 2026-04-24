@@ -13,7 +13,20 @@
   import { createDateFormatter, findLocale } from '$lib/utils';
   import { getBytesWithUnit } from '$lib/utils/byte-units';
   import { type UserAdminResponseDto } from '@immich/sdk';
-  import {Alert, Badge, Code, CommandPaletteDefaultProvider, Container, getByteUnitString, Heading, Icon, MenuItemType, Meter, Stack, Text} from '@immich/ui';
+  import {
+    Alert,
+    Badge,
+    Code,
+    CommandPaletteDefaultProvider,
+    Container,
+    getByteUnitString,
+    Heading,
+    Icon,
+    MenuItemType,
+    Meter,
+    Stack,
+    Text,
+  } from '@immich/ui';
   import {
     mdiAccountOutline,
     mdiCameraIris,

@@ -17,7 +17,7 @@
     isHttpError,
     type LicenseResponseDto,
   } from '@immich/sdk';
-  import {Button, Icon, modalManager} from '@immich/ui';
+  import { Button, Icon, modalManager } from '@immich/ui';
   import { mdiKey } from '@mdi/js';
   import { onMount } from 'svelte';
   import { t } from 'svelte-i18n';

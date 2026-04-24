@@ -25,7 +25,7 @@
   import { featureFlagsManager } from '$lib/managers/feature-flags-manager.svelte';
   import { systemConfigManager } from '$lib/managers/system-config-manager.svelte';
   import { getSystemConfigActions } from '$lib/services/system-config.service';
-  import {Alert, CommandPaletteDefaultProvider, Container} from '@immich/ui';
+  import { Alert, CommandPaletteDefaultProvider, Container } from '@immich/ui';
   import {
     mdiAccountOutline,
     mdiBackupRestore,

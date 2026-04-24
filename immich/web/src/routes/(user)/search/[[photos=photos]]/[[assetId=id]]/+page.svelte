@@ -41,7 +41,7 @@
     searchSmart,
     type SmartSearchDto,
   } from '@immich/sdk';
-  import {ActionButton, CommandPaletteDefaultProvider, Icon, IconButton, LoadingSpinner} from '@immich/ui';
+  import { ActionButton, CommandPaletteDefaultProvider, Icon, IconButton, LoadingSpinner } from '@immich/ui';
   import { mdiArrowLeft, mdiDotsVertical, mdiImageOffOutline, mdiSelectAll } from '@mdi/js';
   import { tick, untrack } from 'svelte';
   import { t } from 'svelte-i18n';

@@ -10,7 +10,7 @@
   import AuthDisableLoginConfirmModal from '$lib/modals/AuthDisableLoginConfirmModal.svelte';
   import { handleError } from '$lib/utils/handle-error';
   import { OAuthTokenEndpointAuthMethod, unlinkAllOAuthAccountsAdmin } from '@immich/sdk';
-  import {Button, Link, modalManager, Text, toastManager} from '@immich/ui';
+  import { Button, Link, modalManager, Text, toastManager } from '@immich/ui';
   import { mdiRestart } from '@mdi/js';
   import { t } from 'svelte-i18n';
   import { fade } from 'svelte/transition';

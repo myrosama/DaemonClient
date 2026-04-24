@@ -23,7 +23,7 @@
     groupOptionsMetadata,
     sortOptionsMetadata,
   } from '$lib/utils/album-utils';
-  import {Button, IconButton, Text} from '@immich/ui';
+  import { Button, IconButton, Text } from '@immich/ui';
   import {
     mdiArrowDownThin,
     mdiArrowUpThin,

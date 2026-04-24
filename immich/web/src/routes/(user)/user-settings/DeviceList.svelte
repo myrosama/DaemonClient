@@ -1,7 +1,7 @@
 <script lang="ts">
   import { handleError } from '$lib/utils/handle-error';
   import { deleteAllSessions, deleteSession, getSessions, type SessionResponseDto } from '@immich/sdk';
-  import {Button, modalManager, Text, toastManager} from '@immich/ui';
+  import { Button, modalManager, Text, toastManager } from '@immich/ui';
   import { t } from 'svelte-i18n';
   import { fade } from 'svelte/transition';
   import DeviceCard from '$lib/components/user-settings-page/DeviceCard.svelte';

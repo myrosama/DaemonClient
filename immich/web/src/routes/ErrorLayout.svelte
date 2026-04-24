@@ -1,6 +1,18 @@
 <script lang="ts">
   import { copyToClipboard } from '$lib/utils';
-  import {Card, CardBody, CardFooter, CardHeader, CardTitle, Icon, IconButton, Link, Text, VStack} from '@immich/ui';
+  import {
+    Card,
+    CardBody,
+    CardFooter,
+    CardHeader,
+    CardTitle,
+    Icon,
+    IconButton,
+    Link,
+    Logo,
+    Text,
+    VStack,
+  } from '@immich/ui';
   import { mdiAlarmLight, mdiCodeTags, mdiContentCopy, mdiMessage, mdiPartyPopper } from '@mdi/js';
   import { t } from 'svelte-i18n';
 
@@ -23,7 +35,7 @@
   <section>
     <div class="flex place-items-center border-b px-6 py-4 dark:border-b-immich-dark-gray">
       <Link href="/photos">
-        <img src="/daemonclient-logo.png" alt="DaemonClient" class="h-8 w-auto" />
+        <Logo variant="inline" />
       </Link>
     </div>
   </section>

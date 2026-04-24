@@ -30,7 +30,7 @@
     type OnUnlink,
   } from '$lib/utils/actions';
   import { AssetVisibility } from '@immich/sdk';
-  import {ActionButton, CloseButton, CommandPaletteDefaultProvider, Icon} from '@immich/ui';
+  import { ActionButton, CloseButton, CommandPaletteDefaultProvider, Icon } from '@immich/ui';
   import { mdiDotsVertical, mdiImageMultiple } from '@mdi/js';
   import { ceil, floor } from 'lodash-es';
   import { t } from 'svelte-i18n';

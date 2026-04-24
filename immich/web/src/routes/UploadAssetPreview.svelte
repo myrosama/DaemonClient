@@ -6,7 +6,7 @@
   import { UploadState } from '$lib/types';
   import { getByteUnitString } from '$lib/utils/byte-units';
   import { fileUploadHandler } from '$lib/utils/file-uploader';
-  import {Icon} from '@immich/ui';
+  import { Icon } from '@immich/ui';
   import {
     mdiAlertCircle,
     mdiCheckCircle,

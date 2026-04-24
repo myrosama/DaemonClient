@@ -1,6 +1,6 @@
 {
   "background_color": "#ffffff",
-  "description": "DaemonClient Photos — Your Secure Cloud Photos with Zero-Knowledge Encryption.",
+  "description": "Self-hosted photo and video backup solution directly from your mobile phone.",
   "dir": "auto",
   "display": "standalone",
   "icons": [
@@ -24,8 +24,8 @@
     }
   ],
   "lang": "en",
-  "name": "DaemonClient Photos",
-  "short_name": "DC Photos",
+  "name": "Immich",
+  "short_name": "Immich",
   "shortcuts": [
     {
       "name": "Photos",

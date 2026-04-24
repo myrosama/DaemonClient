@@ -5,7 +5,7 @@
   import { getAltText } from '$lib/utils/thumbnail-util';
   import { fromISODateTime, fromISODateTimeUTC, toTimelineAsset } from '$lib/utils/timeline-util';
   import { type AssetResponseDto, getAllAlbums } from '@immich/sdk';
-  import {Icon} from '@immich/ui';
+  import { Icon } from '@immich/ui';
   import {
     mdiBookmarkOutline,
     mdiCalendar,

@@ -6,7 +6,7 @@
   import { getPersonActions } from '$lib/services/person.service';
   import { getPeopleThumbnailUrl } from '$lib/utils';
   import { type PersonResponseDto } from '@immich/sdk';
-  import {Icon} from '@immich/ui';
+  import { Icon } from '@immich/ui';
   import {
     mdiAccountMultipleCheckOutline,
     mdiDotsVertical,

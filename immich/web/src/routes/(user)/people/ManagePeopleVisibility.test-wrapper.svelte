@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { PersonResponseDto } from '@immich/sdk';
-  import {TooltipProvider} from '@immich/ui';
+  import { TooltipProvider } from '@immich/ui';
   import ManagePeopleVisibility from './ManagePeopleVisibility.svelte';
 
   interface Props {

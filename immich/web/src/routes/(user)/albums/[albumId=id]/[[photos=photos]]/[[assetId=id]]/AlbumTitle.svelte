@@ -3,7 +3,7 @@
   import { eventManager } from '$lib/managers/event-manager.svelte';
   import { handleError } from '$lib/utils/handle-error';
   import { updateAlbumInfo } from '@immich/sdk';
-  import {Textarea} from '@immich/ui';
+  import { Textarea } from '@immich/ui';
   import { t } from 'svelte-i18n';
   import { fromAction } from 'svelte/attachments';
 

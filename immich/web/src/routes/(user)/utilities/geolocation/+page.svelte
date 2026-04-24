@@ -15,7 +15,7 @@
   import { setQueryValue } from '$lib/utils/navigation';
   import { toTimelineAsset } from '$lib/utils/timeline-util';
   import { AssetVisibility, getAssetInfo, updateAssets } from '@immich/sdk';
-  import {Button, LoadingSpinner, modalManager, Text} from '@immich/ui';
+  import { Button, LoadingSpinner, modalManager, Text } from '@immich/ui';
   import { mdiMapMarkerMultipleOutline, mdiPencilOutline, mdiSelectRemove } from '@mdi/js';
   import { t } from 'svelte-i18n';
   import type { PageData } from './$types';

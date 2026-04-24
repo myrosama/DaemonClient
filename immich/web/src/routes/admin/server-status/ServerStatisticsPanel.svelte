@@ -3,7 +3,18 @@
   import { locale } from '$lib/stores/preferences.store';
   import { getBytesWithUnit } from '$lib/utils/byte-units';
   import type { ServerStatsResponseDto, UserAdminResponseDto } from '@immich/sdk';
-  import {Code, FormatBytes, Icon, Table, TableBody, TableCell, TableHeader, TableHeading, TableRow, Text} from '@immich/ui';
+  import {
+    Code,
+    FormatBytes,
+    Icon,
+    Table,
+    TableBody,
+    TableCell,
+    TableHeader,
+    TableHeading,
+    TableRow,
+    Text,
+  } from '@immich/ui';
   import { mdiCameraIris, mdiChartPie, mdiPlayCircle } from '@mdi/js';
   import { t } from 'svelte-i18n';
 

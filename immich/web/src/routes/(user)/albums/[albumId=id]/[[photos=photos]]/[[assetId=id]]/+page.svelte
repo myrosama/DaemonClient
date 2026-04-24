@@ -52,7 +52,14 @@
   import { handleError } from '$lib/utils/handle-error';
   import { isAlbumsRoute, navigate, type AssetGridRouteSearchParams } from '$lib/utils/navigation';
   import { AlbumUserRole, AssetVisibility, getAlbumInfo, updateAlbumInfo, type AlbumResponseDto } from '@immich/sdk';
-  import {ActionButton, CommandPaletteDefaultProvider, Icon, IconButton, modalManager, toastManager} from '@immich/ui';
+  import {
+    ActionButton,
+    CommandPaletteDefaultProvider,
+    Icon,
+    IconButton,
+    modalManager,
+    toastManager,
+  } from '@immich/ui';
   import {
     mdiAccountEye,
     mdiAccountEyeOutline,

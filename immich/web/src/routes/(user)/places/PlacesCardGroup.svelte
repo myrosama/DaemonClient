@@ -4,7 +4,7 @@
   import { getAssetMediaUrl } from '$lib/utils';
   import { type PlacesGroup, isPlacesGroupCollapsed, togglePlacesGroupCollapsing } from '$lib/utils/places-utils';
   import { AssetMediaSize, type AssetResponseDto } from '@immich/sdk';
-  import {Icon} from '@immich/ui';
+  import { Icon } from '@immich/ui';
   import { mdiChevronRight } from '@mdi/js';
   import { t } from 'svelte-i18n';
 

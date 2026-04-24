@@ -40,7 +40,15 @@
   import { handleError } from '$lib/utils/handle-error';
   import { isExternalUrl } from '$lib/utils/navigation';
   import { AssetVisibility, searchPerson, updatePerson, type PersonResponseDto } from '@immich/sdk';
-  import {ActionButton, CommandPaletteDefaultProvider, ContextMenuButton, LoadingSpinner, modalManager, toastManager, type ActionItem} from '@immich/ui';
+  import {
+    ActionButton,
+    CommandPaletteDefaultProvider,
+    ContextMenuButton,
+    LoadingSpinner,
+    modalManager,
+    toastManager,
+    type ActionItem,
+  } from '@immich/ui';
   import { mdiAccountBoxOutline, mdiAccountMultipleCheckOutline, mdiArrowLeft, mdiDotsVertical } from '@mdi/js';
   import { DateTime } from 'luxon';
   import { onMount } from 'svelte';

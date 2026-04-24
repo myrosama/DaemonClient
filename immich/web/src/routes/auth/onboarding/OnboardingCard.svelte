@@ -1,5 +1,5 @@
 <script lang="ts">
-  import {Button, Icon} from '@immich/ui';
+  import { Button, Icon } from '@immich/ui';
   import { mdiArrowLeft, mdiArrowRight, mdiCheck } from '@mdi/js';
   import type { Snippet } from 'svelte';
   import { t } from 'svelte-i18n';

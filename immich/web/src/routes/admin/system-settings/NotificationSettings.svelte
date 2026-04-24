@@ -11,7 +11,7 @@
   import { handleSystemConfigSave } from '$lib/services/system-config.service';
   import { handleError } from '$lib/utils/handle-error';
   import { sendTestEmailAdmin } from '@immich/sdk';
-  import {Button, toastManager} from '@immich/ui';
+  import { Button, toastManager } from '@immich/ui';
   import { t } from 'svelte-i18n';
   import { fade } from 'svelte/transition';
 

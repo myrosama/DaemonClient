@@ -2,7 +2,7 @@
   import { goto } from '$app/navigation';
   import { Route } from '$lib/route';
   import { handleUpdateLibrary } from '$lib/services/library.service';
-  import {Field, FormModal, Input} from '@immich/ui';
+  import { Field, FormModal, Input } from '@immich/ui';
   import { mdiRenameOutline } from '@mdi/js';
   import { t } from 'svelte-i18n';
   import type { PageData } from '../$types';

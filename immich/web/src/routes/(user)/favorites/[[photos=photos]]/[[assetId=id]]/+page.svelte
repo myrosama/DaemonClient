@@ -19,7 +19,7 @@
   import { authManager } from '$lib/managers/auth-manager.svelte';
   import { TimelineManager } from '$lib/managers/timeline-manager/timeline-manager.svelte';
   import { getAssetBulkActions } from '$lib/services/asset.service';
-  import {ActionButton, CommandPaletteDefaultProvider} from '@immich/ui';
+  import { ActionButton, CommandPaletteDefaultProvider } from '@immich/ui';
   import { mdiDotsVertical } from '@mdi/js';
   import { t } from 'svelte-i18n';
   import type { PageData } from './$types';

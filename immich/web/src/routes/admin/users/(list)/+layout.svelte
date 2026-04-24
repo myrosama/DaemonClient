@@ -6,7 +6,20 @@
   import { locale } from '$lib/stores/preferences.store';
   import { getByteUnitString } from '$lib/utils/byte-units';
   import { searchUsersAdmin, type UserAdminResponseDto } from '@immich/sdk';
-  import {CommandPaletteDefaultProvider, Container, ContextMenuButton, Icon, Link, MenuItemType, Table, TableBody, TableCell, TableHeader, TableHeading, TableRow} from '@immich/ui';
+  import {
+    CommandPaletteDefaultProvider,
+    Container,
+    ContextMenuButton,
+    Icon,
+    Link,
+    MenuItemType,
+    Table,
+    TableBody,
+    TableCell,
+    TableHeader,
+    TableHeading,
+    TableRow,
+  } from '@immich/ui';
   import { mdiInfinity } from '@mdi/js';
   import type { Snippet } from 'svelte';
   import { t } from 'svelte-i18n';

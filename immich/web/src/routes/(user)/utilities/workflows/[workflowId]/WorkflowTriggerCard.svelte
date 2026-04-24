@@ -1,6 +1,6 @@
 <script lang="ts">
   import { PluginTriggerType, type PluginTriggerResponseDto } from '@immich/sdk';
-  import {Icon, Text} from '@immich/ui';
+  import { Icon, Text } from '@immich/ui';
   import { mdiFaceRecognition, mdiFileUploadOutline, mdiLightningBolt } from '@mdi/js';
   import { t } from 'svelte-i18n';
 

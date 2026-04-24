@@ -30,7 +30,7 @@
   import { getAssetMediaUrl, handlePromiseError, memoryLaneTitle } from '$lib/utils';
   import { fromISODateTimeUTC, toTimelineAsset } from '$lib/utils/timeline-util';
   import { AssetMediaSize, AssetTypeEnum, getAssetInfo } from '@immich/sdk';
-  import {ActionButton, IconButton, toastManager} from '@immich/ui';
+  import { ActionButton, IconButton, toastManager } from '@immich/ui';
   import {
     mdiCardsOutline,
     mdiChevronDown,
