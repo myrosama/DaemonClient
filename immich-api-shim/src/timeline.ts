@@ -2,7 +2,7 @@ import type { Env } from './index';
 import { requireAuth, firestoreQuery, json } from './helpers';
 
 export async function handleTimeline(request: Request, env: Env, path: string, url: URL): Promise<Response> {
-  const session = await requireAuth(request);
+  const session = await requireAuth(request, env);
 
   if (path === '/api/timeline/buckets') {
     return getTimeBuckets(env, session.uid, session.idToken, url);

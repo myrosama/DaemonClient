@@ -2,7 +2,7 @@ import type { Env } from './index';
 import { requireAuth, firestoreQuery } from './helpers';
 
 export async function handleSyncStream(request: Request, env: Env): Promise<Response> {
-  const session = await requireAuth(request);
+  const session = await requireAuth(request, env);
 
   let reqBody: any = {};
   if (request.method === 'POST' && request.headers.get('content-type')?.includes('json')) {

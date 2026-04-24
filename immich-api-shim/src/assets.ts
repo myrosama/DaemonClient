@@ -51,7 +51,7 @@ async function getEncryptionKey(env: Env, uid: string, idToken: string): Promise
 }
 
 export async function handleAssets(request: Request, env: Env, path: string, url: URL): Promise<Response> {
-  const session = await requireAuth(request);
+  const session = await requireAuth(request, env);
   const uid = session.uid;
   const idToken = session.idToken;
 
@@ -176,14 +176,23 @@ async function handleBulkUpdate(request: Request, env: Env, uid: string, idToken
 
 async function handleUpload(request: Request, env: Env, uid: string, idToken: string): Promise<Response> {
   const config = await firestoreGet(env, uid, 'config/telegram', idToken);
-  if (!config) return json({ message: 'Telegram not configured' }, 400);
+  if (!config) {
+    console.log('Upload failed: Telegram not configured for uid', uid);
+    return json({ message: 'Telegram not configured' }, 400);
+  }
   const botToken = config.botToken || config.bot_token;
   const channelId = config.channelId || config.channel_id;
-  if (!botToken || !channelId) return json({ message: 'Missing bot/channel config' }, 400);
+  if (!botToken || !channelId) {
+    console.log('Upload failed: Missing bot/channel config for uid', uid);
+    return json({ message: 'Missing bot/channel config' }, 400);
+  }
 
   const formData = await request.formData();
   const file = formData.get('assetData') as File;
-  if (!file) return json({ message: 'No file provided' }, 400);
+  if (!file) {
+    console.log('Upload failed: No file provided in formData keys:', Array.from(formData.keys()));
+    return json({ message: 'No file provided' }, 400);
+  }
 
   try {
     const zkeConfig = await firestoreGet(env, uid, 'config/zke', idToken) || {};

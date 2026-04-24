@@ -41,9 +41,9 @@ exports.immichApiProxy = onRequest({ cors: false }, async (req, res) => {
         const workerRes = await fetch(url.toString(), {
             method: req.method,
             headers,
-            // Pipe the raw request stream directly to preserve multipart/form-data
-            // and avoid memory limits with large files
-            body: ['GET', 'HEAD'].includes(req.method) ? undefined : req,
+            // Use rawBody to preserve the original request body as-is
+            // (JSON.stringify breaks multipart/form-data uploads)
+            body: ['GET', 'HEAD'].includes(req.method) ? undefined : req.rawBody,
         });
 
         const contentType = workerRes.headers.get('content-type') || '';

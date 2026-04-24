@@ -2,7 +2,7 @@ import type { Env } from './index';
 import { requireAuth, firestoreGet, firestoreSet, firestoreQuery, json } from './helpers';
 
 export async function handleUser(request: Request, env: Env, path: string): Promise<Response> {
-  const session = await requireAuth(request);
+  const session = await requireAuth(request, env);
 
   if (path === '/api/users/me' && request.method === 'GET') {
     return getUserMe(env, session);

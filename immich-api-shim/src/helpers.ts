@@ -28,11 +28,32 @@ export function decodeSession(token: string): SessionData | null {
   } catch { return null; }
 }
 
-export async function requireAuth(request: Request): Promise<SessionData> {
+export async function requireAuth(request: Request, env?: Env): Promise<SessionData> {
   const token = getSessionToken(request);
   if (!token) throw new Error('Not authenticated');
   const session = decodeSession(token);
   if (!session) throw new Error('Session expired');
+
+  // Check if Firebase ID token is expired (1 hour TTL)
+  let idTokenExpired = false;
+  try {
+    const payload = JSON.parse(atob(session.idToken.split('.')[1]));
+    if (payload.exp * 1000 < Date.now()) idTokenExpired = true;
+  } catch { idTokenExpired = true; }
+
+  if (idTokenExpired && env?.FIREBASE_API_KEY && session.refreshToken) {
+    const url = `https://securetoken.googleapis.com/v1/token?key=${env.FIREBASE_API_KEY}`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: `grant_type=refresh_token&refresh_token=${session.refreshToken}`
+    });
+    if (res.ok) {
+      const data = await res.json() as any;
+      session.idToken = data.id_token;
+    }
+  }
+
   return session;
 }
 
