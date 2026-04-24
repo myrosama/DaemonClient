@@ -16,6 +16,67 @@ require("dotenv").config();
 admin.initializeApp();
 
 // =========================================================================
+// --- IMMICH API PROXY (same-origin proxy to Cloudflare Worker) ---
+// =========================================================================
+const WORKER_URL = "https://immich-api.sadrikov49.workers.dev";
+
+exports.immichApiProxy = onRequest({ cors: false }, async (req, res) => {
+    const targetUrl = WORKER_URL + req.path;
+    const url = new URL(targetUrl);
+    // Forward query params
+    for (const [key, value] of Object.entries(req.query)) {
+        url.searchParams.set(key, value);
+    }
+
+    const headers = {};
+    // Forward relevant headers
+    if (req.headers['content-type']) headers['Content-Type'] = req.headers['content-type'];
+    if (req.headers['authorization']) headers['Authorization'] = req.headers['authorization'];
+    if (req.headers['cookie']) headers['Cookie'] = req.headers['cookie'];
+    // Forward Origin so the Worker can validate CORS
+    if (req.headers['origin']) headers['Origin'] = req.headers['origin'];
+
+    try {
+        const workerRes = await fetch(url.toString(), {
+            method: req.method,
+            headers,
+            // Use rawBody to preserve the original request body as-is
+            // (JSON.stringify breaks multipart/form-data uploads)
+            body: ['GET', 'HEAD'].includes(req.method) ? undefined : req.rawBody,
+        });
+
+        const contentType = workerRes.headers.get('content-type') || '';
+
+        // Forward Set-Cookie from Worker — strip Domain= so the browser
+        // stores cookies on the hosting domain (photos.daemonclient.uz)
+        // instead of the Worker domain (workers.dev)
+        const setCookie = workerRes.headers.raw()['set-cookie'];
+        if (setCookie) {
+            for (const cookie of setCookie) {
+                const cleaned = cookie.replace(/;\s*Domain=[^;]*/gi, '');
+                res.append('Set-Cookie', cleaned);
+            }
+        }
+
+        res.status(workerRes.status);
+        res.set('Content-Type', contentType);
+
+        if (contentType.includes('image') || contentType.includes('video') || contentType.includes('octet-stream')) {
+            const buffer = await workerRes.buffer();
+            res.send(buffer);
+        } else {
+            const text = await workerRes.text();
+            res.send(text);
+        }
+    } catch (error) {
+        logger.error("immichApiProxy error:", error);
+        res.status(502).json({ message: "Proxy error", error: error.message });
+    }
+});
+
+
+
+// =========================================================================
 // --- CONFIGURATION ---
 // =========================================================================
 const ADMIN_BOT_TOKEN = process.env.TELEGRAM_ADMIN_BOT_TOKEN;

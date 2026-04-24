@@ -88,11 +88,14 @@ async function getStorage(env: Env, session: { uid: string; idToken: string }): 
 
 function defaultPreferences() {
   return {
+    albums: { defaultAssetOrder: 'desc' },
+    cast: { gCastEnabled: false },
     download: { archiveSize: 4294967296, includeEmbeddedVideos: false },
     folders: { enabled: false, sidebarWeb: false },
-    memories: { enabled: false },
-    people: { enabled: false },
+    memories: { enabled: false, duration: 10 },
+    people: { enabled: false, sidebarWeb: false },
     ratings: { enabled: false },
+    sharedLinks: { enabled: false, sidebarWeb: false },
     tags: { enabled: true, sidebarWeb: true },
     emailNotifications: { enabled: false, albumInvite: false, albumUpdate: false },
     purchase: { showSupportBadge: false, hideBuyButtonUntil: new Date(2099, 0).toISOString() },

@@ -3,6 +3,12 @@ import { json } from './helpers';
 
 /** Stub handler for all non-critical endpoints. Returns empty/disabled responses. */
 export async function handleStubs(_request: Request, _env: Env, path: string): Promise<Response> {
+  // Socket.io — Immich frontend tries WebSocket for real-time notifications.
+  // We don't have a WS server, so return a valid socket.io handshake that won't retry aggressively.
+  if (path.startsWith('/api/socket.io')) {
+    return json({ sid: 'stub', upgrades: [], pingInterval: 300000, pingTimeout: 300000 });
+  }
+
   // Albums
   if (path === '/api/albums') return json([]);
   if (path.startsWith('/api/albums/')) return json({ id: '', albumName: '', assets: [], assetCount: 0 });

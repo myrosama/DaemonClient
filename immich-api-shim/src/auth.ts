@@ -56,24 +56,32 @@ async function handleLogin(request: Request, env: Env): Promise<Response> {
   };
 
   const response = json(userResponse);
-  // Set cookie for subsequent requests
+  // Set cookies for subsequent requests
   const newHeaders = new Headers(response.headers);
-  newHeaders.set('Set-Cookie',
-    `immich_access_token=${sessionToken}; Path=/; HttpOnly; SameSite=None; Secure; Max-Age=${7 * 24 * 60 * 60}`
+  newHeaders.append('Set-Cookie',
+    `immich_access_token=${sessionToken}; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=${7 * 24 * 60 * 60}`
   );
-  return new Response(response.body, { status: 200, headers: newHeaders });
+  newHeaders.append('Set-Cookie',
+    `__session=${sessionToken}; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=${7 * 24 * 60 * 60}`
+  );
+  newHeaders.append('Set-Cookie',
+    `immich_is_authenticated=true; Path=/; SameSite=Lax; Secure; Max-Age=${7 * 24 * 60 * 60}`
+  );
+  return new Response(response.body, { status: 201, headers: newHeaders });
 }
 
 function handleLogout(): Response {
   const response = json({ successful: true, redirectUri: '/auth/login' });
   const newHeaders = new Headers(response.headers);
-  newHeaders.set('Set-Cookie', 'immich_access_token=; Path=/; Max-Age=0');
+  newHeaders.append('Set-Cookie', 'immich_access_token=; Path=/; Max-Age=0');
+  newHeaders.append('Set-Cookie', '__session=; Path=/; Max-Age=0');
+  newHeaders.append('Set-Cookie', 'immich_is_authenticated=; Path=/; Max-Age=0');
   return new Response(response.body, { status: 200, headers: newHeaders });
 }
 
 function handleAuthStatus(request: Request): Response {
   const cookie = request.headers.get('Cookie') || '';
-  const match = cookie.match(/immich_access_token=([^;]+)/);
+  const match = cookie.match(/(?:immich_access_token|__session)=([^;]+)/);
   let token = match ? match[1] : null;
   if (!token) {
     const auth = request.headers.get('Authorization') || '';

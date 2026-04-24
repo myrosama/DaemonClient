@@ -109,6 +109,10 @@
       ],
       "rewrites": [
         {
+          "source": "/api/**",
+          "function": "immichApiProxy"
+        },
+        {
           "source": "**",
           "destination": "/index.html"
         }

@@ -4,7 +4,7 @@ import type { Env } from './index';
 
 export function getSessionToken(request: Request): string | null {
   const cookie = request.headers.get('Cookie') || '';
-  const match = cookie.match(/immich_access_token=([^;]+)/);
+  const match = cookie.match(/(?:immich_access_token|__session)=([^;]+)/);
   if (match) return match[1];
   const auth = request.headers.get('Authorization') || '';
   if (auth.startsWith('Bearer ')) return auth.slice(7);
