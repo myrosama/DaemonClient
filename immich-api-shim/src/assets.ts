@@ -148,54 +148,102 @@ async function handleUpload(request: Request, env: Env, uid: string, idToken: st
   const file = formData.get('assetData') as File;
   if (!file) return json({ message: 'No file provided' }, 400);
 
-  const buffer = await file.arrayBuffer();
-
-  // Upload to Telegram
-  const tgForm = new FormData();
-  tgForm.append('chat_id', channelId);
-  tgForm.append('document', new Blob([buffer], { type: file.type }), file.name);
-
-  const tgRes = await fetch(`https://api.telegram.org/bot${botToken}/sendDocument`, {
-    method: 'POST',
-    body: tgForm,
-  });
-  const tgData = await tgRes.json() as any;
-  if (!tgData.ok) return json({ message: 'Telegram upload failed: ' + (tgData.description || '') }, 500);
-
-  const doc = tgData.result.document;
-  const assetId = crypto.randomUUID();
-  const now = new Date().toISOString();
-
-  const metadata: Record<string, any> = {
-    originalFileName: file.name,
-    type: file.type.startsWith('video') ? 'VIDEO' : 'IMAGE',
-    mimeType: file.type,
-    fileSize: buffer.byteLength,
-    width: 0,
-    height: 0,
-    ratio: 1,
-    fileCreatedAt: now,
-    uploadedAt: now,
-    localOffsetHours: 0,
-    isFavorite: false,
-    isTrashed: false,
-    visibility: 'timeline',
-    encrypted: false,
-    thumbhash: null,
-    city: null,
-    country: null,
-    telegramChunks: [{ message_id: tgData.result.message_id, file_id: doc.file_id }],
-    albumIds: [],
-    tags: [],
+  const uploadDocument = async (blob: Blob, name: string) => {
+    const tgForm = new FormData();
+    tgForm.append('chat_id', channelId);
+    tgForm.append('document', blob, name);
+    const tgRes = await fetch(`https://api.telegram.org/bot${botToken}/sendDocument`, {
+      method: 'POST',
+      body: tgForm,
+    });
+    const data = await tgRes.json() as any;
+    if (!data.ok) throw new Error(data.description);
+    return data.result.document.file_id;
   };
 
-  await firestoreSet(env, uid, `photos/${assetId}`, metadata, idToken);
+  const uploadPhoto = async (blob: Blob, name: string) => {
+    const tgForm = new FormData();
+    tgForm.append('chat_id', channelId);
+    tgForm.append('photo', blob, name);
+    const tgRes = await fetch(`https://api.telegram.org/bot${botToken}/sendPhoto`, {
+      method: 'POST',
+      body: tgForm,
+    });
+    const data = await tgRes.json() as any;
+    if (!data.ok) throw new Error(data.description);
+    // Telegram returns multiple sizes. Index 0 is the smallest (usually ~90px), index 1 is ~320px
+    const photos = data.result.photo;
+    const thumbIndex = photos.length > 1 ? 1 : 0;
+    return photos[thumbIndex].file_id;
+  };
 
-  return json({
-    id: assetId,
-    status: 'created',
-    duplicate: false,
-  }, 201);
+  try {
+    const buffer = await file.arrayBuffer();
+    const originalFileId = await uploadDocument(new Blob([buffer], { type: file.type }), file.name);
+
+    let thumbFileId = null;
+    if (file.type.startsWith('image/')) {
+        try {
+            thumbFileId = await uploadPhoto(new Blob([buffer], { type: file.type }), 'thumb.jpg');
+        } catch (e) {
+            console.error("Failed to generate thumb via sendPhoto", e);
+        }
+    }
+
+    const assetId = crypto.randomUUID();
+    const now = new Date().toISOString();
+
+    const metadata: Record<string, any> = {
+      originalFileName: file.name,
+      type: file.type.startsWith('video') ? 'VIDEO' : 'IMAGE',
+      mimeType: file.type,
+      fileSize: buffer.byteLength,
+      width: 0,
+      height: 0,
+      ratio: 1,
+      fileCreatedAt: now,
+      uploadedAt: now,
+      localOffsetHours: 0,
+      isFavorite: false,
+      isTrashed: false,
+      visibility: 'timeline',
+      encrypted: false,
+      telegramOriginalId: originalFileId,
+      telegramThumbId: thumbFileId || originalFileId,
+      telegramChunks: [],
+      albumIds: [],
+      tags: [],
+    };
+
+    await firestoreSet(env, uid, `photos/${assetId}`, metadata, idToken);
+
+    return json({
+      id: assetId,
+      status: 'created',
+      duplicate: false,
+    }, 201);
+  } catch (error: any) {
+    return json({ message: 'Upload failed: ' + error.message }, 500);
+  }
+}
+
+async function fetchTelegramFile(botToken: string, fileId: string, mimeType: string) {
+  const fileRes = await fetch(`https://api.telegram.org/bot${botToken}/getFile?file_id=${fileId}`);
+  const fileData = await fileRes.json() as any;
+  if (!fileData.ok) return json({ message: 'Failed to get file' }, 500);
+
+  const filePath = fileData.result.file_path;
+  const downloadUrl = `https://api.telegram.org/file/bot${botToken}/${filePath}`;
+
+  const imgRes = await fetch(downloadUrl);
+  if (!imgRes.ok) return json({ message: 'Download failed' }, 500);
+
+  return new Response(imgRes.body, {
+    headers: {
+      'Content-Type': mimeType || 'application/octet-stream',
+      'Cache-Control': 'public, max-age=86400, immutable',
+    },
+  });
 }
 
 async function handleThumbnail(env: Env, uid: string, assetId: string, idToken: string, _url: URL): Promise<Response> {
@@ -206,35 +254,31 @@ async function handleThumbnail(env: Env, uid: string, assetId: string, idToken: 
   if (!config) return json({ message: 'No config' }, 500);
   const botToken = config.botToken || config.bot_token;
 
-  const chunks = photo.telegramChunks || [];
-  if (chunks.length === 0) return json({ message: 'No file data' }, 404);
+  let fileId = photo.telegramThumbId;
+  if (!fileId) {
+    fileId = photo.telegramOriginalId || (photo.telegramChunks && photo.telegramChunks.length > 0 ? photo.telegramChunks[0].file_id : null);
+  }
+  if (!fileId) return json({ message: 'No file data' }, 404);
 
-  const fileId = chunks[0].file_id;
-
-  // Get file path from Telegram
-  const fileRes = await fetch(`https://api.telegram.org/bot${botToken}/getFile?file_id=${fileId}`);
-  const fileData = await fileRes.json() as any;
-  if (!fileData.ok) return json({ message: 'Failed to get file' }, 500);
-
-  const filePath = fileData.result.file_path;
-  const downloadUrl = `https://api.telegram.org/file/bot${botToken}/${filePath}`;
-
-  // Download the file
-  const imgRes = await fetch(downloadUrl);
-  if (!imgRes.ok) return json({ message: 'Download failed' }, 500);
-
-  // Return as-is (Cloudflare Workers can't resize images on free plan)
-  // The Immich frontend handles display sizing via CSS
-  return new Response(imgRes.body, {
-    headers: {
-      'Content-Type': photo.mimeType || 'image/jpeg',
-      'Cache-Control': 'public, max-age=86400, immutable',
-    },
-  });
+  const mimeType = photo.telegramThumbId ? 'image/jpeg' : photo.mimeType;
+  return fetchTelegramFile(botToken, fileId, mimeType);
 }
 
 async function handleOriginal(env: Env, uid: string, assetId: string, idToken: string): Promise<Response> {
-  return handleThumbnail(env, uid, assetId, idToken, new URL('http://x'));
+  const photo = await firestoreGet(env, uid, `photos/${assetId}`, idToken);
+  if (!photo) return json({ message: 'Not found' }, 404);
+
+  const config = await firestoreGet(env, uid, 'config/telegram', idToken);
+  if (!config) return json({ message: 'No config' }, 500);
+  const botToken = config.botToken || config.bot_token;
+
+  let fileId = photo.telegramOriginalId;
+  if (!fileId) {
+    fileId = photo.telegramChunks && photo.telegramChunks.length > 0 ? photo.telegramChunks[0].file_id : null;
+  }
+  if (!fileId) return json({ message: 'No file data' }, 404);
+
+  return fetchTelegramFile(botToken, fileId, photo.mimeType);
 }
 
 function toAssetResponseDto(photo: any, ownerId: string): any {

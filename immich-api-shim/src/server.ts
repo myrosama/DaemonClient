@@ -47,9 +47,9 @@ function serverFeatures() {
     ocr: false,
     passwordLogin: true,
     reverseGeocoding: false,
-    search: false,
+    search: true,
     sidecar: false,
-    smartSearch: false,
+    smartSearch: true,
     trash: true,
   };
 }

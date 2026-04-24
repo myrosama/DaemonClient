@@ -183,5 +183,18 @@
     {#if !featureFlagsManager.value.passwordLogin && !featureFlagsManager.value.oauth}
       <Alert color="warning" title={$t('login_has_been_disabled')} />
     {/if}
+
+    <div class="inline-flex w-full items-center justify-center mt-2 mb-2">
+      <hr class="my-4 h-px w-3/4 border-0 bg-gray-200 dark:bg-gray-600" />
+    </div>
+    
+    <div class="flex flex-col items-center justify-center gap-2">
+      <span class="text-sm text-gray-500 dark:text-gray-400">Don't have an account?</span>
+      <a href="https://app.daemonclient.uz" target="_blank" class="w-full">
+        <Button shape="round" size="large" fullWidth color="secondary" class="border-2 border-immich-primary text-immich-primary hover:bg-immich-primary/10">
+          Create Account
+        </Button>
+      </a>
+    </div>
   </Stack>
 </AuthPageLayout>

@@ -16,7 +16,7 @@ const config = {
   preprocess: vitePreprocess(),
   kit: {
     version: {
-      name: process.env.IMMICH_BUILD || Date.now().toString(),
+      name: process.env.IMMICH_BUILD || '1.0.0',
     },
     paths: {
       relative: false,

@@ -13,10 +13,13 @@
   },
   "main": "index.js",
   "dependencies": {
-  "dotenv": "^16.4.5",
-  "firebase-admin": "^12.1.1",
-  "firebase-functions": "^5.0.1",
-  "node-fetch": "^2.7.0"
-},
+    "busboy": "^1.6.0",
+    "dotenv": "^16.4.5",
+    "firebase-admin": "^12.1.1",
+    "firebase-functions": "^5.0.1",
+    "form-data": "^4.0.5",
+    "node-fetch": "^2.7.0",
+    "sharp": "^0.34.5"
+  },
   "private": true
 }

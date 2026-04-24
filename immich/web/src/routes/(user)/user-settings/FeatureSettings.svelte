@@ -67,6 +67,18 @@
   <div in:fade={{ duration: 500 }}>
     <form autocomplete="off" {onsubmit}>
       <div class="sm:ms-4 md:ms-8 flex flex-col">
+        <SettingAccordion key="zke" title="Zero-Knowledge Encryption (ZKE)" subtitle="End-to-end encryption for your photos">
+          <div class="sm:ms-4 mt-4 flex flex-col gap-4">
+            <div class="flex items-center gap-4 bg-gray-100 dark:bg-immich-dark-gray p-4 rounded-lg">
+              <span class="text-immich-primary font-bold">COMING SOON!</span>
+              <span class="text-sm text-gray-600 dark:text-gray-300">Client-side ZKE is currently in development for the Web and Mobile apps.</span>
+            </div>
+            <Field label={$t('enable')}>
+              <Switch checked={false} disabled={true} />
+            </Field>
+          </div>
+        </SettingAccordion>
+
         <SettingAccordion key="albums" title={$t('albums')} subtitle={$t('albums_feature_description')}>
           <div class="sm:ms-4 mt-4 flex flex-col gap-4">
             <Field label={$t('albums_default_sort_order')} description={$t('albums_default_sort_order_description')}>

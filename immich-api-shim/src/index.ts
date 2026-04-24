@@ -4,6 +4,7 @@ import { handleTimeline } from './timeline';
 import { handleAssets } from './assets';
 import { handleUser } from './user';
 import { handleStubs } from './stubs';
+import { handleSyncStream } from './sync';
 
 export interface Env {
   FIREBASE_API_KEY: string;
@@ -50,6 +51,8 @@ export default {
         response = await handleAssets(request, env, path, url);
       } else if (path.startsWith('/api/users')) {
         response = await handleUser(request, env, path);
+      } else if (path === '/api/sync/stream') {
+        response = await handleSyncStream(request, env);
       } else {
         response = await handleStubs(request, env, path);
       }

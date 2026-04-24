@@ -55,12 +55,11 @@ async function handleLogin(request: Request, env: Env): Promise<Response> {
     quotaUsageInBytes: null,
   };
 
-  const response = json(userResponse);
+  const response = json(userResponse, 201);
+  
   // Set cookies for subsequent requests
   const newHeaders = new Headers(response.headers);
-  newHeaders.append('Set-Cookie',
-    `immich_access_token=${sessionToken}; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=${7 * 24 * 60 * 60}`
-  );
+  newHeaders.append('Set-Cookie', `immich_access_token=${sessionToken}; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=${7 * 24 * 60 * 60}`);
   newHeaders.append('Set-Cookie',
     `__session=${sessionToken}; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=${7 * 24 * 60 * 60}`
   );
