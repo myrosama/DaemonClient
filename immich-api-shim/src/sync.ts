@@ -24,14 +24,36 @@ export async function handleSyncStream(request: Request, env: Env): Promise<Resp
         return;
       }
 
+      // Pre-flight UserV1 sync to satisfy SQLite Foreign Key constraints for ownerId
+      send({
+        type: 'UserV1',
+        data: {
+          id: session.uid,
+          email: session.email || 'user@example.com',
+          name: (session.email || 'User').split('@')[0],
+          avatarColor: 'primary',
+          hasProfileImage: false,
+          profileChangedAt: new Date().toISOString(),
+          deletedAt: null
+        },
+        ack: `UserV1|${session.uid}`,
+        ids: [session.uid]
+      });
+
+      const seenChecksums = new Set();
       // Send all assets
       for (const photo of photos) {
         if (!photo) continue;
+        
+        const csum = photo.checksum || photo._id;
+        if (seenChecksums.has(csum)) continue;
+        seenChecksums.add(csum);
+
         const dateStr = photo.fileCreatedAt || photo.uploadedAt || new Date().toISOString();
         const assetData = {
           id: photo._id,
           type: (photo.type || 'IMAGE') === 'IMAGE' ? 'IMAGE' : 'VIDEO',
-          checksum: btoa(photo.checksum || photo._id), // fake base64 checksum
+          checksum: csum,
           fileCreatedAt: dateStr,
           fileModifiedAt: photo.fileModifiedAt || dateStr,
           deletedAt: null,
@@ -39,7 +61,7 @@ export async function handleSyncStream(request: Request, env: Env): Promise<Resp
           height: photo.height || 0,
           isEdited: false,
           isFavorite: photo.isFavorite || false,
-          libraryId: 'default',
+          libraryId: null,
           livePhotoVideoId: null,
           localDateTime: dateStr,
           originalFileName: photo.deviceAssetId || photo._id,

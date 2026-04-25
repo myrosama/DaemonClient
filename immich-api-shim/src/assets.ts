@@ -203,7 +203,8 @@ async function handleUpload(request: Request, env: Env, uid: string, idToken: st
     const key = isServerZke ? await getEncryptionKey(env, uid, idToken) : null;
     const isEncryptedByServer = key !== null;
     
-    // file already retrieved above
+    const checksumFromHeader = request.headers.get('x-immich-checksum');
+    const checksum = (formData.get('checksum') as string) || (formData.get('xImmichChecksum') as string) || checksumFromHeader || '';
     
     // Parse dimensions, fallback to extracting from the file if missing
     const widthFromForm = parseInt(formData.get('width') as string) || 0;
@@ -292,6 +293,7 @@ async function handleUpload(request: Request, env: Env, uid: string, idToken: st
       originalFileName: fileName,
       type: mimeType.startsWith('video') ? 'VIDEO' : 'IMAGE',
       mimeType,
+      checksum,
       fileSize,
       width,
       height,
