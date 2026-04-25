@@ -5,7 +5,7 @@ export async function handleServer(_request: Request, _env: Env, path: string): 
   if (path === '/api/server/config' || path === '/api/server-info/config') return json(serverConfig());
   if (path === '/api/server/features') return json(serverFeatures());
   if (path === '/api/server/about') return json(serverAbout());
-  if (path === '/api/server/version') return json({ major: 1, minor: 115, patch: 0 });
+  if (path === '/api/server/version') return json({ major: 2, minor: 7, patch: 5 });
   if (path === '/api/server/version-history') return json([]);
   if (path === '/api/server/setup') return json({ isInitialized: true, isOnboarded: true });
   if (path === '/api/server/media-types') return json(mediaTypes());

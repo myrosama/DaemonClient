@@ -1,5 +1,6 @@
 import type { Env } from './index';
 import { requireAuth, firestoreGet, firestoreSet, firestoreDelete, json } from './helpers';
+import sizeOf from 'image-size';
 
 // --- ZKE Crypto Implementation ---
 const SALT_LENGTH = 16;
@@ -202,18 +203,19 @@ async function handleUpload(request: Request, env: Env, uid: string, idToken: st
     const key = isServerZke ? await getEncryptionKey(env, uid, idToken) : null;
     const isEncryptedByServer = key !== null;
     
-    const file = formData.get('assetData') as File;
-    if (!file) {
-      console.log('Upload failed: No file provided in formData keys:', Array.from(formData.keys()));
-      return json({ message: 'No file provided' }, 400);
-    }
+    // file already retrieved above
     
-    const width = parseInt(formData.get('width') as string) || 0;
-    const height = parseInt(formData.get('height') as string) || 0;
+    // Parse dimensions, fallback to extracting from the file if missing
+    const widthFromForm = parseInt(formData.get('width') as string) || 0;
+    const heightFromForm = parseInt(formData.get('height') as string) || 0;
+    let width = widthFromForm;
+    let height = heightFromForm;
+    const fileCreatedAt = (formData.get('fileCreatedAt') as string) || new Date().toISOString();
+    const fileModifiedAt = (formData.get('fileModifiedAt') as string) || new Date().toISOString();
+    const durationRaw = formData.get('duration') ? (formData.get('duration') as string) : null;
+    const duration = (!durationRaw || durationRaw === '0' || durationRaw === '0.000' || durationRaw === '0:00:00.00000') ? null : durationRaw;
     
-    const buffer = await file.arrayBuffer();
-    const fileBytes = new Uint8Array(buffer);
-    const fileSize = fileBytes.byteLength;
+    const fileSize = file.size;
     const fileName = file.name;
     const mimeType = file.type;
     const isHeic = /\.(heic|heif)$/i.test(fileName) || mimeType === 'image/heic' || mimeType === 'image/heif';
@@ -225,7 +227,23 @@ async function handleUpload(request: Request, env: Env, uid: string, idToken: st
     for (let i = 0; i < totalChunks; i++) {
       const start = i * CHUNK_SIZE;
       const end = Math.min(start + CHUNK_SIZE, fileSize);
-      let chunkData = fileBytes.slice(start, end).buffer;
+      
+      // CRITICAL: Slice the file instead of reading the whole thing into memory
+      const chunk = file.slice(start, end);
+      let chunkData = await chunk.arrayBuffer();
+
+      if (i === 0 && (width === 0 || height === 0)) {
+        try {
+          const buffer = new Uint8Array(chunkData);
+          const dimensions = sizeOf(buffer);
+          if (dimensions) {
+            width = dimensions.width || 0;
+            height = dimensions.height || 0;
+          }
+        } catch (e) {
+          console.log('Failed to extract dimensions:', e);
+        }
+      }
 
       if (isEncryptedByServer) {
         chunkData = await encryptChunk(chunkData, key);
@@ -251,11 +269,12 @@ async function handleUpload(request: Request, env: Env, uid: string, idToken: st
 
     // Thumbnail generation (skip if encrypted, to preserve zero-knowledge)
     let thumbFileId: string | null = null;
-    if (!isEncryptedByServer && !isClientZke && mimeType.startsWith('image/') && !isHeic) {
+    if (!isEncryptedByServer && !isClientZke && mimeType.startsWith('image/') && !isHeic && fileSize < 20 * 1024 * 1024) {
       try {
+        const fullFile = await file.arrayBuffer();
         const tgForm = new FormData();
         tgForm.append('chat_id', channelId);
-        tgForm.append('photo', new Blob([fileBytes], { type: mimeType }), 'thumb.jpg');
+        tgForm.append('photo', new Blob([fullFile], { type: mimeType }), 'thumb.jpg');
         const tgRes = await fetch(`https://api.telegram.org/bot${botToken}/sendPhoto`, { method: 'POST', body: tgForm });
         const data = await tgRes.json() as any;
         if (data.ok) {
@@ -272,15 +291,29 @@ async function handleUpload(request: Request, env: Env, uid: string, idToken: st
     const metadata: Record<string, any> = {
       originalFileName: fileName,
       type: mimeType.startsWith('video') ? 'VIDEO' : 'IMAGE',
-      mimeType, fileSize, width, height, ratio: (width && height) ? (width / height) : 1,
-      fileCreatedAt: now, uploadedAt: now, localOffsetHours: 0,
-      isFavorite: false, isTrashed: false, visibility: 'timeline',
+      mimeType,
+      fileSize,
+      width,
+      height,
+      ratio: (width && height) ? (width / height) : 1,
+      fileCreatedAt,
+      fileModifiedAt,
+      uploadedAt: now,
+      localOffsetHours: 0,
+      isFavorite: false,
+      isTrashed: false,
+      visibility: 'timeline',
       encrypted: isServerZke || isClientZke,
       encryptionMode: isClientZke ? 'client' : (isServerZke ? 'server' : 'off'),
       telegramOriginalId: singleFileId,
       telegramThumbId: thumbFileId || singleFileId,
-      telegramChunks, totalChunks, isHeic,
-      albumIds: [], tags: [],
+      telegramChunks,
+      totalChunks,
+      isHeic,
+      albumIds: [],
+      tags: [],
+      duration,
+      uploaded: true,
     };
 
     await firestoreSet(env, uid, `photos/${assetId}`, metadata, idToken);
@@ -443,7 +476,7 @@ function toAssetResponseDto(photo: any, ownerId: string): any {
     isOffline: false,
     isEdited: false,
     hasMetadata: true,
-    duration: photo.duration || '0:00:00.00000',
+    duration: (!photo.duration || photo.duration === '0' || photo.duration === '0.000' || photo.duration === '0:00:00.00000') ? null : photo.duration,
     ownerId,
     thumbhash: photo.thumbhash || null,
     visibility: photo.visibility || 'timeline',

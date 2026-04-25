@@ -19,7 +19,7 @@ export async function handleSyncStream(request: Request, env: Env): Promise<Resp
       };
 
       if (reqBody.reset) {
-        send({ type: 'syncResetV1', data: {}, ack: 'syncResetV1|reset' });
+        send({ type: 'SyncResetV1', data: {}, ack: 'SyncResetV1|reset' });
         controller.close();
         return;
       }
@@ -27,38 +27,40 @@ export async function handleSyncStream(request: Request, env: Env): Promise<Resp
       // Send all assets
       for (const photo of photos) {
         if (!photo) continue;
+        const dateStr = photo.fileCreatedAt || photo.uploadedAt || new Date().toISOString();
         const assetData = {
           id: photo._id,
-          deviceAssetId: photo.deviceAssetId || photo._id,
-          deviceId: photo.deviceId || 'daemonclient-web',
           type: (photo.type || 'IMAGE') === 'IMAGE' ? 'IMAGE' : 'VIDEO',
           checksum: btoa(photo.checksum || photo._id), // fake base64 checksum
-          fileCreatedAt: photo.fileCreatedAt || photo.uploadedAt || new Date().toISOString(),
-          fileModifiedAt: photo.fileModifiedAt || photo.uploadedAt || new Date().toISOString(),
-          updatedAt: photo.updatedAt || photo.uploadedAt || new Date().toISOString(),
-          isFavorite: photo.isFavorite || false,
-          isArchived: photo.visibility === 'archive',
-          isExternal: false,
-          isReadOnly: false,
-          isOffline: false,
-          isTrashed: photo.isTrashed || false,
-          thumbhash: photo.thumbhash || null,
+          fileCreatedAt: dateStr,
+          fileModifiedAt: photo.fileModifiedAt || dateStr,
           deletedAt: null,
-          ownerId: session.uid,
+          duration: (!photo.duration || photo.duration === '0' || photo.duration === '0.000' || photo.duration === '0:00:00.00000') ? null : photo.duration,
+          height: photo.height || 0,
+          isEdited: false,
+          isFavorite: photo.isFavorite || false,
           libraryId: 'default',
+          livePhotoVideoId: null,
+          localDateTime: dateStr,
+          originalFileName: photo.deviceAssetId || photo._id,
+          ownerId: session.uid,
+          stackId: null,
+          thumbhash: photo.thumbhash || null,
+          visibility: photo.visibility || 'timeline',
+          width: photo.width || 0,
         };
 
         send({
-          type: 'assetV1',
+          type: 'AssetV1',
           data: assetData,
-          ack: `assetV1|${photo._id}`,
+          ack: `AssetV1|${photo._id}`,
           ids: [photo._id]
         });
       }
 
       // Finally send complete
       const nowId = new Date().toISOString();
-      send({ type: 'syncCompleteV1', data: {}, ack: `syncCompleteV1|${nowId}` });
+      send({ type: 'SyncCompleteV1', data: {}, ack: `SyncCompleteV1|${nowId}` });
 
       controller.close();
     }

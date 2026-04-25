@@ -66,7 +66,7 @@ async function getTimeBucket(env: Env, uid: string, idToken: string, url: URL): 
     id: filtered.map(p => p._id),
     city: filtered.map(p => p.city || null),
     country: filtered.map(p => p.country || null),
-    duration: filtered.map(p => p.duration || null),
+    duration: filtered.map(p => (!p.duration || p.duration === '0' || p.duration === '0.000' || p.duration === '0:00:00.000000') ? null : p.duration),
     fileCreatedAt: filtered.map(p => p.fileCreatedAt || p.uploadedAt || new Date().toISOString()),
     isFavorite: filtered.map(p => p.isFavorite || false),
     isImage: filtered.map(p => (p.type || 'IMAGE') === 'IMAGE'),
