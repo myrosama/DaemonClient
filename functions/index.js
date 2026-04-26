@@ -35,22 +35,19 @@ exports.immichApiProxy = onRequest({ cors: false }, async (req, res) => {
     if (req.headers['cookie']) headers['Cookie'] = req.headers['cookie'];
     // Forward Origin so the Worker can validate CORS
     if (req.headers['origin']) headers['Origin'] = req.headers['origin'];
+    if (req.headers['range']) headers['Range'] = req.headers['range'];
 
     try {
-        logger.info(`Proxying ${req.method} ${url.toString()}, content-type: ${headers['Content-Type']}, rawBody length: ${req.rawBody ? req.rawBody.length : 'undefined'}`);
+        logger.info(`Proxying ${req.method} ${url.toString()}, content-type: ${headers['Content-Type']}, range: ${headers['Range']}`);
         const workerRes = await fetch(url.toString(), {
             method: req.method,
             headers,
-            // Use rawBody to preserve the original request body as-is
-            // (JSON.stringify breaks multipart/form-data uploads)
             body: ['GET', 'HEAD'].includes(req.method) ? undefined : req.rawBody,
         });
 
         const contentType = workerRes.headers.get('content-type') || '';
 
-        // Forward Set-Cookie from Worker — strip Domain= so the browser
-        // stores cookies on the hosting domain (photos.daemonclient.uz)
-        // instead of the Worker domain (workers.dev)
+        // Forward Set-Cookie from Worker
         const setCookie = workerRes.headers.raw()['set-cookie'];
         if (setCookie) {
             for (const cookie of setCookie) {
@@ -58,6 +55,11 @@ exports.immichApiProxy = onRequest({ cors: false }, async (req, res) => {
                 res.append('Set-Cookie', cleaned);
             }
         }
+
+        // Forward Range related headers
+        if (workerRes.headers.get('accept-ranges')) res.set('Accept-Ranges', workerRes.headers.get('accept-ranges'));
+        if (workerRes.headers.get('content-range')) res.set('Content-Range', workerRes.headers.get('content-range'));
+        if (workerRes.headers.get('content-length')) res.set('Content-Length', workerRes.headers.get('content-length'));
 
         res.status(workerRes.status);
         res.set('Content-Type', contentType);

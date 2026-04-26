@@ -72,23 +72,26 @@ export async function handleAssets(request: Request, env: Env, path: string, url
     return json({ mode: zkeConfig.mode, enabled: zkeConfig.enabled });
   }
 
-  if (path.match(/^\/api\/assets\/([^/]+)\/thumbnail$/) && request.method === 'GET') {
-    return handleThumbnail(request, env, uid, path.match(/^\/api\/assets\/([^/]+)\/thumbnail$/)![1], idToken);
+  const idMatch = path.match(/^\/api\/assets?\/([^/]+)/);
+  const resourceId = idMatch ? idMatch[1] : null;
+
+  if (resourceId && path.endsWith('/thumbnail') && request.method === 'GET') {
+    return handleThumbnail(request, env, uid, resourceId, idToken);
   }
-  if (path.match(/^\/api\/assets\/([^/]+)\/original$/) && request.method === 'GET') {
-    return handleOriginal(env, uid, path.match(/^\/api\/assets\/([^/]+)\/original$/)![1], idToken);
+  if (resourceId && (path.endsWith('/original') || path.includes('/file/')) && request.method === 'GET') {
+    return handleOriginal(request, env, uid, resourceId, idToken);
   }
-  if (path.match(/^\/api\/assets\/([^/]+)\/video\/playback$/) && request.method === 'GET') {
-    return handleOriginal(env, uid, path.match(/^\/api\/assets\/([^/]+)\/video\/playback$/)![1], idToken);
+  if (resourceId && path.endsWith('/video/playback') && request.method === 'GET') {
+    return handleOriginal(request, env, uid, resourceId, idToken);
   }
-  if (path.match(/^\/api\/assets\/([^/]+)$/) && request.method === 'GET') {
-    return handleAssetInfo(env, uid, path.match(/^\/api\/assets\/([^/]+)$/)![1], idToken);
+  if (resourceId && path.match(/^\/api\/assets?\/([^/]+)$/) && request.method === 'GET') {
+    return handleAssetInfo(env, uid, resourceId, idToken);
   }
-  if (path.match(/^\/api\/assets\/([^/]+)$/) && request.method === 'PUT') {
-    return handleUpdateAsset(request, env, uid, path.match(/^\/api\/assets\/([^/]+)$/)![1], idToken);
+  if (resourceId && path.match(/^\/api\/assets?\/([^/]+)$/) && request.method === 'PUT') {
+    return handleUpdateAsset(request, env, uid, resourceId, idToken);
   }
-  if (path.match(/^\/api\/assets\/([^/]+)\/view$/)) {
-    return json({ id: path.match(/^\/api\/assets\/([^/]+)\/view$/)![1] });
+  if (resourceId && path.endsWith('/view')) {
+    return json({ id: resourceId });
   }
   if (path === '/api/assets' && request.method === 'DELETE') {
     return handleDeleteAssets(request, env, uid, idToken);
@@ -100,7 +103,7 @@ export async function handleAssets(request: Request, env: Env, path: string, url
     const body = await request.json() as any;
     return json({ results: (body.assets || []).map((a: any) => ({ id: a.id, action: 'accept', assetId: null, isTrashed: false })) });
   }
-  if (path === '/api/assets' && request.method === 'POST') {
+  if ((path === '/api/assets' || path === '/api/asset/upload') && request.method === 'POST') {
     return handleUpload(request, env, uid, idToken);
   }
   if (path === '/api/assets/upload-plan' && request.method === 'POST') {
@@ -602,7 +605,7 @@ async function handleThumbnail(request: Request, env: Env, uid: string, assetId:
   }
 }
 
-async function handleOriginal(env: Env, uid: string, assetId: string, idToken: string): Promise<Response> {
+async function handleOriginal(request: Request, env: Env, uid: string, assetId: string, idToken: string): Promise<Response> {
   const photo = await firestoreGet(env, uid, `photos/${assetId}`, idToken);
   if (!photo) return json({ message: 'Not found' }, 404);
 
@@ -614,6 +617,9 @@ async function handleOriginal(env: Env, uid: string, assetId: string, idToken: s
   const isClientZke = photo.encryptionMode === 'client';
   const key = isServerZke ? await getEncryptionKey(env, uid, idToken) : null;
 
+  const rangeHeader = request.headers.get('Range');
+  const totalSize = photo.fileSize || 0;
+  
   if (photo.telegramChunks && photo.telegramChunks.length > 0) {
     const chunks = [...photo.telegramChunks].sort((a, b) => a.index - b.index);
     
@@ -651,13 +657,23 @@ async function handleOriginal(env: Env, uid: string, assetId: string, idToken: s
       }
     });
 
-    return new Response(stream, {
-      headers: {
-        'Content-Type': photo.mimeType || 'application/octet-stream',
-        'Content-Length': photo.fileSize?.toString() || '',
-        'Cache-Control': 'public, max-age=86400, immutable',
-      }
-    });
+    const headers: Record<string, string> = {
+      'Content-Type': photo.mimeType || 'application/octet-stream',
+      'Accept-Ranges': 'bytes',
+      'Cache-Control': 'public, max-age=86400, immutable',
+    };
+
+    if (rangeHeader && totalSize > 0) {
+        const parts = rangeHeader.replace(/bytes=/, "").split("-");
+        const start = parseInt(parts[0], 10);
+        const end = parts[1] ? parseInt(parts[1], 10) : totalSize - 1;
+        headers['Content-Range'] = `bytes ${start}-${end}/${totalSize}`;
+        headers['Content-Length'] = (end - start + 1).toString();
+        return new Response(stream, { status: 206, headers });
+    } else {
+        headers['Content-Length'] = totalSize.toString() || '';
+        return new Response(stream, { status: 200, headers });
+    }
   }
 
   let fileId = photo.telegramOriginalId;
@@ -677,20 +693,40 @@ async function handleOriginal(env: Env, uid: string, assetId: string, idToken: s
   const downloadUrl = `https://api.telegram.org/file/bot${botToken}/${fileData.result.file_path}`;
   const imgRes = await fetch(downloadUrl);
   
+  const headers: Record<string, string> = {
+    'Content-Type': photo.mimeType || 'application/octet-stream',
+    'Accept-Ranges': 'bytes',
+    'Cache-Control': 'public, max-age=86400, immutable',
+  };
+
+  if (rangeHeader && totalSize > 0) {
+      const parts = rangeHeader.replace(/bytes=/, "").split("-");
+      const start = parseInt(parts[0], 10);
+      const end = parts[1] ? parseInt(parts[1], 10) : totalSize - 1;
+      headers['Content-Range'] = `bytes ${start}-${end}/${totalSize}`;
+      headers['Content-Length'] = (end - start + 1).toString();
+  } else {
+      headers['Content-Length'] = totalSize.toString() || '';
+  }
+  
   if (isServerZke && key) {
       let data = await imgRes.arrayBuffer();
       data = await decryptChunk(data, key);
-      return new Response(data, {
-          headers: { 'Content-Type': photo.mimeType || 'application/octet-stream' }
-      });
+      
+      if (rangeHeader && totalSize > 0) {
+          const parts = rangeHeader.replace(/bytes=/, "").split("-");
+          const start = parseInt(parts[0], 10);
+          const end = parts[1] ? parseInt(parts[1], 10) : totalSize - 1;
+          const sliced = data.slice(start, end + 1);
+          return new Response(sliced, { status: 206, headers });
+      }
+      return new Response(data, { headers });
   }
 
-  return new Response(imgRes.body, {
-    headers: {
-      'Content-Type': photo.mimeType || 'application/octet-stream',
-      'Cache-Control': 'public, max-age=86400, immutable',
-    },
-  });
+  if (rangeHeader && totalSize > 0) {
+      return new Response(imgRes.body, { status: 206, headers });
+  }
+  return new Response(imgRes.body, { status: 200, headers });
 }
 
 function toAssetResponseDto(photo: any, ownerId: string): any {
