@@ -3,6 +3,7 @@ import { handleServer } from './server';
 import { handleTimeline } from './timeline';
 import { handleAssets } from './assets';
 import { handleUser } from './user';
+import { handleAlbums } from './albums';
 import { handleStubs } from './stubs';
 import { handleSyncStream } from './sync';
 import { handlePolicy } from './policy';
@@ -58,6 +59,8 @@ export default {
         response = await handleAssets(request, env, path, url);
       } else if (path.startsWith('/api/users')) {
         response = await handleUser(request, env, path);
+      } else if (path.startsWith('/api/albums')) {
+        response = await handleAlbums(request, env, path);
       } else if (path === '/api/policy/flags') {
         response = await handleFeatureFlags(request, env, path);
       } else if (path.startsWith('/api/policy')) {

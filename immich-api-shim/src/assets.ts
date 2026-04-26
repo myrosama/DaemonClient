@@ -482,7 +482,8 @@ async function handleThumbnail(request: Request, env: Env, uid: string, assetId:
   const botToken = config.botToken || config.bot_token;
 
   const cache = (caches as any).default;
-  const cachedRes = await cache.match(request);
+  const cacheKey = `${request.url}`;
+  const cachedRes = await cache.match(cacheKey);
   if (cachedRes) return cachedRes;
 
   const isServerZke = photo.encryptionMode === 'server' || (photo.encrypted === true && !photo.encryptionMode);
@@ -492,7 +493,14 @@ async function handleThumbnail(request: Request, env: Env, uid: string, assetId:
   let mimeType = photo.mimeType;
   if (photo.isHeic) mimeType = 'image/heic';
   const servingThumb = !wantsHighQuality && fileId === photo.telegramThumbId;
-  if (servingThumb && !isServerZke && !isClientZke) mimeType = 'image/jpeg';
+  // Telegram auto-generated thumbnails are always JPEG
+  if (servingThumb && !isServerZke && !isClientZke) {
+    mimeType = 'image/jpeg';
+  }
+  // For HEIC originals, serve as image/heic but add fallback hint
+  if (photo.isHeic && !servingThumb) {
+    mimeType = 'image/heic';
+  }
 
   const queue = getTgQueue(botToken);
   try {
@@ -518,11 +526,13 @@ async function handleThumbnail(request: Request, env: Env, uid: string, assetId:
       headers: {
         'Content-Type': mimeType || 'application/octet-stream',
         'Cache-Control': 'public, max-age=31536000, immutable',
+        'CDN-Cache-Control': 'public, max-age=31536000',
+        'Cloudflare-CDN-Cache-Control': 'public, max-age=31536000'
       }
     });
 
     if (finalResponse.status === 200) {
-      env.waitUntil?.(cache.put(request, finalResponse.clone()));
+      env.waitUntil?.(cache.put(cacheKey, finalResponse.clone()));
     }
     return finalResponse;
   } finally {
@@ -673,11 +683,17 @@ function toAssetResponseDto(photo: any, ownerId: string): any {
   const id = photo.id;
   const mimeType = photo.mimeType || 'image/jpeg';
   const isHeic = photo.isHeic || mimeType === 'image/heic' || mimeType === 'image/heif';
-  const reportedMime = isHeic ? 'image/jpeg' : mimeType;
+  // Report HEIC as HEIC so frontend can handle conversion
+  const reportedMime = mimeType;
+
+  // Detect video type
+  const isVideo = mimeType.startsWith('video/') ||
+                  photo.type === 'VIDEO' ||
+                  photo.duration;
 
   return {
     id,
-    type: photo.type || 'IMAGE',
+    type: isVideo ? 'VIDEO' : 'IMAGE',
     originalFileName: photo.originalFileName || 'unknown',
     originalMimeType: reportedMime,
     originalPath: `/upload/${id}`,
@@ -777,6 +793,6 @@ class RequestQueue {
 
 const tgQueues: Record<string, RequestQueue> = {};
 function getTgQueue(botToken: string): RequestQueue {
-  if (!tgQueues[botToken]) tgQueues[botToken] = new RequestQueue(3);
+  if (!tgQueues[botToken]) tgQueues[botToken] = new RequestQueue(10);
   return tgQueues[botToken];
 }

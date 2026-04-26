@@ -8,10 +8,32 @@ import { handleCancel } from './request';
 const WORKER_URL = 'https://immich-api.sadrikov49.workers.dev';
 const ASSET_BINARY_REGEX = /^\/api\/assets\/[a-f0-9-]+\/(original|thumbnail)/;
 const API_REGEX = /^\/api\//;
+const TOKEN_CACHE_KEY = 'https://dc-internal/auth-token';
 
 const sw = globalThis as unknown as ServiceWorkerGlobalScope;
 
-let storedToken: string | null = null;
+let cachedToken: string | null = null;
+
+async function persistToken(token: string | null) {
+  cachedToken = token;
+  const cache = await caches.open('dc-auth-v1');
+  if (token) {
+    await cache.put(TOKEN_CACHE_KEY, new Response(token));
+  } else {
+    await cache.delete(TOKEN_CACHE_KEY);
+  }
+}
+
+async function loadToken(): Promise<string | null> {
+  if (cachedToken) return cachedToken;
+  const cache = await caches.open('dc-auth-v1');
+  const res = await cache.match(TOKEN_CACHE_KEY);
+  if (res) {
+    cachedToken = await res.text();
+    return cachedToken;
+  }
+  return null;
+}
 
 const handleActivate = (event: ExtendableEvent) => {
   event.waitUntil(sw.clients.claim());
@@ -21,8 +43,9 @@ const handleInstall = (event: ExtendableEvent) => {
   event.waitUntil(sw.skipWaiting());
 };
 
-function extractToken(request: Request): string | null {
-  if (storedToken) return storedToken;
+async function extractToken(request: Request): Promise<string | null> {
+  const persisted = await loadToken();
+  if (persisted) return persisted;
   const cookie = request.headers.get('cookie') || '';
   const match = cookie.match(/(?:immich_access_token|__session)=([^;]+)/);
   if (match) return match[1];
@@ -42,7 +65,7 @@ async function directWorkerFetch(request: Request, cacheable: boolean, pathname:
   }
 
   const headers: Record<string, string> = {};
-  const token = extractToken(request);
+  const token = await extractToken(request);
   if (token) headers['Authorization'] = `Bearer ${token}`;
   if (request.headers.get('range')) headers['Range'] = request.headers.get('range')!;
   if (request.headers.get('content-type')) headers['Content-Type'] = request.headers.get('content-type')!;
@@ -58,20 +81,18 @@ async function directWorkerFetch(request: Request, cacheable: boolean, pathname:
     body,
   });
 
-  // Intercept login response to capture the token
   if (pathname === '/api/auth/login' && response.ok) {
     const cloned = response.clone();
     try {
       const data = await cloned.json() as any;
       if (data.accessToken) {
-        storedToken = data.accessToken;
+        await persistToken(data.accessToken);
       }
     } catch {}
   }
 
-  // Clear token on logout
   if (pathname === '/api/auth/logout') {
-    storedToken = null;
+    await persistToken(null);
   }
 
   if (cacheable && response.ok) {
@@ -99,13 +120,12 @@ const handleFetch = (event: FetchEvent): void => {
   }
 };
 
-// Also accept token via postMessage from the page
 sw.addEventListener('message', (event) => {
   if (event.data?.type === 'SET_TOKEN') {
-    storedToken = event.data.token;
+    persistToken(event.data.token);
   }
   if (event.data?.type === 'CLEAR_TOKEN') {
-    storedToken = null;
+    persistToken(null);
   }
 });
 
