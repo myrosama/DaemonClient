@@ -61,7 +61,28 @@ export async function handleAssets(request: Request, env: Env, path: string, url
   try {
   if (path === '/api/assets/zke-status' && request.method === 'GET') {
     const zkeConfig = await firestoreGet(env, uid, 'config/zke', idToken) || {};
-    return json({ mode: zkeConfig.mode, enabled: zkeConfig.enabled });
+    return json({ mode: zkeConfig.mode || 'off', enabled: !!zkeConfig.enabled });
+  }
+
+  if (path === '/api/assets/zke-toggle' && request.method === 'POST') {
+    const body = await request.json() as any;
+    const mode = body.mode === 'server' ? 'server' : 'off';
+    const enabled = mode === 'server';
+
+    if (enabled) {
+      const existing = await firestoreGet(env, uid, 'config/zke', idToken);
+      if (existing?.password && existing?.salt) {
+        await firestoreSet(env, uid, 'config/zke', { mode, enabled }, idToken);
+      } else {
+        const salt = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(16))));
+        const password = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))));
+        await firestoreSet(env, uid, 'config/zke', { mode, enabled, password, salt }, idToken);
+      }
+    } else {
+      await firestoreSet(env, uid, 'config/zke', { mode, enabled }, idToken);
+    }
+
+    return json({ mode, enabled });
   }
 
   let resourceId: string | null = null;
@@ -333,6 +354,41 @@ async function handleUpload(request: Request, env: Env, uid: string, idToken: st
         telegramChunks.push({ index: i, message_id: msg.message_id, file_id: fileId });
       }
     }
+
+    // Auto-generate thumbnail for image uploads via sendPhoto
+    if (!telegramThumbId && mimeType.startsWith('image/') && !isHeic && file) {
+      try {
+        const thumbSource = file.slice(0, Math.min(file.size, CHUNK_SIZE));
+        let thumbData = await thumbSource.arrayBuffer();
+        if (isEncryptedByServer && key) {
+          // For encrypted mode, send the raw image as photo, then encrypt the resulting thumb
+          // We need the unencrypted bytes for Telegram to generate a thumbnail
+        }
+        // Only attempt sendPhoto with unencrypted data so Telegram can parse the image
+        if (!isEncryptedByServer) {
+          const thumbForm = new FormData();
+          thumbForm.append('chat_id', channelId);
+          thumbForm.append('photo', new Blob([thumbData], { type: mimeType }), fileName);
+
+          const queue = getTgQueue(botToken);
+          await queue.acquire();
+          try {
+            const thumbRes = await fetch(`https://api.telegram.org/bot${botToken}/sendPhoto`, {
+              method: 'POST', body: thumbForm,
+            });
+            const thumbJson = await thumbRes.json() as any;
+            if (thumbJson.ok && thumbJson.result.photo?.length > 0) {
+              const sizes = thumbJson.result.photo;
+              telegramThumbId = sizes[0].file_id;
+            }
+          } finally {
+            queue.release();
+          }
+        }
+      } catch (e) {
+        console.log('[Upload] Thumbnail generation failed (non-fatal):', e);
+      }
+    }
     }
 
     const assetId = crypto.randomUUID();
@@ -395,8 +451,20 @@ async function handleChunkManifest(env: Env, uid: string, assetId: string, idTok
 async function handleThumbnail(request: Request, env: Env, uid: string, assetId: string, idToken: string): Promise<Response> {
   const photo = await firestoreGet(env, uid, `photos/${assetId}`, idToken);
   if (!photo) return json({ message: 'Not found' }, 404);
-  
-  const fileId = photo.telegramThumbId || photo.telegramOriginalId;
+
+  const url = new URL(request.url);
+  const sizeParam = (url.searchParams.get('size') || '').toLowerCase();
+  const wantsHighQuality = sizeParam === 'preview' || sizeParam === 'fullsize';
+
+  // For preview/fullsize: serve the original (single-chunk only; multi-chunk falls back to thumb)
+  // For thumbnail: serve the small thumb
+  const isMultiChunk = photo.telegramChunks && photo.telegramChunks.length > 1;
+  let fileId: string;
+  if (wantsHighQuality && !isMultiChunk) {
+    fileId = photo.telegramOriginalId || photo.telegramThumbId;
+  } else {
+    fileId = photo.telegramThumbId || photo.telegramOriginalId;
+  }
   if (!fileId) return json({ message: 'No file data' }, 404);
 
   const config = await firestoreGet(env, uid, 'config/telegram', idToken);
@@ -413,7 +481,8 @@ async function handleThumbnail(request: Request, env: Env, uid: string, assetId:
   const key = isServerZke ? await getEncryptionKey(env, uid, idToken) : null;
   let mimeType = photo.mimeType;
   if (photo.isHeic) mimeType = 'image/heic';
-  if (photo.telegramThumbId && !isServerZke && !isClientZke) mimeType = 'image/jpeg';
+  const servingThumb = !wantsHighQuality && fileId === photo.telegramThumbId;
+  if (servingThumb && !isServerZke && !isClientZke) mimeType = 'image/jpeg';
 
   const queue = getTgQueue(botToken);
   try {
