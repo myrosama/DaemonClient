@@ -13,6 +13,9 @@
         ],
         "photos": [
           "daemonclient-photos"
+        ],
+        "accounts": [
+          "daemonclient-accounts"
         ]
       }
     }

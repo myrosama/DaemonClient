@@ -286,7 +286,22 @@ async function handleUpload(request: Request, env: Env, uid: string, idToken: st
     
     const fileSize = file ? file.size : parseInt(formData.get('fileSize') as string) || 0;
     const fileName = file ? file.name : (formData.get('fileName') as string) || 'unknown';
-    const mimeType = file ? file.type : (formData.get('mimeType') as string) || 'application/octet-stream';
+    let mimeType = file ? file.type : (formData.get('mimeType') as string) || 'application/octet-stream';
+
+    // Fix MIME type detection based on file extension if missing or generic
+    if (!mimeType || mimeType === 'application/octet-stream' || mimeType === 'video/quicktime') {
+      const ext = fileName.toLowerCase().split('.').pop();
+      if (ext === 'mp4') mimeType = 'video/mp4';
+      else if (ext === 'mov' || ext === 'qt') mimeType = 'video/quicktime';
+      else if (ext === 'avi') mimeType = 'video/x-msvideo';
+      else if (ext === 'webm') mimeType = 'video/webm';
+      else if (ext === 'mkv') mimeType = 'video/x-matroska';
+      else if (ext === 'heic' || ext === 'heif') mimeType = 'image/heic';
+      else if (ext === 'jpg' || ext === 'jpeg') mimeType = 'image/jpeg';
+      else if (ext === 'png') mimeType = 'image/png';
+      else if (ext === 'webp') mimeType = 'image/webp';
+    }
+
     const isHeic = /\.(heic|heif)$/i.test(fileName) || mimeType === 'image/heic' || mimeType === 'image/heif';
 
     let telegramChunks: Array<{ index: number; message_id: number; file_id: string }> = [];
@@ -342,18 +357,57 @@ async function handleUpload(request: Request, env: Env, uid: string, idToken: st
       const queue = getTgQueue(botToken);
       await queue.acquire();
       let tgRes: Response;
+      let tgData: any;
       try {
         tgRes = await fetch(`https://api.telegram.org/bot${botToken}/sendDocument`, {
           method: 'POST', body: tgFormData,
         });
+        tgData = await tgRes.json() as any;
+      } catch (err: any) {
+        queue.release();
+        console.error(`[Upload] Telegram API error on chunk ${i}:`, err);
+
+        // Cleanup: delete already-uploaded chunks
+        for (const chunk of telegramChunks) {
+          try {
+            await fetch(`https://api.telegram.org/bot${botToken}/deleteMessage`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ chat_id: channelId, message_id: chunk.message_id }),
+            });
+          } catch { /* best effort cleanup */ }
+        }
+
+        return json({
+          message: 'Telegram upload failed',
+          error: err.message,
+          chunksUploaded: i,
+          totalChunks
+        }, 500);
       } finally {
         queue.release();
       }
-      
-      const tgData = await tgRes.json() as any;
+
       if (!tgData.ok) {
         console.error('Telegram upload failed:', tgData);
-        return json({ message: 'Telegram upload failed', details: tgData }, 500);
+
+        // Cleanup: delete already-uploaded chunks
+        for (const chunk of telegramChunks) {
+          try {
+            await fetch(`https://api.telegram.org/bot${botToken}/deleteMessage`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ chat_id: channelId, message_id: chunk.message_id }),
+            });
+          } catch { /* best effort cleanup */ }
+        }
+
+        return json({
+          message: 'Telegram upload failed',
+          details: tgData,
+          chunksUploaded: i,
+          totalChunks
+        }, 500);
       }
       
       const msg = tgData.result;
@@ -365,35 +419,50 @@ async function handleUpload(request: Request, env: Env, uid: string, idToken: st
       }
     }
 
-    // Auto-generate thumbnail for image uploads via sendPhoto
-    if (!telegramThumbId && mimeType.startsWith('image/') && !isHeic && file) {
+    // Auto-generate thumbnail for images and videos via sendPhoto/sendVideo
+    // Skip for encrypted files (Telegram can't parse them) and multi-chunk files
+    const isVideo = mimeType.startsWith('video/') || duration;
+    const isImage = mimeType.startsWith('image/');
+    const isSingleChunk = totalChunks === 1;
+
+    if (!telegramThumbId && (isImage || isVideo) && !isEncryptedByServer && isSingleChunk && file) {
       try {
         const thumbSource = file.slice(0, Math.min(file.size, CHUNK_SIZE));
-        let thumbData = await thumbSource.arrayBuffer();
-        if (isEncryptedByServer && key) {
-          // For encrypted mode, send the raw image as photo, then encrypt the resulting thumb
-          // We need the unencrypted bytes for Telegram to generate a thumbnail
-        }
-        // Only attempt sendPhoto with unencrypted data so Telegram can parse the image
-        if (!isEncryptedByServer) {
-          const thumbForm = new FormData();
-          thumbForm.append('chat_id', channelId);
-          thumbForm.append('photo', new Blob([thumbData], { type: mimeType }), fileName);
+        const thumbData = await thumbSource.arrayBuffer();
 
-          const queue = getTgQueue(botToken);
-          await queue.acquire();
-          try {
-            const thumbRes = await fetch(`https://api.telegram.org/bot${botToken}/sendPhoto`, {
+        const thumbForm = new FormData();
+        thumbForm.append('chat_id', channelId);
+
+        const queue = getTgQueue(botToken);
+        await queue.acquire();
+        try {
+          let thumbRes: Response;
+          if (isVideo) {
+            // Use sendVideo for videos to get automatic thumbnail
+            thumbForm.append('video', new Blob([thumbData], { type: mimeType }), fileName);
+            thumbRes = await fetch(`https://api.telegram.org/bot${botToken}/sendVideo`, {
+              method: 'POST', body: thumbForm,
+            });
+            const thumbJson = await thumbRes.json() as any;
+            if (thumbJson.ok && thumbJson.result.video?.thumb?.file_id) {
+              telegramThumbId = thumbJson.result.video.thumb.file_id;
+              console.log(`[Upload] Generated video thumbnail for ${fileName}`);
+            }
+          } else {
+            // Use sendPhoto for images
+            thumbForm.append('photo', new Blob([thumbData], { type: mimeType }), fileName);
+            thumbRes = await fetch(`https://api.telegram.org/bot${botToken}/sendPhoto`, {
               method: 'POST', body: thumbForm,
             });
             const thumbJson = await thumbRes.json() as any;
             if (thumbJson.ok && thumbJson.result.photo?.length > 0) {
               const sizes = thumbJson.result.photo;
               telegramThumbId = sizes[0].file_id;
+              console.log(`[Upload] Generated image thumbnail for ${fileName}`);
             }
-          } finally {
-            queue.release();
           }
+        } finally {
+          queue.release();
         }
       } catch (e) {
         console.log('[Upload] Thumbnail generation failed (non-fatal):', e);
@@ -422,6 +491,13 @@ async function handleUpload(request: Request, env: Env, uid: string, idToken: st
     };
 
     await firestoreSet(env, uid, `photos/${assetId}`, photo, idToken);
+
+    // Auto-link live photos: if this is a video, check for matching HEIC within 2 seconds
+    // If this is a HEIC, check for matching MOV
+    if (mimeType.startsWith('video/') || isHeic) {
+      env.waitUntil?.(linkLivePhoto(env, uid, assetId, photo, idToken));
+    }
+
     return json(toAssetResponseDto(photo, uid));
   } catch (e: any) {
     console.error('Upload handler error:', e);
@@ -473,9 +549,20 @@ async function handleThumbnail(request: Request, env: Env, uid: string, assetId:
   if (wantsHighQuality && !isMultiChunk) {
     fileId = photo.telegramOriginalId || photo.telegramThumbId;
   } else {
+    // Always fallback to original if no thumb available (for videos/encrypted files)
     fileId = photo.telegramThumbId || photo.telegramOriginalId;
   }
-  if (!fileId) return json({ message: 'No file data' }, 404);
+
+  // For multi-chunk files without thumbnails, we can't serve them as thumbnails
+  // Return 404 instead of serving a broken stream
+  if (!fileId) {
+    console.log(`[Thumbnail] No file ID for asset ${assetId}`);
+    return json({ message: 'No file data' }, 404);
+  }
+  if (isMultiChunk && !photo.telegramThumbId && !wantsHighQuality) {
+    console.log(`[Thumbnail] Multi-chunk asset ${assetId} has no thumbnail`);
+    return json({ message: 'Thumbnail not available for multi-chunk asset' }, 404);
+  }
 
   const config = await firestoreGet(env, uid, 'config/telegram', idToken);
   if (!config) return json({ message: 'No config' }, 500);
@@ -614,8 +701,18 @@ async function handleOriginal(request: Request, env: Env, uid: string, assetId: 
 
     if (rangeHeader && totalSize > 0) {
         const parts = rangeHeader.replace(/bytes=/, "").split("-");
-        const start = parseInt(parts[0], 10);
+        const start = parseInt(parts[0], 10) || 0;
         const end = parts[1] ? parseInt(parts[1], 10) : totalSize - 1;
+
+        // Validate range header
+        if (isNaN(start) || isNaN(end) || start < 0 || end >= totalSize || start > end) {
+          return json({
+            message: 'Invalid range',
+            requested: `${start}-${end}`,
+            totalSize
+          }, 416);
+        }
+
         headers['Content-Range'] = `bytes ${start}-${end}/${totalSize}`;
         headers['Content-Length'] = (end - start + 1).toString();
         return new Response(stream, { status: 206, headers });
@@ -665,8 +762,18 @@ async function handleOriginal(request: Request, env: Env, uid: string, assetId: 
 
   if (rangeHeader && totalSize > 0 && data) {
       const parts = rangeHeader.replace(/bytes=/, "").split("-");
-      const start = parseInt(parts[0], 10);
+      const start = parseInt(parts[0], 10) || 0;
       const end = parts[1] ? parseInt(parts[1], 10) : totalSize - 1;
+
+      // Validate range header
+      if (isNaN(start) || isNaN(end) || start < 0 || end >= totalSize || start > end) {
+        return json({
+          message: 'Invalid range',
+          requested: `${start}-${end}`,
+          totalSize
+        }, 416);
+      }
+
       headers['Content-Range'] = `bytes ${start}-${end}/${totalSize}`;
       headers['Content-Length'] = (end - start + 1).toString();
       const sliced = data.slice(start, end + 1);
@@ -719,7 +826,7 @@ function toAssetResponseDto(photo: any, ownerId: string): any {
       state: null, country: photo.country || null, description: photo.description || null,
       projectionType: null, rating: null,
     },
-    people: [], tags: [], stack: null, livePhotoVideoId: null,
+    people: [], tags: [], stack: null, livePhotoVideoId: photo.livePhotoVideoId || null,
     unassignedFaces: [], duplicateId: null, checksum: '', libraryId: null, profileImagePath: '',
     // --- DaemonClient Drive Metadata ---
     telegramFileId: photo.telegramThumbId || photo.telegramOriginalId,
@@ -795,4 +902,64 @@ const tgQueues: Record<string, RequestQueue> = {};
 function getTgQueue(botToken: string): RequestQueue {
   if (!tgQueues[botToken]) tgQueues[botToken] = new RequestQueue(10);
   return tgQueues[botToken];
+}
+
+// --- Live Photo Linking ---
+async function linkLivePhoto(env: Env, uid: string, assetId: string, photo: any, idToken: string) {
+  try {
+    const isVideo = photo.mimeType.startsWith('video/');
+    const isHeic = photo.isHeic || photo.mimeType === 'image/heic';
+
+    // CRITICAL FIX: Query ONLY recent uploads (within last 5 seconds) using Firestore filter
+    // This prevents O(n) query that loads ALL photos
+    const fiveSecondsAgo = new Date(Date.now() - 5000).toISOString();
+    const recentUploads = await firestoreQuery(
+      env, uid, 'photos', idToken,
+      'uploadedAt', 'DESCENDING', 20, // Only get last 20 uploads
+      [{ field: 'uploadedAt', op: 'GREATER_THAN_OR_EQUAL', value: fiveSecondsAgo }]
+    );
+
+    // Filter out current asset
+    const candidatesForLinking = recentUploads.filter((p: any) => p._id !== assetId);
+
+    if (isVideo) {
+      // Look for matching HEIC image
+      const matchingImage = candidatesForLinking.find((p: any) => {
+        if (!p.isHeic && p.mimeType !== 'image/heic') return false;
+        // Check if timestamps are within 2 seconds
+        const timeDiff = Math.abs(
+          new Date(p.fileCreatedAt).getTime() - new Date(photo.fileCreatedAt).getTime()
+        );
+        return timeDiff < 2000;
+      });
+
+      if (matchingImage) {
+        // Update the image to point to this video
+        await firestoreSet(env, uid, `photos/${matchingImage._id}`, {
+          livePhotoVideoId: assetId
+        }, idToken);
+        console.log(`[LivePhoto] Linked image ${matchingImage._id} to video ${assetId}`);
+      }
+    } else if (isHeic) {
+      // Look for matching MOV video
+      const matchingVideo = candidatesForLinking.find((p: any) => {
+        if (!p.mimeType?.startsWith('video/')) return false;
+        if (!p.duration || parseFloat(p.duration) > 5) return false; // Live photos are short
+        const timeDiff = Math.abs(
+          new Date(p.fileCreatedAt).getTime() - new Date(photo.fileCreatedAt).getTime()
+        );
+        return timeDiff < 2000;
+      });
+
+      if (matchingVideo) {
+        // Update this image to point to the video
+        await firestoreSet(env, uid, `photos/${assetId}`, {
+          livePhotoVideoId: matchingVideo._id
+        }, idToken);
+        console.log(`[LivePhoto] Linked image ${assetId} to video ${matchingVideo._id}`);
+      }
+    }
+  } catch (e) {
+    console.error('[LivePhoto] Link failed:', e);
+  }
 }

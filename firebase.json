@@ -113,6 +113,7 @@
           "destination": "/index.html"
         }
       ],
+      "cleanUrls": true,
       "headers": [
         {
           "source": "/sw.js",
@@ -123,6 +124,32 @@
             }
           ]
         },
+        {
+          "source": "/index.html",
+          "headers": [
+            {
+              "key": "Cache-Control",
+              "value": "no-cache, no-store, must-revalidate"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "target": "accounts",
+      "public": "accounts-portal/dist",
+      "ignore": [
+        "firebase.json",
+        "**/.*",
+        "**/node_modules/**"
+      ],
+      "rewrites": [
+        {
+          "source": "**",
+          "destination": "/index.html"
+        }
+      ],
+      "headers": [
         {
           "source": "/index.html",
           "headers": [

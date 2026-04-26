@@ -106,15 +106,23 @@ export async function requireAuth(request: Request, env?: Env): Promise<SessionD
           tokenCache.set(cacheKey, { token: newToken, expires: Date.now() + 3500000 });
           return newToken;
         })
-        .finally(() => {
+        .catch((err) => {
+          // CRITICAL: Remove failed refresh from cache so next request can retry
           refreshInFlight.delete(cacheKey);
+          throw err;
+        })
+        .finally(() => {
+          // Clean up successful refreshes after a delay
+          setTimeout(() => refreshInFlight.delete(cacheKey), 1000);
         });
       refreshInFlight.set(cacheKey, promise);
     }
 
     try {
       session.idToken = await refreshInFlight.get(cacheKey)!;
-    } catch {
+    } catch (err) {
+      // Don't cache the failure - let next request retry
+      refreshInFlight.delete(cacheKey);
       throw new Error('Session expired');
     }
   }
@@ -153,11 +161,26 @@ export async function firestoreGet(env: Env, uid: string, path: string, idToken:
   const doc = await res.json();
   const value = parseFirestoreDoc(doc);
   
-  const ttl = path.startsWith('config') ? 300000 : 60000;
+  const ttl = path.startsWith('config') ? 300000 : 30000; // 30s for queries, 5min for config
   firestoreCache.set(cacheKey, { value, expires: now + ttl });
-  if (firestoreCache.size > 10000) {
+
+  // Proactive LRU eviction: keep cache size bounded
+  if (firestoreCache.size > 5000) {
+    // Delete oldest 1000 entries (Map maintains insertion order)
     const toDelete = Array.from(firestoreCache.keys()).slice(0, 1000);
     toDelete.forEach(k => firestoreCache.delete(k));
+  }
+
+  // Lazy expiry cleanup: periodically remove expired entries
+  if (Math.random() < 0.01) { // 1% of requests trigger cleanup
+    const expiredKeys: string[] = [];
+    for (const [key, entry] of firestoreCache.entries()) {
+      if (entry.expires < now) {
+        expiredKeys.push(key);
+        if (expiredKeys.length > 500) break; // Limit cleanup work
+      }
+    }
+    expiredKeys.forEach(k => firestoreCache.delete(k));
   }
   
   return value;
@@ -165,7 +188,8 @@ export async function firestoreGet(env: Env, uid: string, path: string, idToken:
 
 export async function firestoreQuery(
   env: Env, uid: string, collection: string, idToken: string,
-  orderBy?: string, direction?: string, limit?: number
+  orderBy?: string, direction?: string, limit?: number,
+  whereFilters?: Array<{ field: string; op: string; value: any }>
 ): Promise<any[]> {
   const parent = `projects/${env.FIREBASE_PROJECT_ID}/databases/(default)/documents/artifacts/${env.APP_IDENTIFIER}/users/${uid}`;
   const collId = collection;
@@ -174,6 +198,23 @@ export async function firestoreQuery(
       from: [{ collectionId: collId }],
     }
   };
+
+  // Add where filters
+  if (whereFilters && whereFilters.length > 0) {
+    body.structuredQuery.where = {
+      compositeFilter: {
+        op: 'AND',
+        filters: whereFilters.map(f => ({
+          fieldFilter: {
+            field: { fieldPath: f.field },
+            op: f.op,
+            value: toFirestoreValue(f.value)
+          }
+        }))
+      }
+    };
+  }
+
   if (orderBy) {
     body.structuredQuery.orderBy = [{
       field: { fieldPath: orderBy },

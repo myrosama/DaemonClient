@@ -8,6 +8,7 @@ import { handleStubs } from './stubs';
 import { handleSyncStream } from './sync';
 import { handlePolicy } from './policy';
 import { handleFeatureFlags } from './feature-flags';
+import { handleSearch } from './search';
 
 export interface Env {
   FIREBASE_API_KEY: string;
@@ -67,6 +68,8 @@ export default {
         response = await handlePolicy(request, env, path);
       } else if (path === '/api/sync/stream') {
         response = await handleSyncStream(request, env);
+      } else if (path.startsWith('/api/search')) {
+        response = await handleSearch(request, env, path);
       } else {
         response = await handleStubs(request, env, path);
       }

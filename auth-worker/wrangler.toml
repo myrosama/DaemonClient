@@ -1,0 +1,9 @@
+name = "daemonclient-auth"
+main = "src/index.ts"
+compatibility_date = "2024-11-25"
+
+[vars]
+FIREBASE_PROJECT_ID = "daemonclient-c0625"
+
+# Set these as secrets: wrangler secret put SESSION_SECRET
+# wrangler secret put FIREBASE_API_KEY

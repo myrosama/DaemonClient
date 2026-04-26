@@ -14,7 +14,7 @@ const pendingRequests = new Map<string, PendingRequest>();
 const getRequestKey = (request: URL | Request): string => (request instanceof URL ? request.href : request.url);
 
 const CANCELATION_MESSAGE = 'Request canceled by application';
-const CLEANUP_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+const CLEANUP_TIMEOUT_MS = 30 * 1000; // 30 seconds (reduced from 5 minutes to prevent stale cache)
 
 export const handleFetch = (request: URL | Request): Promise<Response> => {
   const requestKey = getRequestKey(request);

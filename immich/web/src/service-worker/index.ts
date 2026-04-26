@@ -61,7 +61,9 @@ async function directWorkerFetch(request: Request, cacheable: boolean, pathname:
   if (cacheable) {
     const cache = await caches.open('dc-assets-v1');
     const cached = await cache.match(workerUrl);
-    if (cached) return cached;
+    if (cached) {
+      return cached;
+    }
   }
 
   const headers: Record<string, string> = {};
@@ -75,11 +77,37 @@ async function directWorkerFetch(request: Request, cacheable: boolean, pathname:
     body = await request.arrayBuffer();
   }
 
-  const response = await fetch(workerUrl, {
-    method: request.method,
-    headers,
-    body,
-  });
+  let response: Response;
+  try {
+    response = await fetch(workerUrl, {
+      method: request.method,
+      headers,
+      body,
+    });
+  } catch (err) {
+    // Network error - try to serve from cache
+    if (cacheable) {
+      const cache = await caches.open('dc-assets-v1');
+      const cached = await cache.match(workerUrl);
+      if (cached) {
+        console.log('[SW] Network error, serving from cache:', pathname);
+        return cached;
+      }
+    }
+
+    // No cache available - return 503 with retry header
+    console.error('[SW] Network error, no cache available:', err);
+    return new Response(
+      JSON.stringify({ message: 'Service temporarily unavailable', error: 'Network error' }),
+      {
+        status: 503,
+        headers: {
+          'Content-Type': 'application/json',
+          'Retry-After': '10'
+        }
+      }
+    );
+  }
 
   if (pathname === '/api/auth/login' && response.ok) {
     const cloned = response.clone();
