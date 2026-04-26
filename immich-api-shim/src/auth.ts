@@ -1,6 +1,24 @@
 import type { Env } from './index';
 import { json } from './helpers';
 
+async function hmacSign(payload: string, scope: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(`session:${scope}`),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  );
+  const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(payload));
+  return btoa(String.fromCharCode(...new Uint8Array(sig)));
+}
+
+async function createSignedSessionToken(data: Record<string, unknown>, scope: string): Promise<string> {
+  const payload = btoa(JSON.stringify(data));
+  const sig = await hmacSign(payload, scope);
+  return `${payload}.${sig}`;
+}
+
 export async function handleAuth(request: Request, env: Env, path: string): Promise<Response> {
   if (path === '/api/auth/login' && request.method === 'POST') {
     return handleLogin(request, env);
@@ -34,13 +52,13 @@ async function handleLogin(request: Request, env: Env): Promise<Response> {
   }
 
   // Create session token
-  const sessionToken = btoa(JSON.stringify({
+  const sessionToken = await createSignedSessionToken({
     uid: data.localId,
     email: data.email,
     idToken: data.idToken,
     refreshToken: data.refreshToken,
     exp: Date.now() + 7 * 24 * 60 * 60 * 1000,
-  }));
+  }, env.APP_IDENTIFIER || 'default');
 
   const userResponse = {
     accessToken: sessionToken,
@@ -88,7 +106,8 @@ function handleAuthStatus(request: Request): Response {
   }
   if (!token) return json({ authenticated: false }, 401);
   try {
-    const data = JSON.parse(atob(token));
+    const payload = token.includes('.') ? token.split('.')[0] : token;
+    const data = JSON.parse(atob(payload));
     if (data.exp && data.exp < Date.now()) return json({ authenticated: false }, 401);
   } catch { return json({ authenticated: false }, 401); }
 

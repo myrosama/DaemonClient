@@ -1,7 +1,7 @@
 import type { Env } from './index';
 import { json } from './helpers';
 
-export async function handleServer(_request: Request, _env: Env, path: string): Promise<Response> {
+export async function handleServer(request: Request, env: Env, path: string): Promise<Response> {
   if (path === '/api/server/config' || path === '/api/server-info/config') return json(serverConfig());
   if (path === '/api/server/features') return json(serverFeatures());
   if (path === '/api/server/about') return json(serverAbout());
@@ -15,7 +15,32 @@ export async function handleServer(_request: Request, _env: Env, path: string): 
   if (path === '/api/server/theme') return json({ customCss: '' });
   if (path === '/api/server/onboarding') return json({});
   if (path === '/api/server/ping') return json({ res: 'pong' });
+  if (path === '/api/server/telegram-config') return handleTelegramConfig(request, env);
+  if (path === '/api/server/zke-config') return handleZkeConfig(request, env);
   return json({ message: 'Not found' }, 404);
+}
+
+async function handleZkeConfig(request: Request, env: Env): Promise<Response> {
+  const { requireAuth, firestoreGet } = await import('./helpers');
+  const session = await requireAuth(request, env);
+  const config = await firestoreGet(env, session.uid, 'config/zke', session.idToken);
+  return json({
+    enabled: config?.enabled || config?.mode === 'server',
+    password: config?.password,
+    salt: config?.salt,
+    mode: config?.mode
+  });
+}
+
+async function handleTelegramConfig(request: Request, env: Env): Promise<Response> {
+  const { requireAuth, firestoreGet } = await import('./helpers');
+  const session = await requireAuth(request, env);
+  const config = await firestoreGet(env, session.uid, 'config/telegram', session.idToken);
+  return json({
+    botToken: config?.botToken || config?.bot_token,
+    channelId: config?.channelId || config?.channel_id,
+    proxyUrl: env.TELEGRAM_PROXY,
+  });
 }
 
 function serverConfig() {
@@ -41,16 +66,17 @@ function serverFeatures() {
     email: false,
     facialRecognition: false,
     importFaces: false,
-    map: false,
+    map: true,
     oauth: false,
     oauthAutoLaunch: false,
     ocr: false,
     passwordLogin: true,
-    reverseGeocoding: false,
+    reverseGeocoding: true,
     search: true,
     sidecar: false,
     smartSearch: true,
     trash: true,
+    videos: true,
   };
 }
 

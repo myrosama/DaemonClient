@@ -5,6 +5,8 @@ import { handleAssets } from './assets';
 import { handleUser } from './user';
 import { handleStubs } from './stubs';
 import { handleSyncStream } from './sync';
+import { handlePolicy } from './policy';
+import { handleFeatureFlags } from './feature-flags';
 
 export interface Env {
   FIREBASE_API_KEY: string;
@@ -37,6 +39,7 @@ export default {
 
     const url = new URL(request.url);
     const path = url.pathname;
+    const requestId = request.headers.get('x-request-id') || crypto.randomUUID();
 
     try {
       let response: Response;
@@ -51,6 +54,10 @@ export default {
         response = await handleAssets(request, env, path, url);
       } else if (path.startsWith('/api/users')) {
         response = await handleUser(request, env, path);
+      } else if (path === '/api/policy/flags') {
+        response = await handleFeatureFlags(request, env, path);
+      } else if (path.startsWith('/api/policy')) {
+        response = await handlePolicy(request, env, path);
       } else if (path === '/api/sync/stream') {
         response = await handleSyncStream(request, env);
       } else {
@@ -62,11 +69,12 @@ export default {
       for (const [k, v] of Object.entries(cors)) {
         newHeaders.set(k, v);
       }
+      newHeaders.set('x-request-id', requestId);
       return new Response(response.body, { status: response.status, headers: newHeaders });
     } catch (err: any) {
       return new Response(JSON.stringify({ message: err.message || 'Internal error' }), {
         status: 500,
-        headers: { 'Content-Type': 'application/json', ...cors },
+        headers: { 'Content-Type': 'application/json', 'x-request-id': requestId, ...cors },
       });
     }
   },

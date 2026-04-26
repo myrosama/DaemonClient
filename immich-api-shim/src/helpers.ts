@@ -19,6 +19,34 @@ export interface SessionData {
   exp: number;
 }
 
+async function hmacSign(payload: string, scope: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(`session:${scope}`),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  );
+  const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(payload));
+  return btoa(String.fromCharCode(...new Uint8Array(sig)));
+}
+
+async function verifySignedSessionToken(token: string, scope: string): Promise<SessionData | null> {
+  const parts = token.split('.');
+  if (parts.length !== 2) return null;
+  const payloadB64 = parts[0];
+  const expectedSig = await hmacSign(payloadB64, scope);
+  if (parts[1] !== expectedSig) return null;
+  try {
+    const json = atob(payloadB64);
+    const data = JSON.parse(json);
+    if (data.exp && data.exp < Date.now()) return null;
+    return data;
+  } catch {
+    return null;
+  }
+}
+
 export function decodeSession(token: string): SessionData | null {
   try {
     const json = atob(token);
@@ -31,7 +59,12 @@ export function decodeSession(token: string): SessionData | null {
 export async function requireAuth(request: Request, env?: Env): Promise<SessionData> {
   const token = getSessionToken(request);
   if (!token) throw new Error('Not authenticated');
-  const session = decodeSession(token);
+  let session: SessionData | null = null;
+  if (env?.APP_IDENTIFIER && token.includes('.')) {
+    session = await verifySignedSessionToken(token, env.APP_IDENTIFIER);
+  } else {
+    session = decodeSession(token);
+  }
   if (!session) throw new Error('Session expired');
 
   // Check if Firebase ID token is expired (1 hour TTL)
@@ -63,14 +96,32 @@ export function firestoreDocPath(env: Env, uid: string, ...parts: string[]): str
   return `projects/${env.FIREBASE_PROJECT_ID}/databases/(default)/documents/artifacts/${env.APP_IDENTIFIER}/users/${uid}/${parts.join('/')}`;
 }
 
+const firestoreCache = new Map<string, { value: any; expires: number }>();
+
 export async function firestoreGet(env: Env, uid: string, path: string, idToken: string): Promise<any> {
+  const cacheKey = `${uid}:${path}`;
+  const now = Date.now();
+  const cached = firestoreCache.get(cacheKey);
+  if (cached && cached.expires > now) {
+    return cached.value;
+  }
+
   const docPath = firestoreDocPath(env, uid, ...path.split('/'));
   const res = await fetch(`${FIRESTORE_BASE}/${docPath}`, {
     headers: { 'Authorization': `Bearer ${idToken}` },
   });
   if (!res.ok) return null;
   const doc = await res.json();
-  return parseFirestoreDoc(doc);
+  const value = parseFirestoreDoc(doc);
+  
+  const ttl = path.startsWith('config') ? 300000 : 60000;
+  firestoreCache.set(cacheKey, { value, expires: now + ttl });
+  if (firestoreCache.size > 10000) {
+    const toDelete = Array.from(firestoreCache.keys()).slice(0, 1000);
+    toDelete.forEach(k => firestoreCache.delete(k));
+  }
+  
+  return value;
 }
 
 export async function firestoreQuery(
@@ -103,6 +154,11 @@ export async function firestoreQuery(
 }
 
 export async function firestoreSet(env: Env, uid: string, path: string, data: Record<string, any>, idToken: string): Promise<void> {
+  const cacheKey = `${uid}:${path}`;
+  const ttl = path.startsWith('config') ? 300000 : 60000;
+  const cached = firestoreCache.get(cacheKey)?.value || {};
+  firestoreCache.set(cacheKey, { value: { ...cached, ...data }, expires: Date.now() + ttl });
+
   const docPath = firestoreDocPath(env, uid, ...path.split('/'));
   const fields: Record<string, any> = {};
   for (const [k, v] of Object.entries(data)) {
@@ -116,6 +172,9 @@ export async function firestoreSet(env: Env, uid: string, path: string, data: Re
 }
 
 export async function firestoreDelete(env: Env, uid: string, path: string, idToken: string): Promise<void> {
+  const cacheKey = `${uid}:${path}`;
+  firestoreCache.delete(cacheKey);
+
   const docPath = firestoreDocPath(env, uid, ...path.split('/'));
   await fetch(`${FIRESTORE_BASE}/${docPath}`, {
     method: 'DELETE',
