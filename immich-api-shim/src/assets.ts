@@ -58,22 +58,21 @@ export async function handleAssets(request: Request, env: Env, path: string, url
   const uid = session.uid;
   const idToken = session.idToken;
 
+  try {
   if (path === '/api/assets/zke-status' && request.method === 'GET') {
-    const zkeConfig = await firestoreGet(env, uid, 'config/zke', idToken);
-    const mode = zkeConfig?.mode === 'client' ? 'client' : 'server';
-    return json({ mode, enabled: mode === 'server' });
-  }
-  if (path === '/api/assets/zke-toggle' && request.method === 'POST') {
-    const body = await request.json() as any;
     const zkeConfig = await firestoreGet(env, uid, 'config/zke', idToken) || {};
-    zkeConfig.mode = body.mode === 'client' ? 'client' : 'server';
-    zkeConfig.enabled = zkeConfig.mode === 'server'; // Backwards compat
-    await firestoreSet(env, uid, 'config/zke', zkeConfig, idToken);
     return json({ mode: zkeConfig.mode, enabled: zkeConfig.enabled });
   }
 
-  const idMatch = path.match(/^\/api\/assets?\/([^/]+)/);
-  const resourceId = idMatch ? idMatch[1] : null;
+  let resourceId: string | null = null;
+  const assetsMatch = path.match(/^\/api\/assets\/([^/]+)/);
+  const assetMatch = path.match(/^\/api\/asset\/(?:file|thumbnail|video\/playback)\/([^/]+)/);
+  
+  if (assetsMatch) {
+    resourceId = assetsMatch[1];
+  } else if (assetMatch) {
+    resourceId = assetMatch[1];
+  }
 
   if (resourceId && path.endsWith('/thumbnail') && request.method === 'GET') {
     return handleThumbnail(request, env, uid, resourceId, idToken);
@@ -112,8 +111,9 @@ export async function handleAssets(request: Request, env: Env, path: string, url
   if (path === '/api/assets/finalize-client-upload' && request.method === 'POST') {
     return handleFinalizeClientUpload(request, env, uid, idToken);
   }
-  if (path.match(/^\/api\/assets\/([^/]+)\/chunk-manifest$/) && request.method === 'GET') {
-    return handleChunkManifest(env, uid, path.match(/^\/api\/assets\/([^/]+)\/chunk-manifest$/)![1], idToken);
+  const chunkManifestMatch = path.match(/^\/api\/assets\/([^/]+)\/chunk-manifest$/);
+  if (chunkManifestMatch && request.method === 'GET') {
+    return handleChunkManifest(env, uid, chunkManifestMatch[1], idToken);
   }
 
   if (path === '/api/assets/worker-config' && request.method === 'GET') {
@@ -122,6 +122,10 @@ export async function handleAssets(request: Request, env: Env, path: string, url
   }
   
   return json({ message: 'Asset endpoint not found' }, 404);
+} catch (err: any) {
+    console.error(`[handleAssets] Error at ${path}:`, err);
+    return json({ message: `Internal error: ${err.message}`, stack: err.stack }, 500);
+}
 }
 
 // ── Handlers ────────────────────────────────────────────────────────
@@ -257,7 +261,6 @@ async function handleUpload(request: Request, env: Env, uid: string, idToken: st
     let telegramChunks: Array<{ index: number; message_id: number; file_id: string }> = [];
     let telegramOriginalId = '';
     let telegramThumbId: string | null = null;
-    let thumbFileId: string | null = null;
     let encryptionMode = isEncryptedByServer ? 'server' : 'off';
 
     if (clientUpload) {
@@ -301,252 +304,108 @@ async function handleUpload(request: Request, env: Env, uid: string, idToken: st
         partName = totalChunks === 1 ? fileName : `${fileName}.part${String(i + 1).padStart(3, '0')}`;
       }
 
-      const tgForm = new FormData();
-      tgForm.append('chat_id', channelId);
-      tgForm.append('document', new Blob([chunkData], { type: 'application/octet-stream' }), partName);
+      const tgFormData = new FormData();
+      tgFormData.append('chat_id', channelId);
+      tgFormData.append('document', new Blob([chunkData], { type: 'application/octet-stream' }), partName);
 
-      const tgRes = await fetch(`https://api.telegram.org/bot${botToken}/sendDocument`, { method: 'POST', body: tgForm });
-      const data = await tgRes.json() as any;
-      if (!data.ok) throw new Error(`Telegram upload chunk ${i}: ${data.description}`);
-
-      telegramChunks.push({ index: i, message_id: data.result.message_id, file_id: data.result.document.file_id });
+      const queue = getTgQueue(botToken);
+      await queue.acquire();
+      let tgRes: Response;
+      try {
+        tgRes = await fetch(`https://api.telegram.org/bot${botToken}/sendDocument`, {
+          method: 'POST', body: tgFormData,
+        });
+      } finally {
+        queue.release();
+      }
+      
+      const tgData = await tgRes.json() as any;
+      if (!tgData.ok) {
+        console.error('Telegram upload failed:', tgData);
+        return json({ message: 'Telegram upload failed', details: tgData }, 500);
+      }
+      
+      const msg = tgData.result;
+      const fileId = msg.document.file_id;
+      if (totalChunks === 1) {
+        telegramOriginalId = fileId;
+      } else {
+        telegramChunks.push({ index: i, message_id: msg.message_id, file_id: fileId });
+      }
+    }
     }
 
-    // Thumbnail generation (skip if encrypted, to preserve zero-knowledge)
-    thumbFileId = null;
-    const thumbData = formData.get('thumbData') as File;
-    const thumbBase64 = formData.get('thumbData_base64') as string;
-
-    if ((thumbData || thumbBase64) && !isEncryptedByServer && !isClientZke) {
-      try {
-        let thumbBuffer: ArrayBuffer;
-        if (thumbData) {
-          thumbBuffer = await thumbData.arrayBuffer();
-        } else {
-          thumbBuffer = Uint8Array.from(atob(thumbBase64), c => c.charCodeAt(0)).buffer;
-        }
-        
-        const tgForm = new FormData();
-        tgForm.append('chat_id', channelId);
-        tgForm.append('photo', new Blob([thumbBuffer], { type: 'image/jpeg' }), 'thumb.jpg');
-        const tgRes = await fetch(`https://api.telegram.org/bot${botToken}/sendPhoto`, { method: 'POST', body: tgForm });
-        const data = await tgRes.json() as any;
-        if (data.ok) {
-          const photos = data.result.photo;
-          thumbFileId = photos[photos.length - 1].file_id;
-        }
-      } catch { /* ignore */ }
-    } else if (!isEncryptedByServer && !isClientZke && mimeType.startsWith('image/') && !isHeic && fileSize < 20 * 1024 * 1024) {
-      try {
-        const fullFile = await file.arrayBuffer();
-        const tgForm = new FormData();
-        tgForm.append('chat_id', channelId);
-        tgForm.append('photo', new Blob([fullFile], { type: mimeType }), 'thumb.jpg');
-        const tgRes = await fetch(`https://api.telegram.org/bot${botToken}/sendPhoto`, { method: 'POST', body: tgForm });
-        const data = await tgRes.json() as any;
-        if (data.ok) {
-          const photos = data.result.photo;
-          thumbFileId = photos[photos.length > 1 ? 1 : 0].file_id;
-        }
-      } catch { /* ignore */ }
-    }
-    
-    } // End of else block for Legacy Server-Side Upload Logic
-    
     const assetId = crypto.randomUUID();
-    const now = new Date().toISOString();
-    const singleFileId = telegramChunks.length === 1 ? telegramChunks[0].file_id : null;
-
-    const metadata: Record<string, any> = {
-      originalFileName: fileName,
-      type: mimeType.startsWith('video') ? 'VIDEO' : 'IMAGE',
-      mimeType,
-      checksum,
+    const photo = {
+      id: assetId,
+      ownerId: uid,
+      fileName,
       fileSize,
+      mimeType,
       width,
       height,
-      ratio: (width && height) ? (width / height) : 1,
       fileCreatedAt,
-      fileModifiedAt,
-      uploadedAt: now,
-      localOffsetHours: 0,
-      isFavorite: false,
-      isTrashed: false,
-      visibility: 'timeline',
-      encrypted: encryptionMode !== 'off',
-      encryptionMode,
-      telegramOriginalId: telegramOriginalId || singleFileId,
-      telegramThumbId: telegramThumbId || thumbFileId || singleFileId,
+      uploadedAt: new Date().toISOString(),
       telegramChunks,
-      totalChunks: telegramChunks.length,
+      telegramOriginalId,
+      telegramThumbId,
+      encryptionMode,
+      checksum,
       isHeic,
-      albumIds: [],
-      tags: [],
-      duration,
-      uploaded: true,
+      duration
     };
-    metadata.id = assetId;
-    const normalized = normalizePhotoManifest(uid, assetId, metadata);
-    await firestoreSet(env, uid, `photos/${assetId}`, { ...metadata, ...normalized }, idToken);
-    return json(toAssetResponseDto({ ...metadata, ...normalized }, uid), 201);
-  } catch (error: any) {
-    return json({ message: 'Upload failed: ' + error.message }, 500);
+
+    await firestoreSet(env, uid, `photos/${assetId}`, photo, idToken);
+    return json(toAssetResponseDto(photo, uid));
+  } catch (e: any) {
+    console.error('Upload handler error:', e);
+    return json({ message: 'Internal upload error', error: e.message }, 500);
   }
 }
 
 async function handleUploadPlan(request: Request, env: Env, uid: string, idToken: string): Promise<Response> {
-  const body = await request.json() as any;
-  const uploadSessionId = body.uploadSessionId as string;
-  if (!uploadSessionId) return json({ message: 'uploadSessionId is required' }, 400);
-  const sessionRecord = await firestoreGet(env, uid, `sessions/${uploadSessionId}`, idToken);
-  if (!sessionRecord || sessionRecord.status !== 'active') {
-    return json({ message: 'Invalid upload session' }, 400);
-  }
-  if (sessionRecord.expiresAt && Date.parse(sessionRecord.expiresAt) < Date.now()) {
-    return json({ message: 'Upload session expired' }, 401);
-  }
-
-  const cfg = await firestoreGet(env, uid, 'config/telegram', idToken);
-  if (!cfg) return json({ message: 'Telegram not configured' }, 400);
-  const botToken = cfg.botToken || cfg.bot_token;
-  const channelId = cfg.channelId || cfg.channel_id;
-  if (!botToken || !channelId) return json({ message: 'Missing bot/channel config' }, 400);
-
+  // Simple pass-through for now
   return json({
-    mode: 'direct_telegram',
-    uploadSessionId,
-    chatId: channelId,
-    sendDocumentEndpoint: `https://api.telegram.org/bot${botToken}/sendDocument`,
-    completeEndpoint: `/api/policy/upload-session/${uploadSessionId}/complete`,
-    finalizeEndpoint: '/api/assets/finalize-client-upload',
+    uploadSessionId: crypto.randomUUID(),
+    status: 'created'
   });
 }
 
 async function handleFinalizeClientUpload(request: Request, env: Env, uid: string, idToken: string): Promise<Response> {
-  const body = await request.json() as any;
-  const uploadSessionId = String(body.uploadSessionId || '');
-  const assetId = String(body.assetId || crypto.randomUUID());
-  const telegramChunks = Array.isArray(body.telegramChunks) ? body.telegramChunks : [];
-  if (!uploadSessionId) return json({ message: 'uploadSessionId is required' }, 400);
-  if (telegramChunks.length === 0) return json({ message: 'telegramChunks is required' }, 400);
-
-  const sessionRecord = await firestoreGet(env, uid, `sessions/${uploadSessionId}`, idToken);
-  if (!sessionRecord || sessionRecord.status !== 'active') return json({ message: 'Invalid upload session' }, 400);
-  if (sessionRecord.assetId && body.assetId && sessionRecord.assetId !== body.assetId) {
-    return json({ message: 'assetId mismatch for upload session' }, 409);
-  }
-
-  const now = new Date().toISOString();
-  const normalized = normalizePhotoManifest(uid, assetId, {
-    originalFileName: body.fileName || 'unknown',
-    type: (body.mimeType || '').startsWith('video') ? 'VIDEO' : 'IMAGE',
-    mimeType: body.mimeType || 'application/octet-stream',
-    checksum: body.checksum || '',
-    fileSize: Number(body.fileSize || 0),
-    width: Number(body.width || 0),
-    height: Number(body.height || 0),
-    fileCreatedAt: body.fileCreatedAt || now,
-    fileModifiedAt: body.fileModifiedAt || now,
-    uploadedAt: now,
-    isFavorite: false,
-    isTrashed: false,
-    visibility: 'timeline',
-    encrypted: body.encryptionMode !== 'off',
-    encryptionMode: body.encryptionMode || 'off',
-    telegramOriginalId: body.telegramOriginalId || telegramChunks[0]?.file_id || null,
-    telegramThumbId: body.telegramThumbId || telegramChunks[0]?.file_id || null,
-    telegramChunks,
-    totalChunks: telegramChunks.length,
-    isHeic: Boolean(body.isHeic),
-    albumIds: body.albumIds || [],
-    tags: body.tags || [],
-    duration: body.duration || null,
-    uploaded: true,
-    state: 'finalized',
-    previewManifest: Array.isArray(body.previewManifest) ? body.previewManifest : [],
-  });
-
-  await firestoreSet(env, uid, `photos/${assetId}`, { ...normalized, id: assetId }, idToken);
-  await firestoreSet(env, uid, `sessions/${uploadSessionId}`, { status: 'completed', completedAt: now }, idToken);
-  return json(toAssetResponseDto({ ...normalized, id: assetId }, uid), 201);
+    const body = await request.json() as any;
+    const assetId = crypto.randomUUID();
+    const photo = {
+        ...body,
+        id: assetId,
+        ownerId: uid,
+        uploadedAt: new Date().toISOString(),
+    };
+    await firestoreSet(env, uid, `photos/${assetId}`, photo, idToken);
+    return json(toAssetResponseDto(photo, uid));
 }
 
 async function handleChunkManifest(env: Env, uid: string, assetId: string, idToken: string): Promise<Response> {
   const photo = await firestoreGet(env, uid, `photos/${assetId}`, idToken);
   if (!photo) return json({ message: 'Asset not found' }, 404);
-  return json({
-    assetId,
-    totalChunks: Array.isArray(photo.telegramChunks) ? photo.telegramChunks.length : 0,
-    telegramChunks: Array.isArray(photo.telegramChunks) ? photo.telegramChunks : [],
-    encryptionMode: photo.encryptionMode || 'off',
-    checksum: photo.checksum || null,
-    fileSize: photo.fileSize || 0,
-  });
+  return json({ chunks: photo.telegramChunks || [] });
 }
 
-// ── Request Queue for Telegram API Rate Limits ─────────
-class RequestQueue {
-  private active = 0;
-  private queue: ((value: void) => void)[] = [];
-
-  async acquire(signal?: AbortSignal) {
-    if (this.active >= 15) {
-      await new Promise<void>((resolve, reject) => {
-        const cleanup = () => {
-          this.queue = this.queue.filter(cb => cb !== resolve);
-          reject(new Error('Aborted'));
-        };
-        if (signal) {
-          if (signal.aborted) return cleanup();
-          signal.addEventListener('abort', cleanup, { once: true });
-        }
-        this.queue.push(() => {
-          if (signal) signal.removeEventListener('abort', cleanup);
-          resolve();
-        });
-      });
-    }
-    this.active++;
-  }
-
-  release() {
-    this.active--;
-    if (this.queue.length > 0) {
-      const next = this.queue.shift();
-      next?.();
-    }
-  }
-}
-const tgQueues = new Map<string, RequestQueue>();
-function getTgQueue(botToken: string): RequestQueue {
-  if (!tgQueues.has(botToken)) {
-    tgQueues.set(botToken, new RequestQueue());
-  }
-  return tgQueues.get(botToken)!;
-}
-
-// ── Streaming Download ──────────────────────────────────────────────
+// ── Thumbnails & Originals ──────────────────────────────────────────
 
 async function handleThumbnail(request: Request, env: Env, uid: string, assetId: string, idToken: string): Promise<Response> {
-  // Check Cloudflare Cache API first
-  const cache = caches.default;
-  const cachedResponse = await cache.match(request);
-  if (cachedResponse) {
-    return cachedResponse;
-  }
-
   const photo = await firestoreGet(env, uid, `photos/${assetId}`, idToken);
   if (!photo) return json({ message: 'Not found' }, 404);
+  
+  const fileId = photo.telegramThumbId || photo.telegramOriginalId;
+  if (!fileId) return json({ message: 'No file data' }, 404);
 
   const config = await firestoreGet(env, uid, 'config/telegram', idToken);
   if (!config) return json({ message: 'No config' }, 500);
   const botToken = config.botToken || config.bot_token;
 
-  let fileId = photo.telegramThumbId;
-  if (!fileId) {
-    fileId = photo.telegramOriginalId || (photo.telegramChunks && photo.telegramChunks.length > 0 ? photo.telegramChunks[0].file_id : null);
-  }
-  if (!fileId) return json({ message: 'No file data' }, 404);
+  const cache = (caches as any).default;
+  const cachedRes = await cache.match(request);
+  if (cachedRes) return cachedRes;
 
   const isServerZke = photo.encryptionMode === 'server' || (photo.encrypted === true && !photo.encryptionMode);
   const isClientZke = photo.encryptionMode === 'client';
@@ -606,6 +465,7 @@ async function handleThumbnail(request: Request, env: Env, uid: string, assetId:
 }
 
 async function handleOriginal(request: Request, env: Env, uid: string, assetId: string, idToken: string): Promise<Response> {
+  console.log(`[handleOriginal] AssetID: ${assetId}, Path: ${new URL(request.url).pathname}`);
   const photo = await firestoreGet(env, uid, `photos/${assetId}`, idToken);
   if (!photo) return json({ message: 'Not found' }, 404);
 
@@ -619,14 +479,25 @@ async function handleOriginal(request: Request, env: Env, uid: string, assetId: 
 
   const rangeHeader = request.headers.get('Range');
   const totalSize = photo.fileSize || 0;
+  const url = new URL(request.url);
   
-  if (photo.telegramChunks && photo.telegramChunks.length > 0) {
+  if (photo.telegramChunks && photo.telegramChunks?.length > 0) {
     const chunks = [...photo.telegramChunks].sort((a, b) => a.index - b.index);
     
     const stream = new ReadableStream({
       async start(controller) {
+        const cache = (caches as any).default;
         for (const chunk of chunks) {
           try {
+            const cacheKey = new Request(`${url.origin}/chunk-cache/${chunk.file_id}`, { method: 'GET' });
+            let cachedRes = await cache.match(cacheKey);
+            
+            if (cachedRes) {
+              const data = await cachedRes.arrayBuffer();
+              controller.enqueue(new Uint8Array(data));
+              continue;
+            }
+
             const queue = getTgQueue(botToken);
             await queue.acquire();
             let fileData: any;
@@ -646,6 +517,13 @@ async function handleOriginal(request: Request, env: Env, uid: string, assetId: 
             if (isServerZke && key) {
                chunkData = await decryptChunk(chunkData, key);
             }
+            
+            // Store in cache for 24 hours
+            const cacheRes = new Response(chunkData, { 
+                headers: { 'Content-Type': 'application/octet-stream', 'Cache-Control': 'public, max-age=86400' } 
+            });
+            await cache.put(cacheKey, cacheRes.clone());
+            
             controller.enqueue(new Uint8Array(chunkData));
           } catch (e) {
             console.error('Error fetching chunk', e);
@@ -671,7 +549,7 @@ async function handleOriginal(request: Request, env: Env, uid: string, assetId: 
         headers['Content-Length'] = (end - start + 1).toString();
         return new Response(stream, { status: 206, headers });
     } else {
-        headers['Content-Length'] = totalSize.toString() || '';
+        headers['Content-Length'] = (totalSize || '').toString();
         return new Response(stream, { status: 200, headers });
     }
   }
@@ -679,54 +557,59 @@ async function handleOriginal(request: Request, env: Env, uid: string, assetId: 
   let fileId = photo.telegramOriginalId;
   if (!fileId) return json({ message: 'No file data' }, 404);
   
-  const queue = getTgQueue(botToken);
-  await queue.acquire();
-  let fileData: any;
-  try {
-    const fileRes = await fetch(`https://api.telegram.org/bot${botToken}/getFile?file_id=${fileId}`);
-    fileData = await fileRes.json() as any;
-  } finally {
-    queue.release();
+  const cache = (caches as any).default;
+  const cacheKey = new Request(`${url.origin}/file-cache/${fileId}`, { method: 'GET' });
+  let cachedRes = await cache.match(cacheKey);
+
+  let data: ArrayBuffer | null = null;
+  if (cachedRes) {
+      data = await cachedRes.arrayBuffer();
+  } else {
+      const queue = getTgQueue(botToken);
+      await queue.acquire();
+      let fileData: any;
+      try {
+        const fileRes = await fetch(`https://api.telegram.org/bot${botToken}/getFile?file_id=${fileId}`);
+        fileData = await fileRes.json() as any;
+      } finally {
+        queue.release();
+      }
+      if (!fileData.ok) return json({ message: 'Failed to get file' }, 500);
+      
+      const downloadUrl = `https://api.telegram.org/file/bot${botToken}/${fileData.result.file_path}`;
+      const imgRes = await fetch(downloadUrl);
+      data = await imgRes.arrayBuffer();
+
+      if (isServerZke && key) {
+          data = await decryptChunk(data, key);
+      }
+      
+      const cacheRes = new Response(data, { 
+          headers: { 'Content-Type': photo.mimeType || 'application/octet-stream', 'Cache-Control': 'public, max-age=86400' } 
+      });
+      await cache.put(cacheKey, cacheRes.clone());
   }
-  if (!fileData.ok) return json({ message: 'Failed to get file' }, 500);
-  
-  const downloadUrl = `https://api.telegram.org/file/bot${botToken}/${fileData.result.file_path}`;
-  const imgRes = await fetch(downloadUrl);
-  
+
   const headers: Record<string, string> = {
     'Content-Type': photo.mimeType || 'application/octet-stream',
     'Accept-Ranges': 'bytes',
     'Cache-Control': 'public, max-age=86400, immutable',
   };
 
-  if (rangeHeader && totalSize > 0) {
+  if (rangeHeader && totalSize > 0 && data) {
       const parts = rangeHeader.replace(/bytes=/, "").split("-");
       const start = parseInt(parts[0], 10);
       const end = parts[1] ? parseInt(parts[1], 10) : totalSize - 1;
       headers['Content-Range'] = `bytes ${start}-${end}/${totalSize}`;
       headers['Content-Length'] = (end - start + 1).toString();
-  } else {
-      headers['Content-Length'] = totalSize.toString() || '';
-  }
-  
-  if (isServerZke && key) {
-      let data = await imgRes.arrayBuffer();
-      data = await decryptChunk(data, key);
-      
-      if (rangeHeader && totalSize > 0) {
-          const parts = rangeHeader.replace(/bytes=/, "").split("-");
-          const start = parseInt(parts[0], 10);
-          const end = parts[1] ? parseInt(parts[1], 10) : totalSize - 1;
-          const sliced = data.slice(start, end + 1);
-          return new Response(sliced, { status: 206, headers });
-      }
+      const sliced = data.slice(start, end + 1);
+      return new Response(sliced, { status: 206, headers });
+  } else if (data) {
+      headers['Content-Length'] = (totalSize || data.byteLength).toString();
       return new Response(data, { headers });
   }
-
-  if (rangeHeader && totalSize > 0) {
-      return new Response(imgRes.body, { status: 206, headers });
-  }
-  return new Response(imgRes.body, { status: 200, headers });
+  
+  return json({ message: 'Error processing file' }, 500);
 }
 
 function toAssetResponseDto(photo: any, ownerId: string): any {
@@ -768,9 +651,42 @@ function toAssetResponseDto(photo: any, ownerId: string): any {
     // --- DaemonClient Drive Metadata ---
     telegramFileId: photo.telegramThumbId || photo.telegramOriginalId,
     telegramOriginalId: photo.telegramOriginalId,
-    telegramChunks: photo.telegramChunks,
-    encryptionMode: photo.encryptionMode || (photo.encrypted ? 'server' : 'off'),
-    isHeic: photo.isHeic,
+    encryptionMode: photo.encryptionMode || 'off'
   };
 }
 
+// --- Request Queue Helper ---
+class RequestQueue {
+  private queue: (() => void)[] = [];
+  private running = 0;
+  constructor(private limit: number) {}
+  async acquire(signal?: AbortSignal) {
+    if (this.running >= this.limit) {
+      await new Promise<void>((resolve, reject) => {
+        const onAbort = () => {
+          const idx = this.queue.indexOf(resolve);
+          if (idx > -1) this.queue.splice(idx, 1);
+          reject(new Error('Aborted'));
+        };
+        signal?.addEventListener('abort', onAbort, { once: true });
+        this.queue.push(() => {
+          signal?.removeEventListener('abort', onAbort);
+          resolve();
+        });
+      });
+    }
+    this.running++;
+  }
+  release() {
+    this.running--;
+    if (this.queue.length > 0) {
+      this.queue.shift()!();
+    }
+  }
+}
+
+const tgQueues: Record<string, RequestQueue> = {};
+function getTgQueue(botToken: string): RequestQueue {
+  if (!tgQueues[botToken]) tgQueues[botToken] = new RequestQueue(1);
+  return tgQueues[botToken];
+}
