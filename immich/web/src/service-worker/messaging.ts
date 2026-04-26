@@ -27,6 +27,10 @@ export const installMessageListener = () => {
         handleCancel(url);
         break;
       }
+      case 'clear-cache': {
+        caches.delete('dc-assets-v1');
+        break;
+      }
     }
   });
 };

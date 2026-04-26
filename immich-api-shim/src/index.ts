@@ -14,6 +14,7 @@ export interface Env {
   APP_IDENTIFIER: string;
   TELEGRAM_PROXY: string;
   ALLOWED_ORIGINS: string;
+  waitUntil?: (promise: Promise<any>) => void;
 }
 
 function corsHeaders(request: Request, env: Env): Record<string, string> {
@@ -30,7 +31,10 @@ function corsHeaders(request: Request, env: Env): Record<string, string> {
 }
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
+    if (ctx) {
+      env.waitUntil = ctx.waitUntil.bind(ctx);
+    }
     const cors = corsHeaders(request, env);
 
     if (request.method === 'OPTIONS') {

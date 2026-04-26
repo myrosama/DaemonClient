@@ -144,18 +144,28 @@ export async function handleAssets(request: Request, env: Env, path: string, url
   
   return json({ message: 'Asset endpoint not found' }, 404);
 } catch (err: any) {
-    console.error(`[handleAssets] Error at ${path}:`, err);
-    return json({ message: `Internal error: ${err.message}`, stack: err.stack }, 500);
+    console.error(`[handleAssets] Error at ${path}:`, err?.message, err?.stack);
+    if (err?.message?.includes('authenticated') || err?.message?.includes('expired')) {
+      return json({ message: err.message }, 401);
+    }
+    return json({ message: `Internal error: ${err?.message}` }, 500);
 }
 }
 
 // ── Handlers ────────────────────────────────────────────────────────
 
 async function handleAssetInfo(env: Env, uid: string, assetId: string, idToken: string): Promise<Response> {
-  const photo = await firestoreGet(env, uid, `photos/${assetId}`, idToken);
-  if (!photo) return json({ message: 'Asset not found' }, 404);
-  photo.id = assetId;
-  return json(toAssetResponseDto(photo, uid));
+  try {
+    const photo = await firestoreGet(env, uid, `photos/${assetId}`, idToken);
+    if (!photo) {
+      return json({ message: 'Asset not found' }, 404);
+    }
+    photo.id = assetId;
+    return json(toAssetResponseDto(photo, uid));
+  } catch (err: any) {
+    console.error(`[handleAssetInfo] Error for ${assetId}:`, err?.message);
+    return json({ message: `Error fetching asset: ${err?.message}` }, 500);
+  }
 }
 
 async function handleUpdateAsset(request: Request, env: Env, uid: string, assetId: string, idToken: string): Promise<Response> {
@@ -492,37 +502,24 @@ async function handleThumbnail(request: Request, env: Env, uid: string, assetId:
   }
 
   try {
-    const fileRes = await fetch(`https://api.telegram.org/bot${botToken}/getFile?file_id=${fileId}`);
-    const fileData = await fileRes.json() as any;
-    if (!fileData.ok) return json({ message: 'Failed to get file' }, 500);
+    const result = await tgDownloadFile(botToken, fileId);
+    if (!result.ok) return json({ message: result.error }, 502);
 
-    const downloadUrl = `https://api.telegram.org/file/bot${botToken}/${fileData.result.file_path}`;
-    const imgRes = await fetch(downloadUrl);
-    if (!imgRes.ok) return json({ message: 'Download failed' }, 500);
-
-    let finalResponse: Response;
-
+    let responseData = result.data!;
     if (isServerZke && key) {
       try {
-        let data = await imgRes.arrayBuffer();
-        data = await decryptChunk(data, key);
-        finalResponse = new Response(data, {
-          headers: {
-            'Content-Type': mimeType || 'application/octet-stream',
-            'Cache-Control': 'public, max-age=31536000, immutable',
-          }
-        });
+        responseData = await decryptChunk(responseData, key);
       } catch (e) {
         return json({ message: 'Decryption failed' }, 500);
       }
-    } else {
-      finalResponse = new Response(imgRes.body, {
-        headers: {
-          'Content-Type': mimeType || 'application/octet-stream',
-          'Cache-Control': 'public, max-age=31536000, immutable',
-        },
-      });
     }
+
+    const finalResponse = new Response(responseData, {
+      headers: {
+        'Content-Type': mimeType || 'application/octet-stream',
+        'Cache-Control': 'public, max-age=31536000, immutable',
+      }
+    });
 
     if (finalResponse.status === 200) {
       env.waitUntil?.(cache.put(request, finalResponse.clone()));
@@ -569,20 +566,15 @@ async function handleOriginal(request: Request, env: Env, uid: string, assetId: 
 
             const queue = getTgQueue(botToken);
             await queue.acquire();
-            let fileData: any;
+            let chunkResult;
             try {
-              const fileRes = await fetch(`https://api.telegram.org/bot${botToken}/getFile?file_id=${chunk.file_id}`);
-              fileData = await fileRes.json() as any;
+              chunkResult = await tgDownloadFile(botToken, chunk.file_id);
             } finally {
               queue.release();
             }
-            if (!fileData.ok) throw new Error('Failed to get file path');
-            
-            const downloadUrl = `https://api.telegram.org/file/bot${botToken}/${fileData.result.file_path}`;
-            const imgRes = await fetch(downloadUrl);
-            if (!imgRes.ok) throw new Error('Download failed');
-            
-            let chunkData = await imgRes.arrayBuffer();
+            if (!chunkResult.ok) throw new Error(chunkResult.error);
+
+            let chunkData = chunkResult.data!;
             if (isServerZke && key) {
                chunkData = await decryptChunk(chunkData, key);
             }
@@ -636,18 +628,14 @@ async function handleOriginal(request: Request, env: Env, uid: string, assetId: 
   } else {
       const queue = getTgQueue(botToken);
       await queue.acquire();
-      let fileData: any;
+      let result;
       try {
-        const fileRes = await fetch(`https://api.telegram.org/bot${botToken}/getFile?file_id=${fileId}`);
-        fileData = await fileRes.json() as any;
+        result = await tgDownloadFile(botToken, fileId);
       } finally {
         queue.release();
       }
-      if (!fileData.ok) return json({ message: 'Failed to get file' }, 500);
-      
-      const downloadUrl = `https://api.telegram.org/file/bot${botToken}/${fileData.result.file_path}`;
-      const imgRes = await fetch(downloadUrl);
-      data = await imgRes.arrayBuffer();
+      if (!result.ok) return json({ message: result.error }, 502);
+      data = result.data!;
 
       if (isServerZke && key) {
           data = await decryptChunk(data, key);
@@ -724,6 +712,39 @@ function toAssetResponseDto(photo: any, ownerId: string): any {
   };
 }
 
+// --- Telegram Fetch with Retry ---
+async function tgFetchWithRetry(url: string, options?: RequestInit, maxRetries = 4): Promise<Response> {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const res = await fetch(url, options);
+    if (res.status === 429 || res.status === 420) {
+      const body = await res.json().catch(() => ({})) as any;
+      const retryAfter = body?.parameters?.retry_after || 5;
+      console.warn(`[tgFetch] 429 on ${url.substring(0, 80)}..., waiting ${retryAfter}s (attempt ${attempt + 1})`);
+      await new Promise(r => setTimeout(r, (retryAfter + 1) * 1000));
+      continue;
+    }
+    return res;
+  }
+  return new Response(JSON.stringify({ ok: false, description: 'Rate limit retries exhausted' }), {
+    status: 429, headers: { 'Content-Type': 'application/json' }
+  });
+}
+
+async function tgGetFileUrl(botToken: string, fileId: string): Promise<{ ok: boolean; url?: string; error?: string }> {
+  const res = await tgFetchWithRetry(`https://api.telegram.org/bot${botToken}/getFile?file_id=${fileId}`);
+  const data = await res.json() as any;
+  if (!data.ok) return { ok: false, error: data.description || 'getFile failed' };
+  return { ok: true, url: `https://api.telegram.org/file/bot${botToken}/${data.result.file_path}` };
+}
+
+async function tgDownloadFile(botToken: string, fileId: string): Promise<{ ok: boolean; data?: ArrayBuffer; error?: string }> {
+  const fileResult = await tgGetFileUrl(botToken, fileId);
+  if (!fileResult.ok) return { ok: false, error: fileResult.error };
+  const imgRes = await tgFetchWithRetry(fileResult.url!);
+  if (!imgRes.ok) return { ok: false, error: `Download failed: ${imgRes.status}` };
+  return { ok: true, data: await imgRes.arrayBuffer() };
+}
+
 // --- Request Queue Helper ---
 class RequestQueue {
   private queue: (() => void)[] = [];
@@ -756,6 +777,6 @@ class RequestQueue {
 
 const tgQueues: Record<string, RequestQueue> = {};
 function getTgQueue(botToken: string): RequestQueue {
-  if (!tgQueues[botToken]) tgQueues[botToken] = new RequestQueue(1);
+  if (!tgQueues[botToken]) tgQueues[botToken] = new RequestQueue(3);
   return tgQueues[botToken];
 }

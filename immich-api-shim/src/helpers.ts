@@ -56,6 +56,25 @@ export function decodeSession(token: string): SessionData | null {
   } catch { return null; }
 }
 
+const refreshInFlight = new Map<string, Promise<string>>();
+const tokenCache = new Map<string, { token: string; expires: number }>();
+
+async function refreshFirebaseToken(apiKey: string, refreshToken: string): Promise<string> {
+  const url = `https://securetoken.googleapis.com/v1/token?key=${apiKey}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: `grant_type=refresh_token&refresh_token=${refreshToken}`
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    console.error(`[refreshToken] Failed: ${res.status} ${body.substring(0, 200)}`);
+    throw new Error(`Token refresh failed: ${res.status}`);
+  }
+  const data = await res.json() as any;
+  return data.id_token;
+}
+
 export async function requireAuth(request: Request, env?: Env): Promise<SessionData> {
   const token = getSessionToken(request);
   if (!token) throw new Error('Not authenticated');
@@ -67,7 +86,6 @@ export async function requireAuth(request: Request, env?: Env): Promise<SessionD
   }
   if (!session) throw new Error('Session expired');
 
-  // Check if Firebase ID token is expired (1 hour TTL)
   let idTokenExpired = false;
   try {
     const payload = JSON.parse(atob(session.idToken.split('.')[1]));
@@ -75,15 +93,29 @@ export async function requireAuth(request: Request, env?: Env): Promise<SessionD
   } catch { idTokenExpired = true; }
 
   if (idTokenExpired && env?.FIREBASE_API_KEY && session.refreshToken) {
-    const url = `https://securetoken.googleapis.com/v1/token?key=${env.FIREBASE_API_KEY}`;
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: `grant_type=refresh_token&refresh_token=${session.refreshToken}`
-    });
-    if (res.ok) {
-      const data = await res.json() as any;
-      session.idToken = data.id_token;
+    const cacheKey = session.uid;
+    const cached = tokenCache.get(cacheKey);
+    if (cached && cached.expires > Date.now()) {
+      session.idToken = cached.token;
+      return session;
+    }
+
+    if (!refreshInFlight.has(cacheKey)) {
+      const promise = refreshFirebaseToken(env.FIREBASE_API_KEY, session.refreshToken)
+        .then(newToken => {
+          tokenCache.set(cacheKey, { token: newToken, expires: Date.now() + 3500000 });
+          return newToken;
+        })
+        .finally(() => {
+          refreshInFlight.delete(cacheKey);
+        });
+      refreshInFlight.set(cacheKey, promise);
+    }
+
+    try {
+      session.idToken = await refreshInFlight.get(cacheKey)!;
+    } catch {
+      throw new Error('Session expired');
     }
   }
 
@@ -110,7 +142,14 @@ export async function firestoreGet(env: Env, uid: string, path: string, idToken:
   const res = await fetch(`${FIRESTORE_BASE}/${docPath}`, {
     headers: { 'Authorization': `Bearer ${idToken}` },
   });
-  if (!res.ok) return null;
+  if (!res.ok) {
+    if (res.status === 401 || res.status === 403) {
+      console.error(`[firestoreGet] AUTH FAILURE: ${path} returned ${res.status} for uid ${uid} — token may be expired`);
+    } else if (res.status !== 404) {
+      console.warn(`[firestoreGet] ${path} returned ${res.status} for uid ${uid}`);
+    }
+    return null;
+  }
   const doc = await res.json();
   const value = parseFirestoreDoc(doc);
   
