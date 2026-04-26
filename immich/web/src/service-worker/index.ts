@@ -8,9 +8,10 @@ import { handleCancel } from './request';
 const WORKER_URL = 'https://immich-api.sadrikov49.workers.dev';
 const ASSET_BINARY_REGEX = /^\/api\/assets\/[a-f0-9-]+\/(original|thumbnail)/;
 const API_REGEX = /^\/api\//;
-const AUTH_REGEX = /^\/api\/auth/;
 
 const sw = globalThis as unknown as ServiceWorkerGlobalScope;
+
+let storedToken: string | null = null;
 
 const handleActivate = (event: ExtendableEvent) => {
   event.waitUntil(sw.clients.claim());
@@ -21,6 +22,7 @@ const handleInstall = (event: ExtendableEvent) => {
 };
 
 function extractToken(request: Request): string | null {
+  if (storedToken) return storedToken;
   const cookie = request.headers.get('cookie') || '';
   const match = cookie.match(/(?:immich_access_token|__session)=([^;]+)/);
   if (match) return match[1];
@@ -29,7 +31,7 @@ function extractToken(request: Request): string | null {
   return null;
 }
 
-async function directWorkerFetch(request: Request, cacheable: boolean): Promise<Response> {
+async function directWorkerFetch(request: Request, cacheable: boolean, pathname: string): Promise<Response> {
   const url = new URL(request.url);
   const workerUrl = WORKER_URL + url.pathname + url.search;
 
@@ -45,11 +47,32 @@ async function directWorkerFetch(request: Request, cacheable: boolean): Promise<
   if (request.headers.get('range')) headers['Range'] = request.headers.get('range')!;
   if (request.headers.get('content-type')) headers['Content-Type'] = request.headers.get('content-type')!;
 
+  let body: BodyInit | undefined;
+  if (request.method !== 'GET' && request.method !== 'HEAD') {
+    body = await request.arrayBuffer();
+  }
+
   const response = await fetch(workerUrl, {
     method: request.method,
     headers,
-    body: request.method !== 'GET' && request.method !== 'HEAD' ? request.body : undefined,
+    body,
   });
+
+  // Intercept login response to capture the token
+  if (pathname === '/api/auth/login' && response.ok) {
+    const cloned = response.clone();
+    try {
+      const data = await cloned.json() as any;
+      if (data.accessToken) {
+        storedToken = data.accessToken;
+      }
+    } catch {}
+  }
+
+  // Clear token on logout
+  if (pathname === '/api/auth/logout') {
+    storedToken = null;
+  }
 
   if (cacheable && response.ok) {
     const cache = await caches.open('dc-assets-v1');
@@ -63,19 +86,28 @@ const handleFetch = (event: FetchEvent): void => {
   const url = new URL(event.request.url);
   if (url.origin !== self.location.origin) return;
   if (!API_REGEX.test(url.pathname)) return;
-  if (AUTH_REGEX.test(url.pathname)) return;
 
   if (event.request.method === 'GET') {
     const cacheable = ASSET_BINARY_REGEX.test(url.pathname);
-    event.respondWith(directWorkerFetch(event.request, cacheable));
+    event.respondWith(directWorkerFetch(event.request, cacheable, url.pathname));
     return;
   }
 
   if (event.request.method === 'POST' || event.request.method === 'PUT' || event.request.method === 'DELETE') {
-    event.respondWith(directWorkerFetch(event.request, false));
+    event.respondWith(directWorkerFetch(event.request, false, url.pathname));
     return;
   }
 };
+
+// Also accept token via postMessage from the page
+sw.addEventListener('message', (event) => {
+  if (event.data?.type === 'SET_TOKEN') {
+    storedToken = event.data.token;
+  }
+  if (event.data?.type === 'CLEAR_TOKEN') {
+    storedToken = null;
+  }
+});
 
 sw.addEventListener('install', handleInstall, { passive: true });
 sw.addEventListener('activate', handleActivate, { passive: true });

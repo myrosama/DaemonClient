@@ -83,6 +83,13 @@
       loading = true;
       const user = await login({ loginCredentialDto: { email, password } });
 
+      if (user.accessToken) {
+        const maxAge = 7 * 24 * 60 * 60;
+        document.cookie = `immich_access_token=${user.accessToken}; Path=/; SameSite=Lax; Secure; Max-Age=${maxAge}`;
+        document.cookie = `immich_is_authenticated=true; Path=/; SameSite=Lax; Secure; Max-Age=${maxAge}`;
+        navigator.serviceWorker?.controller?.postMessage({ type: 'SET_TOKEN', token: user.accessToken });
+      }
+
       if (user.isAdmin && !serverConfig.isOnboarded) {
         await onOnboarding();
         return;

@@ -76,8 +76,10 @@ export default {
       newHeaders.set('x-request-id', requestId);
       return new Response(response.body, { status: response.status, headers: newHeaders });
     } catch (err: any) {
-      return new Response(JSON.stringify({ message: err.message || 'Internal error' }), {
-        status: 500,
+      const msg = err.message || 'Internal error';
+      const isAuth = msg === 'Not authenticated' || msg === 'Session expired';
+      return new Response(JSON.stringify({ message: msg }), {
+        status: isAuth ? 401 : 500,
         headers: { 'Content-Type': 'application/json', 'x-request-id': requestId, ...cors },
       });
     }
