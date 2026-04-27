@@ -303,11 +303,14 @@ async function handleUpload(request: Request, env: Env, uid: string, idToken: st
     }
 
     const isHeic = /\.(heic|heif)$/i.test(fileName) || mimeType === 'image/heic' || mimeType === 'image/heif';
+    const thumbBase64 = formData.get('thumbData_base64') as string | null;
 
     let telegramChunks: Array<{ index: number; message_id: number; file_id: string }> = [];
     let telegramOriginalId = '';
     let telegramThumbId: string | null = null;
     let encryptionMode = isEncryptedByServer ? 'server' : 'off';
+    let thumbEncrypted = false;
+    let pendingThumbGen: any = null;
 
     if (clientUpload) {
         // Client already uploaded to Telegram
@@ -417,55 +420,102 @@ async function handleUpload(request: Request, env: Env, uid: string, idToken: st
       } else {
         telegramChunks.push({ index: i, message_id: msg.message_id, file_id: fileId });
       }
+      // Grab document thumbnail if available (Telegram auto-generates for image/video docs)
+      if (!telegramThumbId && msg.document.thumb?.file_id) {
+        telegramThumbId = msg.document.thumb.file_id;
+        console.log(`[Upload] Got document thumbnail for ${fileName} from sendDocument`);
+      }
+      if (!telegramThumbId && msg.document.thumbnail?.file_id) {
+        telegramThumbId = msg.document.thumbnail.file_id;
+        console.log(`[Upload] Got document thumbnail (v2) for ${fileName} from sendDocument`);
+      }
     }
 
-    // Auto-generate thumbnail for images and videos via sendPhoto/sendVideo
-    // Skip for encrypted files (Telegram can't parse them) and multi-chunk files
+    // --- Thumbnail generation ---
+    // Priority: 1) Mobile-provided JPEG thumb (thumbBase64) 2) sendDocument auto-thumb 3) sendPhoto/sendVideo
     const isVideo = mimeType.startsWith('video/') || duration;
     const isImage = mimeType.startsWith('image/');
     const isSingleChunk = totalChunks === 1;
 
-    if (!telegramThumbId && (isImage || isVideo) && !isEncryptedByServer && isSingleChunk && file) {
+    // Strategy 1: Mobile-provided thumbnail (works for ALL formats including HEIC)
+    if (!telegramThumbId && thumbBase64) {
       try {
-        const thumbSource = file.slice(0, Math.min(file.size, CHUNK_SIZE));
-        const thumbData = await thumbSource.arrayBuffer();
+        let thumbBytes: ArrayBuffer = Uint8Array.from(atob(thumbBase64), c => c.charCodeAt(0)).buffer;
+
+        if (isEncryptedByServer && key) {
+          thumbBytes = await encryptChunk(thumbBytes, key);
+          thumbEncrypted = true;
+        }
 
         const thumbForm = new FormData();
         thumbForm.append('chat_id', channelId);
 
         const queue = getTgQueue(botToken);
-        await queue.acquire(undefined, 5); // Priority 5 for thumbnails (medium)
+        await queue.acquire(undefined, 5);
         try {
-          let thumbRes: Response;
-          if (isVideo) {
-            // Use sendVideo for videos to get automatic thumbnail
-            thumbForm.append('video', new Blob([thumbData], { type: mimeType }), fileName);
-            thumbRes = await fetch(`https://api.telegram.org/bot${botToken}/sendVideo`, {
+          if (thumbEncrypted) {
+            thumbForm.append('document', new Blob([thumbBytes], { type: 'application/octet-stream' }), 'thumb.bin');
+            const thumbRes = await fetch(`https://api.telegram.org/bot${botToken}/sendDocument`, {
               method: 'POST', body: thumbForm,
             });
             const thumbJson = await thumbRes.json() as any;
-            if (thumbJson.ok && thumbJson.result.video?.thumb?.file_id) {
-              telegramThumbId = thumbJson.result.video.thumb.file_id;
-              console.log(`[Upload] Generated video thumbnail for ${fileName}`);
+            if (thumbJson.ok) {
+              telegramThumbId = thumbJson.result.document.file_id;
+              console.log(`[Upload] Stored encrypted mobile thumbnail for ${fileName}`);
             }
           } else {
-            // Use sendPhoto for images
-            thumbForm.append('photo', new Blob([thumbData], { type: mimeType }), fileName);
-            thumbRes = await fetch(`https://api.telegram.org/bot${botToken}/sendPhoto`, {
+            thumbForm.append('photo', new Blob([thumbBytes], { type: 'image/jpeg' }), 'thumb.jpg');
+            const thumbRes = await fetch(`https://api.telegram.org/bot${botToken}/sendPhoto`, {
               method: 'POST', body: thumbForm,
             });
             const thumbJson = await thumbRes.json() as any;
             if (thumbJson.ok && thumbJson.result.photo?.length > 0) {
-              const sizes = thumbJson.result.photo;
-              telegramThumbId = sizes[0].file_id;
-              console.log(`[Upload] Generated image thumbnail for ${fileName}`);
+              telegramThumbId = thumbJson.result.photo[0].file_id;
+              console.log(`[Upload] Stored mobile thumbnail for ${fileName}`);
             }
           }
         } finally {
           queue.release();
         }
       } catch (e) {
-        console.log('[Upload] Thumbnail generation failed (non-fatal):', e);
+        console.log('[Upload] Mobile thumbnail upload failed (non-fatal):', e);
+      }
+    }
+
+    // Strategy 2: sendPhoto/sendVideo (non-encrypted, runs in background for multi-chunk to avoid timeout)
+    if (!telegramThumbId && (isImage || isVideo) && !isEncryptedByServer && file) {
+      const thumbSource = file.slice(0, Math.min(file.size, CHUNK_SIZE));
+      const thumbData = await thumbSource.arrayBuffer();
+
+      if (isSingleChunk) {
+        // Single chunk: generate inline (fast enough)
+        try {
+          const thumbForm = new FormData();
+          thumbForm.append('chat_id', channelId);
+          const queue = getTgQueue(botToken);
+          await queue.acquire(undefined, 5);
+          try {
+            if (isVideo) {
+              thumbForm.append('video', new Blob([thumbData], { type: mimeType }), fileName);
+              const thumbRes = await fetch(`https://api.telegram.org/bot${botToken}/sendVideo`, { method: 'POST', body: thumbForm });
+              const thumbJson = await thumbRes.json() as any;
+              telegramThumbId = thumbJson.result?.video?.thumb?.file_id || thumbJson.result?.video?.thumbnail?.file_id || null;
+            } else {
+              thumbForm.append('photo', new Blob([thumbData], { type: mimeType }), fileName);
+              const thumbRes = await fetch(`https://api.telegram.org/bot${botToken}/sendPhoto`, { method: 'POST', body: thumbForm });
+              const thumbJson = await thumbRes.json() as any;
+              if (thumbJson.ok && thumbJson.result.photo?.length > 0) {
+                telegramThumbId = thumbJson.result.photo[0].file_id;
+              }
+            }
+            if (telegramThumbId) console.log(`[Upload] Generated thumbnail for ${fileName}`);
+          } finally { queue.release(); }
+        } catch (e) {
+          console.log('[Upload] Thumbnail generation failed (non-fatal):', e);
+        }
+      } else {
+        // Multi-chunk: generate in background via waitUntil to avoid worker timeout
+        pendingThumbGen = { bgThumbData: thumbData.slice(0), bgMimeType: mimeType, bgFileName: fileName, bgIsVideo: isVideo, botToken, channelId };
       }
     }
     }
@@ -484,6 +534,7 @@ async function handleUpload(request: Request, env: Env, uid: string, idToken: st
       telegramChunks,
       telegramOriginalId,
       telegramThumbId,
+      thumbEncrypted,
       encryptionMode,
       checksum,
       isHeic,
@@ -492,16 +543,48 @@ async function handleUpload(request: Request, env: Env, uid: string, idToken: st
 
     await firestoreSet(env, uid, `photos/${assetId}`, photo, idToken);
 
-    // Auto-link live photos: if this is a video, check for matching HEIC within 2 seconds
-    // If this is a HEIC, check for matching MOV
     if (mimeType.startsWith('video/') || isHeic) {
       env.waitUntil?.(linkLivePhoto(env, uid, assetId, photo, idToken));
     }
 
+    // Background thumbnail generation for multi-chunk files
+    if (pendingThumbGen) {
+      const pendingThumb = pendingThumbGen;
+      env.waitUntil?.((async () => {
+        try {
+          const { bgThumbData, bgMimeType, bgFileName, bgIsVideo, botToken: bt, channelId: ch } = pendingThumb;
+          const thumbForm = new FormData();
+          thumbForm.append('chat_id', ch);
+          const queue = getTgQueue(bt);
+          await queue.acquire(undefined, 5);
+          let thumbId: string | null = null;
+          try {
+            if (bgIsVideo) {
+              thumbForm.append('video', new Blob([bgThumbData], { type: bgMimeType }), bgFileName);
+              const res = await fetch(`https://api.telegram.org/bot${bt}/sendVideo`, { method: 'POST', body: thumbForm });
+              const j = await res.json() as any;
+              thumbId = j.result?.video?.thumb?.file_id || j.result?.video?.thumbnail?.file_id || null;
+            } else {
+              thumbForm.append('photo', new Blob([bgThumbData], { type: bgMimeType }), bgFileName);
+              const res = await fetch(`https://api.telegram.org/bot${bt}/sendPhoto`, { method: 'POST', body: thumbForm });
+              const j = await res.json() as any;
+              if (j.ok && j.result.photo?.length > 0) thumbId = j.result.photo[0].file_id;
+            }
+          } finally { queue.release(); }
+          if (thumbId) {
+            await firestoreSet(env, uid, `photos/${assetId}`, { telegramThumbId: thumbId }, idToken);
+            console.log(`[Upload] Background thumbnail saved for ${assetId}`);
+          }
+        } catch (e) {
+          console.log('[Upload] Background thumbnail failed:', e);
+        }
+      })());
+    }
+
     return json(toAssetResponseDto(photo, uid));
   } catch (e: any) {
-    console.error('Upload handler error:', e);
-    return json({ message: 'Internal upload error', error: e.message }, 500);
+    console.error('Upload handler error:', e?.message, e?.stack);
+    return json({ message: 'Internal upload error', error: e?.message }, 500);
   }
 }
 
@@ -542,25 +625,19 @@ async function handleThumbnail(request: Request, env: Env, uid: string, assetId:
   const sizeParam = (url.searchParams.get('size') || '').toLowerCase();
   const wantsHighQuality = sizeParam === 'preview' || sizeParam === 'fullsize';
 
-  // For preview/fullsize: serve the original (single-chunk only; multi-chunk falls back to thumb)
-  // For thumbnail: serve the small thumb
   const isMultiChunk = photo.telegramChunks && photo.telegramChunks.length > 1;
   let fileId: string;
+
   if (wantsHighQuality && !isMultiChunk) {
     fileId = photo.telegramOriginalId || photo.telegramThumbId;
   } else {
-    // Always fallback to original if no thumb available (for videos/encrypted files)
     fileId = photo.telegramThumbId || photo.telegramOriginalId;
   }
 
-  // For multi-chunk files without thumbnails, we can't serve them as thumbnails
-  // Return 404 instead of serving a broken stream
   if (!fileId) {
-    console.log(`[Thumbnail] No file ID for asset ${assetId}`);
     return json({ message: 'No file data' }, 404);
   }
   if (isMultiChunk && !photo.telegramThumbId && !wantsHighQuality) {
-    console.log(`[Thumbnail] Multi-chunk asset ${assetId} has no thumbnail`);
     return json({ message: 'Thumbnail not available for multi-chunk asset' }, 404);
   }
 
@@ -580,12 +657,10 @@ async function handleThumbnail(request: Request, env: Env, uid: string, assetId:
   let mimeType = photo.mimeType;
   if (photo.isHeic) mimeType = 'image/heic';
   const servingThumb = !wantsHighQuality && fileId === photo.telegramThumbId;
-  // Telegram auto-generated thumbnails are always JPEG
-  if (servingThumb && !isServerZke && !isClientZke) {
+  if (servingThumb) {
+    // Thumbnails are always JPEG (either Telegram-generated or mobile-provided)
     mimeType = 'image/jpeg';
-  }
-  // For HEIC originals, serve as image/heic but add fallback hint
-  if (photo.isHeic && !servingThumb) {
+  } else if (photo.isHeic) {
     mimeType = 'image/heic';
   }
 
@@ -646,52 +721,30 @@ async function handleOriginal(request: Request, env: Env, uid: string, assetId: 
   
   if (photo.telegramChunks && photo.telegramChunks?.length > 0) {
     const chunks = [...photo.telegramChunks].sort((a, b) => a.index - b.index);
-    
-    const stream = new ReadableStream({
-      async start(controller) {
-        const cache = (caches as any).default;
-        for (const chunk of chunks) {
-          try {
-            const cacheKey = new Request(`${url.origin}/chunk-cache/${chunk.file_id}`, { method: 'GET' });
-            let cachedRes = await cache.match(cacheKey);
-            
-            if (cachedRes) {
-              const data = await cachedRes.arrayBuffer();
-              controller.enqueue(new Uint8Array(data));
-              continue;
-            }
+    const chunkSize = CHUNK_SIZE; // 19MB per chunk (before encryption overhead)
+    const cache = (caches as any).default;
 
-            const queue = getTgQueue(botToken);
-            await queue.acquire(undefined, 10); // Priority 10 for original downloads (high)
-            let chunkResult;
-            try {
-              chunkResult = await tgDownloadFile(botToken, chunk.file_id);
-            } finally {
-              queue.release();
-            }
-            if (!chunkResult.ok) throw new Error(chunkResult.error);
+    // Helper: download + decrypt + cache a single chunk
+    const getChunk = async (chunk: any): Promise<ArrayBuffer> => {
+      const ck = new Request(`${url.origin}/chunk-cache/${chunk.file_id}`, { method: 'GET' });
+      const cached = await cache.match(ck);
+      if (cached) return cached.arrayBuffer();
 
-            let chunkData = chunkResult.data!;
-            if (isServerZke && key) {
-               chunkData = await decryptChunk(chunkData, key);
-            }
-            
-            // Store in cache for 24 hours
-            const cacheRes = new Response(chunkData, { 
-                headers: { 'Content-Type': 'application/octet-stream', 'Cache-Control': 'public, max-age=86400' } 
-            });
-            await cache.put(cacheKey, cacheRes.clone());
-            
-            controller.enqueue(new Uint8Array(chunkData));
-          } catch (e) {
-            console.error('Error fetching chunk', e);
-            controller.error(e);
-            return;
-          }
-        }
-        controller.close();
-      }
-    });
+      const queue = getTgQueue(botToken);
+      await queue.acquire(undefined, 10);
+      let result;
+      try { result = await tgDownloadFile(botToken, chunk.file_id); }
+      finally { queue.release(); }
+      if (!result.ok) throw new Error(result.error);
+
+      let data = result.data!;
+      if (isServerZke && key) data = await decryptChunk(data, key);
+
+      env.waitUntil?.(cache.put(ck, new Response(data.slice(0), {
+        headers: { 'Content-Type': 'application/octet-stream', 'Cache-Control': 'public, max-age=86400' }
+      })));
+      return data;
+    };
 
     const headers: Record<string, string> = {
       'Content-Type': photo.mimeType || 'application/octet-stream',
@@ -700,25 +753,60 @@ async function handleOriginal(request: Request, env: Env, uid: string, assetId: 
     };
 
     if (rangeHeader && totalSize > 0) {
-        const parts = rangeHeader.replace(/bytes=/, "").split("-");
-        const start = parseInt(parts[0], 10) || 0;
-        const end = parts[1] ? parseInt(parts[1], 10) : totalSize - 1;
+      const parts = rangeHeader.replace(/bytes=/, "").split("-");
+      const start = parseInt(parts[0], 10) || 0;
+      const end = parts[1] ? parseInt(parts[1], 10) : Math.min(start + 2 * 1024 * 1024 - 1, totalSize - 1);
 
-        // Validate range header
-        if (isNaN(start) || isNaN(end) || start < 0 || end >= totalSize || start > end) {
-          return json({
-            message: 'Invalid range',
-            requested: `${start}-${end}`,
-            totalSize
-          }, 416);
-        }
+      if (isNaN(start) || isNaN(end) || start < 0 || end >= totalSize || start > end) {
+        return json({ message: 'Invalid range', requested: `${start}-${end}`, totalSize }, 416);
+      }
 
-        headers['Content-Range'] = `bytes ${start}-${end}/${totalSize}`;
-        headers['Content-Length'] = (end - start + 1).toString();
-        return new Response(stream, { status: 206, headers });
+      // Calculate which chunks we need for this byte range
+      const firstChunkIdx = Math.floor(start / chunkSize);
+      const lastChunkIdx = Math.min(Math.floor(end / chunkSize), chunks.length - 1);
+
+      // Download only the required chunks and extract the requested bytes
+      const parts2: Uint8Array[] = [];
+      let bytesCollected = 0;
+      const neededBytes = end - start + 1;
+
+      for (let i = firstChunkIdx; i <= lastChunkIdx && bytesCollected < neededBytes; i++) {
+        const chunkData = await getChunk(chunks[i]);
+        const chunkStart = i * chunkSize;
+        const sliceStart = Math.max(start - chunkStart, 0);
+        const sliceEnd = Math.min(end - chunkStart + 1, chunkData.byteLength);
+        parts2.push(new Uint8Array(chunkData, sliceStart, sliceEnd - sliceStart));
+        bytesCollected += sliceEnd - sliceStart;
+      }
+
+      const body = new Uint8Array(neededBytes);
+      let offset = 0;
+      for (const part of parts2) {
+        body.set(part, offset);
+        offset += part.length;
+      }
+
+      headers['Content-Range'] = `bytes ${start}-${end}/${totalSize}`;
+      headers['Content-Length'] = neededBytes.toString();
+      return new Response(body, { status: 206, headers });
     } else {
-        headers['Content-Length'] = (totalSize || '').toString();
-        return new Response(stream, { status: 200, headers });
+      // No range — stream all chunks
+      const stream = new ReadableStream({
+        async start(controller) {
+          for (const chunk of chunks) {
+            try {
+              const data = await getChunk(chunk);
+              controller.enqueue(new Uint8Array(data));
+            } catch (e) {
+              controller.error(e);
+              return;
+            }
+          }
+          controller.close();
+        }
+      });
+      headers['Content-Length'] = (totalSize || '').toString();
+      return new Response(stream, { status: 200, headers });
     }
   }
 
