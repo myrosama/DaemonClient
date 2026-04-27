@@ -9,6 +9,8 @@ import { handleSyncStream } from './sync';
 import { handlePolicy } from './policy';
 import { handleFeatureFlags } from './feature-flags';
 import { handleSearch } from './search';
+import { linkExistingLivePhotos } from './link-live-photos';
+import { requireAuth } from './helpers';
 
 export interface Env {
   FIREBASE_API_KEY: string;
@@ -70,6 +72,9 @@ export default {
         response = await handleSyncStream(request, env);
       } else if (path.startsWith('/api/search')) {
         response = await handleSearch(request, env, path);
+      } else if (path === '/api/admin/link-live-photos' && request.method === 'POST') {
+        const session = await requireAuth(request, env);
+        response = await linkExistingLivePhotos(request, env, session.uid, session.idToken);
       } else {
         response = await handleStubs(request, env, path);
       }

@@ -355,7 +355,7 @@ async function handleUpload(request: Request, env: Env, uid: string, idToken: st
       tgFormData.append('document', new Blob([chunkData], { type: 'application/octet-stream' }), partName);
 
       const queue = getTgQueue(botToken);
-      await queue.acquire();
+      await queue.acquire(undefined, 1); // Priority 1 for uploads (low)
       let tgRes: Response;
       let tgData: any;
       try {
@@ -434,7 +434,7 @@ async function handleUpload(request: Request, env: Env, uid: string, idToken: st
         thumbForm.append('chat_id', channelId);
 
         const queue = getTgQueue(botToken);
-        await queue.acquire();
+        await queue.acquire(undefined, 5); // Priority 5 for thumbnails (medium)
         try {
           let thumbRes: Response;
           if (isVideo) {
@@ -591,7 +591,7 @@ async function handleThumbnail(request: Request, env: Env, uid: string, assetId:
 
   const queue = getTgQueue(botToken);
   try {
-    await queue.acquire(request.signal);
+    await queue.acquire(request.signal, 10); // Priority 10 for thumbnail downloads (high)
   } catch (e) {
     return new Response('Aborted', { status: 499 });
   }
@@ -662,7 +662,7 @@ async function handleOriginal(request: Request, env: Env, uid: string, assetId: 
             }
 
             const queue = getTgQueue(botToken);
-            await queue.acquire();
+            await queue.acquire(undefined, 10); // Priority 10 for original downloads (high)
             let chunkResult;
             try {
               chunkResult = await tgDownloadFile(botToken, chunk.file_id);
@@ -734,7 +734,7 @@ async function handleOriginal(request: Request, env: Env, uid: string, assetId: 
       data = await cachedRes.arrayBuffer();
   } else {
       const queue = getTgQueue(botToken);
-      await queue.acquire();
+      await queue.acquire(undefined, 10); // Priority 10 for original downloads (high)
       let result;
       try {
         result = await tgDownloadFile(botToken, fileId);
@@ -793,15 +793,20 @@ function toAssetResponseDto(photo: any, ownerId: string): any {
   // Report HEIC as HEIC so frontend can handle conversion
   const reportedMime = mimeType;
 
-  // Detect video type
-  const isVideo = mimeType.startsWith('video/') ||
-                  photo.type === 'VIDEO' ||
-                  photo.duration;
+  // Detect video type — live photos (images with livePhotoVideoId) are always IMAGE
+  const isVideo = !photo.livePhotoVideoId && (
+    mimeType.startsWith('video/') ||
+    photo.type === 'VIDEO'
+  );
+
+  // Live photos should not expose duration (prevents GIF treatment in gallery)
+  const effectiveDuration = photo.livePhotoVideoId ? null :
+    (!photo.duration || photo.duration === '0' || photo.duration === '0.000' || photo.duration === '0:00:00.00000') ? null : photo.duration;
 
   return {
     id,
     type: isVideo ? 'VIDEO' : 'IMAGE',
-    originalFileName: photo.originalFileName || 'unknown',
+    originalFileName: photo.originalFileName || photo.fileName || 'unknown',
     originalMimeType: reportedMime,
     originalPath: `/upload/${id}`,
     fileCreatedAt: photo.fileCreatedAt || photo.uploadedAt || new Date().toISOString(),
@@ -814,7 +819,7 @@ function toAssetResponseDto(photo: any, ownerId: string): any {
     isOffline: false,
     isEdited: false,
     hasMetadata: true,
-    duration: (!photo.duration || photo.duration === '0' || photo.duration === '0.000' || photo.duration === '0:00:00.00000') ? null : photo.duration,
+    duration: effectiveDuration,
     ownerId,
     thumbhash: photo.thumbhash || null,
     visibility: photo.visibility || 'timeline',
@@ -868,32 +873,52 @@ async function tgDownloadFile(botToken: string, fileId: string): Promise<{ ok: b
   return { ok: true, data: await imgRes.arrayBuffer() };
 }
 
-// --- Request Queue Helper ---
+// --- Request Queue Helper with Priority ---
+type QueueItem = { resolve: () => void; reject: (err: Error) => void; priority: number; signal?: AbortSignal };
+
 class RequestQueue {
-  private queue: (() => void)[] = [];
+  private queue: QueueItem[] = [];
   private running = 0;
   constructor(private limit: number) {}
-  async acquire(signal?: AbortSignal) {
+
+  async acquire(signal?: AbortSignal, priority: number = 0) {
     if (this.running >= this.limit) {
       await new Promise<void>((resolve, reject) => {
         const onAbort = () => {
-          const idx = this.queue.indexOf(resolve);
+          const idx = this.queue.findIndex(item => item.resolve === resolve);
           if (idx > -1) this.queue.splice(idx, 1);
           reject(new Error('Aborted'));
         };
         signal?.addEventListener('abort', onAbort, { once: true });
-        this.queue.push(() => {
-          signal?.removeEventListener('abort', onAbort);
-          resolve();
-        });
+
+        const item: QueueItem = {
+          resolve: () => {
+            signal?.removeEventListener('abort', onAbort);
+            resolve();
+          },
+          reject,
+          priority,
+          signal
+        };
+
+        // Insert based on priority (higher priority = front of queue)
+        const insertIdx = this.queue.findIndex(q => q.priority < priority);
+        if (insertIdx === -1) {
+          this.queue.push(item);
+        } else {
+          this.queue.splice(insertIdx, 0, item);
+        }
       });
     }
     this.running++;
   }
+
   release() {
     this.running--;
     if (this.queue.length > 0) {
-      this.queue.shift()!();
+      // Always take from front (highest priority)
+      const next = this.queue.shift()!;
+      next.resolve();
     }
   }
 }
@@ -910,6 +935,8 @@ async function linkLivePhoto(env: Env, uid: string, assetId: string, photo: any,
     const isVideo = photo.mimeType.startsWith('video/');
     const isHeic = photo.isHeic || photo.mimeType === 'image/heic';
 
+    console.log(`[LivePhoto] Processing ${assetId}: isVideo=${isVideo}, isHeic=${isHeic}, mimeType=${photo.mimeType}, fileName=${photo.fileName}`);
+
     // CRITICAL FIX: Query ONLY recent uploads (within last 5 seconds) using Firestore filter
     // This prevents O(n) query that loads ALL photos
     const fiveSecondsAgo = new Date(Date.now() - 5000).toISOString();
@@ -919,18 +946,25 @@ async function linkLivePhoto(env: Env, uid: string, assetId: string, photo: any,
       [{ field: 'uploadedAt', op: 'GREATER_THAN_OR_EQUAL', value: fiveSecondsAgo }]
     );
 
+    console.log(`[LivePhoto] Found ${recentUploads.length} recent uploads in last 5 seconds`);
+
     // Filter out current asset
     const candidatesForLinking = recentUploads.filter((p: any) => p._id !== assetId);
+    console.log(`[LivePhoto] ${candidatesForLinking.length} candidates after filtering current asset`);
 
     if (isVideo) {
       // Look for matching HEIC image
+      console.log(`[LivePhoto] Looking for HEIC pair for video ${assetId}`);
       const matchingImage = candidatesForLinking.find((p: any) => {
-        if (!p.isHeic && p.mimeType !== 'image/heic') return false;
+        const isHeicCandidate = p.isHeic || p.mimeType === 'image/heic';
+        if (!isHeicCandidate) return false;
         // Check if timestamps are within 2 seconds
         const timeDiff = Math.abs(
           new Date(p.fileCreatedAt).getTime() - new Date(photo.fileCreatedAt).getTime()
         );
-        return timeDiff < 2000;
+        const withinTime = timeDiff < 2000;
+        console.log(`[LivePhoto] Checking ${p._id}: isHeic=${isHeicCandidate}, timeDiff=${timeDiff}ms, withinTime=${withinTime}`);
+        return withinTime;
       });
 
       if (matchingImage) {
@@ -938,17 +972,32 @@ async function linkLivePhoto(env: Env, uid: string, assetId: string, photo: any,
         await firestoreSet(env, uid, `photos/${matchingImage._id}`, {
           livePhotoVideoId: assetId
         }, idToken);
-        console.log(`[LivePhoto] Linked image ${matchingImage._id} to video ${assetId}`);
+        console.log(`[LivePhoto] ✅ Linked image ${matchingImage._id} to video ${assetId}`);
+      } else {
+        console.log(`[LivePhoto] ❌ No matching HEIC found for video ${assetId}`);
       }
     } else if (isHeic) {
       // Look for matching MOV video
+      console.log(`[LivePhoto] Looking for MOV pair for HEIC ${assetId}`);
       const matchingVideo = candidatesForLinking.find((p: any) => {
-        if (!p.mimeType?.startsWith('video/')) return false;
-        if (!p.duration || parseFloat(p.duration) > 5) return false; // Live photos are short
+        const isVideoCandidate = p.mimeType?.startsWith('video/');
+        if (!isVideoCandidate) return false;
+
+        // Live photos are typically 1-3 seconds, must have duration
+        const durationSecs = p.duration ? parseFloat(p.duration) : 0;
+        const isLivePhotoLength = durationSecs > 0.5 && durationSecs <= 4;
+        if (!isLivePhotoLength) {
+          console.log(`[LivePhoto] Skipping ${p._id}: duration out of range (${durationSecs}s, need 0.5-4s)`);
+          return false;
+        }
+
+        // Timestamps must be VERY close (within 2 seconds)
         const timeDiff = Math.abs(
           new Date(p.fileCreatedAt).getTime() - new Date(photo.fileCreatedAt).getTime()
         );
-        return timeDiff < 2000;
+        const withinTime = timeDiff < 2000;
+        console.log(`[LivePhoto] Checking ${p._id}: isVideo=${isVideoCandidate}, duration=${durationSecs}s, timeDiff=${timeDiff}ms, withinTime=${withinTime}`);
+        return withinTime;
       });
 
       if (matchingVideo) {
@@ -956,7 +1005,9 @@ async function linkLivePhoto(env: Env, uid: string, assetId: string, photo: any,
         await firestoreSet(env, uid, `photos/${assetId}`, {
           livePhotoVideoId: matchingVideo._id
         }, idToken);
-        console.log(`[LivePhoto] Linked image ${assetId} to video ${matchingVideo._id}`);
+        console.log(`[LivePhoto] ✅ Linked image ${assetId} to video ${matchingVideo._id}`);
+      } else {
+        console.log(`[LivePhoto] ❌ No matching MOV found for HEIC ${assetId}`);
       }
     }
   } catch (e) {

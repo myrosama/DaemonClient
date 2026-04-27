@@ -20,7 +20,15 @@ async function getTimeBuckets(env: Env, uid: string, idToken: string, url: URL):
   const isTrashed = url.searchParams.get('isTrashed') === 'true';
   const visibility = url.searchParams.get('visibility');
 
+  // Collect IDs of videos that are linked as live photo companions
+  const livePhotoVideoIds = new Set<string>();
+  for (const p of photos) {
+    if (p?.livePhotoVideoId) livePhotoVideoIds.add(p.livePhotoVideoId);
+  }
+
   let filtered = photos.filter(p => p !== null);
+  // Hide live photo companion videos from timeline
+  filtered = filtered.filter(p => !livePhotoVideoIds.has(p._id));
   if (isFavorite) filtered = filtered.filter(p => p.isFavorite);
   if (isTrashed) filtered = filtered.filter(p => p.isTrashed);
   else filtered = filtered.filter(p => !p.isTrashed);
@@ -51,8 +59,16 @@ async function getTimeBucket(env: Env, uid: string, idToken: string, url: URL): 
 
   const targetMonth = timeBucket.substring(0, 7); // "2024-03"
 
+  // Collect IDs of videos that are linked as live photo companions
+  const livePhotoVideoIds = new Set<string>();
+  for (const p of photos) {
+    if (p?.livePhotoVideoId) livePhotoVideoIds.add(p.livePhotoVideoId);
+  }
+
   let filtered = photos.filter(p => {
     if (!p) return false;
+    // Hide live photo companion videos
+    if (livePhotoVideoIds.has(p._id)) return false;
     const date = p.fileCreatedAt || p.uploadedAt || '';
     return date.substring(0, 7) === targetMonth;
   });
@@ -66,12 +82,21 @@ async function getTimeBucket(env: Env, uid: string, idToken: string, url: URL): 
     id: filtered.map(p => p._id),
     city: filtered.map(p => p.city || null),
     country: filtered.map(p => p.country || null),
-    duration: filtered.map(p => (!p.duration || p.duration === '0' || p.duration === '0.000' || p.duration === '0:00:00.000000') ? null : p.duration),
+    duration: filtered.map(p => {
+      // Live photos (HEIC with linked MOV) should not report duration — prevents GIF treatment
+      if (p.livePhotoVideoId) return null;
+      if (!p.duration || p.duration === '0' || p.duration === '0.000' || p.duration === '0:00:00.000000') return null;
+      return p.duration;
+    }),
     fileCreatedAt: filtered.map(p => p.fileCreatedAt || p.uploadedAt || new Date().toISOString()),
     isFavorite: filtered.map(p => p.isFavorite || false),
-    isImage: filtered.map(p => (p.type || 'IMAGE') === 'IMAGE'),
+    isImage: filtered.map(p => {
+      if (p.mimeType?.startsWith('video/')) return false;
+      if (p.type === 'VIDEO') return false;
+      return true;
+    }),
     isTrashed: filtered.map(p => p.isTrashed || false),
-    livePhotoVideoId: filtered.map(() => null),
+    livePhotoVideoId: filtered.map(p => p.livePhotoVideoId || null),
     localOffsetHours: filtered.map(p => p.localOffsetHours || 0),
     ownerId: filtered.map(() => uid),
     projectionType: filtered.map(() => null),

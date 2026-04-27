@@ -40,19 +40,28 @@ export async function handleSyncStream(request: Request, env: Env): Promise<Resp
         ids: [session.uid]
       });
 
+      // Collect IDs of videos that are live photo companions
+      const livePhotoVideoIds = new Set<string>();
+      for (const p of photos) {
+        if (p?.livePhotoVideoId) livePhotoVideoIds.add(p.livePhotoVideoId);
+      }
+
       const seenChecksums = new Set();
       // Send all assets
       for (const photo of photos) {
         if (!photo) continue;
-        
+        // Hide live photo companion videos from sync
+        if (livePhotoVideoIds.has(photo._id)) continue;
+
         const csum = photo.checksum || photo._id;
         if (seenChecksums.has(csum)) continue;
         seenChecksums.add(csum);
 
+        const isVideo = photo.mimeType?.startsWith('video/') || photo.type === 'VIDEO';
         const dateStr = photo.fileCreatedAt || photo.uploadedAt || new Date().toISOString();
         const assetData = {
           id: photo._id,
-          type: (photo.type || 'IMAGE') === 'IMAGE' ? 'IMAGE' : 'VIDEO',
+          type: isVideo ? 'VIDEO' : 'IMAGE',
           checksum: csum,
           fileCreatedAt: dateStr,
           fileModifiedAt: photo.fileModifiedAt || dateStr,
@@ -62,7 +71,7 @@ export async function handleSyncStream(request: Request, env: Env): Promise<Resp
           isEdited: false,
           isFavorite: photo.isFavorite || false,
           libraryId: null,
-          livePhotoVideoId: null,
+          livePhotoVideoId: photo.livePhotoVideoId || null,
           localDateTime: dateStr,
           originalFileName: photo.deviceAssetId || photo._id,
           ownerId: session.uid,
