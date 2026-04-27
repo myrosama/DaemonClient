@@ -305,6 +305,7 @@ async function handleUpload(request: Request, env: Env, uid: string, idToken: st
 
     const isHeic = /\.(heic|heif)$/i.test(fileName) || mimeType === 'image/heic' || mimeType === 'image/heif';
     const thumbBase64 = formData.get('thumbData_base64') as string | null;
+    console.log(`[Upload] thumbBase64=${thumbBase64 ? `present(${thumbBase64.length}chars)` : 'MISSING'}, isHeic=${isHeic}, mime=${mimeType}`);
 
     let telegramChunks: Array<{ index: number; message_id: number; file_id: string }> = [];
     let telegramOriginalId = '';
@@ -436,8 +437,8 @@ async function handleUpload(request: Request, env: Env, uid: string, idToken: st
     // For ALL uploads: send raw file via sendPhoto/sendVideo to get Telegram-generated thumb
     // This happens REGARDLESS of encryption — thumbs are always unencrypted small JPEGs on Telegram
     // The original file is encrypted separately via sendDocument above
-    const isVideo = mimeType.startsWith('video/') || duration;
-    const isImage = mimeType.startsWith('image/');
+    const isVideo = mimeType.startsWith('video/') && !isHeic;
+    const isImage = mimeType.startsWith('image/') || isHeic;
     const isSingleChunk = totalChunks === 1;
 
     // Strategy 1: Mobile-provided JPEG thumbnail
@@ -711,7 +712,7 @@ async function handleOriginal(request: Request, env: Env, uid: string, assetId: 
     if (rangeHeader && totalSize > 0) {
       const parts = rangeHeader.replace(/bytes=/, "").split("-");
       const start = parseInt(parts[0], 10) || 0;
-      const end = parts[1] ? parseInt(parts[1], 10) : Math.min(start + 2 * 1024 * 1024 - 1, totalSize - 1);
+      const end = parts[1] ? parseInt(parts[1], 10) : totalSize - 1;
 
       if (isNaN(start) || isNaN(end) || start < 0 || end >= totalSize || start > end) {
         return json({ message: 'Invalid range', requested: `${start}-${end}`, totalSize }, 416);
