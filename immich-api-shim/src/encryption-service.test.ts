@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll } from 'vitest';
-import { EncryptionService } from './encryption-service';
+import { EncryptionService, getEncryptionService } from './encryption-service';
 
 describe('EncryptionService', () => {
   let service: EncryptionService;
@@ -43,5 +43,36 @@ describe('EncryptionService', () => {
     await expect(
       uninitializedService.encryptToken('test')
     ).rejects.toThrow('not initialized');
+  });
+
+  it('should throw error if encrypting empty token', async () => {
+    await expect(
+      service.encryptToken('')
+    ).rejects.toThrow('Cannot encrypt empty token');
+
+    await expect(
+      service.encryptToken('   ')
+    ).rejects.toThrow('Cannot encrypt empty token');
+  });
+});
+
+describe('getEncryptionService (singleton)', () => {
+  it('should return the same instance (singleton)', async () => {
+    const service1 = await getEncryptionService('test-master-key-32byte-pad-12345');
+    const service2 = await getEncryptionService(); // No key, should return existing
+
+    expect(service1).toBe(service2); // Same instance
+  });
+
+  it('should initialize service with master key', async () => {
+    const testKey = 'test-master-key-32byte-pad-12345';
+    const service = await getEncryptionService(testKey);
+
+    // Service should be initialized and able to encrypt/decrypt
+    const token = 'test_token_123';
+    const encrypted = await service.encryptToken(token);
+    const decrypted = await service.decryptToken(encrypted);
+
+    expect(decrypted).toBe(token);
   });
 });

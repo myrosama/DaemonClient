@@ -18,6 +18,10 @@ export class EncryptionService {
       throw new Error('Encryption service not initialized');
     }
 
+    if (!token || token.trim().length === 0) {
+      throw new Error('Cannot encrypt empty token');
+    }
+
     const iv = crypto.getRandomValues(new Uint8Array(IV_LENGTH));
     const encrypted = await crypto.subtle.encrypt(
       { name: 'AES-GCM', iv },
@@ -59,11 +63,11 @@ export class EncryptionService {
 // Singleton instance
 let encryptionServiceInstance: EncryptionService | null = null;
 
-export function getEncryptionService(masterKey?: string): EncryptionService {
+export async function getEncryptionService(masterKey?: string): Promise<EncryptionService> {
   if (!encryptionServiceInstance) {
     encryptionServiceInstance = new EncryptionService();
     if (masterKey) {
-      encryptionServiceInstance.initialize(masterKey);
+      await encryptionServiceInstance.initialize(masterKey);
     }
   }
   return encryptionServiceInstance;
