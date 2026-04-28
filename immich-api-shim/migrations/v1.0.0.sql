@@ -73,10 +73,10 @@ CREATE TABLE config (
   value TEXT NOT NULL
 );
 
--- Insert default ZKE config
+-- Insert default ZKE config (encryption ON by default for new users)
 INSERT INTO config (key, value) VALUES
-  ('zke_mode', 'off'),
-  ('zke_enabled', '0'),
+  ('zke_mode', 'server'),
+  ('zke_enabled', '1'),
   ('zke_password', ''),
   ('zke_salt', '');
 
