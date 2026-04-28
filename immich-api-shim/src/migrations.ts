@@ -115,15 +115,23 @@ export async function runMigrations(
     try {
       console.log(`[Migration] Running ${migration.version}...`);
 
-      // Run migration in transaction
-      await db.batch([
-        db.prepare(migration.sql)
-      ]);
+      // Split SQL into individual statements
+      const statements = migration.sql
+        .split(';')
+        .map(s => s.trim())
+        .filter(s => s.length > 0 && !s.startsWith('--'))
+        .map(s => db.prepare(s));
 
-      // Update schema version in config
-      await db.prepare(
-        'INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)'
-      ).bind('schema_version', migration.version).run();
+      // Add schema version update to the statement batch
+      statements.push(
+        db.prepare('INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)')
+          .bind('schema_version', migration.version)
+      );
+
+      // Run all statements in single batch transaction
+      if (statements.length > 0) {
+        await db.batch(statements);
+      }
 
       console.log(`[Migration] ✓ ${migration.version} complete`);
     } catch (error: any) {
@@ -164,12 +172,22 @@ export function compareVersions(v1: string, v2: string): number {
 
 export async function getCurrentSchemaVersion(db: D1Database): Promise<string | null> {
   try {
+    // Check if config table exists
+    const tableCheck = await db.prepare(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='config'"
+    ).first();
+
+    if (!tableCheck) {
+      return null; // Table doesn't exist, first-time setup
+    }
+
     const result = await db.prepare(
       'SELECT value FROM config WHERE key = ?'
     ).bind('schema_version').first<{ value: string }>();
 
     return result?.value || null;
-  } catch {
-    return null;
+  } catch (error) {
+    console.error('[Migration] Error checking schema version:', error);
+    throw error; // Re-throw instead of returning null
   }
 }
