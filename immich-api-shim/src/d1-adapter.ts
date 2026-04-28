@@ -52,31 +52,20 @@ export class D1Adapter {
   }
 
   async savePhoto(photo: Partial<Photo> & { id: string }): Promise<void> {
-    const existing = await this.getPhoto(photo.id);
+    const keys = Object.keys(photo);
+    const placeholders = keys.map(() => '?').join(', ');
+    const values = Object.values(photo);
 
-    if (existing) {
-      // Update
-      const updates = Object.entries(photo)
-        .filter(([key]) => key !== 'id')
-        .map(([key]) => `${key} = ?`);
+    // Build ON CONFLICT update SET clause
+    const updateSet = keys
+      .filter(k => k !== 'id')
+      .map(k => `${k} = excluded.${k}`)
+      .join(', ');
 
-      const values = Object.entries(photo)
-        .filter(([key]) => key !== 'id')
-        .map(([, value]) => value);
-
-      await this.db.prepare(
-        `UPDATE photos SET ${updates.join(', ')} WHERE id = ?`
-      ).bind(...values, photo.id).run();
-    } else {
-      // Insert
-      const keys = Object.keys(photo);
-      const placeholders = keys.map(() => '?').join(', ');
-      const values = Object.values(photo);
-
-      await this.db.prepare(
-        `INSERT INTO photos (${keys.join(', ')}) VALUES (${placeholders})`
-      ).bind(...values).run();
-    }
+    await this.db.prepare(
+      `INSERT INTO photos (${keys.join(', ')}) VALUES (${placeholders})
+       ON CONFLICT(id) DO UPDATE SET ${updateSet}`
+    ).bind(...values).run();
   }
 
   async deletePhoto(id: string): Promise<void> {
@@ -112,7 +101,14 @@ export class D1Adapter {
     }
 
     if (filters.orderBy) {
-      query += ` ORDER BY ${filters.orderBy}`;
+      const allowedColumns = ['uploadedAt', 'fileCreatedAt', 'fileName', 'fileSize', 'width', 'height'];
+      const [column, direction = 'DESC'] = filters.orderBy.split(' ');
+      const upperDirection = direction.toUpperCase();
+
+      if (!allowedColumns.includes(column) || !['ASC', 'DESC'].includes(upperDirection)) {
+        throw new Error(`Invalid orderBy parameter: ${filters.orderBy}`);
+      }
+      query += ` ORDER BY ${column} ${upperDirection}`;
     }
 
     if (filters.limit !== undefined) {
@@ -142,29 +138,19 @@ export class D1Adapter {
   }
 
   async saveAlbum(album: Partial<Album> & { id: string }): Promise<void> {
-    const existing = await this.getAlbum(album.id);
+    const keys = Object.keys(album);
+    const placeholders = keys.map(() => '?').join(', ');
+    const values = Object.values(album);
 
-    if (existing) {
-      const updates = Object.entries(album)
-        .filter(([key]) => key !== 'id')
-        .map(([key]) => `${key} = ?`);
+    const updateSet = keys
+      .filter(k => k !== 'id')
+      .map(k => `${k} = excluded.${k}`)
+      .join(', ');
 
-      const values = Object.entries(album)
-        .filter(([key]) => key !== 'id')
-        .map(([, value]) => value);
-
-      await this.db.prepare(
-        `UPDATE albums SET ${updates.join(', ')} WHERE id = ?`
-      ).bind(...values, album.id).run();
-    } else {
-      const keys = Object.keys(album);
-      const placeholders = keys.map(() => '?').join(', ');
-      const values = Object.values(album);
-
-      await this.db.prepare(
-        `INSERT INTO albums (${keys.join(', ')}) VALUES (${placeholders})`
-      ).bind(...values).run();
-    }
+    await this.db.prepare(
+      `INSERT INTO albums (${keys.join(', ')}) VALUES (${placeholders})
+       ON CONFLICT(id) DO UPDATE SET ${updateSet}`
+    ).bind(...values).run();
   }
 
   async deleteAlbum(id: string): Promise<void> {
@@ -215,18 +201,26 @@ export class D1Adapter {
     password: string;
     salt: string;
   } | null> {
-    const mode = await this.getConfig('zke_mode');
-    const enabled = await this.getConfig('zke_enabled');
-    const password = await this.getConfig('zke_password');
-    const salt = await this.getConfig('zke_salt');
+    const result = await this.db.prepare(
+      `SELECT key, value FROM config
+       WHERE key IN ('zke_mode', 'zke_enabled', 'zke_password', 'zke_salt')`
+    ).all<{ key: string; value: string }>();
 
-    if (!mode) return null;
+    if (!result.results || result.results.length === 0) {
+      return null;
+    }
+
+    const config = Object.fromEntries(
+      result.results.map(r => [r.key, r.value])
+    );
+
+    if (!config.zke_mode) return null;
 
     return {
-      mode,
-      enabled: enabled === '1',
-      password: password || '',
-      salt: salt || ''
+      mode: config.zke_mode,
+      enabled: config.zke_enabled === '1',
+      password: config.zke_password || '',
+      salt: config.zke_salt || ''
     };
   }
 
