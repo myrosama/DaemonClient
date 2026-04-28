@@ -1,0 +1,14 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "aemon-lient",
+  "compatibility_date": "2026-04-27",
+  "observability": {
+    "enabled": true
+  },
+  "assets": {
+    "directory": "accounts-portal"
+  },
+  "compatibility_flags": [
+    "nodejs_compat"
+  ]
+}

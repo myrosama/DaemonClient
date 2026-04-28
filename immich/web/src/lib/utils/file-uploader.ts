@@ -285,12 +285,31 @@ async function fileUploader({
   uploadAssetsStore.markStarted(deviceAssetId);
 
   try {
+    // Convert HEIC to JPEG for browser compatibility
+    let uploadFile = assetFile;
+    const isHeic = /\.(heic|heif)$/i.test(assetFile.name) || assetFile.type.includes('heic');
+    if (isHeic) {
+      try {
+        console.log(`[Upload] Converting HEIC: ${assetFile.name} (${assetFile.size} bytes)`);
+        uploadAssetsStore.updateItem(deviceAssetId, { message: 'Converting HEIC...' });
+        const module = await import('$lib/utils/heic2any.js');
+        const heic2any = module.default || module;
+        const converted = await heic2any({ blob: assetFile, toType: 'image/jpeg', quality: 0.9 });
+        const jpegBlob = Array.isArray(converted) ? converted[0] : converted;
+        const newName = assetFile.name.replace(/\.(heic|heif)$/i, '.jpg');
+        uploadFile = new File([jpegBlob], newName, { type: 'image/jpeg', lastModified: assetFile.lastModified });
+        console.log(`[Upload] HEIC converted: ${newName} (${uploadFile.size} bytes)`);
+      } catch (e) {
+        console.error('[Upload] HEIC conversion failed, will upload as-is:', e);
+      }
+    }
+
     const formData = new FormData();
     for (const [key, value] of Object.entries({
       fileCreatedAt,
       fileModifiedAt: new Date(assetFile.lastModified).toISOString(),
       isFavorite: 'false',
-      assetData: new File([assetFile], assetFile.name),
+      assetData: new File([uploadFile], uploadFile.name),
     })) {
       formData.append(key, value);
     }
@@ -324,13 +343,13 @@ async function fileUploader({
     if (!responseData) {
       const queryParams = asQueryString(authManager.params);
 
-      const { width, height } = await extractDimensions(assetFile);
+      const { width, height } = await extractDimensions(uploadFile);
       formData.append('width', width.toString());
       formData.append('height', height.toString());
 
       let thumbBlob: Blob | null = null;
       try {
-        thumbBlob = await generateThumbnail(assetFile);
+        thumbBlob = await generateThumbnail(uploadFile);
       } catch (e) {
         console.error('Thumb generation failed', e);
       }

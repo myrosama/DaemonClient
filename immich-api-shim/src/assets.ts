@@ -1,5 +1,5 @@
 import type { Env } from './index';
-import { requireAuth, firestoreGet, firestoreSet, firestoreDelete, json } from './helpers';
+import { requireAuth, firestoreGet, firestoreSet, firestoreDelete, firestoreQuery, json } from './helpers';
 import sizeOf from 'image-size';
 import { normalizePhotoManifest } from './contracts';
 import { getFlagsForUser } from './feature-flags';
@@ -71,8 +71,8 @@ export async function handleAssets(request: Request, env: Env, path: string, url
   if (path === '/api/assets/zke-status' && request.method === 'GET') {
     if (env.DB) {
       const adapter = new D1Adapter(env.DB);
-      const zkeConfig = await adapter.getZkeConfig() || {};
-      return json({ mode: zkeConfig.mode || 'off', enabled: !!zkeConfig.enabled });
+      const zkeConfig = await adapter.getZkeConfig();
+      return json({ mode: zkeConfig?.mode || 'off', enabled: !!zkeConfig?.enabled });
     } else {
       const zkeConfig = await firestoreGet(env, uid, 'config/zke', idToken) || {};
       return json({ mode: zkeConfig.mode || 'off', enabled: !!zkeConfig.enabled });
@@ -218,10 +218,24 @@ async function handleUpdateAsset(request: Request, env: Env, uid: string, assetI
     if (body.updateAssetDto.isArchived !== undefined) updates.visibility = body.updateAssetDto.isArchived ? 'archive' : 'timeline';
     if (body.updateAssetDto.description !== undefined) updates.description = body.updateAssetDto.description;
   }
+
   if (Object.keys(updates).length > 0) {
-    await firestoreSet(env, uid, `photos/${assetId}`, updates, idToken);
+    if (env.DB) {
+      const adapter = new D1Adapter(env.DB);
+      await adapter.savePhoto({ id: assetId, ...updates });
+    } else {
+      await firestoreSet(env, uid, `photos/${assetId}`, updates, idToken);
+    }
   }
-  const photo = await firestoreGet(env, uid, `photos/${assetId}`, idToken);
+
+  let photo;
+  if (env.DB) {
+    const adapter = new D1Adapter(env.DB);
+    photo = await adapter.getPhoto(assetId);
+  } else {
+    photo = await firestoreGet(env, uid, `photos/${assetId}`, idToken);
+  }
+
   return json(toAssetResponseDto(photo, uid));
 }
 
@@ -235,9 +249,20 @@ async function handleDeleteAssets(request: Request, env: Env, uid: string, idTok
 
   for (const id of ids) {
     if (!clientDelete) {
-      const photo = await firestoreGet(env, uid, `photos/${id}`, idToken);
+      let photo;
+      if (env.DB) {
+        const adapter = new D1Adapter(env.DB);
+        photo = await adapter.getPhoto(id);
+      } else {
+        photo = await firestoreGet(env, uid, `photos/${id}`, idToken);
+      }
+
       if (photo && botToken && channelId && photo.telegramChunks) {
-        for (const chunk of photo.telegramChunks) {
+        const chunks = typeof photo.telegramChunks === 'string'
+          ? JSON.parse(photo.telegramChunks)
+          : photo.telegramChunks;
+
+        for (const chunk of chunks) {
           try {
             await fetch(`https://api.telegram.org/bot${botToken}/deleteMessage`, {
               method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -247,7 +272,13 @@ async function handleDeleteAssets(request: Request, env: Env, uid: string, idTok
         }
       }
     }
-    await firestoreDelete(env, uid, `photos/${id}`, idToken);
+
+    if (env.DB) {
+      const adapter = new D1Adapter(env.DB);
+      await adapter.deletePhoto(id);
+    } else {
+      await firestoreDelete(env, uid, `photos/${id}`, idToken);
+    }
   }
   return json({});
 }
@@ -260,9 +291,16 @@ async function handleBulkUpdate(request: Request, env: Env, uid: string, idToken
   if (body.visibility !== undefined) updates.visibility = body.visibility;
   if (body.isTrashed !== undefined) updates.isTrashed = body.isTrashed;
 
-  for (const id of ids) {
-    if (Object.keys(updates).length > 0) {
-      await firestoreSet(env, uid, `photos/${id}`, updates, idToken);
+  if (Object.keys(updates).length > 0) {
+    if (env.DB) {
+      const adapter = new D1Adapter(env.DB);
+      for (const id of ids) {
+        await adapter.savePhoto({ id, ...updates });
+      }
+    } else {
+      for (const id of ids) {
+        await firestoreSet(env, uid, `photos/${id}`, updates, idToken);
+      }
     }
   }
   return json({});
@@ -566,17 +604,22 @@ async function handleUpload(request: Request, env: Env, uid: string, idToken: st
       height,
       fileCreatedAt,
       uploadedAt: new Date().toISOString(),
-      telegramChunks,
+      telegramChunks: typeof telegramChunks === 'string' ? telegramChunks : JSON.stringify(telegramChunks),
       telegramOriginalId,
       telegramThumbId,
-      thumbEncrypted,
+      thumbEncrypted: thumbEncrypted ? 1 : 0,
       encryptionMode,
       checksum,
-      isHeic,
-      duration
+      isHeic: isHeic ? 1 : 0,
+      duration: duration || undefined
     };
 
-    await firestoreSet(env, uid, `photos/${assetId}`, photo, idToken);
+    if (env.DB) {
+      const adapter = new D1Adapter(env.DB);
+      await adapter.savePhoto(photo);
+    } else {
+      await firestoreSet(env, uid, `photos/${assetId}`, photo, idToken);
+    }
 
     if (mimeType.startsWith('video/') || isHeic) {
       env.waitUntil?.(linkLivePhoto(env, uid, assetId, photo, idToken));
@@ -606,7 +649,14 @@ async function handleFinalizeClientUpload(request: Request, env: Env, uid: strin
         ownerId: uid,
         uploadedAt: new Date().toISOString(),
     };
-    await firestoreSet(env, uid, `photos/${assetId}`, photo, idToken);
+
+    if (env.DB) {
+      const adapter = new D1Adapter(env.DB);
+      await adapter.savePhoto(photo);
+    } else {
+      await firestoreSet(env, uid, `photos/${assetId}`, photo, idToken);
+    }
+
     return json(toAssetResponseDto(photo, uid));
 }
 

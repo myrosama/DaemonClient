@@ -72,3 +72,8 @@ functions/.env
 
 daemonclient-desktop/node_modules
 daemon-cli/src/daemonclient/config.py
+
+# wrangler files
+.wrangler
+.dev.vars*
+!.dev.vars.example

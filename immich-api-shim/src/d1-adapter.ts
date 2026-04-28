@@ -8,7 +8,7 @@ export interface Photo {
   mimeType: string;
   width?: number;
   height?: number;
-  duration?: string;
+  duration?: string | null;
   fileCreatedAt: string;
   uploadedAt: string;
   telegramOriginalId?: string;

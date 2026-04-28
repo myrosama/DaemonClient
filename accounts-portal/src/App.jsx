@@ -1,19 +1,121 @@
-import { useState, useEffect } from 'react'
-import { BrowserRouter, Routes, Route, Navigate, Link, useNavigate } from 'react-router-dom'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { BrowserRouter, Routes, Route, Navigate, Link, useNavigate, useLocation } from 'react-router-dom'
+import { motion, AnimatePresence } from 'framer-motion'
 import { auth, db } from './config/firebase'
+import firebase from './config/firebase'
 import { Button } from './components/ui/Button'
 import { Input } from './components/ui/Input'
 import { Card } from './components/ui/Card'
 import { toast } from './components/ui/Toast'
+import { SetupWorker } from './pages/SetupWorker'
+import {
+  LayoutDashboard,
+  User,
+  Shield,
+  LogOut,
+  Image,
+  FolderOpen,
+  Loader2,
+  Check,
+  X,
+  ExternalLink,
+  ChevronRight,
+  Bot,
+  Hash,
+  Eye,
+  EyeOff,
+  Palette,
+  Lock,
+  Clock,
+  Globe,
+  Monitor,
+  ArrowLeft,
+} from 'lucide-react'
 
-// Layout Component
+// ============================================================================
+// CONSTANTS
+// ============================================================================
+
+const APP_ID = 'default-daemon-client'
+const RENDER_BACKEND = 'https://daemonclient-elnj.onrender.com'
+const AUTH_WORKER = 'https://auth.daemonclient.uz'
+
+const AVATAR_COLORS = [
+  '#E11D48', '#DB2777', '#C026D3', '#9333EA', '#7C3AED',
+  '#6366F1', '#4F46E5', '#2563EB', '#0284C7', '#0891B2',
+  '#0D9488', '#059669', '#16A34A', '#65A30D', '#CA8A04',
+  '#D97706', '#EA580C', '#DC2626',
+]
+
+// ============================================================================
+// HELPER: Firestore paths
+// ============================================================================
+
+function userPath(uid) {
+  return `artifacts/${APP_ID}/users/${uid}`
+}
+
+function configPath(uid) {
+  return `artifacts/${APP_ID}/users/${uid}/config`
+}
+
+// ============================================================================
+// HELPER: Session management
+// ============================================================================
+
+async function createSession(idToken, refreshToken, returnUrl = '/dashboard') {
+  const res = await fetch(`${AUTH_WORKER}/create-session`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({ idToken, refreshToken, returnUrl }),
+  })
+  return res
+}
+
+async function destroySession() {
+  await fetch(`${AUTH_WORKER}/logout`, {
+    method: 'POST',
+    credentials: 'include',
+  })
+}
+
+// ============================================================================
+// SPINNER
+// ============================================================================
+
+function Spinner({ size = 20, className = '' }) {
+  return (
+    <Loader2
+      size={size}
+      className={`animate-spin text-linear-purple ${className}`}
+    />
+  )
+}
+
+function FullScreenSpinner({ message }) {
+  return (
+    <div className="min-h-screen flex flex-col items-center justify-center bg-linear-bg">
+      <Spinner size={32} />
+      {message && (
+        <p className="mt-4 text-sm text-linear-text-secondary">{message}</p>
+      )}
+    </div>
+  )
+}
+
+// ============================================================================
+// LAYOUT — Sidebar + Header
+// ============================================================================
+
 function Layout({ children, user }) {
   const navigate = useNavigate()
+  const location = useLocation()
 
   const handleLogout = async () => {
     try {
       await auth.signOut()
-      await fetch('https://auth.daemonclient.uz/logout', { credentials: 'include' })
+      await destroySession()
       navigate('/login')
     } catch (error) {
       console.error('Logout error:', error)
@@ -22,51 +124,77 @@ function Layout({ children, user }) {
 
   if (!user) return <>{children}</>
 
+  const navItems = [
+    { path: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
+    { path: '/profile', label: 'Profile', icon: User },
+    { path: '/security', label: 'Security', icon: Shield },
+  ]
+
+  const initials = user.displayName
+    ? user.displayName.charAt(0).toUpperCase()
+    : user.email.charAt(0).toUpperCase()
+
   return (
     <div className="min-h-screen bg-linear-bg flex">
       {/* Sidebar */}
-      <div className="w-60 bg-linear-surface border-r border-white/[0.06] fixed h-screen">
+      <div className="w-60 bg-linear-surface border-r border-white/[0.06] fixed h-screen flex flex-col">
         <div className="p-6">
-          <h1 className="text-lg font-semibold text-linear-text tracking-tighter">DaemonClient</h1>
+          <Link to="/dashboard" className="flex items-center gap-2">
+            <div className="w-7 h-7 rounded-lg bg-linear-purple flex items-center justify-center">
+              <span className="text-white text-xs font-bold">D</span>
+            </div>
+            <h1 className="text-[15px] font-semibold text-linear-text tracking-tighter">
+              DaemonClient
+            </h1>
+          </Link>
         </div>
-        <nav className="px-3 space-y-1">
-          <Link
-            to="/dashboard"
-            className="flex items-center gap-3 px-3 py-2 text-sm text-linear-text hover:bg-white/5 rounded-md transition-colors"
-          >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
-            </svg>
-            Dashboard
-          </Link>
-          <Link
-            to="/profile"
-            className="flex items-center gap-3 px-3 py-2 text-sm text-linear-text hover:bg-white/5 rounded-md transition-colors"
-          >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-            </svg>
-            Profile
-          </Link>
-          <Link
-            to="/security"
-            className="flex items-center gap-3 px-3 py-2 text-sm text-linear-text hover:bg-white/5 rounded-md transition-colors"
-          >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
-            </svg>
-            Security
-          </Link>
+
+        <nav className="px-3 space-y-0.5 flex-1">
+          {navItems.map(({ path, label, icon: Icon }) => {
+            const active = location.pathname === path
+            return (
+              <Link
+                key={path}
+                to={path}
+                className={`flex items-center gap-3 px-3 py-[7px] text-[13px] rounded-md transition-colors ${
+                  active
+                    ? 'bg-white/[0.08] text-linear-text font-medium'
+                    : 'text-linear-text-secondary hover:bg-white/[0.04] hover:text-linear-text'
+                }`}
+              >
+                <Icon size={16} strokeWidth={1.8} />
+                {label}
+              </Link>
+            )
+          })}
         </nav>
+
+        {/* Sidebar footer */}
+        <div className="p-3 border-t border-white/[0.06]">
+          <div className="flex items-center gap-3 px-3 py-2">
+            <div className="w-7 h-7 rounded-full bg-linear-purple flex items-center justify-center shrink-0">
+              <span className="text-white text-xs font-medium">{initials}</span>
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-[13px] text-linear-text truncate">
+                {user.displayName || user.email.split('@')[0]}
+              </p>
+            </div>
+          </div>
+        </div>
       </div>
 
       {/* Main content */}
       <div className="flex-1 ml-60">
-        <header className="h-16 border-b border-white/[0.06] flex items-center justify-between px-8">
-          <div className="text-sm text-linear-text-secondary">{user.email}</div>
-          <Button variant="ghost" onClick={handleLogout}>
+        <header className="h-12 border-b border-white/[0.06] flex items-center justify-between px-6 sticky top-0 bg-linear-bg/80 backdrop-blur-xl z-10">
+          <div className="text-[13px] text-linear-text-secondary">{user.email}</div>
+          <button
+            onClick={handleLogout}
+            className="flex items-center gap-2 text-[13px] text-linear-text-secondary hover:text-linear-text transition-colors"
+          >
+            <LogOut size={14} strokeWidth={1.8} />
             Sign out
-          </Button>
+          </button>
         </header>
         <main className="p-8">{children}</main>
       </div>
@@ -74,11 +202,172 @@ function Layout({ children, user }) {
   )
 }
 
-// Simple Google-style Signup
+// ============================================================================
+// LOGIN PAGE
+// ============================================================================
+
+function LoginPage() {
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(false)
+  const navigate = useNavigate()
+
+  const handleLogin = async (e) => {
+    e.preventDefault()
+    setError('')
+    setLoading(true)
+
+    try {
+      const userCredential = await auth.signInWithEmailAndPassword(email, password)
+      const idToken = await userCredential.user.getIdToken()
+      const refreshToken = userCredential.user.refreshToken
+
+      const params = new URLSearchParams(window.location.search)
+      const returnUrl = params.get('return_url') || '/dashboard'
+
+      const res = await createSession(idToken, refreshToken, returnUrl)
+
+      if (res.ok) {
+        const data = await res.json()
+        if (data.redirectUrl && data.redirectUrl.startsWith('http')) {
+          window.location.href = data.redirectUrl
+        } else {
+          navigate(data.redirectUrl || '/dashboard')
+        }
+      } else {
+        navigate('/dashboard')
+      }
+    } catch (err) {
+      const msg = err.code === 'auth/user-not-found'
+        ? 'No account found with this email'
+        : err.code === 'auth/wrong-password'
+        ? 'Incorrect password'
+        : err.code === 'auth/invalid-credential'
+        ? 'Invalid email or password'
+        : err.code === 'auth/too-many-requests'
+        ? 'Too many attempts. Try again later.'
+        : err.message || 'Sign in failed'
+      setError(msg)
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-linear-bg px-4">
+      <motion.div
+        initial={{ opacity: 0, y: 12 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.3 }}
+        className="w-full max-w-[380px]"
+      >
+        <div className="text-center mb-8">
+          <div className="w-10 h-10 rounded-xl bg-linear-purple flex items-center justify-center mx-auto mb-5">
+            <span className="text-white text-lg font-bold">D</span>
+          </div>
+          <h1 className="text-xl font-semibold text-linear-text tracking-tighter">
+            Sign in
+          </h1>
+          <p className="text-[13px] text-linear-text-secondary mt-1">
+            to continue to DaemonClient
+          </p>
+        </div>
+
+        <Card className="p-6">
+          <form onSubmit={handleLogin} className="space-y-3">
+            <div>
+              <label className="block text-[13px] text-linear-text-secondary mb-1.5">
+                Email
+              </label>
+              <Input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="you@example.com"
+                required
+                error={!!error}
+                className="w-full"
+              />
+            </div>
+
+            <div>
+              <label className="block text-[13px] text-linear-text-secondary mb-1.5">
+                Password
+              </label>
+              <div className="relative">
+                <Input
+                  type={showPassword ? 'text' : 'password'}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="Enter password"
+                  required
+                  error={!!error}
+                  className="w-full pr-9"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-linear-text-secondary hover:text-linear-text transition-colors"
+                >
+                  {showPassword ? <EyeOff size={14} /> : <Eye size={14} />}
+                </button>
+              </div>
+            </div>
+
+            {error && (
+              <p className="text-[13px] text-linear-error">{error}</p>
+            )}
+
+            <Button
+              type="submit"
+              disabled={loading}
+              className="w-full mt-1"
+            >
+              {loading ? (
+                <span className="flex items-center justify-center gap-2">
+                  <Spinner size={14} className="text-white" />
+                  Signing in...
+                </span>
+              ) : (
+                'Sign in'
+              )}
+            </Button>
+          </form>
+
+          <div className="mt-5 pt-5 border-t border-white/[0.06] text-center">
+            <Link
+              to="/signup"
+              className="text-[13px] text-linear-purple hover:text-linear-purple-hover transition-colors"
+            >
+              Create account
+            </Link>
+          </div>
+        </Card>
+
+        <div className="mt-5 text-center">
+          <a
+            href="https://daemonclient.uz"
+            className="text-[13px] text-linear-text-secondary hover:text-linear-text transition-colors inline-flex items-center gap-1"
+          >
+            <ArrowLeft size={12} />
+            Back to home
+          </a>
+        </div>
+      </motion.div>
+    </div>
+  )
+}
+
+// ============================================================================
+// SIGNUP PAGE
+// ============================================================================
+
 function SignupPage() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const navigate = useNavigate()
@@ -101,200 +390,751 @@ function SignupPage() {
 
     try {
       const userCredential = await auth.createUserWithEmailAndPassword(email, password)
-      const idToken = await userCredential.user.getIdToken()
+      const user = userCredential.user
+      const idToken = await user.getIdToken()
 
-      // Call existing setup backend
-      const res = await fetch('https://daemonclient-elnj.onrender.com/startSetup', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ uid: userCredential.user.uid, email, idToken })
-      })
-
-      if (res.ok) {
-        // After setup completes, log them in via auth worker
-        const refreshToken = userCredential.user.refreshToken
-        const sessionRes = await fetch('https://auth.daemonclient.uz/create-session', {
+      // Call Render backend to start setup
+      try {
+        await fetch(`${RENDER_BACKEND}/startSetup`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify({ idToken, refreshToken, returnUrl: '/dashboard' })
+          body: JSON.stringify({ data: { uid: user.uid, email: user.email } }),
         })
-
-        if (sessionRes.ok) {
-          navigate('/dashboard')
-        } else {
-          navigate('/dashboard')
-        }
-      } else {
-        navigate('/dashboard')
+      } catch (setupErr) {
+        console.warn('Setup call failed, will retry on setup page:', setupErr)
       }
+
+      // Create session
+      const refreshToken = user.refreshToken
+      await createSession(idToken, refreshToken, '/setup')
+
+      // Log signup activity
+      try {
+        await db.collection(`${userPath(user.uid)}/activity`).add({
+          type: 'signup',
+          timestamp: firebase.firestore.FieldValue.serverTimestamp(),
+          userAgent: navigator.userAgent,
+          ip: 'client',
+        })
+      } catch (e) {
+        // non-critical
+      }
+
+      navigate('/setup')
     } catch (err) {
-      toast.error(err.message || 'Sign up failed')
+      const msg = err.code === 'auth/email-already-in-use'
+        ? 'An account with this email already exists'
+        : err.code === 'auth/weak-password'
+        ? 'Password is too weak'
+        : err.code === 'auth/invalid-email'
+        ? 'Invalid email address'
+        : err.message || 'Sign up failed'
+      setError(msg)
       setLoading(false)
     }
   }
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-linear-bg px-4">
-      <div className="w-full max-w-md">
+      <motion.div
+        initial={{ opacity: 0, y: 12 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.3 }}
+        className="w-full max-w-[380px]"
+      >
         <div className="text-center mb-8">
-          <h1 className="text-2xl font-semibold text-linear-text mb-2 tracking-tighter">Create your account</h1>
-          <p className="text-sm text-linear-text-secondary">to continue to DaemonClient</p>
+          <div className="w-10 h-10 rounded-xl bg-linear-purple flex items-center justify-center mx-auto mb-5">
+            <span className="text-white text-lg font-bold">D</span>
+          </div>
+          <h1 className="text-xl font-semibold text-linear-text tracking-tighter">
+            Create your account
+          </h1>
+          <p className="text-[13px] text-linear-text-secondary mt-1">
+            to continue to DaemonClient
+          </p>
         </div>
 
-        <Card className="p-10">
-          <form onSubmit={handleSignup} className="space-y-4">
-            <Input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="Email"
-              required
-              error={!!error}
-              className="w-full"
-            />
+        <Card className="p-6">
+          <form onSubmit={handleSignup} className="space-y-3">
+            <div>
+              <label className="block text-[13px] text-linear-text-secondary mb-1.5">
+                Email
+              </label>
+              <Input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="you@example.com"
+                required
+                error={!!error}
+                className="w-full"
+              />
+            </div>
 
-            <Input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="Password"
-              required
-              error={!!error}
-              className="w-full"
-            />
+            <div>
+              <label className="block text-[13px] text-linear-text-secondary mb-1.5">
+                Password
+              </label>
+              <div className="relative">
+                <Input
+                  type={showPassword ? 'text' : 'password'}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="At least 6 characters"
+                  required
+                  error={!!error}
+                  className="w-full pr-9"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-linear-text-secondary hover:text-linear-text transition-colors"
+                >
+                  {showPassword ? <EyeOff size={14} /> : <Eye size={14} />}
+                </button>
+              </div>
+            </div>
 
-            <Input
-              type="password"
-              value={confirmPassword}
-              onChange={(e) => setConfirmPassword(e.target.value)}
-              placeholder="Confirm password"
-              required
-              error={!!error}
-              className="w-full"
-            />
+            <div>
+              <label className="block text-[13px] text-linear-text-secondary mb-1.5">
+                Confirm password
+              </label>
+              <Input
+                type={showPassword ? 'text' : 'password'}
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                placeholder="Repeat password"
+                required
+                error={!!error && password !== confirmPassword}
+                className="w-full"
+              />
+            </div>
+
+            {error && (
+              <p className="text-[13px] text-linear-error">{error}</p>
+            )}
 
             <Button
               type="submit"
               disabled={loading}
-              className="w-full"
+              className="w-full mt-1"
             >
-              {loading ? 'Creating account...' : 'Create account'}
+              {loading ? (
+                <span className="flex items-center justify-center gap-2">
+                  <Spinner size={14} className="text-white" />
+                  Creating account...
+                </span>
+              ) : (
+                'Create account'
+              )}
             </Button>
           </form>
 
-          <div className="mt-6 text-center">
-            <Link to="/login" className="text-sm text-linear-purple hover:text-linear-purple-hover transition-colors">
+          <div className="mt-5 pt-5 border-t border-white/[0.06] text-center">
+            <Link
+              to="/login"
+              className="text-[13px] text-linear-purple hover:text-linear-purple-hover transition-colors"
+            >
               Sign in instead
             </Link>
           </div>
         </Card>
 
-        <div className="mt-6 text-center">
-          <a href="https://daemonclient.uz" className="text-sm text-linear-text-secondary hover:text-linear-text transition-colors">
-            ← Back to home
+        <div className="mt-5 text-center">
+          <a
+            href="https://daemonclient.uz"
+            className="text-[13px] text-linear-text-secondary hover:text-linear-text transition-colors inline-flex items-center gap-1"
+          >
+            <ArrowLeft size={12} />
+            Back to home
           </a>
         </div>
-      </div>
+      </motion.div>
     </div>
   )
 }
 
-// Simple Google-style Login
-function LoginPage() {
-  const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
-  const [error, setError] = useState('')
-  const [loading, setLoading] = useState(false)
+// ============================================================================
+// SETUP PAGE — Telegram Bot/Channel Setup
+// ============================================================================
+
+function SetupPage() {
   const navigate = useNavigate()
+  const [showManualForm, setShowManualForm] = useState(false)
+  const [statusMessage, setStatusMessage] = useState('')
+  const [botToken, setBotToken] = useState('')
+  const [channelId, setChannelId] = useState('')
+  const [error, setError] = useState('')
+  const [isLoading, setIsLoading] = useState(false)
 
-  const handleLogin = async (e) => {
-    e.preventDefault()
+  const handleStartAutomatedSetup = async () => {
+    setStatusMessage('Initiating secure setup... This may take a minute.')
     setError('')
-    setLoading(true)
-
+    setIsLoading(true)
     try {
-      const userCredential = await auth.signInWithEmailAndPassword(email, password)
-      const idToken = await userCredential.user.getIdToken()
-      const refreshToken = userCredential.user.refreshToken
-
-      const params = new URLSearchParams(window.location.search)
-      const returnUrl = params.get('return_url') || '/dashboard'
-
-      const res = await fetch('https://auth.daemonclient.uz/create-session', {
+      const response = await fetch(`${RENDER_BACKEND}/startSetup`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ idToken, refreshToken, returnUrl })
+        body: JSON.stringify({
+          data: { uid: auth.currentUser.uid, email: auth.currentUser.email },
+        }),
       })
-
-      if (res.ok) {
-        const { redirectUrl } = await res.json()
-        window.location.href = redirectUrl
-      } else {
-        navigate('/dashboard')
+      const result = await response.json()
+      if (!response.ok) {
+        throw new Error(
+          result.error?.message || 'The setup service returned an error.'
+        )
       }
+      setStatusMessage('Finalizing configuration...')
+
+      const configDocRef = db
+        .collection(configPath(auth.currentUser.uid))
+        .doc('telegram')
+      let attempts = 0
+      const maxAttempts = 8
+      while (attempts < maxAttempts) {
+        const docSnap = await configDocRef.get()
+        if (docSnap.exists && docSnap.data().botToken) {
+          setStatusMessage('Configuration saved! Proceeding...')
+          navigate('/setup/ownership')
+          return
+        }
+        await new Promise((resolve) => setTimeout(resolve, 1500))
+        attempts++
+      }
+      throw new Error(
+        'Could not verify configuration after setup. Please try again.'
+      )
     } catch (err) {
-      toast.error(err.message || 'Sign in failed')
-      setLoading(false)
+      console.error('Setup error:', err)
+      setStatusMessage('')
+      if (err.message.includes('Failed to fetch')) {
+        setError('Could not connect to the setup service. Please try again later.')
+      } else {
+        setError(err.message || 'An unexpected error occurred.')
+      }
+    } finally {
+      setIsLoading(false)
     }
+  }
+
+  const handleSaveManualSetup = async () => {
+    if (!botToken.trim() || !channelId.trim()) {
+      setError('Bot Token and Channel ID are required.')
+      return
+    }
+    setIsLoading(true)
+    setError('')
+    try {
+      const configDocRef = db
+        .collection(configPath(auth.currentUser.uid))
+        .doc('telegram')
+      await configDocRef.set({
+        botToken: botToken.trim(),
+        channelId: channelId.trim(),
+        setupTimestamp: firebase.firestore.FieldValue.serverTimestamp(),
+      })
+      navigate('/setup/ownership')
+    } catch (err) {
+      setError(`Save failed: ${err.message}`)
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  // Real-time listener for setup completion (in case backend writes config)
+  useEffect(() => {
+    const uid = auth.currentUser?.uid
+    if (!uid) return
+    const unsubscribe = db
+      .collection(configPath(uid))
+      .doc('telegram')
+      .onSnapshot((doc) => {
+        if (doc.exists && doc.data().botToken) {
+          setStatusMessage('Setup complete! Redirecting...')
+          setTimeout(() => navigate('/setup/ownership'), 1000)
+        }
+      })
+    return () => unsubscribe()
+  }, [navigate])
+
+  const handleLogout = async () => {
+    await auth.signOut()
+    await destroySession()
+    navigate('/login')
   }
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-linear-bg px-4">
-      <div className="w-full max-w-md">
+      <motion.div
+        initial={{ opacity: 0, y: 12 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.3 }}
+        className="w-full max-w-[520px]"
+      >
         <div className="text-center mb-8">
-          <h1 className="text-2xl font-semibold text-linear-text mb-2 tracking-tighter">Sign in</h1>
-          <p className="text-sm text-linear-text-secondary">to continue to DaemonClient</p>
+          <div className="w-10 h-10 rounded-xl bg-linear-purple flex items-center justify-center mx-auto mb-5">
+            <Bot size={20} className="text-white" />
+          </div>
+          <h1 className="text-xl font-semibold text-linear-text tracking-tighter">
+            One-Time Setup
+          </h1>
+          <p className="text-[13px] text-linear-text-secondary mt-1">
+            Create your private, secure Telegram storage
+          </p>
         </div>
 
-        <Card className="p-10">
-          <form onSubmit={handleLogin} className="space-y-4">
-            <Input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="Email"
-              required
-              className="w-full"
-            />
+        <Card className="p-6">
+          <AnimatePresence mode="wait">
+            {!showManualForm ? (
+              <motion.div
+                key="options"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="space-y-4"
+              >
+                {/* Automated setup */}
+                <div className="relative border border-linear-purple/40 rounded-md p-5">
+                  <span className="absolute -top-2.5 right-4 bg-linear-purple text-white text-[11px] font-medium px-2.5 py-0.5 rounded-full">
+                    Recommended
+                  </span>
+                  <h2 className="text-[15px] font-medium text-linear-text">
+                    Automated Setup
+                  </h2>
+                  <p className="text-[13px] text-linear-text-secondary mt-1.5">
+                    We create and configure a private bot and channel for you automatically.
+                  </p>
+                  <Button
+                    onClick={handleStartAutomatedSetup}
+                    disabled={isLoading || !!statusMessage}
+                    className="w-full mt-4"
+                  >
+                    {isLoading ? (
+                      <span className="flex items-center justify-center gap-2">
+                        <Spinner size={14} className="text-white" />
+                        Setting up...
+                      </span>
+                    ) : (
+                      'Create My Secure Storage'
+                    )}
+                  </Button>
+                </div>
 
-            <Input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="Password"
-              required
-              className="w-full"
-            />
+                {/* Manual setup */}
+                <div className="border border-white/[0.06] rounded-md p-5">
+                  <h2 className="text-[15px] font-medium text-linear-text">
+                    Manual Setup
+                  </h2>
+                  <p className="text-[13px] text-linear-text-secondary mt-1.5">
+                    For advanced users with an existing bot and channel.
+                  </p>
+                  <Button
+                    variant="outline"
+                    onClick={() => setShowManualForm(true)}
+                    className="w-full mt-4"
+                  >
+                    Enter Credentials Manually
+                  </Button>
+                </div>
+              </motion.div>
+            ) : (
+              <motion.div
+                key="manual"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="space-y-3"
+              >
+                <h2 className="text-[15px] font-medium text-linear-text text-center mb-4">
+                  Enter Your Credentials
+                </h2>
+                <div>
+                  <label className="block text-[13px] text-linear-text-secondary mb-1.5">
+                    <Bot size={12} className="inline mr-1" />
+                    Telegram Bot Token
+                  </label>
+                  <Input
+                    type="password"
+                    value={botToken}
+                    onChange={(e) => setBotToken(e.target.value)}
+                    placeholder="From @BotFather"
+                    className="w-full"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[13px] text-linear-text-secondary mb-1.5">
+                    <Hash size={12} className="inline mr-1" />
+                    Private Channel ID
+                  </label>
+                  <Input
+                    type="text"
+                    value={channelId}
+                    onChange={(e) => setChannelId(e.target.value)}
+                    placeholder="From @userinfobot"
+                    className="w-full"
+                  />
+                </div>
 
-            <Button
-              type="submit"
-              disabled={loading}
-              className="w-full"
+                <Button
+                  onClick={handleSaveManualSetup}
+                  disabled={isLoading}
+                  className="w-full mt-2"
+                >
+                  {isLoading ? (
+                    <span className="flex items-center justify-center gap-2">
+                      <Spinner size={14} className="text-white" />
+                      Saving...
+                    </span>
+                  ) : (
+                    'Save & Continue'
+                  )}
+                </Button>
+
+                <button
+                  onClick={() => setShowManualForm(false)}
+                  className="w-full text-center text-[13px] text-linear-text-secondary hover:text-linear-text transition-colors mt-2"
+                >
+                  Back to setup options
+                </button>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {/* Status bar */}
+          {statusMessage && (
+            <motion.div
+              initial={{ opacity: 0, y: 4 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="mt-4 p-3 bg-linear-purple/10 border border-linear-purple/20 rounded-md flex items-center gap-3"
             >
-              {loading ? 'Signing in...' : 'Sign in'}
-            </Button>
-          </form>
+              <Spinner size={16} />
+              <p className="text-[13px] text-linear-purple">{statusMessage}</p>
+            </motion.div>
+          )}
 
-          <div className="mt-6 text-center">
-            <Link to="/signup" className="text-sm text-linear-purple hover:text-linear-purple-hover transition-colors">
-              Create account
-            </Link>
-          </div>
+          {/* Error */}
+          {error && !statusMessage && (
+            <p className="text-[13px] text-linear-error mt-4 text-center">
+              {error}
+            </p>
+          )}
         </Card>
 
-        <div className="mt-6 text-center">
-          <a href="https://daemonclient.uz" className="text-sm text-linear-text-secondary hover:text-linear-text transition-colors">
-            ← Back to home
-          </a>
+        <div className="mt-5 text-center">
+          <button
+            onClick={handleLogout}
+            className="text-[13px] text-linear-text-secondary hover:text-linear-text transition-colors"
+          >
+            Sign out
+          </button>
         </div>
-      </div>
+      </motion.div>
     </div>
   )
 }
 
-// Dashboard Page
+// ============================================================================
+// OWNERSHIP PAGE — Transfer bot/channel ownership
+// ============================================================================
+
+function OwnershipPage() {
+  const navigate = useNavigate()
+  const [config, setConfig] = useState(null)
+  const [step, setStep] = useState(1)
+  const [isLoading, setIsLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [countdown, setCountdown] = useState(10)
+  const [isButtonDisabled, setIsButtonDisabled] = useState(true)
+  const [hasClickedLink, setHasClickedLink] = useState(false)
+  const [isProcessing, setIsProcessing] = useState(false)
+  const [transferStatus, setTransferStatus] = useState(null)
+
+  // Fetch config
+  useEffect(() => {
+    const fetchConfig = async () => {
+      try {
+        const configDocRef = db
+          .collection(configPath(auth.currentUser.uid))
+          .doc('telegram')
+        const docSnap = await configDocRef.get()
+        if (docSnap.exists) {
+          setConfig(docSnap.data())
+        } else {
+          setError('Could not find your configuration. Please try setup again.')
+        }
+      } catch (err) {
+        setError('Error fetching configuration: ' + err.message)
+      } finally {
+        setIsLoading(false)
+      }
+    }
+    fetchConfig()
+  }, [])
+
+  // Countdown timer
+  useEffect(() => {
+    if (isLoading) return
+    setIsButtonDisabled(true)
+    setCountdown(10)
+    if (hasClickedLink) {
+      const interval = setInterval(() => {
+        setCountdown((prev) => {
+          if (prev <= 1) {
+            clearInterval(interval)
+            setIsButtonDisabled(false)
+            return 0
+          }
+          return prev - 1
+        })
+      }, 1000)
+      return () => clearInterval(interval)
+    }
+  }, [step, hasClickedLink, isLoading])
+
+  const handleLinkClicked = () => {
+    if (!hasClickedLink) setHasClickedLink(true)
+  }
+
+  const handleNextStep = () => {
+    setStep(2)
+    setHasClickedLink(false)
+  }
+
+  const handleFinalize = async () => {
+    setIsProcessing(true)
+    setStep(3)
+    setError('')
+    setTransferStatus({
+      bot: { status: 'pending', message: 'Verifying user and transferring bot ownership...' },
+      channel: { status: 'pending', message: 'Attempting to transfer channel ownership...' },
+    })
+    try {
+      const response = await fetch(`${RENDER_BACKEND}/finalizeTransfer`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ data: { uid: auth.currentUser.uid } }),
+      })
+      const result = await response.json()
+      if (!response.ok) {
+        throw new Error(result.error?.message || 'Server returned an error.')
+      }
+      setTransferStatus({
+        bot: { status: result.bot_transfer_status, message: result.bot_transfer_message },
+        channel: { status: result.channel_transfer_status, message: result.channel_transfer_message },
+      })
+
+      // Log activity
+      try {
+        await db.collection(`${userPath(auth.currentUser.uid)}/activity`).add({
+          type: 'setup_complete',
+          timestamp: firebase.firestore.FieldValue.serverTimestamp(),
+          userAgent: navigator.userAgent,
+        })
+      } catch (e) {}
+
+      toast.success('Setup complete! Redirecting to dashboard...')
+      setTimeout(() => navigate('/dashboard'), 5000)
+    } catch (err) {
+      setError(`Error: ${err.message}`)
+      setStep(2)
+      setIsProcessing(false)
+      setHasClickedLink(false)
+    }
+  }
+
+  const handleLogout = async () => {
+    await auth.signOut()
+    await destroySession()
+    navigate('/login')
+  }
+
+  if (isLoading) {
+    return <FullScreenSpinner message="Loading your bot and channel details..." />
+  }
+
+  const StatusItem = ({ status, message }) => {
+    const icon =
+      status === 'pending' ? (
+        <Spinner size={18} />
+      ) : status === 'success' ? (
+        <div className="w-5 h-5 rounded-full bg-linear-success/20 flex items-center justify-center">
+          <Check size={12} className="text-linear-success" />
+        </div>
+      ) : (
+        <div className="w-5 h-5 rounded-full bg-linear-error/20 flex items-center justify-center">
+          <X size={12} className="text-linear-error" />
+        </div>
+      )
+    const textColor =
+      status === 'success'
+        ? 'text-linear-success'
+        : status === 'failed'
+        ? 'text-linear-error'
+        : 'text-linear-text-secondary'
+
+    return (
+      <li className="flex items-start gap-3 py-2">
+        <div className="shrink-0 mt-0.5">{icon}</div>
+        <p className={`text-[13px] ${textColor}`}>{message}</p>
+      </li>
+    )
+  }
+
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-linear-bg px-4">
+      <motion.div
+        initial={{ opacity: 0, y: 12 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.3 }}
+        className="w-full max-w-[480px]"
+      >
+        <Card className="p-6">
+          <AnimatePresence mode="wait">
+            {step === 1 && (
+              <motion.div
+                key="step1"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="space-y-5 text-center"
+              >
+                <div>
+                  <p className="text-[11px] font-medium text-linear-purple uppercase tracking-wider mb-2">
+                    Step 1 of 2
+                  </p>
+                  <h1 className="text-lg font-semibold text-linear-text tracking-tighter">
+                    Start Your Bot
+                  </h1>
+                  <p className="text-[13px] text-linear-text-secondary mt-2">
+                    Click the link below, press START in Telegram, then come back here.
+                  </p>
+                </div>
+
+                <a
+                  href={config ? `https://t.me/${config.botUsername}` : '#'}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={handleLinkClicked}
+                  className="inline-flex items-center gap-2 bg-[#2AABEE] hover:bg-[#229ED9] text-white text-[13px] font-medium px-5 py-2 rounded-md transition-colors"
+                >
+                  {config?.botUsername ? (
+                    <>
+                      Open @{config.botUsername}
+                      <ExternalLink size={13} />
+                    </>
+                  ) : (
+                    <Spinner size={14} className="text-white" />
+                  )}
+                </a>
+
+                <Button
+                  onClick={handleNextStep}
+                  disabled={isButtonDisabled}
+                  className="w-full"
+                >
+                  {isButtonDisabled
+                    ? `Next Step (${countdown}s)`
+                    : 'Next Step'}
+                </Button>
+              </motion.div>
+            )}
+
+            {step === 2 && (
+              <motion.div
+                key="step2"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="space-y-5 text-center"
+              >
+                <div>
+                  <p className="text-[11px] font-medium text-linear-purple uppercase tracking-wider mb-2">
+                    Step 2 of 2
+                  </p>
+                  <h1 className="text-lg font-semibold text-linear-text tracking-tighter">
+                    Join Your Channel
+                  </h1>
+                  <p className="text-[13px] text-linear-text-secondary mt-2">
+                    Click the link to join your secure channel, then finalize the transfer.
+                  </p>
+                </div>
+
+                <a
+                  href={config ? config.invite_link : '#'}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={handleLinkClicked}
+                  className="inline-flex items-center gap-2 bg-[#2AABEE] hover:bg-[#229ED9] text-white text-[13px] font-medium px-5 py-2 rounded-md transition-colors"
+                >
+                  Join Secure Channel
+                  <ExternalLink size={13} />
+                </a>
+
+                <Button
+                  onClick={handleFinalize}
+                  disabled={isButtonDisabled}
+                  className="w-full"
+                >
+                  {isButtonDisabled
+                    ? `Finalize (${countdown}s)`
+                    : 'Finalize Transfer'}
+                </Button>
+              </motion.div>
+            )}
+
+            {step === 3 && (
+              <motion.div
+                key="step3"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+              >
+                <h1 className="text-lg font-semibold text-linear-text tracking-tighter text-center mb-4">
+                  Finalizing Setup...
+                </h1>
+                <ul className="space-y-1 bg-linear-bg rounded-md p-4">
+                  {transferStatus && (
+                    <>
+                      <StatusItem
+                        status={transferStatus.bot.status}
+                        message={transferStatus.bot.message}
+                      />
+                      <StatusItem
+                        status={transferStatus.channel.status}
+                        message={transferStatus.channel.message}
+                      />
+                    </>
+                  )}
+                </ul>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {error && (
+            <p className="text-[13px] text-linear-error text-center mt-4">
+              {error}
+            </p>
+          )}
+        </Card>
+
+        <div className="mt-5 text-center">
+          <button
+            onClick={handleLogout}
+            className="text-[13px] text-linear-text-secondary hover:text-linear-text transition-colors"
+          >
+            Sign out
+          </button>
+        </div>
+      </motion.div>
+    </div>
+  )
+}
+
+// ============================================================================
+// DASHBOARD PAGE
+// ============================================================================
+
 function DashboardPage() {
   const [services, setServices] = useState({ photos: null, drive: null })
   const [loading, setLoading] = useState(true)
@@ -306,8 +1146,7 @@ function DashboardPage() {
     const uid = user.uid
     const unsubscribes = []
 
-    // Listen to photos service
-    const photosRef = db.doc(`artifacts/default-daemon-client/users/${uid}/services/photos`)
+    const photosRef = db.doc(`${userPath(uid)}/services/photos`)
     unsubscribes.push(
       photosRef.onSnapshot((doc) => {
         if (doc.exists) {
@@ -317,117 +1156,626 @@ function DashboardPage() {
       })
     )
 
-    // Listen to drive service
-    const driveRef = db.doc(`artifacts/default-daemon-client/users/${uid}/services/drive`)
+    const driveRef = db.doc(`${userPath(uid)}/services/drive`)
     unsubscribes.push(
       driveRef.onSnapshot((doc) => {
         if (doc.exists) {
           setServices((prev) => ({ ...prev, drive: doc.data() }))
         }
+        setLoading(false)
       })
     )
 
-    return () => unsubscribes.forEach((unsub) => unsub())
+    // fallback in case no docs exist
+    const timeout = setTimeout(() => setLoading(false), 3000)
+
+    return () => {
+      unsubscribes.forEach((unsub) => unsub())
+      clearTimeout(timeout)
+    }
   }, [])
 
+  const serviceCards = [
+    {
+      key: 'photos',
+      title: 'DaemonClient Photos',
+      description: 'Unlimited photo storage with automatic organization',
+      href: 'https://photos.daemonclient.uz',
+      icon: Image,
+      color: 'text-linear-purple',
+      bgColor: 'bg-linear-purple/10',
+      borderHover: 'hover:border-linear-purple/30',
+      stats: services.photos
+        ? `${services.photos.totalAssets || 0} photos`
+        : null,
+      lastAccessed: services.photos?.lastAccessed,
+    },
+    {
+      key: 'drive',
+      title: 'DaemonClient Drive',
+      description: 'Store any file, encrypted and accessible anywhere',
+      href: 'https://app.daemonclient.uz',
+      icon: FolderOpen,
+      color: 'text-purple-400',
+      bgColor: 'bg-purple-500/10',
+      borderHover: 'hover:border-purple-500/30',
+      stats: services.drive
+        ? `${services.drive.totalFiles || 0} files`
+        : null,
+      lastAccessed: services.drive?.lastAccessed,
+    },
+  ]
+
   return (
-    <div className="max-w-7xl mx-auto px-4 py-12">
-      <h1 className="text-4xl font-bold text-white mb-2">Your DaemonClient Account</h1>
-      <p className="text-gray-400 mb-12">Manage your services and storage</p>
+    <div className="max-w-4xl">
+      <div className="mb-8">
+        <h1 className="text-xl font-semibold text-linear-text tracking-tighter">
+          Dashboard
+        </h1>
+        <p className="text-[13px] text-linear-text-secondary mt-1">
+          Manage your services and storage
+        </p>
+      </div>
 
       {loading ? (
-        <div className="text-center py-12">
-          <div className="inline-block w-8 h-8 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
+        <div className="flex items-center justify-center py-16">
+          <Spinner size={24} />
         </div>
       ) : (
-        <div className="grid md:grid-cols-2 gap-6">
-          {/* Photos Service Card */}
-          <motion.a
-            href="https://photos.daemonclient.uz"
-            whileHover={{ scale: 1.02, y: -4 }}
-            className="block p-6 bg-gradient-to-br from-gray-800/80 to-gray-900/80 backdrop-blur border border-gray-700 rounded-2xl hover:border-indigo-500/50 transition shadow-xl"
-          >
-            <div className="flex items-start justify-between mb-4">
-              <div className="p-3 bg-indigo-500/10 rounded-xl">
-                <svg className="w-8 h-8 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                </svg>
-              </div>
-              <span className="px-3 py-1 bg-green-500/10 border border-green-500/50 rounded-full text-green-400 text-xs font-medium">
-                Active
-              </span>
-            </div>
-            <h3 className="text-xl font-bold text-white mb-2">DaemonClient Photos</h3>
-            <p className="text-gray-400 text-sm mb-4">
-              Unlimited photo storage with automatic organization
-            </p>
-            {services.photos && (
-              <div className="text-sm text-gray-500">
-                {services.photos.totalAssets || 0} photos
-                {services.photos.lastAccessed && ` • Last used ${new Date(services.photos.lastAccessed.toDate()).toLocaleDateString()}`}
-              </div>
-            )}
-          </motion.a>
+        <div className="grid md:grid-cols-2 gap-4">
+          {serviceCards.map((svc) => {
+            const Icon = svc.icon
+            return (
+              <motion.a
+                key={svc.key}
+                href={svc.href}
+                whileHover={{ y: -2 }}
+                transition={{ duration: 0.15 }}
+                className={`block p-5 bg-linear-surface border border-white/[0.06] rounded-md ${svc.borderHover} transition-colors group`}
+              >
+                <div className="flex items-start justify-between mb-4">
+                  <div className={`p-2.5 rounded-lg ${svc.bgColor}`}>
+                    <Icon size={20} className={svc.color} strokeWidth={1.8} />
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <div className="w-1.5 h-1.5 rounded-full bg-linear-success" />
+                    <span className="text-[11px] text-linear-success font-medium">
+                      Active
+                    </span>
+                  </div>
+                </div>
 
-          {/* Drive Service Card */}
-          <motion.a
-            href="https://app.daemonclient.uz"
-            whileHover={{ scale: 1.02, y: -4 }}
-            className="block p-6 bg-gradient-to-br from-gray-800/80 to-gray-900/80 backdrop-blur border border-gray-700 rounded-2xl hover:border-purple-500/50 transition shadow-xl"
-          >
-            <div className="flex items-start justify-between mb-4">
-              <div className="p-3 bg-purple-500/10 rounded-xl">
-                <svg className="w-8 h-8 text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
-                </svg>
-              </div>
-              <span className="px-3 py-1 bg-green-500/10 border border-green-500/50 rounded-full text-green-400 text-xs font-medium">
-                Active
-              </span>
-            </div>
-            <h3 className="text-xl font-bold text-white mb-2">DaemonClient Drive</h3>
-            <p className="text-gray-400 text-sm mb-4">
-              Store any file, encrypted and accessible anywhere
-            </p>
-            {services.drive && (
-              <div className="text-sm text-gray-500">
-                {services.drive.totalFiles || 0} files
-                {services.drive.lastAccessed && ` • Last used ${new Date(services.drive.lastAccessed.toDate()).toLocaleDateString()}`}
-              </div>
-            )}
-          </motion.a>
+                <h3 className="text-[15px] font-medium text-linear-text mb-1">
+                  {svc.title}
+                </h3>
+                <p className="text-[13px] text-linear-text-secondary mb-3">
+                  {svc.description}
+                </p>
+
+                {svc.stats && (
+                  <div className="text-[12px] text-linear-text-secondary">
+                    {svc.stats}
+                    {svc.lastAccessed &&
+                      ` · Last used ${new Date(svc.lastAccessed.toDate()).toLocaleDateString()}`}
+                  </div>
+                )}
+
+                <div className="flex items-center gap-1 mt-3 text-[12px] text-linear-text-secondary group-hover:text-linear-purple transition-colors">
+                  Open
+                  <ChevronRight size={12} />
+                </div>
+              </motion.a>
+            )
+          })}
         </div>
       )}
     </div>
   )
 }
 
-// Profile Page
+// ============================================================================
+// PROFILE PAGE
+// ============================================================================
+
 function ProfilePage() {
-  return (
-    <div className="max-w-4xl mx-auto px-4 py-12">
-      <h1 className="text-3xl font-bold text-white mb-8">Profile Settings</h1>
-      <div className="bg-gray-800/50 backdrop-blur border border-gray-700 rounded-2xl p-8">
-        <p className="text-gray-400">Profile settings coming soon...</p>
+  const user = auth.currentUser
+  const [displayName, setDisplayName] = useState(user?.displayName || '')
+  const [avatarColor, setAvatarColor] = useState(AVATAR_COLORS[4])
+  const [saving, setSaving] = useState(false)
+  const [profileLoaded, setProfileLoaded] = useState(false)
+
+  // Load profile from Firestore
+  useEffect(() => {
+    if (!user) return
+    const docRef = db.doc(`${userPath(user.uid)}/profile/settings`)
+    const unsubscribe = docRef.onSnapshot((doc) => {
+      if (doc.exists) {
+        const data = doc.data()
+        if (data.displayName) setDisplayName(data.displayName)
+        if (data.avatarColor) setAvatarColor(data.avatarColor)
+      }
+      setProfileLoaded(true)
+    })
+    return () => unsubscribe()
+  }, [user])
+
+  const handleSave = async () => {
+    if (!user) return
+    setSaving(true)
+    try {
+      // Update Firebase Auth displayName
+      await user.updateProfile({ displayName: displayName.trim() || null })
+
+      // Save to Firestore
+      await db.doc(`${userPath(user.uid)}/profile/settings`).set(
+        {
+          displayName: displayName.trim(),
+          avatarColor,
+          updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      )
+      toast.success('Profile updated')
+    } catch (err) {
+      toast.error('Failed to save: ' + err.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const initials = displayName
+    ? displayName.charAt(0).toUpperCase()
+    : user?.email?.charAt(0).toUpperCase() || '?'
+
+  if (!profileLoaded) {
+    return (
+      <div className="flex items-center justify-center py-16">
+        <Spinner size={24} />
       </div>
+    )
+  }
+
+  return (
+    <div className="max-w-2xl">
+      <div className="mb-8">
+        <h1 className="text-xl font-semibold text-linear-text tracking-tighter">
+          Profile
+        </h1>
+        <p className="text-[13px] text-linear-text-secondary mt-1">
+          Manage your account settings
+        </p>
+      </div>
+
+      <Card className="p-6 space-y-6">
+        {/* Avatar preview */}
+        <div className="flex items-center gap-4">
+          <div
+            className="w-16 h-16 rounded-full flex items-center justify-center shrink-0 transition-colors"
+            style={{ backgroundColor: avatarColor }}
+          >
+            <span className="text-white text-2xl font-semibold">{initials}</span>
+          </div>
+          <div>
+            <p className="text-[15px] font-medium text-linear-text">
+              {displayName || user?.email?.split('@')[0]}
+            </p>
+            <p className="text-[13px] text-linear-text-secondary">{user?.email}</p>
+          </div>
+        </div>
+
+        {/* Display name */}
+        <div>
+          <label className="block text-[13px] text-linear-text-secondary mb-1.5">
+            Display name
+          </label>
+          <Input
+            type="text"
+            value={displayName}
+            onChange={(e) => setDisplayName(e.target.value)}
+            placeholder="Your name"
+            className="w-full max-w-xs"
+          />
+        </div>
+
+        {/* Email (read-only) */}
+        <div>
+          <label className="block text-[13px] text-linear-text-secondary mb-1.5">
+            Email
+          </label>
+          <div className="h-8 px-3 bg-[#27272A]/50 border border-white/[0.06] rounded-md text-[13px] text-linear-text-secondary flex items-center max-w-xs">
+            {user?.email}
+          </div>
+        </div>
+
+        {/* Avatar color picker */}
+        <div>
+          <label className="flex items-center gap-1.5 text-[13px] text-linear-text-secondary mb-3">
+            <Palette size={13} />
+            Avatar color
+          </label>
+          <div className="flex flex-wrap gap-2">
+            {AVATAR_COLORS.map((color) => (
+              <button
+                key={color}
+                onClick={() => setAvatarColor(color)}
+                className={`w-7 h-7 rounded-full transition-all ${
+                  avatarColor === color
+                    ? 'ring-2 ring-white ring-offset-2 ring-offset-linear-surface scale-110'
+                    : 'hover:scale-105'
+                }`}
+                style={{ backgroundColor: color }}
+              />
+            ))}
+          </div>
+        </div>
+
+        {/* Save button */}
+        <div className="pt-2">
+          <Button onClick={handleSave} disabled={saving}>
+            {saving ? (
+              <span className="flex items-center gap-2">
+                <Spinner size={14} className="text-white" />
+                Saving...
+              </span>
+            ) : (
+              'Save changes'
+            )}
+          </Button>
+        </div>
+      </Card>
     </div>
   )
 }
 
-// Security Page
+// ============================================================================
+// SECURITY PAGE
+// ============================================================================
+
 function SecurityPage() {
+  const user = auth.currentUser
+  const [currentPassword, setCurrentPassword] = useState('')
+  const [newPassword, setNewPassword] = useState('')
+  const [confirmNewPassword, setConfirmNewPassword] = useState('')
+  const [passwordError, setPasswordError] = useState('')
+  const [changingPassword, setChangingPassword] = useState(false)
+  const [activityLog, setActivityLog] = useState([])
+  const [loadingActivity, setLoadingActivity] = useState(true)
+
+  // Load activity log
+  useEffect(() => {
+    if (!user) return
+    const unsubscribe = db
+      .collection(`${userPath(user.uid)}/activity`)
+      .orderBy('timestamp', 'desc')
+      .limit(20)
+      .onSnapshot(
+        (snapshot) => {
+          const entries = []
+          snapshot.forEach((doc) => {
+            entries.push({ id: doc.id, ...doc.data() })
+          })
+          setActivityLog(entries)
+          setLoadingActivity(false)
+        },
+        () => setLoadingActivity(false)
+      )
+    return () => unsubscribe()
+  }, [user])
+
+  const handleChangePassword = async (e) => {
+    e.preventDefault()
+    setPasswordError('')
+
+    if (newPassword !== confirmNewPassword) {
+      setPasswordError('New passwords do not match')
+      return
+    }
+    if (newPassword.length < 6) {
+      setPasswordError('New password must be at least 6 characters')
+      return
+    }
+
+    setChangingPassword(true)
+    try {
+      // Re-authenticate first
+      const credential = firebase.auth.EmailAuthProvider.credential(
+        user.email,
+        currentPassword
+      )
+      await user.reauthenticateWithCredential(credential)
+      await user.updatePassword(newPassword)
+
+      // Log the activity
+      try {
+        await db.collection(`${userPath(user.uid)}/activity`).add({
+          type: 'password_change',
+          timestamp: firebase.firestore.FieldValue.serverTimestamp(),
+          userAgent: navigator.userAgent,
+          ip: 'client',
+        })
+      } catch (e) {}
+
+      toast.success('Password updated successfully')
+      setCurrentPassword('')
+      setNewPassword('')
+      setConfirmNewPassword('')
+    } catch (err) {
+      const msg =
+        err.code === 'auth/wrong-password'
+          ? 'Current password is incorrect'
+          : err.code === 'auth/requires-recent-login'
+          ? 'Please sign out and sign back in, then try again'
+          : err.message || 'Failed to change password'
+      setPasswordError(msg)
+    } finally {
+      setChangingPassword(false)
+    }
+  }
+
+  const getActivityIcon = (type) => {
+    switch (type) {
+      case 'login':
+        return <Globe size={14} className="text-linear-purple" />
+      case 'signup':
+        return <User size={14} className="text-linear-success" />
+      case 'password_change':
+        return <Lock size={14} className="text-yellow-500" />
+      case 'setup_complete':
+        return <Check size={14} className="text-linear-success" />
+      default:
+        return <Clock size={14} className="text-linear-text-secondary" />
+    }
+  }
+
+  const getActivityLabel = (type) => {
+    switch (type) {
+      case 'login':
+        return 'Sign in'
+      case 'signup':
+        return 'Account created'
+      case 'password_change':
+        return 'Password changed'
+      case 'setup_complete':
+        return 'Setup completed'
+      default:
+        return type
+    }
+  }
+
+  const formatTimestamp = (ts) => {
+    if (!ts) return 'Just now'
+    try {
+      const date = ts.toDate ? ts.toDate() : new Date(ts)
+      return date.toLocaleString()
+    } catch {
+      return 'Unknown'
+    }
+  }
+
+  const parseUserAgent = (ua) => {
+    if (!ua) return 'Unknown device'
+    if (ua.includes('Mobile')) return 'Mobile browser'
+    if (ua.includes('Chrome')) return 'Chrome'
+    if (ua.includes('Firefox')) return 'Firefox'
+    if (ua.includes('Safari')) return 'Safari'
+    return 'Browser'
+  }
+
   return (
-    <div className="max-w-4xl mx-auto px-4 py-12">
-      <h1 className="text-3xl font-bold text-white mb-8">Security & Activity</h1>
-      <div className="bg-gray-800/50 backdrop-blur border border-gray-700 rounded-2xl p-8">
-        <p className="text-gray-400">Activity log coming soon...</p>
+    <div className="max-w-2xl">
+      <div className="mb-8">
+        <h1 className="text-xl font-semibold text-linear-text tracking-tighter">
+          Security
+        </h1>
+        <p className="text-[13px] text-linear-text-secondary mt-1">
+          Manage your password and review activity
+        </p>
       </div>
+
+      {/* Change password */}
+      <Card className="p-6 mb-6">
+        <h2 className="text-[15px] font-medium text-linear-text mb-4 flex items-center gap-2">
+          <Lock size={15} strokeWidth={1.8} />
+          Change password
+        </h2>
+
+        <form onSubmit={handleChangePassword} className="space-y-3 max-w-xs">
+          <div>
+            <label className="block text-[13px] text-linear-text-secondary mb-1.5">
+              Current password
+            </label>
+            <Input
+              type="password"
+              value={currentPassword}
+              onChange={(e) => setCurrentPassword(e.target.value)}
+              placeholder="Enter current password"
+              required
+              error={!!passwordError}
+              className="w-full"
+            />
+          </div>
+          <div>
+            <label className="block text-[13px] text-linear-text-secondary mb-1.5">
+              New password
+            </label>
+            <Input
+              type="password"
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              placeholder="At least 6 characters"
+              required
+              error={!!passwordError}
+              className="w-full"
+            />
+          </div>
+          <div>
+            <label className="block text-[13px] text-linear-text-secondary mb-1.5">
+              Confirm new password
+            </label>
+            <Input
+              type="password"
+              value={confirmNewPassword}
+              onChange={(e) => setConfirmNewPassword(e.target.value)}
+              placeholder="Repeat new password"
+              required
+              error={
+                !!passwordError && newPassword !== confirmNewPassword
+              }
+              className="w-full"
+            />
+          </div>
+
+          {passwordError && (
+            <p className="text-[13px] text-linear-error">{passwordError}</p>
+          )}
+
+          <Button type="submit" disabled={changingPassword} className="mt-1">
+            {changingPassword ? (
+              <span className="flex items-center gap-2">
+                <Spinner size={14} className="text-white" />
+                Updating...
+              </span>
+            ) : (
+              'Update password'
+            )}
+          </Button>
+        </form>
+      </Card>
+
+      {/* Activity log */}
+      <Card className="p-6">
+        <h2 className="text-[15px] font-medium text-linear-text mb-4 flex items-center gap-2">
+          <Clock size={15} strokeWidth={1.8} />
+          Recent activity
+        </h2>
+
+        {loadingActivity ? (
+          <div className="flex items-center justify-center py-8">
+            <Spinner size={20} />
+          </div>
+        ) : activityLog.length === 0 ? (
+          <p className="text-[13px] text-linear-text-secondary py-4">
+            No activity recorded yet.
+          </p>
+        ) : (
+          <div className="space-y-0.5">
+            {activityLog.map((entry) => (
+              <div
+                key={entry.id}
+                className="flex items-center gap-3 py-2.5 px-3 rounded-md hover:bg-white/[0.03] transition-colors"
+              >
+                <div className="w-7 h-7 rounded-full bg-white/[0.06] flex items-center justify-center shrink-0">
+                  {getActivityIcon(entry.type)}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-[13px] text-linear-text">
+                    {getActivityLabel(entry.type)}
+                  </p>
+                  <div className="flex items-center gap-2 mt-0.5">
+                    <span className="text-[11px] text-linear-text-secondary">
+                      {formatTimestamp(entry.timestamp)}
+                    </span>
+                    {entry.userAgent && (
+                      <>
+                        <span className="text-[11px] text-linear-text-secondary">
+                          &middot;
+                        </span>
+                        <span className="text-[11px] text-linear-text-secondary flex items-center gap-1">
+                          <Monitor size={10} />
+                          {parseUserAgent(entry.userAgent)}
+                        </span>
+                      </>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
     </div>
   )
 }
 
-// Protected Route Component
-function ProtectedRoute({ children }) {
+// ============================================================================
+// PROTECTED ROUTE — Auth guard with setup/ownership redirect
+// ============================================================================
+
+function ProtectedRoute({ children, requireSetup = true }) {
+  const [state, setState] = useState({
+    user: null,
+    loading: true,
+    hasConfig: null,
+    ownershipDone: null,
+  })
+  const navigate = useNavigate()
+  const location = useLocation()
+
+  useEffect(() => {
+    const unsubscribe = auth.onAuthStateChanged(async (user) => {
+      if (!user) {
+        setState({ user: null, loading: false, hasConfig: null, ownershipDone: null })
+        return
+      }
+
+      if (!requireSetup) {
+        setState({ user, loading: false, hasConfig: true, ownershipDone: true })
+        return
+      }
+
+      // Check Telegram config
+      try {
+        const configDoc = await db
+          .collection(configPath(user.uid))
+          .doc('telegram')
+          .get()
+
+        if (!configDoc.exists || !configDoc.data().botToken) {
+          setState({ user, loading: false, hasConfig: false, ownershipDone: false })
+          return
+        }
+
+        const data = configDoc.data()
+        // Check if ownership transfer is done (presence of ownershipTransferred flag,
+        // or if the user got past that step already — indicated by having used the app)
+        const ownershipDone = data.ownershipTransferred === true ||
+          data.setupComplete === true ||
+          // If they have services data, they definitely completed setup
+          true // Allow through if config exists - ownership view will handle itself
+
+        setState({ user, loading: false, hasConfig: true, ownershipDone })
+      } catch (err) {
+        console.error('Error checking config:', err)
+        setState({ user, loading: false, hasConfig: true, ownershipDone: true })
+      }
+    })
+    return () => unsubscribe()
+  }, [requireSetup])
+
+  if (state.loading) {
+    return <FullScreenSpinner />
+  }
+
+  if (!state.user) {
+    return <Navigate to="/login" replace />
+  }
+
+  // Redirect to setup if no Telegram config
+  if (requireSetup && state.hasConfig === false) {
+    const isSetupPage = location.pathname.startsWith('/setup')
+    if (!isSetupPage) {
+      return <Navigate to="/setup" replace />
+    }
+  }
+
+  return <Layout user={state.user}>{children}</Layout>
+}
+
+// ============================================================================
+// AUTH GUARD — For setup pages (no sidebar layout)
+// ============================================================================
+
+function AuthOnly({ children }) {
   const [user, setUser] = useState(null)
   const [loading, setLoading] = useState(true)
 
@@ -436,31 +1784,92 @@ function ProtectedRoute({ children }) {
       setUser(user)
       setLoading(false)
     })
-    return unsubscribe
+    return () => unsubscribe()
   }, [])
 
   if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900">
-        <div className="w-8 h-8 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
-      </div>
-    )
+    return <FullScreenSpinner />
   }
 
   if (!user) {
     return <Navigate to="/login" replace />
   }
 
-  return <Layout user={user}>{children}</Layout>
+  return <>{children}</>
 }
 
-// Main App
+// ============================================================================
+// PUBLIC GUARD — Redirect to dashboard if already logged in
+// ============================================================================
+
+function PublicOnly({ children }) {
+  const [user, setUser] = useState(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    const unsubscribe = auth.onAuthStateChanged((user) => {
+      setUser(user)
+      setLoading(false)
+    })
+    return () => unsubscribe()
+  }, [])
+
+  if (loading) {
+    return <FullScreenSpinner />
+  }
+
+  if (user) {
+    return <Navigate to="/dashboard" replace />
+  }
+
+  return <>{children}</>
+}
+
+// ============================================================================
+// MAIN APP
+// ============================================================================
+
 function App() {
   return (
     <BrowserRouter>
       <Routes>
-        <Route path="/login" element={<LoginPage />} />
-        <Route path="/signup" element={<SignupPage />} />
+        {/* Public routes */}
+        <Route
+          path="/login"
+          element={
+            <PublicOnly>
+              <LoginPage />
+            </PublicOnly>
+          }
+        />
+        <Route
+          path="/signup"
+          element={
+            <PublicOnly>
+              <SignupPage />
+            </PublicOnly>
+          }
+        />
+
+        {/* Setup routes (auth required, no sidebar) */}
+        <Route
+          path="/setup"
+          element={
+            <AuthOnly>
+              <SetupPage />
+            </AuthOnly>
+          }
+        />
+        <Route
+          path="/setup/ownership"
+          element={
+            <AuthOnly>
+              <OwnershipPage />
+            </AuthOnly>
+          }
+        />
+
+        {/* Protected routes (auth + setup required, with sidebar) */}
         <Route
           path="/dashboard"
           element={
@@ -485,7 +1894,10 @@ function App() {
             </ProtectedRoute>
           }
         />
+
+        {/* Default redirect */}
         <Route path="/" element={<Navigate to="/dashboard" replace />} />
+        <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Routes>
     </BrowserRouter>
   )
