@@ -89,8 +89,7 @@ INSERT INTO config (key, value) VALUES
   ('zke_mode', 'off'),
   ('zke_enabled', '0'),
   ('zke_password', ''),
-  ('zke_salt', ''),
-  ('schema_version', '1.0.0');
+  ('zke_salt', '');
 
 -- Upload sessions table
 CREATE TABLE upload_sessions (
