@@ -128,6 +128,21 @@ daemon list
 
 ---
 
+## 🆕 New: Per-User Workers (v2.0)
+
+DaemonClient now scales infinitely at $0 cost by deploying a personal worker to each user's Cloudflare account.
+
+**Benefits:**
+- 100K requests/day per user (not shared)
+- 5M database reads/day per user
+- Complete data sovereignty
+- Automatic updates
+- **Encryption enabled by default**
+
+**Setup:** See [docs/SETUP_GUIDE.md](docs/SETUP_GUIDE.md)
+
+---
+
 ## 🔧 Self-Hosting
 
 <details>
