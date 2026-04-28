@@ -3,6 +3,7 @@ import { requireAuth, firestoreGet, firestoreSet, firestoreDelete, json } from '
 import sizeOf from 'image-size';
 import { normalizePhotoManifest } from './contracts';
 import { getFlagsForUser } from './feature-flags';
+import { D1Adapter } from './d1-adapter';
 
 // --- ZKE Crypto Implementation ---
 const SALT_LENGTH = 16;
@@ -46,9 +47,17 @@ async function decryptChunk(encryptedChunk: ArrayBuffer, key: CryptoKey): Promis
 }
 
 async function getEncryptionKey(env: Env, uid: string, idToken: string): Promise<CryptoKey | null> {
-  const zkeConfig = await firestoreGet(env, uid, 'config/zke', idToken);
-  if (zkeConfig && zkeConfig.enabled && zkeConfig.password && zkeConfig.salt) {
-    return deriveKey(zkeConfig.password, zkeConfig.salt);
+  if (env.DB) {
+    const adapter = new D1Adapter(env.DB);
+    const zkeConfig = await adapter.getZkeConfig();
+    if (zkeConfig && zkeConfig.enabled && zkeConfig.password && zkeConfig.salt) {
+      return deriveKey(zkeConfig.password, zkeConfig.salt);
+    }
+  } else {
+    const zkeConfig = await firestoreGet(env, uid, 'config/zke', idToken);
+    if (zkeConfig && zkeConfig.enabled && zkeConfig.password && zkeConfig.salt) {
+      return deriveKey(zkeConfig.password, zkeConfig.salt);
+    }
   }
   return null;
 }
@@ -60,8 +69,14 @@ export async function handleAssets(request: Request, env: Env, path: string, url
 
   try {
   if (path === '/api/assets/zke-status' && request.method === 'GET') {
-    const zkeConfig = await firestoreGet(env, uid, 'config/zke', idToken) || {};
-    return json({ mode: zkeConfig.mode || 'off', enabled: !!zkeConfig.enabled });
+    if (env.DB) {
+      const adapter = new D1Adapter(env.DB);
+      const zkeConfig = await adapter.getZkeConfig() || {};
+      return json({ mode: zkeConfig.mode || 'off', enabled: !!zkeConfig.enabled });
+    } else {
+      const zkeConfig = await firestoreGet(env, uid, 'config/zke', idToken) || {};
+      return json({ mode: zkeConfig.mode || 'off', enabled: !!zkeConfig.enabled });
+    }
   }
 
   if (path === '/api/assets/zke-toggle' && request.method === 'POST') {
@@ -69,17 +84,33 @@ export async function handleAssets(request: Request, env: Env, path: string, url
     const mode = body.mode === 'server' ? 'server' : 'off';
     const enabled = mode === 'server';
 
-    if (enabled) {
-      const existing = await firestoreGet(env, uid, 'config/zke', idToken);
-      if (existing?.password && existing?.salt) {
-        await firestoreSet(env, uid, 'config/zke', { mode, enabled }, idToken);
+    if (env.DB) {
+      const adapter = new D1Adapter(env.DB);
+      if (enabled) {
+        const existing = await adapter.getZkeConfig();
+        if (existing?.password && existing?.salt) {
+          await adapter.setZkeConfig({ mode, enabled });
+        } else {
+          const salt = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(16))));
+          const password = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))));
+          await adapter.setZkeConfig({ mode, enabled, password, salt });
+        }
       } else {
-        const salt = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(16))));
-        const password = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))));
-        await firestoreSet(env, uid, 'config/zke', { mode, enabled, password, salt }, idToken);
+        await adapter.setZkeConfig({ mode, enabled });
       }
     } else {
-      await firestoreSet(env, uid, 'config/zke', { mode, enabled }, idToken);
+      if (enabled) {
+        const existing = await firestoreGet(env, uid, 'config/zke', idToken);
+        if (existing?.password && existing?.salt) {
+          await firestoreSet(env, uid, 'config/zke', { mode, enabled }, idToken);
+        } else {
+          const salt = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(16))));
+          const password = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))));
+          await firestoreSet(env, uid, 'config/zke', { mode, enabled, password, salt }, idToken);
+        }
+      } else {
+        await firestoreSet(env, uid, 'config/zke', { mode, enabled }, idToken);
+      }
     }
 
     return json({ mode, enabled });
@@ -136,6 +167,10 @@ export async function handleAssets(request: Request, env: Env, path: string, url
   if (chunkManifestMatch && request.method === 'GET') {
     return handleChunkManifest(env, uid, chunkManifestMatch[1], idToken);
   }
+  const thumbUploadMatch = path.match(/^\/api\/assets\/([^/]+)\/thumbnail$/);
+  if (thumbUploadMatch && request.method === 'POST') {
+    return handleThumbnailUpload(request, env, uid, thumbUploadMatch[1], idToken);
+  }
 
   if (path === '/api/assets/worker-config' && request.method === 'GET') {
     const workerConfig = await firestoreGet(env, uid, 'config/worker', idToken);
@@ -156,7 +191,14 @@ export async function handleAssets(request: Request, env: Env, path: string, url
 
 async function handleAssetInfo(env: Env, uid: string, assetId: string, idToken: string): Promise<Response> {
   try {
-    const photo = await firestoreGet(env, uid, `photos/${assetId}`, idToken);
+    let photo;
+    if (env.DB) {
+      const adapter = new D1Adapter(env.DB);
+      photo = await adapter.getPhoto(assetId);
+    } else {
+      photo = await firestoreGet(env, uid, `photos/${assetId}`, idToken);
+    }
+
     if (!photo) {
       return json({ message: 'Asset not found' }, 404);
     }
@@ -305,7 +347,13 @@ async function handleUpload(request: Request, env: Env, uid: string, idToken: st
 
     const isHeic = /\.(heic|heif)$/i.test(fileName) || mimeType === 'image/heic' || mimeType === 'image/heif';
     const thumbBase64 = formData.get('thumbData_base64') as string | null;
-    console.log(`[Upload] thumbBase64=${thumbBase64 ? `present(${thumbBase64.length}chars)` : 'MISSING'}, isHeic=${isHeic}, mime=${mimeType}`);
+
+    // CRITICAL DEBUG: Check if mobile sends thumbnail
+    if (thumbBase64) {
+      console.log(`✅ [Upload] thumbData_base64 PRESENT: ${thumbBase64.length} chars for ${fileName}`);
+    } else {
+      console.log(`❌ [Upload] thumbData_base64 MISSING for ${fileName}. Keys received: ${formKeys.join(', ')}`);
+    }
 
     let telegramChunks: Array<{ index: number; message_id: number; file_id: string }> = [];
     let telegramOriginalId = '';
@@ -466,8 +514,9 @@ async function handleUpload(request: Request, env: Env, uid: string, idToken: st
       }
     }
 
-    // Strategy 2: sendPhoto/sendVideo with the RAW file (before encryption) for single-chunk files
-    if (!telegramThumbId && (isImage || isVideo) && isSingleChunk && file) {
+    // Strategy 2: sendPhoto/sendVideo — ONLY for unencrypted uploads
+    // Encrypted uploads must NOT send raw files to Telegram
+    if (!telegramThumbId && !isEncryptedByServer && (isImage || isVideo) && isSingleChunk && file) {
       try {
         const rawSlice = file.slice(0, Math.min(file.size, CHUNK_SIZE));
         const rawData = await rawSlice.arrayBuffer();
@@ -565,6 +614,62 @@ async function handleChunkManifest(env: Env, uid: string, assetId: string, idTok
   const photo = await firestoreGet(env, uid, `photos/${assetId}`, idToken);
   if (!photo) return json({ message: 'Asset not found' }, 404);
   return json({ chunks: photo.telegramChunks || [] });
+}
+
+async function handleThumbnailUpload(request: Request, env: Env, uid: string, assetId: string, idToken: string): Promise<Response> {
+  const photo = await firestoreGet(env, uid, `photos/${assetId}`, idToken);
+  if (!photo) return json({ message: 'Asset not found' }, 404);
+
+  const config = await firestoreGet(env, uid, 'config/telegram', idToken);
+  if (!config) return json({ message: 'No config' }, 500);
+  const botToken = config.botToken || config.bot_token;
+  const channelId = config.channelId || config.channel_id;
+
+  try {
+    const formData = await request.formData();
+    const thumbFile = formData.get('thumbnail') as File | null;
+    const thumbBase64 = formData.get('thumbData_base64') as string | null;
+
+    if (!thumbFile && !thumbBase64) {
+      return json({ message: 'No thumbnail data provided' }, 400);
+    }
+
+    let thumbBytes: ArrayBuffer;
+    if (thumbBase64) {
+      thumbBytes = Uint8Array.from(atob(thumbBase64), c => c.charCodeAt(0)).buffer;
+    } else {
+      thumbBytes = await thumbFile!.arrayBuffer();
+    }
+
+    const thumbForm = new FormData();
+    thumbForm.append('chat_id', channelId);
+    thumbForm.append('photo', new Blob([thumbBytes], { type: 'image/jpeg' }), 'thumb.jpg');
+
+    const queue = getTgQueue(botToken);
+    await queue.acquire(undefined, 5);
+    let telegramThumbId: string | null = null;
+    try {
+      const res = await fetch(`https://api.telegram.org/bot${botToken}/sendPhoto`, { method: 'POST', body: thumbForm });
+      const data = await res.json() as any;
+      if (data.ok && data.result.photo?.length > 0) {
+        telegramThumbId = data.result.photo[0].file_id;
+      }
+    } finally {
+      queue.release();
+    }
+
+    if (!telegramThumbId) {
+      return json({ message: 'Telegram sendPhoto failed' }, 500);
+    }
+
+    await firestoreSet(env, uid, `photos/${assetId}`, { telegramThumbId }, idToken);
+    console.log(`[ThumbnailUpload] Successfully stored thumbnail for ${assetId}`);
+
+    return json({ success: true, telegramThumbId });
+  } catch (err: any) {
+    console.error(`[ThumbnailUpload] Error for ${assetId}:`, err);
+    return json({ message: err.message }, 500);
+  }
 }
 
 // ── Thumbnails & Originals ──────────────────────────────────────────

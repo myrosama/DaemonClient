@@ -9,3 +9,9 @@ FIREBASE_PROJECT_ID = "daemonclient-c0625"
 APP_IDENTIFIER = "default-daemon-client"
 TELEGRAM_PROXY = "https://daemonclient-proxy.sadrikov49.workers.dev"
 ALLOWED_ORIGINS = "https://photos.daemonclient.uz,http://localhost:5173"
+
+# D1 binding for per-user worker deployment
+[[d1_databases]]
+binding = "DB"
+database_name = "photos-db"
+database_id = "placeholder-will-be-replaced-per-user"

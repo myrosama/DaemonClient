@@ -11,6 +11,9 @@ import { handleFeatureFlags } from './feature-flags';
 import { handleSearch } from './search';
 import { linkExistingLivePhotos } from './link-live-photos';
 import { requireAuth } from './helpers';
+import type { D1Database } from '@cloudflare/workers-types';
+
+export const WORKER_VERSION = '1.0.0';
 
 export interface Env {
   FIREBASE_API_KEY: string;
@@ -18,6 +21,8 @@ export interface Env {
   APP_IDENTIFIER: string;
   TELEGRAM_PROXY: string;
   ALLOWED_ORIGINS: string;
+  DB?: D1Database;
+  ENCRYPTION_MASTER_KEY?: string;
   waitUntil?: (promise: Promise<any>) => void;
 }
 
@@ -52,7 +57,15 @@ export default {
     try {
       let response: Response;
 
-      if (path.startsWith('/api/auth')) {
+      if (path === '/api/health' && request.method === 'GET') {
+        response = new Response(JSON.stringify({
+          version: WORKER_VERSION,
+          timestamp: Date.now(),
+          database: env.DB ? 'connected' : 'not_configured'
+        }), {
+          headers: { 'Content-Type': 'application/json' }
+        });
+      } else if (path.startsWith('/api/auth')) {
         response = await handleAuth(request, env, path);
       } else if (path.startsWith('/api/server') || path === '/api/server-info/config') {
         response = await handleServer(request, env, path);
@@ -79,12 +92,13 @@ export default {
         response = await handleStubs(request, env, path);
       }
 
-      // Add CORS to every response
+      // Add CORS and version to every response
       const newHeaders = new Headers(response.headers);
       for (const [k, v] of Object.entries(cors)) {
         newHeaders.set(k, v);
       }
       newHeaders.set('x-request-id', requestId);
+      newHeaders.set('X-Worker-Version', WORKER_VERSION);
       return new Response(response.body, { status: response.status, headers: newHeaders });
     } catch (err: any) {
       const msg = err.message || 'Internal error';
