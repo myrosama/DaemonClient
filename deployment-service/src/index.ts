@@ -92,11 +92,25 @@ async function handleDeployWorker(request: Request, env: Env): Promise<Response>
     const shortId = uid.substring(0, 8).toLowerCase().replace(/[^a-z0-9]/g, '');
     const cfApi = new CloudflareAPI();
 
-    // Step 1: Create D1 database in USER's account
+    // Step 1: Create D1 database in USER's account (handle if already exists)
     const dbName = `dc-photos-${shortId}`;
+    let databaseId: string;
     const dbResult = await cfApi.createD1Database({ accountId, apiToken, databaseName: dbName });
-    if (!dbResult.success) return corsResponse(JSON.stringify({ error: dbResult.error }), { status: 500 });
-    const databaseId = dbResult.databaseId!;
+    if (dbResult.success) {
+      databaseId = dbResult.databaseId!;
+    } else {
+      // Database might already exist — try to find it
+      const listRes = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/d1/database`, {
+        headers: { 'Authorization': `Bearer ${apiToken}` }
+      });
+      const listData = await listRes.json() as any;
+      const existing = listData.result?.find((d: any) => d.name === dbName);
+      if (existing) {
+        databaseId = existing.uuid;
+      } else {
+        return corsResponse(JSON.stringify({ error: dbResult.error }), { status: 500 });
+      }
+    }
 
     // Step 2: Run migration
     await cfApi.executeD1Query(accountId, databaseId, apiToken, MIGRATION_SQL);
@@ -109,8 +123,26 @@ async function handleDeployWorker(request: Request, env: Env): Promise<Response>
     );
 
     // Step 4: Deploy worker to USER's account
-    const workerCode = await fetch('https://raw.githubusercontent.com/myrosama/DaemonClient/main/immich-api-shim/dist/worker.js')
-      .then(r => r.text()).catch(() => 'export default { async fetch() { return new Response("setup-pending"); } };');
+    // Use a valid ES module placeholder — the real immich-api-shim will be deployed via wrangler later
+    const workerCode = `
+export default {
+  async fetch(request, env) {
+    const url = new URL(request.url);
+    const cors = {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+      'Content-Type': 'application/json'
+    };
+    if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors });
+    return new Response(JSON.stringify({
+      status: 'active',
+      message: 'DaemonClient worker is running. Deploy the full immich-api-shim for Photos functionality.',
+      path: url.pathname
+    }), { headers: cors });
+  }
+};`;
+
     const workerName = `dc-${shortId}`;
     const deployResult = await cfApi.deployWorker({
       accountId, workerName, apiToken, workerCode,
