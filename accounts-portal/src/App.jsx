@@ -1725,6 +1725,10 @@ function useSetupStage(user) {
       return
     }
 
+    // CRITICAL: Reset loading immediately when user changes
+    // Prevents race condition where stale stage=null causes redirect to /dashboard
+    setLoading(true)
+
     let cancelled = false
 
     async function checkStage() {
@@ -1756,7 +1760,6 @@ function useSetupStage(user) {
         if (!cancelled) { setStage('complete'); setLoading(false) }
       } catch (err) {
         console.error('Error checking setup stage:', err)
-        // On error, assume complete to avoid blocking users
         if (!cancelled) { setStage('complete'); setLoading(false) }
       }
     }
