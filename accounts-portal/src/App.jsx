@@ -227,18 +227,22 @@ function LoginPage() {
       const params = new URLSearchParams(window.location.search)
       const returnUrl = params.get('return_url') || '/dashboard'
 
-      const res = await createSession(idToken, refreshToken, returnUrl)
-
-      if (res.ok) {
-        const data = await res.json()
-        if (data.redirectUrl && data.redirectUrl.startsWith('http')) {
-          window.location.href = data.redirectUrl
-        } else {
-          navigate(data.redirectUrl || '/dashboard')
+      // Create cross-domain session (non-blocking — Firebase Auth handles core auth)
+      try {
+        const res = await createSession(idToken, refreshToken, returnUrl)
+        if (res.ok) {
+          const data = await res.json()
+          if (data.redirectUrl && data.redirectUrl.startsWith('http')) {
+            window.location.href = data.redirectUrl
+            return
+          }
         }
-      } else {
-        navigate('/dashboard')
+      } catch (sessionErr) {
+        console.warn('Session creation failed (non-critical):', sessionErr)
       }
+
+      // Navigate — route guards will redirect to correct step
+      navigate(returnUrl)
     } catch (err) {
       const msg = err.code === 'auth/user-not-found'
         ? 'No account found with this email'
@@ -404,9 +408,13 @@ function SignupPage() {
         console.warn('Setup call failed, will retry on setup page:', setupErr)
       }
 
-      // Create session
-      const refreshToken = user.refreshToken
-      await createSession(idToken, refreshToken, '/setup')
+      // Create session (non-blocking — cross-domain cookie is nice-to-have)
+      try {
+        const refreshToken = user.refreshToken
+        await createSession(idToken, refreshToken, '/setup')
+      } catch (sessionErr) {
+        console.warn('Session creation failed (non-critical):', sessionErr)
+      }
 
       // Log signup activity
       try {
