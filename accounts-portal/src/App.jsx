@@ -1701,93 +1701,95 @@ function SecurityPage() {
 // PROTECTED ROUTE — Auth guard with setup/ownership redirect
 // ============================================================================
 
-function ProtectedRoute({ children, requireSetup = true }) {
-  const [state, setState] = useState({
-    user: null,
-    loading: true,
-    hasConfig: null,
-    ownershipDone: null,
-  })
-  const navigate = useNavigate()
-  const location = useLocation()
-
-  useEffect(() => {
-    const unsubscribe = auth.onAuthStateChanged(async (user) => {
-      if (!user) {
-        setState({ user: null, loading: false, hasConfig: null, ownershipDone: null })
-        return
-      }
-
-      if (!requireSetup) {
-        setState({ user, loading: false, hasConfig: true, ownershipDone: true })
-        return
-      }
-
-      // Check Telegram config
-      try {
-        const configDoc = await db
-          .collection(configPath(user.uid))
-          .doc('telegram')
-          .get()
-
-        if (!configDoc.exists || !configDoc.data().botToken) {
-          setState({ user, loading: false, hasConfig: false, ownershipDone: false })
-          return
-        }
-
-        const data = configDoc.data()
-        // Check if ownership transfer is done (presence of ownershipTransferred flag,
-        // or if the user got past that step already — indicated by having used the app)
-        const ownershipDone = data.ownershipTransferred === true ||
-          data.setupComplete === true ||
-          // If they have services data, they definitely completed setup
-          true // Allow through if config exists - ownership view will handle itself
-
-        setState({ user, loading: false, hasConfig: true, ownershipDone })
-      } catch (err) {
-        console.error('Error checking config:', err)
-        setState({ user, loading: false, hasConfig: true, ownershipDone: true })
-      }
-    })
-    return () => unsubscribe()
-  }, [requireSetup])
-
-  if (state.loading) {
-    return <FullScreenSpinner />
-  }
-
-  if (!state.user) {
-    return <Navigate to="/login" replace />
-  }
-
-  // Redirect to setup if no Telegram config
-  if (requireSetup && state.hasConfig === false) {
-    const isSetupPage = location.pathname.startsWith('/setup')
-    if (!isSetupPage) {
-      return <Navigate to="/setup" replace />
-    }
-  }
-
-  return <Layout user={state.user}>{children}</Layout>
-}
-
 // ============================================================================
-// AUTH GUARD — For setup pages (no sidebar layout)
+// SETUP STAGE RESOLVER — Determines where a user is in the onboarding funnel
+// Stages: 'telegram' → 'ownership' → 'worker' → 'complete'
 // ============================================================================
 
-function AuthOnly({ children }) {
-  const [user, setUser] = useState(null)
+function useSetupStage(user) {
+  const [stage, setStage] = useState(null) // null = loading
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    const unsubscribe = auth.onAuthStateChanged((user) => {
-      setUser(user)
+    if (!user) {
+      setStage(null)
       setLoading(false)
+      return
+    }
+
+    let cancelled = false
+
+    async function checkStage() {
+      try {
+        const basePath = configPath(user.uid)
+
+        // 1. Check Telegram config
+        const telegramDoc = await db.collection(basePath).doc('telegram').get()
+        if (!telegramDoc.exists || !telegramDoc.data()?.botToken) {
+          if (!cancelled) { setStage('telegram'); setLoading(false) }
+          return
+        }
+
+        // 2. Check ownership transfer
+        const telegramData = telegramDoc.data()
+        if (!telegramData.ownershipTransferred) {
+          if (!cancelled) { setStage('ownership'); setLoading(false) }
+          return
+        }
+
+        // 3. Check Cloudflare / worker setup
+        const cfDoc = await db.collection(basePath).doc('cloudflare').get()
+        if (!cfDoc.exists || !cfDoc.data()?.workerUrl) {
+          if (!cancelled) { setStage('worker'); setLoading(false) }
+          return
+        }
+
+        // All done
+        if (!cancelled) { setStage('complete'); setLoading(false) }
+      } catch (err) {
+        console.error('Error checking setup stage:', err)
+        // On error, assume complete to avoid blocking users
+        if (!cancelled) { setStage('complete'); setLoading(false) }
+      }
+    }
+
+    checkStage()
+    return () => { cancelled = true }
+  }, [user])
+
+  return { stage, loading }
+}
+
+// Map stage → route
+function stageToRoute(stage) {
+  switch (stage) {
+    case 'telegram': return '/setup'
+    case 'ownership': return '/setup/ownership'
+    case 'worker': return '/setup/worker'
+    case 'complete': return '/dashboard'
+    default: return '/dashboard'
+  }
+}
+
+// ============================================================================
+// PROTECTED ROUTE — Dashboard/Profile/Security (requires ALL setup done)
+// ============================================================================
+
+function ProtectedRoute({ children }) {
+  const [user, setUser] = useState(null)
+  const [authLoading, setAuthLoading] = useState(true)
+
+  useEffect(() => {
+    const unsubscribe = auth.onAuthStateChanged((u) => {
+      setUser(u)
+      setAuthLoading(false)
     })
     return () => unsubscribe()
   }, [])
 
-  if (loading) {
+  const { stage, loading: stageLoading } = useSetupStage(user)
+
+  if (authLoading || stageLoading) {
     return <FullScreenSpinner />
   }
 
@@ -1795,31 +1797,80 @@ function AuthOnly({ children }) {
     return <Navigate to="/login" replace />
   }
 
-  return <>{children}</>
+  // If setup is not complete, redirect to the incomplete step
+  if (stage !== 'complete') {
+    return <Navigate to={stageToRoute(stage)} replace />
+  }
+
+  return <Layout user={user}>{children}</Layout>
 }
 
 // ============================================================================
-// PUBLIC GUARD — Redirect to dashboard if already logged in
+// AUTH GUARD — For setup pages (prevents skipping ahead or going backwards)
 // ============================================================================
 
-function PublicOnly({ children }) {
+function AuthOnly({ children, allowedStage }) {
   const [user, setUser] = useState(null)
-  const [loading, setLoading] = useState(true)
+  const [authLoading, setAuthLoading] = useState(true)
+  const location = useLocation()
 
   useEffect(() => {
-    const unsubscribe = auth.onAuthStateChanged((user) => {
-      setUser(user)
-      setLoading(false)
+    const unsubscribe = auth.onAuthStateChanged((u) => {
+      setUser(u)
+      setAuthLoading(false)
     })
     return () => unsubscribe()
   }, [])
 
-  if (loading) {
+  const { stage, loading: stageLoading } = useSetupStage(user)
+
+  if (authLoading || stageLoading) {
+    return <FullScreenSpinner />
+  }
+
+  if (!user) {
+    return <Navigate to="/login" replace />
+  }
+
+  // If setup is complete and they're on a setup page, send to dashboard
+  if (stage === 'complete') {
+    return <Navigate to="/dashboard" replace />
+  }
+
+  // If their current stage doesn't match this setup page, redirect them
+  const correctRoute = stageToRoute(stage)
+  if (location.pathname !== correctRoute) {
+    return <Navigate to={correctRoute} replace />
+  }
+
+  return <>{children}</>
+}
+
+// ============================================================================
+// PUBLIC GUARD — Redirect to correct page if already logged in
+// ============================================================================
+
+function PublicOnly({ children }) {
+  const [user, setUser] = useState(null)
+  const [authLoading, setAuthLoading] = useState(true)
+
+  useEffect(() => {
+    const unsubscribe = auth.onAuthStateChanged((u) => {
+      setUser(u)
+      setAuthLoading(false)
+    })
+    return () => unsubscribe()
+  }, [])
+
+  const { stage, loading: stageLoading } = useSetupStage(user)
+
+  if (authLoading || (user && stageLoading)) {
     return <FullScreenSpinner />
   }
 
   if (user) {
-    return <Navigate to="/dashboard" replace />
+    // Send them to wherever they need to be
+    return <Navigate to={stageToRoute(stage)} replace />
   }
 
   return <>{children}</>
