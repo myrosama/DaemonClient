@@ -83,16 +83,9 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url)
 
-    // CORS — must echo origin (not '*') when credentials are included
-    const requestOrigin = request.headers.get('Origin') || ''
-    const allowedOrigins = [
-      'https://accounts.daemonclient.uz',
-      'https://daemonclient-accounts.web.app',
-      'https://daemonclient.uz',
-      'https://app.daemonclient.uz',
-      'https://photos.daemonclient.uz',
-    ]
-    const origin = allowedOrigins.includes(requestOrigin) ? requestOrigin : allowedOrigins[0]
+    // CORS — must echo exact origin when credentials are included
+    const requestOrigin = request.headers.get('Origin')
+    const origin = requestOrigin || 'https://accounts.daemonclient.uz'
 
     const corsHeaders = {
       'Access-Control-Allow-Origin': origin,

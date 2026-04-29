@@ -1760,7 +1760,9 @@ function useSetupStage(user) {
         if (!cancelled) { setStage('complete'); setLoading(false) }
       } catch (err) {
         console.error('Error checking setup stage:', err)
-        if (!cancelled) { setStage('complete'); setLoading(false) }
+        // On error (e.g. Firestore permission denied for a brand new uninitialized user),
+        // we MUST fallback to 'telegram' setup, NOT 'complete', otherwise they skip the funnel
+        if (!cancelled) { setStage('telegram'); setLoading(false) }
       }
     }
 
