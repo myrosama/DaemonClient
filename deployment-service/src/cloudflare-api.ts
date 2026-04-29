@@ -26,7 +26,7 @@ export class CloudflareAPI {
 
     try {
       const formData = new FormData();
-      formData.append('script', new Blob([workerCode], { type: 'application/javascript' }), 'worker.js');
+      formData.append('worker.js', new Blob([workerCode], { type: 'application/javascript+module' }), 'worker.js');
 
       const metadata = {
         main_module: 'worker.js',
