@@ -1,16 +1,8 @@
 name = "daemonclient-deployment"
 main = "src/index.ts"
 compatibility_date = "2024-09-23"
+compatibility_flags = ["nodejs_compat"]
 
 [vars]
 FIREBASE_API_KEY = "AIzaSyBH5diC5M7MnOIuOWaNPmOB1AV6uJVZyS8"
 FIREBASE_PROJECT_ID = "daemonclient-c0625"
-
-[[queues.producers]]
-binding = "UPDATE_QUEUE"
-queue = "worker-updates"
-
-[[queues.consumers]]
-queue = "worker-updates"
-max_batch_size = 10
-max_batch_timeout = 30

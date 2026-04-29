@@ -38,7 +38,7 @@ import {
 
 const APP_ID = 'default-daemon-client'
 const RENDER_BACKEND = 'https://daemonclient-elnj.onrender.com'
-const AUTH_WORKER = 'https://auth.daemonclient.uz'
+const AUTH_WORKER = 'https://daemonclient-auth.sadrikov49.workers.dev'
 
 const AVATAR_COLORS = [
   '#E11D48', '#DB2777', '#C026D3', '#9333EA', '#7C3AED',
@@ -933,8 +933,8 @@ function OwnershipPage() {
         })
       } catch (e) {}
 
-      toast.success('Setup complete! Redirecting to dashboard...')
-      setTimeout(() => navigate('/dashboard'), 5000)
+      toast.success('Ownership transferred! Setting up your backend...')
+      setTimeout(() => navigate('/setup/worker'), 3000)
     } catch (err) {
       setError(`Error: ${err.message}`)
       setStep(2)
@@ -1865,6 +1865,14 @@ function App() {
           element={
             <AuthOnly>
               <OwnershipPage />
+            </AuthOnly>
+          }
+        />
+        <Route
+          path="/setup/worker"
+          element={
+            <AuthOnly>
+              <SetupWorker />
             </AuthOnly>
           }
         />

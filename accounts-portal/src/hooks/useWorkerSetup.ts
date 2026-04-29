@@ -1,5 +1,11 @@
 import { useState } from 'react'
-import { auth } from '../config/firebase'
+import { auth, db } from '../config/firebase'
+import firebase from '../config/firebase'
+
+// Central deployment worker handles the setup orchestration,
+// but deploys everything (D1, Worker) to the USER's own Cloudflare account
+const DEPLOYMENT_WORKER = 'https://daemonclient-deployment.sadrikov49.workers.dev'
+const APP_ID = 'default-daemon-client'
 
 export interface DeploymentStep {
   key: string
@@ -16,6 +22,10 @@ export function useWorkerSetup() {
 
   const handleTokenChange = (newToken: string) => {
     setToken(newToken)
+    if (isValid) {
+      setIsValid(false)
+      setAccountId('')
+    }
   }
 
   const handleValidation = (data: any) => {
@@ -24,7 +34,7 @@ export function useWorkerSetup() {
   }
 
   const startDeployment = async () => {
-    if (!token || !isValid) return
+    if (!token || !isValid || !accountId) return
 
     setIsDeploying(true)
     setError(null)
@@ -36,8 +46,10 @@ export function useWorkerSetup() {
 
       const idToken = await user.getIdToken()
 
-      // Call deployment endpoint
-      const response = await fetch('/api/deploy-worker', {
+      // Call central deployment worker — it uses the user's API token
+      // to deploy D1 + Worker to the user's OWN Cloudflare account
+      setCurrentStep('database')
+      const response = await fetch(`${DEPLOYMENT_WORKER}/deploy-worker`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -55,26 +67,37 @@ export function useWorkerSetup() {
         throw new Error(data.error || 'Deployment failed')
       }
 
-      // Track deployment progress via polling or SSE
-      await trackDeploymentProgress(data.deploymentId)
+      // Update local UI steps
+      setCurrentStep('worker')
+      await sleep(1500)
+
+      setCurrentStep('encryption')
+      await sleep(1500)
+
+      setCurrentStep('telegram')
+      await sleep(1000)
+
+      // Save service status to Firestore
+      try {
+        await db.doc(`artifacts/${APP_ID}/users/${user.uid}/services/photos`).set({
+          workerUrl: data.workerUrl,
+          status: 'active',
+          setupTimestamp: firebase.firestore.FieldValue.serverTimestamp(),
+        }, { merge: true })
+      } catch (e) {
+        console.warn('Failed to save service status:', e)
+      }
 
       setCurrentStep('complete')
+      setIsDeploying(false)
       return data
 
     } catch (err: any) {
+      console.error('Deployment error:', err)
       setError(err.message || 'Deployment failed')
+      setCurrentStep(null)
       setIsDeploying(false)
       throw err
-    }
-  }
-
-  async function trackDeploymentProgress(deploymentId: string) {
-    const steps = ['connect', 'database', 'worker', 'encryption', 'telegram']
-
-    for (const step of steps) {
-      setCurrentStep(step)
-      // Simulate progress (in real implementation, poll /api/deployment-status)
-      await new Promise(resolve => setTimeout(resolve, 6000))
     }
   }
 
@@ -87,6 +110,10 @@ export function useWorkerSetup() {
     error,
     handleTokenChange,
     handleValidation,
-    startDeployment
+    startDeployment,
   }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms))
 }

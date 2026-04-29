@@ -1,10 +1,14 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Input } from './ui/Input'
 import { Check, X, Loader2 } from 'lucide-react'
+
+const DEPLOYMENT_WORKER = 'https://daemonclient-deployment.sadrikov49.workers.dev'
 
 export function TokenInput({ value, onChange, onValidate }) {
   const [validationState, setValidationState] = useState('idle') // 'idle' | 'validating' | 'valid' | 'invalid'
   const [error, setError] = useState('')
+  const onValidateRef = useRef(onValidate)
+  onValidateRef.current = onValidate
 
   useEffect(() => {
     if (!value || value.length < 20) {
@@ -16,8 +20,8 @@ export function TokenInput({ value, onChange, onValidate }) {
       setValidationState('validating')
 
       try {
-        // Call validation endpoint
-        const response = await fetch('/api/validate-cf-token', {
+        // Validate via central deployment worker (proxies to Cloudflare API, no CORS issues)
+        const response = await fetch(`${DEPLOYMENT_WORKER}/validate-cf-token`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ token: value })
@@ -28,19 +32,19 @@ export function TokenInput({ value, onChange, onValidate }) {
         if (data.valid) {
           setValidationState('valid')
           setError('')
-          onValidate?.(data)
+          onValidateRef.current?.(data)
         } else {
           setValidationState('invalid')
           setError(data.error || 'Invalid token')
         }
       } catch (err) {
         setValidationState('invalid')
-        setError('Failed to validate token')
+        setError('Failed to validate token. Please try again.')
       }
-    }, 500)
+    }, 600)
 
     return () => clearTimeout(timeoutId)
-  }, [value, onValidate])
+  }, [value])
 
   return (
     <div>
