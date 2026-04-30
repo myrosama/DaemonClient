@@ -394,6 +394,7 @@ def start_setup_endpoint():
         return jsonify({"error": {"message": "No available worker bots to process the request."}}), 500
 
     async def run_setup_flow():
+        failures = []
         for bot_creds in available_bots:
             bot_doc_id = bot_creds["doc_id"]
             client = TelegramClient(StringSession(bot_creds["session_string"]), bot_creds["api_id"], bot_creds["api_hash"])
@@ -415,14 +416,22 @@ def start_setup_endpoint():
 
             except UserDeactivatedBanError as e:
                 db.collection("userbots").document(bot_doc_id).update({'is_active': False, 'status': 'banned'})
+                failures.append({"bot": bot_doc_id, "error": "banned"})
+                print(f"[{bot_doc_id}] BANNED: {e}")
                 continue
             except Exception as e:
-                db.collection("userbots").document(bot_doc_id).update({'status': f'error: {str(e)[:200]}', 'error_count': firestore.Increment(1)})
+                err_str = f"{type(e).__name__}: {str(e)[:300]}"
+                db.collection("userbots").document(bot_doc_id).update({'status': f'error: {err_str[:200]}', 'error_count': firestore.Increment(1)})
+                failures.append({"bot": bot_doc_id, "error": err_str})
+                print(f"[{bot_doc_id}] FAILED: {err_str}")
+                import traceback; traceback.print_exc()
                 continue
             finally:
                 if client.is_connected(): await client.disconnect()
 
-        return jsonify({"error": {"message": "All available worker bots failed."}}), 500
+        return jsonify({
+            "error": {"message": "All available worker bots failed.", "failures": failures, "bot_count": len(available_bots)}
+        }), 500
 
     return asyncio.run(run_setup_flow())
 
