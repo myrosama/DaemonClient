@@ -65,6 +65,21 @@ export default {
         }), {
           headers: { 'Content-Type': 'application/json' }
         });
+      } else if (path === '/proxy') {
+        const target = url.searchParams.get('url');
+        if (!target) {
+          response = new Response('Missing url parameter', { status: 400 });
+        } else {
+          let body: BodyInit | undefined;
+          if (request.method !== 'GET' && request.method !== 'HEAD') {
+            body = await request.arrayBuffer();
+          }
+          const fwdHeaders = new Headers();
+          const ct = request.headers.get('Content-Type');
+          if (ct) fwdHeaders.set('Content-Type', ct);
+          const upstream = await fetch(target, { method: request.method, headers: fwdHeaders, body });
+          response = new Response(upstream.body, { status: upstream.status, headers: upstream.headers });
+        }
       } else if (path.startsWith('/api/auth')) {
         response = await handleAuth(request, env, path);
       } else if (path.startsWith('/api/server') || path === '/api/server-info/config') {

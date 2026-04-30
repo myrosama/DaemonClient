@@ -10,8 +10,10 @@ APP_IDENTIFIER = "default-daemon-client"
 TELEGRAM_PROXY = "https://daemonclient-proxy.sadrikov49.workers.dev"
 ALLOWED_ORIGINS = "https://photos.daemonclient.uz,http://localhost:5173"
 
-# D1 binding for per-user worker deployment
-[[d1_databases]]
-binding = "DB"
-database_name = "photos-db"
-database_id = "placeholder-will-be-replaced-per-user"
+# D1 binding is per-user only. Per-user deploys via deployment-service inject
+# the binding at deploy time. The central worker mainly handles login then
+# returns the user's workerUrl for the client to switch to.
+# [[d1_databases]]
+# binding = "DB"
+# database_name = "photos-db"
+# database_id = "placeholder-will-be-replaced-per-user"

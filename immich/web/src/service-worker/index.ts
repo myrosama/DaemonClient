@@ -5,14 +5,16 @@
 import { installMessageListener } from './messaging';
 import { handleCancel } from './request';
 
-const WORKER_URL = 'https://immich-api.sadrikov49.workers.dev';
+const DEFAULT_WORKER_URL = 'https://immich-api.sadrikov49.workers.dev';
 const ASSET_BINARY_REGEX = /^\/api\/assets\/[a-f0-9-]+\/(original|thumbnail)/;
 const API_REGEX = /^\/api\//;
 const TOKEN_CACHE_KEY = 'https://dc-internal/auth-token';
+const WORKER_URL_CACHE_KEY = 'https://dc-internal/worker-url';
 
 const sw = globalThis as unknown as ServiceWorkerGlobalScope;
 
 let cachedToken: string | null = null;
+let cachedWorkerUrl: string | null = null;
 
 async function persistToken(token: string | null) {
   cachedToken = token;
@@ -33,6 +35,27 @@ async function loadToken(): Promise<string | null> {
     return cachedToken;
   }
   return null;
+}
+
+async function persistWorkerUrl(url: string | null) {
+  cachedWorkerUrl = url;
+  const cache = await caches.open('dc-auth-v1');
+  if (url) {
+    await cache.put(WORKER_URL_CACHE_KEY, new Response(url));
+  } else {
+    await cache.delete(WORKER_URL_CACHE_KEY);
+  }
+}
+
+async function getWorkerUrl(): Promise<string> {
+  if (cachedWorkerUrl) return cachedWorkerUrl;
+  const cache = await caches.open('dc-auth-v1');
+  const res = await cache.match(WORKER_URL_CACHE_KEY);
+  if (res) {
+    cachedWorkerUrl = await res.text();
+    return cachedWorkerUrl!;
+  }
+  return DEFAULT_WORKER_URL;
 }
 
 const handleActivate = (event: ExtendableEvent) => {
@@ -56,7 +79,8 @@ async function extractToken(request: Request): Promise<string | null> {
 
 async function directWorkerFetch(request: Request, cacheable: boolean, pathname: string): Promise<Response> {
   const url = new URL(request.url);
-  const workerUrl = WORKER_URL + url.pathname + url.search;
+  const base = await getWorkerUrl();
+  const workerUrl = base + url.pathname + url.search;
 
   if (cacheable) {
     const cache = await caches.open('dc-assets-v1');
@@ -116,11 +140,15 @@ async function directWorkerFetch(request: Request, cacheable: boolean, pathname:
       if (data.accessToken) {
         await persistToken(data.accessToken);
       }
+      if (data.workerUrl) {
+        await persistWorkerUrl(data.workerUrl);
+      }
     } catch {}
   }
 
   if (pathname === '/api/auth/logout') {
     await persistToken(null);
+    await persistWorkerUrl(null);
   }
 
   if (cacheable && response.ok) {
@@ -154,6 +182,9 @@ sw.addEventListener('message', (event) => {
   }
   if (event.data?.type === 'CLEAR_TOKEN') {
     persistToken(null);
+  }
+  if (event.data?.type === 'SET_WORKER_URL') {
+    persistWorkerUrl(event.data.workerUrl || null);
   }
 });
 

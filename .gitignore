@@ -77,3 +77,11 @@ daemon-cli/src/daemonclient/config.py
 .wrangler
 .dev.vars*
 !.dev.vars.example
+
+# pnpm and build artifacts
+.pnpm-store/
+immich/web/build/
+accounts-portal/dist/
+deployment-service/src/shim-bundle.ts
+deployment-service/scripts/
+backend-server/myenv/

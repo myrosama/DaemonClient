@@ -6,11 +6,10 @@ export interface DeployWorkerConfig {
   bindings: WorkerBinding[];
 }
 
-export interface WorkerBinding {
-  type: 'd1' | 'kv' | 'r2';
-  name: string;
-  id: string;
-}
+export type WorkerBinding =
+  | { type: 'd1' | 'kv' | 'r2'; name: string; id: string }
+  | { type: 'plain_text'; name: string; text: string }
+  | { type: 'secret_text'; name: string; text: string };
 
 export interface CreateD1Config {
   accountId: string;
@@ -30,11 +29,14 @@ export class CloudflareAPI {
 
       const metadata = {
         main_module: 'worker.js',
-        bindings: bindings.map(b => ({
-          type: b.type,
-          name: b.name,
-          id: b.id
-        }))
+        compatibility_date: '2024-09-23',
+        compatibility_flags: ['nodejs_compat'],
+        bindings: bindings.map(b => {
+          if (b.type === 'plain_text' || b.type === 'secret_text') {
+            return { type: b.type, name: b.name, text: b.text };
+          }
+          return { type: b.type, name: b.name, id: b.id };
+        })
       };
       formData.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
 
@@ -112,6 +114,70 @@ export class CloudflareAPI {
         return { success: false, error: `Query failed: ${response.status} ${error}` };
       }
 
+      return { success: true };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  }
+
+  async getWorkersSubdomain(accountId: string, apiToken: string): Promise<{ subdomain?: string; error?: string; notProvisioned?: boolean }> {
+    try {
+      const res = await fetch(
+        `${this.baseUrl}/accounts/${accountId}/workers/subdomain`,
+        { headers: { 'Authorization': `Bearer ${apiToken}` } }
+      );
+      if (!res.ok) {
+        const text = await res.text();
+        // CF returns 404 with code 10007 when the account has never set up a
+        // workers.dev subdomain. Surface this as a distinct condition so the
+        // caller can provision one instead of failing the whole deploy.
+        const notProvisioned = res.status === 404 || /10007/.test(text);
+        return { error: `Get subdomain failed: ${res.status} ${text}`, notProvisioned };
+      }
+      const data = await res.json() as any;
+      const subdomain = data.result?.subdomain;
+      return subdomain ? { subdomain } : { notProvisioned: true, error: 'No subdomain set on account' };
+    } catch (error: any) {
+      return { error: error.message };
+    }
+  }
+
+  async setWorkersSubdomain(accountId: string, apiToken: string, subdomain: string): Promise<{ success: boolean; error?: string; conflict?: boolean }> {
+    try {
+      const res = await fetch(
+        `${this.baseUrl}/accounts/${accountId}/workers/subdomain`,
+        {
+          method: 'PUT',
+          headers: { 'Authorization': `Bearer ${apiToken}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ subdomain })
+        }
+      );
+      if (!res.ok) {
+        const text = await res.text();
+        // 409/already-taken — caller can retry with a different name.
+        const conflict = res.status === 409 || /already.*(taken|exists|use)/i.test(text);
+        return { success: false, error: `Set subdomain failed: ${res.status} ${text}`, conflict };
+      }
+      return { success: true };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  }
+
+  async enableWorkersDev(accountId: string, workerName: string, apiToken: string): Promise<{ success: boolean; error?: string }> {
+    try {
+      const res = await fetch(
+        `${this.baseUrl}/accounts/${accountId}/workers/scripts/${workerName}/subdomain`,
+        {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${apiToken}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled: true })
+        }
+      );
+      if (!res.ok) {
+        const error = await res.text();
+        return { success: false, error: `Enable workers.dev failed: ${res.status} ${error}` };
+      }
       return { success: true };
     } catch (error: any) {
       return { success: false, error: error.message };

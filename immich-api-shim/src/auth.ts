@@ -1,5 +1,5 @@
 import type { Env } from './index';
-import { json } from './helpers';
+import { json, firestoreGet } from './helpers';
 
 async function hmacSign(payload: string, scope: string): Promise<string> {
   const key = await crypto.subtle.importKey(
@@ -60,6 +60,12 @@ async function handleLogin(request: Request, env: Env): Promise<Response> {
     exp: Date.now() + 7 * 24 * 60 * 60 * 1000,
   }, env.APP_IDENTIFIER || 'default');
 
+  let workerUrl: string | null = null;
+  try {
+    const cfConfig = await firestoreGet(env, data.localId, 'config/cloudflare', data.idToken);
+    if (cfConfig?.workerUrl) workerUrl = cfConfig.workerUrl;
+  } catch {}
+
   const userResponse = {
     accessToken: sessionToken,
     userId: data.localId,
@@ -71,6 +77,7 @@ async function handleLogin(request: Request, env: Env): Promise<Response> {
     profileImagePath: '',
     quotaSizeInBytes: null,
     quotaUsageInBytes: null,
+    workerUrl,
   };
 
   const response = json(userResponse, 201);

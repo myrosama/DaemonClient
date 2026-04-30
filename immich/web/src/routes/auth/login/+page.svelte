@@ -88,6 +88,9 @@
         document.cookie = `immich_access_token=${user.accessToken}; Path=/; SameSite=Lax; Secure; Max-Age=${maxAge}`;
         document.cookie = `immich_is_authenticated=true; Path=/; SameSite=Lax; Secure; Max-Age=${maxAge}`;
         navigator.serviceWorker?.controller?.postMessage({ type: 'SET_TOKEN', token: user.accessToken });
+        if ((user as any).workerUrl) {
+          navigator.serviceWorker?.controller?.postMessage({ type: 'SET_WORKER_URL', workerUrl: (user as any).workerUrl });
+        }
       }
 
       if (user.isAdmin && !serverConfig.isOnboarded) {

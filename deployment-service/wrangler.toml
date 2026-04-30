@@ -6,3 +6,6 @@ compatibility_flags = ["nodejs_compat"]
 [vars]
 FIREBASE_API_KEY = "AIzaSyBH5diC5M7MnOIuOWaNPmOB1AV6uJVZyS8"
 FIREBASE_PROJECT_ID = "daemonclient-c0625"
+APP_IDENTIFIER = "default-daemon-client"
+TELEGRAM_PROXY = "https://daemonclient-proxy.sadrikov49.workers.dev"
+ALLOWED_ORIGINS = "https://photos.daemonclient.uz,http://localhost:5173"

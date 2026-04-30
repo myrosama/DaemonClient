@@ -36,10 +36,13 @@ async function handleTelegramConfig(request: Request, env: Env): Promise<Respons
   const { requireAuth, firestoreGet } = await import('./helpers');
   const session = await requireAuth(request, env);
   const config = await firestoreGet(env, session.uid, 'config/telegram', session.idToken);
+  // Each user's own worker provides the CORS proxy. Falls back to env value (central
+  // shim) if this worker has no D1 binding (i.e., it IS the central worker).
+  const selfProxy = `${new URL(request.url).origin}/proxy`;
   return json({
     botToken: config?.botToken || config?.bot_token,
     channelId: config?.channelId || config?.channel_id,
-    proxyUrl: env.TELEGRAM_PROXY,
+    proxyUrl: env.DB ? selfProxy : (env.TELEGRAM_PROXY || selfProxy),
   });
 }
 

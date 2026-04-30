@@ -574,8 +574,15 @@ function SetupPage() {
   const [channelId, setChannelId] = useState('')
   const [error, setError] = useState('')
   const [isLoading, setIsLoading] = useState(false)
+  const [alreadyConfigured, setAlreadyConfigured] = useState(false)
 
   const handleStartAutomatedSetup = async () => {
+    // Guard: if telegram config already exists, do NOT call /startSetup again —
+    // that would create a duplicate bot+channel. Just move forward.
+    if (alreadyConfigured) {
+      navigate('/setup/ownership')
+      return
+    }
     setStatusMessage('Initiating secure setup... This may take a minute.')
     setError('')
     setIsLoading(true)
@@ -650,7 +657,10 @@ function SetupPage() {
     }
   }
 
-  // Real-time listener for setup completion (in case backend writes config)
+  // Real-time listener for setup completion (in case backend writes config).
+  // Also doubles as a guard: if telegram is already set up when this page loads,
+  // mark alreadyConfigured and route forward — never re-trigger /startSetup,
+  // which would create a duplicate bot+channel.
   useEffect(() => {
     const uid = auth.currentUser?.uid
     if (!uid) return
@@ -658,10 +668,16 @@ function SetupPage() {
       .collection(configPath(uid))
       .doc('telegram')
       .onSnapshot((doc) => {
-        if (doc.exists && doc.data().botToken) {
-          setStatusMessage('Setup complete! Redirecting...')
-          setTimeout(() => navigate('/setup/ownership'), 1000)
-        }
+        if (!doc.exists) return
+        const data = doc.data() || {}
+        // Only treat as configured when the doc is fully populated, not just
+        // a half-written stub from a failed /startSetup.
+        const complete = !!(data.botToken && data.botUsername && data.channelId)
+        if (!complete) return
+        setAlreadyConfigured(true)
+        const transferred = data.ownership_transferred || data.ownershipTransferred
+        setStatusMessage('Setup complete! Redirecting...')
+        setTimeout(() => navigate(transferred ? '/setup/worker' : '/setup/ownership'), 800)
       })
     return () => unsubscribe()
   }, [navigate])
@@ -858,7 +874,9 @@ function OwnershipPage() {
   const [isProcessing, setIsProcessing] = useState(false)
   const [transferStatus, setTransferStatus] = useState(null)
 
-  // Fetch config
+  // Fetch config. If telegram doc is missing or incomplete (half-written by a
+  // failed /startSetup), bounce the user back to /setup so they can re-trigger
+  // setup — instead of leaving them staring at a spinner with no @bot to open.
   useEffect(() => {
     const fetchConfig = async () => {
       try {
@@ -866,11 +884,13 @@ function OwnershipPage() {
           .collection(configPath(auth.currentUser.uid))
           .doc('telegram')
         const docSnap = await configDocRef.get()
-        if (docSnap.exists) {
-          setConfig(docSnap.data())
-        } else {
-          setError('Could not find your configuration. Please try setup again.')
+        const data = docSnap.exists ? docSnap.data() : null
+        const complete = !!(data && data.botToken && data.botUsername && data.channelId)
+        if (!complete) {
+          navigate('/setup', { replace: true })
+          return
         }
+        setConfig(data)
       } catch (err) {
         setError('Error fetching configuration: ' + err.message)
       } finally {
@@ -878,7 +898,7 @@ function OwnershipPage() {
       }
     }
     fetchConfig()
-  }, [])
+  }, [navigate])
 
   // Countdown timer
   useEffect(() => {
@@ -942,7 +962,27 @@ function OwnershipPage() {
       } catch (e) {}
 
       toast.success('Ownership transferred! Setting up your backend...')
-      setTimeout(() => navigate('/setup/worker'), 3000)
+
+      // CRITICAL: don't navigate to /setup/worker until the client can actually
+      // READ ownership_transferred=true from Firestore. The backend already
+      // wrote it, but client cache/replication can lag a few seconds — and
+      // useSetupStage on /setup/worker would otherwise read stale data and
+      // bounce the user right back here, looping forever.
+      const configDocRef = db
+        .collection(configPath(auth.currentUser.uid))
+        .doc('telegram')
+      let attempts = 0
+      const maxAttempts = 12 // ~18s total
+      while (attempts < maxAttempts) {
+        try {
+          const snap = await configDocRef.get({ source: 'server' })
+          const data = snap.data() || {}
+          if (data.ownership_transferred || data.ownershipTransferred) break
+        } catch {}
+        await new Promise((r) => setTimeout(r, 1500))
+        attempts++
+      }
+      navigate('/setup/worker')
     } catch (err) {
       setError(`Error: ${err.message}`)
       setStep(2)
@@ -1717,16 +1757,23 @@ function SecurityPage() {
 function useSetupStage(user) {
   const [stage, setStage] = useState(null) // null = loading
   const [loading, setLoading] = useState(true)
+  // Track which uid the current `stage` value belongs to. If `user.uid` differs
+  // from this, our stage value is stale and we MUST treat the hook as loading
+  // — synchronously, before any consumer reads `stageToRoute(null)` and
+  // wrongly sends a freshly-signed-up user to /dashboard.
+  const stageForUidRef = useRef(null)
 
   useEffect(() => {
     if (!user) {
       setStage(null)
       setLoading(false)
+      stageForUidRef.current = null
       return
     }
 
-    // CRITICAL: Reset loading immediately when user changes
-    // Prevents race condition where stale stage=null causes redirect to /dashboard
+    // Reset stage when user changes so the synchronous race-guard below
+    // continues to read as loading until checkStage resolves.
+    setStage(null)
     setLoading(true)
 
     let cancelled = false
@@ -1735,34 +1782,41 @@ function useSetupStage(user) {
       try {
         const basePath = configPath(user.uid)
 
-        // 1. Check Telegram config
+        // 1. Check Telegram config — require ALL fields, not just botToken.
+        // Half-written docs (botToken without botUsername/channelId) used to
+        // advance the user to /setup/ownership where the UI then spins forever
+        // because there is no @bot to open. Treat partial config as 'telegram'
+        // so the user can re-trigger /startSetup cleanly.
         const telegramDoc = await db.collection(basePath).doc('telegram').get()
-        if (!telegramDoc.exists || !telegramDoc.data()?.botToken) {
-          if (!cancelled) { setStage('telegram'); setLoading(false) }
+        const tg = telegramDoc.exists ? telegramDoc.data() : null
+        const telegramComplete = !!(tg && tg.botToken && tg.botUsername && tg.channelId)
+        if (!telegramComplete) {
+          if (!cancelled) { stageForUidRef.current = user.uid; setStage('telegram'); setLoading(false) }
           return
         }
 
         // 2. Check ownership transfer
-        const telegramData = telegramDoc.data()
-        if (!telegramData.ownershipTransferred) {
-          if (!cancelled) { setStage('ownership'); setLoading(false) }
+        // Backend writes snake_case (ownership_transferred) — match that.
+        const telegramData = tg
+        if (!telegramData.ownership_transferred && !telegramData.ownershipTransferred) {
+          if (!cancelled) { stageForUidRef.current = user.uid; setStage('ownership'); setLoading(false) }
           return
         }
 
         // 3. Check Cloudflare / worker setup
         const cfDoc = await db.collection(basePath).doc('cloudflare').get()
         if (!cfDoc.exists || !cfDoc.data()?.workerUrl) {
-          if (!cancelled) { setStage('worker'); setLoading(false) }
+          if (!cancelled) { stageForUidRef.current = user.uid; setStage('worker'); setLoading(false) }
           return
         }
 
         // All done
-        if (!cancelled) { setStage('complete'); setLoading(false) }
+        if (!cancelled) { stageForUidRef.current = user.uid; setStage('complete'); setLoading(false) }
       } catch (err) {
         console.error('Error checking setup stage:', err)
         // On error (e.g. Firestore permission denied for a brand new uninitialized user),
         // we MUST fallback to 'telegram' setup, NOT 'complete', otherwise they skip the funnel
-        if (!cancelled) { setStage('telegram'); setLoading(false) }
+        if (!cancelled) { stageForUidRef.current = user.uid; setStage('telegram'); setLoading(false) }
       }
     }
 
@@ -1770,17 +1824,22 @@ function useSetupStage(user) {
     return () => { cancelled = true }
   }, [user])
 
-  return { stage, loading }
+  // Synchronous race guard: if the consumer just received a new `user` and
+  // our stage value still belongs to the previous uid, we are loading —
+  // regardless of what the `loading` state currently says.
+  const stageMatchesUser = user ? stageForUidRef.current === user.uid : true
+  return { stage, loading: loading || (!!user && !stageMatchesUser) }
 }
 
-// Map stage → route
+// Map stage → route. Defaults to /setup (start of funnel) so a stage=null race
+// never accidentally promotes a brand-new user straight to /dashboard.
 function stageToRoute(stage) {
   switch (stage) {
     case 'telegram': return '/setup'
     case 'ownership': return '/setup/ownership'
     case 'worker': return '/setup/worker'
     case 'complete': return '/dashboard'
-    default: return '/dashboard'
+    default: return '/setup'
   }
 }
 

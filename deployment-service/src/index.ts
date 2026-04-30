@@ -1,4 +1,5 @@
 import { CloudflareAPI } from './cloudflare-api';
+import { SHIM_BUNDLE, SHIM_VERSION } from './shim-bundle';
 
 // Inline encryption helper
 const IV_LENGTH = 12;
@@ -22,6 +23,9 @@ export interface Env {
   FIREBASE_API_KEY: string;
   FIREBASE_PROJECT_ID: string;
   ENCRYPTION_MASTER_KEY: string;
+  APP_IDENTIFIER: string;
+  TELEGRAM_PROXY: string;
+  ALLOWED_ORIGINS: string;
 }
 
 const MIGRATION_SQL = `
@@ -122,42 +126,66 @@ async function handleDeployWorker(request: Request, env: Env): Promise<Response>
       `UPDATE config SET value = '${password}' WHERE key = 'zke_password'; UPDATE config SET value = '${salt}' WHERE key = 'zke_salt';`
     );
 
-    // Step 4: Deploy worker to USER's account
-    // Use a valid ES module placeholder — the real immich-api-shim will be deployed via wrangler later
-    const workerCode = `
-export default {
-  async fetch(request, env) {
-    const url = new URL(request.url);
-    const cors = {
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-      'Content-Type': 'application/json'
-    };
-    if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors });
-    return new Response(JSON.stringify({
-      status: 'active',
-      message: 'DaemonClient worker is running. Deploy the full immich-api-shim for Photos functionality.',
-      path: url.pathname
-    }), { headers: cors });
-  }
-};`;
-
+    // Step 4: Deploy the real immich-api-shim to USER's account, bound to USER's D1
     const workerName = `dc-${shortId}`;
     const deployResult = await cfApi.deployWorker({
-      accountId, workerName, apiToken, workerCode,
-      bindings: [{ type: 'd1', name: 'DB', id: databaseId }]
+      accountId, workerName, apiToken, workerCode: SHIM_BUNDLE,
+      bindings: [
+        { type: 'd1', name: 'DB', id: databaseId },
+        { type: 'plain_text', name: 'FIREBASE_API_KEY', text: env.FIREBASE_API_KEY },
+        { type: 'plain_text', name: 'FIREBASE_PROJECT_ID', text: env.FIREBASE_PROJECT_ID },
+        { type: 'plain_text', name: 'APP_IDENTIFIER', text: env.APP_IDENTIFIER },
+        { type: 'plain_text', name: 'TELEGRAM_PROXY', text: env.TELEGRAM_PROXY },
+        { type: 'plain_text', name: 'ALLOWED_ORIGINS', text: env.ALLOWED_ORIGINS },
+      ]
     });
     if (!deployResult.success) return corsResponse(JSON.stringify({ error: deployResult.error }), { status: 500 });
 
+    // Step 4b: Ensure the account has a workers.dev subdomain.
+    // First-time CF Workers users don't have one until they visit the Workers
+    // & Pages page in the dashboard. In that case GET /workers/subdomain
+    // returns 404 / code 10007. We provision one programmatically so the user
+    // doesn't have to bounce out of the flow. This MUST happen before
+    // enableWorkersDev — enabling workers.dev for a script is meaningless
+    // without an account-level subdomain.
+    let subdomainResult = await cfApi.getWorkersSubdomain(accountId, apiToken);
+    if (!subdomainResult.subdomain && subdomainResult.notProvisioned) {
+      // workers.dev subdomains are globally unique — try a few candidates.
+      const accountSlug = accountId.substring(0, 8).toLowerCase();
+      const candidates = [
+        `dc-${accountSlug}`,
+        `dc-${accountSlug}-${Math.random().toString(36).substring(2, 6)}`,
+        `dc-${accountSlug}-${Math.random().toString(36).substring(2, 8)}`,
+      ];
+      let claimed = false;
+      let lastErr: string | undefined;
+      for (const candidate of candidates) {
+        const r = await cfApi.setWorkersSubdomain(accountId, apiToken, candidate);
+        if (r.success) { claimed = true; break; }
+        lastErr = r.error;
+        if (!r.conflict) break;
+      }
+      if (!claimed) {
+        return corsResponse(JSON.stringify({ error: `Could not provision workers.dev subdomain: ${lastErr}` }), { status: 500 });
+      }
+      subdomainResult = await cfApi.getWorkersSubdomain(accountId, apiToken);
+    }
+    if (!subdomainResult.subdomain) {
+      return corsResponse(JSON.stringify({ error: subdomainResult.error || 'Could not fetch workers subdomain' }), { status: 500 });
+    }
+
+    // Step 4c: Make sure workers.dev is enabled for THIS script (newly
+    // deployed module workers default to disabled on some accounts).
+    await cfApi.enableWorkersDev(accountId, workerName, apiToken);
+
     // Step 5: Save config to Firestore
-    const workerUrl = `https://${workerName}.${accountId}.workers.dev`;
+    const workerUrl = `https://${workerName}.${subdomainResult.subdomain}.workers.dev`;
     const encryptedToken = await encryptToken(apiToken, env.ENCRYPTION_MASTER_KEY);
     await saveWorkerConfig(uid, {
       apiToken: encryptedToken, accountId, workerName, workerUrl,
       databaseName: dbName, databaseId,
       setupTimestamp: new Date().toISOString(),
-      lastDeployedVersion: '1.0.0', autoUpdateEnabled: true
+      lastDeployedVersion: SHIM_VERSION, autoUpdateEnabled: true
     }, env);
 
     return corsResponse(JSON.stringify({ success: true, workerUrl, deploymentId: crypto.randomUUID() }));
