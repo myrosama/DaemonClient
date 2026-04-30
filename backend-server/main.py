@@ -68,7 +68,11 @@ ASSET_CHANNEL_ID = int(os.getenv("ASSET_CHANNEL_ID", 0))
 BOT_PIC_MESSAGE_ID = int(os.getenv("BOT_PIC_MESSAGE_ID", 0))
 
 # --- Bot Pool Management ---
+_last_bot_query_error: str | None = None
+
 def get_available_bots():
+    global _last_bot_query_error
+    _last_bot_query_error = None
     print("Fetching available userbots from Firestore...")
     try:
         bots_ref = (
@@ -81,8 +85,14 @@ def get_available_bots():
         print(f"Found {len(bots_list)} active bots.")
         return bots_list
     except Exception as e:
-        print(f"Error fetching bots from Firestore: {e}")
+        err = f"{type(e).__name__}: {str(e)[:400]}"
+        _last_bot_query_error = err
+        print(f"Error fetching bots from Firestore: {err}")
+        import traceback; traceback.print_exc()
         return []
+
+def get_last_bot_query_error():
+    return _last_bot_query_error
 
 # --- Helper Functions ---
 async def wait_for_message_with_buttons(client: TelegramClient, chat: str, timeout: int = 15):
@@ -391,7 +401,12 @@ def start_setup_endpoint():
     
     available_bots = get_available_bots()
     if not available_bots:
-        return jsonify({"error": {"message": "No available worker bots to process the request."}}), 500
+        query_err = get_last_bot_query_error()
+        return jsonify({"error": {
+            "message": "No available worker bots to process the request.",
+            "query_error": query_err,
+            "hint": "If query_error mentions an index, Firestore needs a composite index on (is_active ASC, last_used ASC) for the userbots collection."
+        }}), 500
 
     async def run_setup_flow():
         failures = []
