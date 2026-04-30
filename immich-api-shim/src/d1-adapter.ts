@@ -52,11 +52,16 @@ export class D1Adapter {
   }
 
   async savePhoto(photo: Partial<Photo> & { id: string }): Promise<void> {
-    const keys = Object.keys(photo);
+    // D1 .bind() rejects `undefined` ("D1_TYPE_ERROR: Type 'undefined' not
+    // supported"). Drop undefined fields entirely (the column will keep its
+    // default / NULL) and coerce any other non-bindable values (NaN) to null.
+    const entries = Object.entries(photo).filter(([, v]) => v !== undefined).map(
+      ([k, v]) => [k, typeof v === 'number' && Number.isNaN(v) ? null : v] as const
+    );
+    const keys = entries.map(([k]) => k);
+    const values = entries.map(([, v]) => v);
     const placeholders = keys.map(() => '?').join(', ');
-    const values = Object.values(photo);
 
-    // Build ON CONFLICT update SET clause
     const updateSet = keys
       .filter(k => k !== 'id')
       .map(k => `${k} = excluded.${k}`)
