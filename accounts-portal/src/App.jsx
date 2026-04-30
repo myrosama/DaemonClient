@@ -30,6 +30,9 @@ import {
   Globe,
   Monitor,
   ArrowLeft,
+  Server,
+  Copy,
+  Smartphone,
 } from 'lucide-react'
 
 // ============================================================================
@@ -1185,6 +1188,7 @@ function OwnershipPage() {
 
 function DashboardPage() {
   const [services, setServices] = useState({ photos: null, drive: null })
+  const [backend, setBackend] = useState(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -1214,6 +1218,13 @@ function DashboardPage() {
       })
     )
 
+    const cfRef = db.doc(`${configPath(uid)}/cloudflare`)
+    unsubscribes.push(
+      cfRef.onSnapshot((doc) => {
+        if (doc.exists) setBackend(doc.data())
+      })
+    )
+
     // fallback in case no docs exist
     const timeout = setTimeout(() => setLoading(false), 3000)
 
@@ -1222,6 +1233,13 @@ function DashboardPage() {
       clearTimeout(timeout)
     }
   }, [])
+
+  const copyToClipboard = (text, label) => {
+    navigator.clipboard.writeText(text).then(
+      () => toast.success(`${label} copied`),
+      () => toast.error('Copy failed')
+    )
+  }
 
   const serviceCards = [
     {
@@ -1315,6 +1333,71 @@ function DashboardPage() {
               </motion.a>
             )
           })}
+        </div>
+      )}
+
+      {backend?.workerUrl && (
+        <div className="mt-6">
+          <div className="flex items-center gap-2 mb-3">
+            <Server size={14} className="text-linear-text-secondary" />
+            <h2 className="text-[13px] font-medium text-linear-text">Your Backend</h2>
+          </div>
+          <div className="bg-linear-surface border border-white/[0.06] rounded-md p-5 space-y-4">
+            <div>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="text-[11px] font-medium text-linear-text-secondary uppercase tracking-wider">
+                  Worker URL
+                </label>
+                <button
+                  onClick={() => copyToClipboard(backend.workerUrl, 'Worker URL')}
+                  className="flex items-center gap-1 text-[11px] text-linear-text-secondary hover:text-linear-text transition-colors"
+                >
+                  <Copy size={11} />
+                  Copy
+                </button>
+              </div>
+              <div className="font-mono text-[12px] text-linear-text bg-linear-bg border border-white/[0.04] rounded px-3 py-2 break-all">
+                {backend.workerUrl}
+              </div>
+            </div>
+
+            <div>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="text-[11px] font-medium text-linear-text-secondary uppercase tracking-wider flex items-center gap-1.5">
+                  <Smartphone size={11} />
+                  Immich Mobile App — Server Endpoint URL
+                </label>
+                <button
+                  onClick={() => copyToClipboard(`${backend.workerUrl}/api`, 'Server URL')}
+                  className="flex items-center gap-1 text-[11px] text-linear-text-secondary hover:text-linear-text transition-colors"
+                >
+                  <Copy size={11} />
+                  Copy
+                </button>
+              </div>
+              <div className="font-mono text-[12px] text-linear-text bg-linear-bg border border-white/[0.04] rounded px-3 py-2 break-all">
+                {backend.workerUrl}/api
+              </div>
+              <p className="text-[11px] text-linear-text-secondary mt-1.5">
+                Paste this in the Immich mobile app's "Server Endpoint URL" field on the login screen.
+              </p>
+            </div>
+
+            {backend.databaseName && (
+              <div className="grid grid-cols-2 gap-4 pt-2 border-t border-white/[0.04]">
+                <div>
+                  <p className="text-[11px] text-linear-text-secondary mb-0.5">Database</p>
+                  <p className="font-mono text-[12px] text-linear-text">{backend.databaseName}</p>
+                </div>
+                <div>
+                  <p className="text-[11px] text-linear-text-secondary mb-0.5">Account ID</p>
+                  <p className="font-mono text-[12px] text-linear-text truncate" title={backend.accountId}>
+                    {backend.accountId}
+                  </p>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       )}
     </div>

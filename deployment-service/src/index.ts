@@ -212,7 +212,7 @@ async function handleValidateToken(request: Request, env: Env): Promise<Response
   }
 }
 
-async function validateFirebaseToken(request: Request, env: Env): Promise<{ uid: string; idToken: string } | null> {
+async function validateFirebaseToken(request: Request, env: Env): Promise<{ uid: string; idToken: string; email?: string } | null> {
   const authHeader = request.headers.get('Authorization');
   if (!authHeader?.startsWith('Bearer ')) return null;
   const idToken = authHeader.substring(7);
@@ -222,8 +222,9 @@ async function validateFirebaseToken(request: Request, env: Env): Promise<{ uid:
   );
   if (!response.ok) return null;
   const data = await response.json() as any;
-  const uid = data.users?.[0]?.localId;
-  return uid ? { uid, idToken } : null;
+  const u = data.users?.[0];
+  const uid = u?.localId;
+  return uid ? { uid, idToken, email: u?.email } : null;
 }
 
 async function saveWorkerConfig(uid: string, idToken: string, config: any, env: Env): Promise<void> {
