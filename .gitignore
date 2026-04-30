@@ -98,3 +98,4 @@ DEPLOYMENT_FINAL_*.md
 PRIORITY_QUEUE_DEPLOYED.md
 PROJECT_ROADMAP.md
 immich-api-shim/tail_logs*.json
+*.txt
