@@ -51,6 +51,23 @@ export class D1Adapter {
     return result || null;
   }
 
+  // Normalize a D1 photo row to the legacy Firestore-shaped object the rest
+  // of the codebase still consumes: `_id` alongside `id`, `originalFileName`
+  // alongside `fileName`, and `telegramChunks` parsed back into an array.
+  static normalizeRow(row: any): any {
+    if (!row) return row;
+    let chunks = row.telegramChunks;
+    if (typeof chunks === 'string') {
+      try { chunks = JSON.parse(chunks); } catch { chunks = []; }
+    }
+    return {
+      ...row,
+      _id: row.id,
+      originalFileName: row.fileName,
+      telegramChunks: chunks,
+    };
+  }
+
   async savePhoto(photo: Partial<Photo> & { id: string }): Promise<void> {
     // D1 .bind() rejects `undefined` ("D1_TYPE_ERROR: Type 'undefined' not
     // supported"). Drop undefined fields entirely (the column will keep its

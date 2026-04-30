@@ -661,13 +661,25 @@ async function handleFinalizeClientUpload(request: Request, env: Env, uid: strin
 }
 
 async function handleChunkManifest(env: Env, uid: string, assetId: string, idToken: string): Promise<Response> {
-  const photo = await firestoreGet(env, uid, `photos/${assetId}`, idToken);
+  const photo = await loadPhotoById(env, uid, assetId, idToken);
   if (!photo) return json({ message: 'Asset not found' }, 404);
   return json({ chunks: photo.telegramChunks || [] });
 }
 
+// D1-aware single photo loader. Per-user workers (env.DB bound) read from D1;
+// the central worker still falls back to Firestore. The D1 row is normalized
+// (telegramChunks JSON parsed, _id/originalFileName aliases) so downstream
+// consumers don't need to know which source it came from.
+async function loadPhotoById(env: Env, uid: string, assetId: string, idToken: string): Promise<any | null> {
+  if (env.DB) {
+    const row = await new D1Adapter(env.DB).getPhoto(assetId);
+    return row ? D1Adapter.normalizeRow(row) : null;
+  }
+  return firestoreGet(env, uid, `photos/${assetId}`, idToken);
+}
+
 async function handleThumbnailUpload(request: Request, env: Env, uid: string, assetId: string, idToken: string): Promise<Response> {
-  const photo = await firestoreGet(env, uid, `photos/${assetId}`, idToken);
+  const photo = await loadPhotoById(env, uid, assetId, idToken);
   if (!photo) return json({ message: 'Asset not found' }, 404);
 
   const config = await firestoreGet(env, uid, 'config/telegram', idToken);
@@ -712,7 +724,11 @@ async function handleThumbnailUpload(request: Request, env: Env, uid: string, as
       return json({ message: 'Telegram sendPhoto failed' }, 500);
     }
 
-    await firestoreSet(env, uid, `photos/${assetId}`, { telegramThumbId }, idToken);
+    if (env.DB) {
+      await new D1Adapter(env.DB).savePhoto({ id: assetId, telegramThumbId });
+    } else {
+      await firestoreSet(env, uid, `photos/${assetId}`, { telegramThumbId }, idToken);
+    }
     console.log(`[ThumbnailUpload] Successfully stored thumbnail for ${assetId}`);
 
     return json({ success: true, telegramThumbId });
@@ -725,7 +741,7 @@ async function handleThumbnailUpload(request: Request, env: Env, uid: string, as
 // ── Thumbnails & Originals ──────────────────────────────────────────
 
 async function handleThumbnail(request: Request, env: Env, uid: string, assetId: string, idToken: string): Promise<Response> {
-  const photo = await firestoreGet(env, uid, `photos/${assetId}`, idToken);
+  const photo = await loadPhotoById(env, uid, assetId, idToken);
   if (!photo) return json({ message: 'Not found' }, 404);
 
   const url = new URL(request.url);
@@ -814,7 +830,7 @@ async function handleThumbnail(request: Request, env: Env, uid: string, assetId:
 
 async function handleOriginal(request: Request, env: Env, uid: string, assetId: string, idToken: string): Promise<Response> {
   console.log(`[handleOriginal] AssetID: ${assetId}, Path: ${new URL(request.url).pathname}`);
-  const photo = await firestoreGet(env, uid, `photos/${assetId}`, idToken);
+  const photo = await loadPhotoById(env, uid, assetId, idToken);
   if (!photo) return json({ message: 'Not found' }, 404);
 
   const config = await firestoreGet(env, uid, 'config/telegram', idToken);

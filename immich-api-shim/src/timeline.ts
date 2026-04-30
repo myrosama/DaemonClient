@@ -1,5 +1,18 @@
 import type { Env } from './index';
 import { requireAuth, firestoreQuery, json } from './helpers';
+import { D1Adapter } from './d1-adapter';
+
+// Per-user workers store photos in D1 (env.DB). The central worker (no D1
+// binding) still uses Firestore. Read from whichever is present and normalize
+// rows so downstream code can use a single shape (Firestore-style with `_id`).
+async function loadPhotos(env: Env, uid: string, idToken: string): Promise<any[]> {
+  if (env.DB) {
+    const adapter = new D1Adapter(env.DB);
+    const rows = await adapter.queryPhotos({ ownerId: uid, orderBy: 'fileCreatedAt DESC' });
+    return rows.map(D1Adapter.normalizeRow);
+  }
+  return firestoreQuery(env, uid, 'photos', idToken, 'fileCreatedAt', 'DESCENDING');
+}
 
 export async function handleTimeline(request: Request, env: Env, path: string, url: URL): Promise<Response> {
   const session = await requireAuth(request, env);
@@ -14,7 +27,7 @@ export async function handleTimeline(request: Request, env: Env, path: string, u
 }
 
 async function getTimeBuckets(env: Env, uid: string, idToken: string, url: URL): Promise<Response> {
-  const photos = await firestoreQuery(env, uid, 'photos', idToken, 'fileCreatedAt', 'DESCENDING');
+  const photos = await loadPhotos(env, uid, idToken);
 
   const isFavorite = url.searchParams.get('isFavorite') === 'true';
   const isTrashed = url.searchParams.get('isTrashed') === 'true';
@@ -55,7 +68,7 @@ async function getTimeBucket(env: Env, uid: string, idToken: string, url: URL): 
   const isFavorite = url.searchParams.get('isFavorite') === 'true';
   const isTrashed = url.searchParams.get('isTrashed') === 'true';
 
-  const photos = await firestoreQuery(env, uid, 'photos', idToken, 'fileCreatedAt', 'DESCENDING');
+  const photos = await loadPhotos(env, uid, idToken);
 
   const targetMonth = timeBucket.substring(0, 7); // "2024-03"
 

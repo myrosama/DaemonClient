@@ -1,5 +1,17 @@
 import { Env } from './index';
 import { requireAuth, firestoreQuery, json } from './helpers';
+import { D1Adapter } from './d1-adapter';
+
+// Read from D1 (per-user worker) or Firestore (central worker), normalized
+// to the Firestore-style shape the rest of this file expects.
+async function loadPhotos(env: Env, uid: string, idToken: string): Promise<any[]> {
+  if (env.DB) {
+    const adapter = new D1Adapter(env.DB);
+    const rows = await adapter.queryPhotos({ ownerId: uid, orderBy: 'fileCreatedAt DESC' });
+    return rows.map(D1Adapter.normalizeRow);
+  }
+  return firestoreQuery(env, uid, 'photos', idToken);
+}
 
 export async function handleSearch(request: Request, env: Env, path: string): Promise<Response> {
   if (path === '/api/search/metadata') {
@@ -22,7 +34,7 @@ async function handleSearchMetadata(request: Request, env: Env): Promise<Respons
   const isFavorite = body.isFavorite;
   const type = body.type; // 'IMAGE' | 'VIDEO'
 
-  let allPhotos = await firestoreQuery(env, uid, 'photos', idToken);
+  let allPhotos = await loadPhotos(env, uid, idToken);
 
   // Filter by text search (filename)
   if (query) {
