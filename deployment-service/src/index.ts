@@ -89,8 +89,9 @@ export default {
 async function handleDeployWorker(request: Request, env: Env): Promise<Response> {
   try {
     const { apiToken, accountId } = await request.json() as any;
-    const uid = await validateFirebaseToken(request, env);
-    if (!uid) return corsResponse(JSON.stringify({ error: 'Unauthorized' }), { status: 401 });
+    const auth = await validateFirebaseToken(request, env);
+    if (!auth) return corsResponse(JSON.stringify({ error: 'Unauthorized' }), { status: 401 });
+    const { uid, idToken } = auth;
 
     // Sanitize UID for Cloudflare naming (lowercase alphanumeric + dashes only)
     const shortId = uid.substring(0, 8).toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -181,7 +182,7 @@ async function handleDeployWorker(request: Request, env: Env): Promise<Response>
     // Step 5: Save config to Firestore
     const workerUrl = `https://${workerName}.${subdomainResult.subdomain}.workers.dev`;
     const encryptedToken = await encryptToken(apiToken, env.ENCRYPTION_MASTER_KEY);
-    await saveWorkerConfig(uid, {
+    await saveWorkerConfig(uid, idToken, {
       apiToken: encryptedToken, accountId, workerName, workerUrl,
       databaseName: dbName, databaseId,
       setupTimestamp: new Date().toISOString(),
@@ -211,7 +212,7 @@ async function handleValidateToken(request: Request, env: Env): Promise<Response
   }
 }
 
-async function validateFirebaseToken(request: Request, env: Env): Promise<string | null> {
+async function validateFirebaseToken(request: Request, env: Env): Promise<{ uid: string; idToken: string } | null> {
   const authHeader = request.headers.get('Authorization');
   if (!authHeader?.startsWith('Bearer ')) return null;
   const idToken = authHeader.substring(7);
@@ -221,15 +222,30 @@ async function validateFirebaseToken(request: Request, env: Env): Promise<string
   );
   if (!response.ok) return null;
   const data = await response.json() as any;
-  return data.users?.[0]?.localId || null;
+  const uid = data.users?.[0]?.localId;
+  return uid ? { uid, idToken } : null;
 }
 
-async function saveWorkerConfig(uid: string, config: any, env: Env): Promise<void> {
+async function saveWorkerConfig(uid: string, idToken: string, config: any, env: Env): Promise<void> {
   const path = `artifacts/default-daemon-client/users/${uid}/config/cloudflare`;
   const url = `https://firestore.googleapis.com/v1/projects/${env.FIREBASE_PROJECT_ID}/databases/(default)/documents/${path}`;
   const fields: any = {};
   for (const [key, value] of Object.entries(config)) {
     fields[key] = { stringValue: String(value) };
   }
-  await fetch(url, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fields }) });
+  // Firestore rules require an authenticated request — without the user's
+  // idToken this PATCH 401s silently and the user gets bounced back through
+  // the CF setup forever because no `cloudflare` doc ever appears.
+  const res = await fetch(url, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${idToken}`,
+    },
+    body: JSON.stringify({ fields }),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Firestore write failed: ${res.status} ${text}`);
+  }
 }
