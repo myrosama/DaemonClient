@@ -85,3 +85,16 @@ accounts-portal/dist/
 deployment-service/src/shim-bundle.ts
 deployment-service/scripts/
 backend-server/myenv/
+
+# AI History, scratch, and temporary logs
+memory/
+scratch/
+docs/photos/
+docs/superpowers/
+docs/v2.0.0-COMPLETION-REPORT.md
+BUG_FIXES_*.md
+CRITICAL_FIXES_DEPLOYED.md
+DEPLOYMENT_FINAL_*.md
+PRIORITY_QUEUE_DEPLOYED.md
+PROJECT_ROADMAP.md
+immich-api-shim/tail_logs*.json
