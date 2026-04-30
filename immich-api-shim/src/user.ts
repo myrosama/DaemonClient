@@ -1,5 +1,6 @@
 import type { Env } from './index';
 import { requireAuth, firestoreGet, firestoreSet, firestoreQuery, json } from './helpers';
+import { D1Adapter } from './d1-adapter';
 
 export async function handleUser(request: Request, env: Env, path: string): Promise<Response> {
   const session = await requireAuth(request, env);
@@ -73,9 +74,12 @@ async function updateUserMe(request: Request, env: Env, session: { uid: string; 
 }
 
 async function getStorage(env: Env, session: { uid: string; idToken: string }): Promise<Response> {
-  const photos = await firestoreQuery(env, session.uid, 'photos', session.idToken);
+  // Skip the full collection scan for per-user workers — D1 has it.
+  const photos = env.DB
+    ? await new D1Adapter(env.DB).queryPhotos({ ownerId: session.uid })
+    : await firestoreQuery(env, session.uid, 'photos', session.idToken);
   let totalBytes = 0;
-  for (const p of photos) {
+  for (const p of photos as any[]) {
     if (p) totalBytes += (p.fileSize || 0);
   }
   return json({

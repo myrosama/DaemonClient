@@ -1,5 +1,6 @@
 import type { Env } from './index';
 import { requireAuth, firestoreQuery } from './helpers';
+import { D1Adapter } from './d1-adapter';
 
 export async function handleSyncStream(request: Request, env: Env): Promise<Response> {
   const session = await requireAuth(request, env);
@@ -9,8 +10,13 @@ export async function handleSyncStream(request: Request, env: Env): Promise<Resp
     reqBody = await request.json();
   }
 
-  // Get assets
-  const photos = await firestoreQuery(env, session.uid, 'photos', session.idToken, 'fileCreatedAt', 'DESCENDING');
+  // Per-user workers (env.DB bound) read from D1; central worker still uses
+  // Firestore. Without this branch, sync was always doing a full Firestore
+  // collection scan on every page load — adding ~150-300ms to boot even when
+  // the user had zero photos.
+  const photos = env.DB
+    ? (await new D1Adapter(env.DB).queryPhotos({ ownerId: session.uid, orderBy: 'fileCreatedAt DESC' })).map(D1Adapter.normalizeRow)
+    : await firestoreQuery(env, session.uid, 'photos', session.idToken, 'fileCreatedAt', 'DESCENDING');
 
   const stream = new ReadableStream({
     async start(controller) {
