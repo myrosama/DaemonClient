@@ -23,6 +23,24 @@ export async function handleServer(request: Request, env: Env, path: string): Pr
 async function handleZkeConfig(request: Request, env: Env): Promise<Response> {
   const { requireAuth, firestoreGet } = await import('./helpers');
   const session = await requireAuth(request, env);
+
+  // Per-user workers store ZKE keys in D1; the deployment-service generates
+  // them there on first provision and never writes them to Firestore. Reading
+  // from Firestore here returns stale/wrong keys, so the web client encrypts
+  // with K_firestore while the worker later decrypts with K_d1 — AES-GCM auth
+  // fails and every uploaded photo becomes unviewable. Prefer D1 when bound.
+  if (env.DB) {
+    const { D1Adapter } = await import('./d1-adapter');
+    const adapter = new D1Adapter(env.DB);
+    const zke = await adapter.getZkeConfig();
+    return json({
+      enabled: !!zke?.enabled,
+      password: zke?.password,
+      salt: zke?.salt,
+      mode: zke?.mode,
+    });
+  }
+
   const config = await firestoreGet(env, session.uid, 'config/zke', session.idToken);
   return json({
     enabled: config?.enabled || config?.mode === 'server',
