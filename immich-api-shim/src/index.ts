@@ -11,7 +11,28 @@ import { handleFeatureFlags } from './feature-flags';
 import { handleSearch } from './search';
 import { linkExistingLivePhotos } from './link-live-photos';
 import { requireAuth } from './helpers';
+import { proxyToUserWorker } from './proxy';
 import type { D1Database } from '@cloudflare/workers-types';
+
+// Path prefixes whose data lives in a per-user worker (D1 + ZKE keys + bot
+// token). When this shim runs as the central router (no env.DB), these paths
+// are proxied to the user's own worker. When it runs AS the per-user worker
+// (env.DB bound), they're handled locally.
+const PER_USER_PATHS = [
+  '/api/assets',
+  '/api/asset',
+  '/api/timeline',
+  '/api/users',
+  '/api/albums',
+  '/api/policy',
+  '/api/sync',
+  '/api/search',
+  '/api/admin',
+];
+
+function isPerUserPath(path: string): boolean {
+  return PER_USER_PATHS.some(p => path === p || path.startsWith(p + '/'));
+}
 
 export const WORKER_VERSION = '1.0.0';
 
@@ -56,6 +77,25 @@ export default {
 
     try {
       let response: Response;
+
+      // ROUTER MODE: when this shim runs as the central worker (no D1 bound)
+      // and the path is owned by per-user data, forward it to the user's own
+      // worker — bypasses ISP blocks on *.workers.dev because clients only
+      // ever talk to the central custom domain. Falls through to local
+      // Firestore handlers if the user has no workerUrl in their session yet.
+      if (!env.DB && isPerUserPath(path)) {
+        const proxied = await proxyToUserWorker(request, env);
+        if (proxied) {
+          const newHeaders = new Headers(proxied.headers);
+          for (const [k, v] of Object.entries(cors)) newHeaders.set(k, v);
+          newHeaders.set('x-request-id', requestId);
+          newHeaders.set('X-Worker-Version', WORKER_VERSION);
+          newHeaders.set('X-Routed-Via', 'central-proxy');
+          return new Response(proxied.body, { status: proxied.status, headers: newHeaders });
+        }
+        // proxyToUserWorker returned null → no session/workerUrl yet; fall
+        // through to the normal handlers (which will Firestore-fallback).
+      }
 
       if (path === '/api/health' && request.method === 'GET') {
         response = new Response(JSON.stringify({

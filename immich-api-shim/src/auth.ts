@@ -51,20 +51,24 @@ async function handleLogin(request: Request, env: Env): Promise<Response> {
     return json({ message: data.error.message || 'Invalid credentials' }, 401);
   }
 
-  // Create session token
-  const sessionToken = await createSignedSessionToken({
-    uid: data.localId,
-    email: data.email,
-    idToken: data.idToken,
-    refreshToken: data.refreshToken,
-    exp: Date.now() + 7 * 24 * 60 * 60 * 1000,
-  }, env.APP_IDENTIFIER || 'default');
-
+  // Look up the user's per-user worker URL up front so we can BAKE it into
+  // the session token. Embedding it lets the central worker proxy every
+  // subsequent /api/* request to the user's worker without any extra
+  // Firestore read — pure JWT-decode + fetch.
   let workerUrl: string | null = null;
   try {
     const cfConfig = await firestoreGet(env, data.localId, 'config/cloudflare', data.idToken);
     if (cfConfig?.workerUrl) workerUrl = cfConfig.workerUrl;
   } catch {}
+
+  const sessionToken = await createSignedSessionToken({
+    uid: data.localId,
+    email: data.email,
+    idToken: data.idToken,
+    refreshToken: data.refreshToken,
+    workerUrl,
+    exp: Date.now() + 7 * 24 * 60 * 60 * 1000,
+  }, env.APP_IDENTIFIER || 'default');
 
   const userResponse = {
     accessToken: sessionToken,
