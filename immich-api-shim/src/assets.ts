@@ -776,12 +776,17 @@ async function handleThumbnail(request: Request, env: Env, uid: string, assetId:
   const isServerZke = photo.encryptionMode === 'server' || (photo.encrypted === true && !photo.encryptionMode);
   const isClientZke = photo.encryptionMode === 'client';
 
-  const key = isServerZke ? await getEncryptionKey(env, uid, idToken) : null;
+  // `servingThumb` covers both the small thumbnail and the multi-chunk preview
+  // fallback path — anywhere we end up downloading `telegramThumbId`. Thumbs
+  // are always plain JPEGs (Telegram-generated, mobile-provided, or sent via
+  // sendPhoto), never encrypted, so decrypting them with the AES key fails
+  // GCM auth ("Decryption failed... Input length was N, output length expected
+  // to be N"). Skip decryption for thumbs entirely.
+  const servingThumb = !!photo.telegramThumbId && fileId === photo.telegramThumbId;
+  const key = isServerZke && !servingThumb ? await getEncryptionKey(env, uid, idToken) : null;
   let mimeType = photo.mimeType;
   if (photo.isHeic) mimeType = 'image/heic';
-  const servingThumb = !wantsHighQuality && fileId === photo.telegramThumbId;
   if (servingThumb) {
-    // Thumbnails are always JPEG (either Telegram-generated or mobile-provided)
     mimeType = 'image/jpeg';
   } else if (photo.isHeic) {
     mimeType = 'image/heic';
@@ -799,8 +804,7 @@ async function handleThumbnail(request: Request, env: Env, uid: string, assetId:
     if (!result.ok) return json({ message: result.error }, 502);
 
     let responseData = result.data!;
-    console.log(`[Thumbnail] Downloaded ${responseData.byteLength} bytes for ${assetId}, isServerZke=${isServerZke}, hasKey=${!!key}, encMode=${photo.encryptionMode}, servingThumb=${servingThumb}`);
-    if (isServerZke && key) {
+    if (isServerZke && key && !servingThumb) {
       try {
         responseData = await decryptChunk(responseData, key);
         console.log(`[Thumbnail] Decrypted to ${responseData.byteLength} bytes`);
