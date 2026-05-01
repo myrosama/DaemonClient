@@ -1854,57 +1854,76 @@ function useSetupStage(user) {
       return
     }
 
-    // Reset stage when user changes so the synchronous race-guard below
-    // continues to read as loading until checkStage resolves.
     setStage(null)
     setLoading(true)
 
-    let cancelled = false
+    // Subscribe to BOTH the telegram + cloudflare config docs. Earlier this
+    // was a one-shot `.get()` pair, which meant: once the doc updated mid-
+    // session (e.g. `/finalizeTransfer` flipped ownership_transferred to true,
+    // or deployment-service wrote workerUrl) the hook never noticed, so the
+    // user got stuck on the current page until they reloaded the tab.
+    // onSnapshot reacts to writes immediately and re-routes the user.
+    const basePath = configPath(user.uid)
+    let tg = null
+    let cf = null
+    let tgReady = false
+    let cfReady = false
 
-    async function checkStage() {
-      try {
-        const basePath = configPath(user.uid)
-
-        // 1. Check Telegram config — require ALL fields, not just botToken.
-        // Half-written docs (botToken without botUsername/channelId) used to
-        // advance the user to /setup/ownership where the UI then spins forever
-        // because there is no @bot to open. Treat partial config as 'telegram'
-        // so the user can re-trigger /startSetup cleanly.
-        const telegramDoc = await db.collection(basePath).doc('telegram').get()
-        const tg = telegramDoc.exists ? telegramDoc.data() : null
-        const telegramComplete = !!(tg && tg.botToken && tg.botUsername && tg.channelId)
-        if (!telegramComplete) {
-          if (!cancelled) { stageForUidRef.current = user.uid; setStage('telegram'); setLoading(false) }
-          return
-        }
-
-        // 2. Check ownership transfer
-        // Backend writes snake_case (ownership_transferred) — match that.
-        const telegramData = tg
-        if (!telegramData.ownership_transferred && !telegramData.ownershipTransferred) {
-          if (!cancelled) { stageForUidRef.current = user.uid; setStage('ownership'); setLoading(false) }
-          return
-        }
-
-        // 3. Check Cloudflare / worker setup
-        const cfDoc = await db.collection(basePath).doc('cloudflare').get()
-        if (!cfDoc.exists || !cfDoc.data()?.workerUrl) {
-          if (!cancelled) { stageForUidRef.current = user.uid; setStage('worker'); setLoading(false) }
-          return
-        }
-
-        // All done
-        if (!cancelled) { stageForUidRef.current = user.uid; setStage('complete'); setLoading(false) }
-      } catch (err) {
-        console.error('Error checking setup stage:', err)
-        // On error (e.g. Firestore permission denied for a brand new uninitialized user),
-        // we MUST fallback to 'telegram' setup, NOT 'complete', otherwise they skip the funnel
-        if (!cancelled) { stageForUidRef.current = user.uid; setStage('telegram'); setLoading(false) }
+    const recompute = () => {
+      const telegramComplete = !!(tg && tg.botToken && tg.botUsername && tg.channelId)
+      if (!telegramComplete) {
+        stageForUidRef.current = user.uid
+        setStage('telegram')
+        setLoading(false)
+        return
       }
+      if (!tg.ownership_transferred && !tg.ownershipTransferred) {
+        stageForUidRef.current = user.uid
+        setStage('ownership')
+        setLoading(false)
+        return
+      }
+      if (!cf || !cf.workerUrl) {
+        stageForUidRef.current = user.uid
+        setStage('worker')
+        setLoading(false)
+        return
+      }
+      stageForUidRef.current = user.uid
+      setStage('complete')
+      setLoading(false)
     }
 
-    checkStage()
-    return () => { cancelled = true }
+    const tgUnsub = db.collection(basePath).doc('telegram').onSnapshot(
+      (doc) => {
+        tg = doc.exists ? doc.data() : null
+        tgReady = true
+        if (cfReady) recompute()
+      },
+      (err) => {
+        // On permission-denied for a brand-new uninitialized user, treat as
+        // 'telegram' stage so they can start the funnel — never 'complete'.
+        console.error('Error subscribing to telegram doc:', err)
+        tg = null
+        tgReady = true
+        if (cfReady) recompute()
+      }
+    )
+    const cfUnsub = db.collection(basePath).doc('cloudflare').onSnapshot(
+      (doc) => {
+        cf = doc.exists ? doc.data() : null
+        cfReady = true
+        if (tgReady) recompute()
+      },
+      (err) => {
+        console.error('Error subscribing to cloudflare doc:', err)
+        cf = null
+        cfReady = true
+        if (tgReady) recompute()
+      }
+    )
+
+    return () => { tgUnsub(); cfUnsub() }
   }, [user])
 
   // Synchronous race guard: if the consumer just received a new `user` and
