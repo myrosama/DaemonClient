@@ -51,9 +51,10 @@ async function handleZkeConfig(request: Request, env: Env): Promise<Response> {
 }
 
 async function handleTelegramConfig(request: Request, env: Env): Promise<Response> {
-  const { requireAuth, firestoreGet } = await import('./helpers');
+  const { requireAuth } = await import('./helpers');
+  const { getCachedConfig } = await import('./cached-config');
   const session = await requireAuth(request, env);
-  const config = await firestoreGet(env, session.uid, 'config/telegram', session.idToken);
+  const config = await getCachedConfig<any>(env, session.uid, session.idToken, 'telegram');
   // Each user's own worker provides the CORS proxy. Falls back to env value (central
   // shim) if this worker has no D1 binding (i.e., it IS the central worker).
   const selfProxy = `${new URL(request.url).origin}/proxy`;

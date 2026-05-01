@@ -1,6 +1,36 @@
 import type { Env } from './index';
 import { firestoreGet, firestoreSet, json, requireAuth } from './helpers';
 import { DEFAULT_CHUNK_SIZE, MAX_UPLOAD_SESSION_TTL_MS, newSessionId, computeExpiryIso } from './contracts';
+import { getCachedConfig, setCachedConfig } from './cached-config';
+import { D1Adapter } from './d1-adapter';
+
+// Per-user upload session helpers — D1 has an `upload_sessions` table with
+// only sessionId/status/createdAt/expiresAt columns, but the policy layer
+// stores a richer record (resumeToken, proof, allowedChunkRange, etc). Stash
+// the full JSON in the existing config table under `session:<id>` so we don't
+// have to ship a schema migration for every new field.
+async function getSessionRecord(env: Env, uid: string, idToken: string, sessionId: string): Promise<any> {
+  if (env.DB) {
+    const adapter = new D1Adapter(env.DB);
+    const rec = await adapter.getJsonConfig<any>(`session:${sessionId}`);
+    if (rec) return rec;
+  }
+  return firestoreGet(env, uid, `sessions/${sessionId}`, idToken);
+}
+
+async function saveSessionRecord(env: Env, uid: string, idToken: string, sessionId: string, record: any, options: { merge?: boolean } = {}): Promise<void> {
+  if (env.DB) {
+    const adapter = new D1Adapter(env.DB);
+    let next = record;
+    if (options.merge) {
+      const prev = (await adapter.getJsonConfig<any>(`session:${sessionId}`)) || {};
+      next = { ...prev, ...record };
+    }
+    await adapter.setJsonConfig(`session:${sessionId}`, next);
+    return;
+  }
+  await firestoreSet(env, uid, `sessions/${sessionId}`, record, idToken);
+}
 
 interface QuotaState {
   uploadTokens: number;
@@ -66,7 +96,7 @@ export async function handlePolicy(request: Request, env: Env, path: string): Pr
       return json({ message: 'Invalid worker URL' }, 400);
     }
     if (parsed.protocol !== 'https:') return json({ message: 'Worker URL must use HTTPS' }, 400);
-    await firestoreSet(env, uid, 'config/worker', { url: parsed.toString(), updatedAt: new Date().toISOString() }, session.idToken);
+    await setCachedConfig(env, uid, session.idToken, 'worker', { url: parsed.toString(), updatedAt: new Date().toISOString() }, { mergeExisting: true });
     return json({ ok: true, url: parsed.toString() });
   }
 
@@ -94,27 +124,27 @@ export async function handlePolicy(request: Request, env: Env, path: string): Pr
       proof: await signSessionProof(`${uid}:${assetId}:${sessionId}:${expiresAt}`, uid),
     };
 
-    await firestoreSet(env, uid, `sessions/${sessionId}`, sessionRecord, session.idToken);
+    await saveSessionRecord(env, uid, session.idToken, sessionId, sessionRecord);
     return json(sessionRecord, 201);
   }
 
   if (path.match(/^\/api\/policy\/upload-session\/([^/]+)$/) && request.method === 'GET') {
     const sessionId = path.match(/^\/api\/policy\/upload-session\/([^/]+)$/)?.[1] || '';
-    const record = await firestoreGet(env, uid, `sessions/${sessionId}`, session.idToken);
+    const record = await getSessionRecord(env, uid, session.idToken, sessionId);
     if (!record) return json({ message: 'Session not found' }, 404);
     return json(record);
   }
 
   if (path.match(/^\/api\/policy\/upload-session\/([^/]+)\/complete$/) && request.method === 'POST') {
     const sessionId = path.match(/^\/api\/policy\/upload-session\/([^/]+)\/complete$/)?.[1] || '';
-    const record = await firestoreGet(env, uid, `sessions/${sessionId}`, session.idToken);
+    const record = await getSessionRecord(env, uid, session.idToken, sessionId);
     if (!record) return json({ message: 'Session not found' }, 404);
-    await firestoreSet(env, uid, `sessions/${sessionId}`, { status: 'completed', completedAt: new Date().toISOString() }, session.idToken);
+    await saveSessionRecord(env, uid, session.idToken, sessionId, { status: 'completed', completedAt: new Date().toISOString() }, { merge: true });
     return json({ ok: true });
   }
 
   if (path === '/api/policy/health' && request.method === 'GET') {
-    const workerConfig = await firestoreGet(env, uid, 'config/worker', session.idToken);
+    const workerConfig = await getCachedConfig<{ url?: string }>(env, uid, session.idToken, 'worker');
     return json({
       uid,
       rate: getQuota(uid),

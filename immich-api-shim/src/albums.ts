@@ -1,112 +1,172 @@
 import type { Env } from './index';
 import { requireAuth, firestoreGet, firestoreSet, firestoreDelete, firestoreQuery, json } from './helpers';
+import { D1Adapter } from './d1-adapter';
 
+// Albums live in D1 on per-user workers (tables `albums` + `album_assets`).
+// On the central worker (no env.DB) we still go through Firestore for backwards
+// compatibility with users who haven't deployed their personal worker yet.
 export async function handleAlbums(request: Request, env: Env, path: string): Promise<Response> {
   const session = await requireAuth(request, env);
   const uid = session.uid;
   const idToken = session.idToken;
+  const adapter = env.DB ? new D1Adapter(env.DB) : null;
 
   try {
-    // GET /api/albums - List all albums
     if (path === '/api/albums' && request.method === 'GET') {
+      if (adapter) {
+        const rows = await adapter.listAlbums();
+        const out = await Promise.all(rows.map(async (a) => ({
+          ...a,
+          assetCount: await adapter.countAlbumAssets(a.id),
+          ownerId: uid,
+          owner: { id: uid, email: session.email, name: session.email.split('@')[0] },
+        })));
+        return json(out.map(toAlbumDto));
+      }
       const albums = await firestoreQuery(env, uid, 'albums', idToken);
       return json(albums.map((a: any) => toAlbumDto(a)));
     }
 
-    // POST /api/albums - Create album
     if (path === '/api/albums' && request.method === 'POST') {
       const body = await request.json() as any;
       const albumId = crypto.randomUUID();
-      const album = {
+      const now = new Date().toISOString();
+      const assetIds: string[] = body.assetIds || [];
+      const album: any = {
         id: albumId,
         albumName: body.albumName || 'Untitled Album',
         description: body.description || '',
-        assets: body.assetIds || [],
-        assetCount: (body.assetIds || []).length,
-        albumThumbnailAssetId: body.assetIds?.[0] || null,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
+        createdAt: now,
+        updatedAt: now,
+        albumThumbnailAssetId: assetIds[0] || null,
+      };
+      if (adapter) {
+        await adapter.saveAlbum(album);
+        for (const id of assetIds) await adapter.addAssetToAlbum(albumId, id);
+      } else {
+        await firestoreSet(env, uid, `albums/${albumId}`, {
+          ...album,
+          assets: assetIds,
+          assetCount: assetIds.length,
+          ownerId: uid,
+        }, idToken);
+      }
+      return json(toAlbumDto({
+        ...album,
+        assetCount: assetIds.length,
         ownerId: uid,
         owner: { id: uid, email: session.email, name: session.email.split('@')[0] },
-        shared: false,
-        albumUsers: []
-      };
-      await firestoreSet(env, uid, `albums/${albumId}`, album, idToken);
-      return json(toAlbumDto(album), 201);
+      }), 201);
     }
 
-    // Album-specific operations
     const albumMatch = path.match(/^\/api\/albums\/([^/]+)$/);
     if (albumMatch) {
       const albumId = albumMatch[1];
 
-      // GET /api/albums/{id}
       if (request.method === 'GET') {
+        if (adapter) {
+          const a = await adapter.getAlbum(albumId);
+          if (!a) return json({ message: 'Album not found' }, 404);
+          const count = await adapter.countAlbumAssets(albumId);
+          return json(toAlbumDto({
+            ...a, assetCount: count,
+            ownerId: uid,
+            owner: { id: uid, email: session.email, name: session.email.split('@')[0] },
+          }));
+        }
         const album = await firestoreGet(env, uid, `albums/${albumId}`, idToken);
         if (!album) return json({ message: 'Album not found' }, 404);
         return json(toAlbumDto(album));
       }
 
-      // PATCH /api/albums/{id}
       if (request.method === 'PATCH') {
         const body = await request.json() as any;
-        const updates: any = { updatedAt: new Date().toISOString() };
+        const updates: any = { id: albumId, updatedAt: new Date().toISOString() };
         if (body.albumName) updates.albumName = body.albumName;
         if (body.description !== undefined) updates.description = body.description;
+        if (adapter) {
+          const existing = await adapter.getAlbum(albumId);
+          if (!existing) return json({ message: 'Album not found' }, 404);
+          await adapter.saveAlbum({ ...existing, ...updates });
+          const count = await adapter.countAlbumAssets(albumId);
+          return json(toAlbumDto({
+            ...existing, ...updates,
+            assetCount: count, ownerId: uid,
+            owner: { id: uid, email: session.email, name: session.email.split('@')[0] },
+          }));
+        }
         await firestoreSet(env, uid, `albums/${albumId}`, updates, idToken);
         const album = await firestoreGet(env, uid, `albums/${albumId}`, idToken);
         return json(toAlbumDto(album));
       }
 
-      // DELETE /api/albums/{id}
       if (request.method === 'DELETE') {
-        await firestoreDelete(env, uid, `albums/${albumId}`, idToken);
+        if (adapter) await adapter.deleteAlbum(albumId);
+        else await firestoreDelete(env, uid, `albums/${albumId}`, idToken);
         return new Response(null, { status: 204 });
       }
     }
 
-    // PUT /api/albums/{id}/assets
     const assetsMatch = path.match(/^\/api\/albums\/([^/]+)\/assets$/);
     if (assetsMatch && request.method === 'PUT') {
       const albumId = assetsMatch[1];
       const body = await request.json() as any;
-      const { ids } = body;
-
+      const ids: string[] = body.ids || [];
+      if (adapter) {
+        const existing = await adapter.getAlbum(albumId);
+        if (!existing) return json({ message: 'Album not found' }, 404);
+        for (const id of ids) await adapter.addAssetToAlbum(albumId, id);
+        const updated = {
+          ...existing,
+          albumThumbnailAssetId: existing.albumThumbnailAssetId || ids[0] || null,
+          updatedAt: new Date().toISOString(),
+        };
+        await adapter.saveAlbum(updated);
+        const count = await adapter.countAlbumAssets(albumId);
+        return json([{ id: albumId, album: toAlbumDto({
+          ...updated, assetCount: count, ownerId: uid,
+          owner: { id: uid, email: session.email, name: session.email.split('@')[0] },
+        }), success: true }]);
+      }
       const album = await firestoreGet(env, uid, `albums/${albumId}`, idToken);
       if (!album) return json({ message: 'Album not found' }, 404);
-
-      const existingAssets = new Set(album.assets || []);
-      ids.forEach((id: string) => existingAssets.add(id));
-      const assets = Array.from(existingAssets);
-
+      const set = new Set(album.assets || []);
+      ids.forEach((id) => set.add(id));
+      const assets = Array.from(set);
       await firestoreSet(env, uid, `albums/${albumId}`, {
         assets,
         assetCount: assets.length,
         albumThumbnailAssetId: assets[0] || album.albumThumbnailAssetId,
-        updatedAt: new Date().toISOString()
+        updatedAt: new Date().toISOString(),
       }, idToken);
-
       const updated = await firestoreGet(env, uid, `albums/${albumId}`, idToken);
       return json([{ id: albumId, album: toAlbumDto(updated), success: true }]);
     }
 
-    // DELETE /api/albums/{id}/assets
-    const removeAssetsMatch = path.match(/^\/api\/albums\/([^/]+)\/assets$/);
-    if (removeAssetsMatch && request.method === 'DELETE') {
-      const albumId = removeAssetsMatch[1];
+    if (assetsMatch && request.method === 'DELETE') {
+      const albumId = assetsMatch[1];
       const body = await request.json() as any;
-      const { ids } = body;
-
+      const ids: string[] = body.ids || [];
+      if (adapter) {
+        for (const id of ids) await adapter.removeAssetFromAlbum(albumId, id);
+        const existing = await adapter.getAlbum(albumId);
+        if (!existing) return json({ message: 'Album not found' }, 404);
+        const updated = { ...existing, updatedAt: new Date().toISOString() };
+        await adapter.saveAlbum(updated);
+        const count = await adapter.countAlbumAssets(albumId);
+        return json([{ id: albumId, album: toAlbumDto({
+          ...updated, assetCount: count, ownerId: uid,
+          owner: { id: uid, email: session.email, name: session.email.split('@')[0] },
+        }), success: true }]);
+      }
       const album = await firestoreGet(env, uid, `albums/${albumId}`, idToken);
       if (!album) return json({ message: 'Album not found' }, 404);
-
       const assets = (album.assets || []).filter((id: string) => !ids.includes(id));
       await firestoreSet(env, uid, `albums/${albumId}`, {
         assets,
         assetCount: assets.length,
-        updatedAt: new Date().toISOString()
+        updatedAt: new Date().toISOString(),
       }, idToken);
-
       const updated = await firestoreGet(env, uid, `albums/${albumId}`, idToken);
       return json([{ id: albumId, album: toAlbumDto(updated), success: true }]);
     }
@@ -128,12 +188,12 @@ function toAlbumDto(album: any) {
     albumThumbnailAssetId: album.albumThumbnailAssetId,
     shared: album.shared || false,
     assetCount: album.assetCount || 0,
-    assets: [], // Full asset list not needed for list view
+    assets: [],
     owner: album.owner || { id: album.ownerId, email: '', name: '' },
     albumUsers: album.albumUsers || [],
     hasSharedLink: false,
     startDate: null,
     endDate: null,
-    isActivityEnabled: true
+    isActivityEnabled: true,
   };
 }

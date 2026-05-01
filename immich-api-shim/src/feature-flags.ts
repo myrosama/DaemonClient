@@ -1,5 +1,6 @@
 import type { Env } from './index';
-import { firestoreGet, json, requireAuth } from './helpers';
+import { json, requireAuth } from './helpers';
+import { getCachedConfig } from './cached-config';
 
 export interface PhotosFeatureFlags {
   directBytePath: boolean;
@@ -18,7 +19,7 @@ const DEFAULT_FLAGS: PhotosFeatureFlags = {
 };
 
 export async function getFlagsForUser(env: Env, uid: string, idToken: string): Promise<PhotosFeatureFlags> {
-  const stored = await firestoreGet(env, uid, 'config/photosFlags', idToken);
+  const stored = await getCachedConfig<Partial<PhotosFeatureFlags>>(env, uid, idToken, 'photosFlags');
   return { ...DEFAULT_FLAGS, ...(stored || {}) };
 }
 

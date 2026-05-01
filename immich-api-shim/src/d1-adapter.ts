@@ -187,6 +187,20 @@ export class D1Adapter {
     return result.results?.map(r => r.assetId) || [];
   }
 
+  async listAlbums(): Promise<Album[]> {
+    const result = await this.db.prepare(
+      'SELECT * FROM albums ORDER BY updatedAt DESC'
+    ).all<Album>();
+    return result.results || [];
+  }
+
+  async countAlbumAssets(albumId: string): Promise<number> {
+    const result = await this.db.prepare(
+      'SELECT COUNT(*) as c FROM album_assets WHERE albumId = ?'
+    ).bind(albumId).first<{ c: number }>();
+    return result?.c || 0;
+  }
+
   async addAssetToAlbum(albumId: string, assetId: string): Promise<void> {
     await this.db.prepare(
       'INSERT OR IGNORE INTO album_assets (albumId, assetId, addedAt) VALUES (?, ?, ?)'
@@ -215,6 +229,20 @@ export class D1Adapter {
     await this.db.prepare(
       'INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)'
     ).bind(key, value).run();
+  }
+
+  // JSON-blob config helpers — these store a serialized object under a single
+  // key in the existing config table, so we can move per-user document configs
+  // (telegram/photosFlags/worker/immich_profile) off Firestore without adding
+  // new columns or migrations.
+  async getJsonConfig<T = any>(key: string): Promise<T | null> {
+    const raw = await this.getConfig(key);
+    if (!raw) return null;
+    try { return JSON.parse(raw) as T; } catch { return null; }
+  }
+
+  async setJsonConfig(key: string, value: any): Promise<void> {
+    await this.setConfig(key, JSON.stringify(value));
   }
 
   async getZkeConfig(): Promise<{

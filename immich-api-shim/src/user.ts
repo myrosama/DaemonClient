@@ -1,6 +1,7 @@
 import type { Env } from './index';
-import { requireAuth, firestoreGet, firestoreSet, firestoreQuery, json } from './helpers';
+import { requireAuth, firestoreQuery, json } from './helpers';
 import { D1Adapter } from './d1-adapter';
+import { getCachedConfig, setCachedConfig } from './cached-config';
 
 export async function handleUser(request: Request, env: Env, path: string): Promise<Response> {
   const session = await requireAuth(request, env);
@@ -18,7 +19,7 @@ export async function handleUser(request: Request, env: Env, path: string): Prom
     return json(defaultPreferences());
   }
   if (path === '/api/users/me/onboarding' && request.method === 'POST') {
-    await firestoreSet(env, session.uid, 'config/immich_profile', { isOnboarded: true }, session.idToken);
+    await setCachedConfig(env, session.uid, session.idToken, 'immich_profile', { isOnboarded: true }, { mergeExisting: true });
     return json({});
   }
   if (path === '/api/users/me/storage') {
@@ -37,7 +38,7 @@ export async function handleUser(request: Request, env: Env, path: string): Prom
 }
 
 async function getUserMe(env: Env, session: { uid: string; email: string; idToken: string }): Promise<Response> {
-  const profile = await firestoreGet(env, session.uid, 'config/immich_profile', session.idToken);
+  const profile = await getCachedConfig<any>(env, session.uid, session.idToken, 'immich_profile');
   const name = profile?.name || session.email.split('@')[0];
 
   return json({
@@ -68,7 +69,7 @@ async function updateUserMe(request: Request, env: Env, session: { uid: string; 
   if (body.name) updates.name = body.name;
   if (body.avatarColor) updates.avatarColor = body.avatarColor;
   if (Object.keys(updates).length > 0) {
-    await firestoreSet(env, session.uid, 'config/immich_profile', updates, session.idToken);
+    await setCachedConfig(env, session.uid, session.idToken, 'immich_profile', updates, { mergeExisting: true });
   }
   return getUserMe(env, { ...session, email: '' });
 }

@@ -4,6 +4,7 @@ import sizeOf from 'image-size';
 import { normalizePhotoManifest } from './contracts';
 import { getFlagsForUser } from './feature-flags';
 import { D1Adapter } from './d1-adapter';
+import { getCachedConfig } from './cached-config';
 
 // --- ZKE Crypto Implementation ---
 const SALT_LENGTH = 16;
@@ -173,7 +174,7 @@ export async function handleAssets(request: Request, env: Env, path: string, url
   }
 
   if (path === '/api/assets/worker-config' && request.method === 'GET') {
-    const workerConfig = await firestoreGet(env, uid, 'config/worker', idToken);
+    const workerConfig = await getCachedConfig<{ url?: string }>(env, uid, idToken, 'worker');
     return json({ url: workerConfig?.url || null });
   }
   
@@ -243,7 +244,7 @@ async function handleDeleteAssets(request: Request, env: Env, uid: string, idTok
   const body = await request.json() as any;
   const ids: string[] = body.ids || [];
   const clientDelete = body.clientDelete === true;
-  const config = await firestoreGet(env, uid, 'config/telegram', idToken);
+  const config = await getCachedConfig<any>(env, uid, idToken, 'telegram');
   const botToken = config?.botToken || config?.bot_token;
   const channelId = config?.channelId || config?.channel_id;
 
@@ -313,7 +314,7 @@ async function handleUpload(request: Request, env: Env, uid: string, idToken: st
   if (!flags.directBytePath) {
     return json({ message: 'Direct upload path is disabled by feature flag' }, 503);
   }
-  const config = await firestoreGet(env, uid, 'config/telegram', idToken);
+  const config = await getCachedConfig<any>(env, uid, idToken, 'telegram');
   if (!config) {
     console.log('Upload failed: Telegram not configured for uid', uid);
     return json({ message: 'Telegram not configured' }, 400);
@@ -328,7 +329,13 @@ async function handleUpload(request: Request, env: Env, uid: string, idToken: st
     const formData = await request.formData();
     const uploadSessionId = (formData.get('uploadSessionId') as string) || '';
     if (uploadSessionId) {
-      const sessionRecord = await firestoreGet(env, uid, `sessions/${uploadSessionId}`, idToken);
+      let sessionRecord: any = null;
+      if (env.DB) {
+        sessionRecord = await new D1Adapter(env.DB).getJsonConfig<any>(`session:${uploadSessionId}`);
+      }
+      if (!sessionRecord) {
+        sessionRecord = await firestoreGet(env, uid, `sessions/${uploadSessionId}`, idToken);
+      }
       if (!sessionRecord || sessionRecord.status !== 'active') {
         return json({ message: 'Invalid upload session' }, 400);
       }
@@ -347,7 +354,13 @@ async function handleUpload(request: Request, env: Env, uid: string, idToken: st
   }
 
   try {
-    const zkeConfig = await firestoreGet(env, uid, 'config/zke', idToken) || {};
+    let zkeConfig: any = {};
+    if (env.DB) {
+      const adapter = new D1Adapter(env.DB);
+      zkeConfig = (await adapter.getZkeConfig()) || {};
+    } else {
+      zkeConfig = (await firestoreGet(env, uid, 'config/zke', idToken)) || {};
+    }
     const isClientZke = zkeConfig.mode === 'client' || request.url.includes('client=true') || clientUpload;
     const isServerZke = !isClientZke; // Default to server mode
 
@@ -682,7 +695,7 @@ async function handleThumbnailUpload(request: Request, env: Env, uid: string, as
   const photo = await loadPhotoById(env, uid, assetId, idToken);
   if (!photo) return json({ message: 'Asset not found' }, 404);
 
-  const config = await firestoreGet(env, uid, 'config/telegram', idToken);
+  const config = await getCachedConfig<any>(env, uid, idToken, 'telegram');
   if (!config) return json({ message: 'No config' }, 500);
   const botToken = config.botToken || config.bot_token;
   const channelId = config.channelId || config.channel_id;
@@ -764,7 +777,7 @@ async function handleThumbnail(request: Request, env: Env, uid: string, assetId:
     return json({ message: 'Thumbnail not available for multi-chunk asset' }, 404);
   }
 
-  const config = await firestoreGet(env, uid, 'config/telegram', idToken);
+  const config = await getCachedConfig<any>(env, uid, idToken, 'telegram');
   if (!config) return json({ message: 'No config' }, 500);
   const botToken = config.botToken || config.bot_token;
 
@@ -837,7 +850,7 @@ async function handleOriginal(request: Request, env: Env, uid: string, assetId: 
   const photo = await loadPhotoById(env, uid, assetId, idToken);
   if (!photo) return json({ message: 'Not found' }, 404);
 
-  const config = await firestoreGet(env, uid, 'config/telegram', idToken);
+  const config = await getCachedConfig<any>(env, uid, idToken, 'telegram');
   if (!config) return json({ message: 'No config' }, 500);
   const botToken = config.botToken || config.bot_token;
 
@@ -1157,14 +1170,24 @@ async function linkLivePhoto(env: Env, uid: string, assetId: string, photo: any,
 
     console.log(`[LivePhoto] Processing ${assetId}: isVideo=${isVideo}, isHeic=${isHeic}, mimeType=${photo.mimeType}, fileName=${photo.fileName}`);
 
-    // CRITICAL FIX: Query ONLY recent uploads (within last 5 seconds) using Firestore filter
-    // This prevents O(n) query that loads ALL photos
+    // Query only the last few uploads (live-photo pairs land within 1-2s of each
+    // other). On per-user workers we read straight from D1; the central worker
+    // keeps the Firestore filter so the result set stays bounded.
     const fiveSecondsAgo = new Date(Date.now() - 5000).toISOString();
-    const recentUploads = await firestoreQuery(
-      env, uid, 'photos', idToken,
-      'uploadedAt', 'DESCENDING', 20, // Only get last 20 uploads
-      [{ field: 'uploadedAt', op: 'GREATER_THAN_OR_EQUAL', value: fiveSecondsAgo }]
-    );
+    let recentUploads: any[];
+    if (env.DB) {
+      const adapter = new D1Adapter(env.DB);
+      const rows = await adapter.queryPhotos({ ownerId: uid, orderBy: 'uploadedAt DESC', limit: 20 });
+      recentUploads = rows
+        .map(D1Adapter.normalizeRow)
+        .filter((p: any) => p.uploadedAt >= fiveSecondsAgo);
+    } else {
+      recentUploads = await firestoreQuery(
+        env, uid, 'photos', idToken,
+        'uploadedAt', 'DESCENDING', 20,
+        [{ field: 'uploadedAt', op: 'GREATER_THAN_OR_EQUAL', value: fiveSecondsAgo }]
+      );
+    }
 
     console.log(`[LivePhoto] Found ${recentUploads.length} recent uploads in last 5 seconds`);
 
@@ -1189,9 +1212,13 @@ async function linkLivePhoto(env: Env, uid: string, assetId: string, photo: any,
 
       if (matchingImage) {
         // Update the image to point to this video
-        await firestoreSet(env, uid, `photos/${matchingImage._id}`, {
-          livePhotoVideoId: assetId
-        }, idToken);
+        if (env.DB) {
+          await new D1Adapter(env.DB).savePhoto({ id: matchingImage._id, livePhotoVideoId: assetId });
+        } else {
+          await firestoreSet(env, uid, `photos/${matchingImage._id}`, {
+            livePhotoVideoId: assetId
+          }, idToken);
+        }
         console.log(`[LivePhoto] ✅ Linked image ${matchingImage._id} to video ${assetId}`);
       } else {
         console.log(`[LivePhoto] ❌ No matching HEIC found for video ${assetId}`);
@@ -1222,9 +1249,13 @@ async function linkLivePhoto(env: Env, uid: string, assetId: string, photo: any,
 
       if (matchingVideo) {
         // Update this image to point to the video
-        await firestoreSet(env, uid, `photos/${assetId}`, {
-          livePhotoVideoId: matchingVideo._id
-        }, idToken);
+        if (env.DB) {
+          await new D1Adapter(env.DB).savePhoto({ id: assetId, livePhotoVideoId: matchingVideo._id });
+        } else {
+          await firestoreSet(env, uid, `photos/${assetId}`, {
+            livePhotoVideoId: matchingVideo._id
+          }, idToken);
+        }
         console.log(`[LivePhoto] ✅ Linked image ${assetId} to video ${matchingVideo._id}`);
       } else {
         console.log(`[LivePhoto] ❌ No matching MOV found for HEIC ${assetId}`);

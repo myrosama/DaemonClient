@@ -1,11 +1,19 @@
 import type { Env } from './index';
 import { firestoreQuery, firestoreSet } from './helpers';
+import { D1Adapter } from './d1-adapter';
 
 export async function linkExistingLivePhotos(request: Request, env: Env, uid: string, idToken: string): Promise<Response> {
   console.log('[LinkLivePhotos] Starting retroactive linking for user:', uid);
 
   try {
-    const allPhotos = await firestoreQuery(env, uid, 'photos', idToken);
+    const adapter = env.DB ? new D1Adapter(env.DB) : null;
+    let allPhotos: any[];
+    if (adapter) {
+      const rows = await adapter.queryPhotos({ ownerId: uid });
+      allPhotos = rows.map(D1Adapter.normalizeRow);
+    } else {
+      allPhotos = await firestoreQuery(env, uid, 'photos', idToken);
+    }
     console.log(`[LinkLivePhotos] Found ${allPhotos.length} total photos`);
 
     let linkedCount = 0;
@@ -44,13 +52,17 @@ export async function linkExistingLivePhotos(request: Request, env: Env, uid: st
       if (matchingVideo) {
         linkedVideoIds.add(matchingVideo._id);
 
-        await firestoreSet(env, uid, `photos/${heicImage._id}`, {
-          livePhotoVideoId: matchingVideo._id
-        }, idToken);
-
-        await firestoreSet(env, uid, `photos/${matchingVideo._id}`, {
-          linkedAsLivePhoto: true
-        }, idToken);
+        if (adapter) {
+          await adapter.savePhoto({ id: heicImage._id, livePhotoVideoId: matchingVideo._id });
+          await adapter.savePhoto({ id: matchingVideo._id, livePhotoVideoId: heicImage._id });
+        } else {
+          await firestoreSet(env, uid, `photos/${heicImage._id}`, {
+            livePhotoVideoId: matchingVideo._id
+          }, idToken);
+          await firestoreSet(env, uid, `photos/${matchingVideo._id}`, {
+            linkedAsLivePhoto: true
+          }, idToken);
+        }
 
         linkedCount++;
         console.log(`[LinkLivePhotos] Linked ${heicImage._id} → ${matchingVideo._id}`);
