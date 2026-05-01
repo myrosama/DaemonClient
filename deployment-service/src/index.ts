@@ -100,9 +100,11 @@ async function handleDeployWorker(request: Request, env: Env): Promise<Response>
     // Step 1: Create D1 database in USER's account (handle if already exists)
     const dbName = `dc-photos-${shortId}`;
     let databaseId: string;
+    let isNewDatabase = false;
     const dbResult = await cfApi.createD1Database({ accountId, apiToken, databaseName: dbName });
     if (dbResult.success) {
       databaseId = dbResult.databaseId!;
+      isNewDatabase = true;
     } else {
       // Database might already exist — try to find it
       const listRes = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/d1/database`, {
@@ -117,15 +119,18 @@ async function handleDeployWorker(request: Request, env: Env): Promise<Response>
       }
     }
 
-    // Step 2: Run migration
-    await cfApi.executeD1Query(accountId, databaseId, apiToken, MIGRATION_SQL);
+    // Step 2: Run migration + generate ZKE keys only on a fresh DB. Re-running
+    // these on an existing DB silently rotates the AES password/salt, which
+    // makes every previously-uploaded photo permanently undecryptable.
+    if (isNewDatabase) {
+      await cfApi.executeD1Query(accountId, databaseId, apiToken, MIGRATION_SQL);
 
-    // Step 3: Generate ZKE keys
-    const salt = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(16))));
-    const password = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))));
-    await cfApi.executeD1Query(accountId, databaseId, apiToken,
-      `UPDATE config SET value = '${password}' WHERE key = 'zke_password'; UPDATE config SET value = '${salt}' WHERE key = 'zke_salt';`
-    );
+      const salt = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(16))));
+      const password = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))));
+      await cfApi.executeD1Query(accountId, databaseId, apiToken,
+        `UPDATE config SET value = '${password}' WHERE key = 'zke_password'; UPDATE config SET value = '${salt}' WHERE key = 'zke_salt';`
+      );
+    }
 
     // Step 4: Deploy the real immich-api-shim to USER's account, bound to USER's D1
     const workerName = `dc-${shortId}`;
