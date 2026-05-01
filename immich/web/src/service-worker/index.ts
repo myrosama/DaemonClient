@@ -5,7 +5,11 @@
 import { installMessageListener } from './messaging';
 import { handleCancel } from './request';
 
-const DEFAULT_WORKER_URL = 'https://immich-api.sadrikov49.workers.dev';
+// Custom domain for the central router worker. Per-user workers live on
+// *.workers.dev which is blocked by some ISPs (notably in CIS/Russia/UZ),
+// so clients always talk to this domain and the central worker proxies
+// per-user requests internally.
+const DEFAULT_WORKER_URL = 'https://api.daemonclient.uz';
 const ASSET_BINARY_REGEX = /^\/api\/assets\/[a-f0-9-]+\/(original|thumbnail)/;
 const API_REGEX = /^\/api\//;
 const TOKEN_CACHE_KEY = 'https://dc-internal/auth-token';
@@ -48,13 +52,10 @@ async function persistWorkerUrl(url: string | null) {
 }
 
 async function getWorkerUrl(): Promise<string> {
-  if (cachedWorkerUrl) return cachedWorkerUrl;
-  const cache = await caches.open('dc-auth-v1');
-  const res = await cache.match(WORKER_URL_CACHE_KEY);
-  if (res) {
-    cachedWorkerUrl = await res.text();
-    return cachedWorkerUrl!;
-  }
+  // Always route through the central router (DEFAULT_WORKER_URL). Cached
+  // per-user *.workers.dev URLs from old SW versions are deliberately
+  // ignored — the central worker proxies per-user requests internally so
+  // clients only ever hit the custom domain.
   return DEFAULT_WORKER_URL;
 }
 
@@ -140,9 +141,11 @@ async function directWorkerFetch(request: Request, cacheable: boolean, pathname:
       if (data.accessToken) {
         await persistToken(data.accessToken);
       }
-      if (data.workerUrl) {
-        await persistWorkerUrl(data.workerUrl);
-      }
+      // Intentionally do NOT cache data.workerUrl. The central router worker
+      // at DEFAULT_WORKER_URL proxies per-user requests on our behalf. If we
+      // cached the per-user *.workers.dev URL, clients would try to fetch it
+      // directly and hit ISP blocks. The workerUrl stays embedded in the
+      // session JWT — only the central router reads it.
     } catch {}
   }
 
