@@ -83,6 +83,14 @@ export default {
       // worker — bypasses ISP blocks on *.workers.dev because clients only
       // ever talk to the central custom domain. Falls through to local
       // Firestore handlers if the user has no workerUrl in their session yet.
+      // Short-circuit OCR — Immich frontend probes every asset for OCR text;
+      // we don't implement it. Answer here so old per-user workers don't 404.
+      if (path.match(/^\/api\/assets\/[^/]+\/ocr$/) && request.method === 'GET') {
+        return new Response(JSON.stringify({ ocr: null }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json', ...cors, 'X-Worker-Version': WORKER_VERSION },
+        });
+      }
       if (!env.DB && isPerUserPath(path)) {
         const proxied = await proxyToUserWorker(request, env);
         if (proxied) {

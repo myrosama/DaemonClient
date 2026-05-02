@@ -177,7 +177,11 @@ export async function handleAssets(request: Request, env: Env, path: string, url
     const workerConfig = await getCachedConfig<{ url?: string }>(env, uid, idToken, 'worker');
     return json({ url: workerConfig?.url || null });
   }
-  
+
+  if (path.match(/^\/api\/assets\/[^/]+\/ocr$/) && request.method === 'GET') {
+    return json({ ocr: null });
+  }
+
   return json({ message: 'Asset endpoint not found' }, 404);
 } catch (err: any) {
     console.error(`[handleAssets] Error at ${path}:`, err?.message, err?.stack);
