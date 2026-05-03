@@ -578,12 +578,25 @@ function SetupPage() {
   const [error, setError] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [alreadyConfigured, setAlreadyConfigured] = useState(false)
+  // Did we get the first Firestore snapshot back? Until we have, we don't know
+  // whether the user already has a telegram doc — clicking Start Setup before
+  // this is true would re-call /startSetup and create a duplicate bot/channel.
+  const [snapshotReady, setSnapshotReady] = useState(false)
+  // Anything in the telegram doc at all (even partial) means /startSetup is
+  // already in flight or completed. Don't run it again.
+  const [docExists, setDocExists] = useState(false)
 
   const handleStartAutomatedSetup = async () => {
-    // Guard: if telegram config already exists, do NOT call /startSetup again —
-    // that would create a duplicate bot+channel. Just move forward.
+    // Guard: if telegram config exists in any state (partial or complete), do
+    // NOT call /startSetup again — that creates a duplicate bot+channel.
     if (alreadyConfigured) {
       navigate('/setup/ownership')
+      return
+    }
+    if (docExists) {
+      // Partial state — backend is still writing. Just wait for the snapshot
+      // to flip alreadyConfigured.
+      setStatusMessage('Setup is finalizing… waiting for backend.')
       return
     }
     setStatusMessage('Initiating secure setup... This may take a minute.')
@@ -671,11 +684,12 @@ function SetupPage() {
       .collection(configPath(uid))
       .doc('telegram')
       .onSnapshot((doc) => {
-        if (!doc.exists) return
-        const data = doc.data() || {}
-        // Only treat as configured when the doc is fully populated, not just
-        // a half-written stub from a failed /startSetup.
-        const complete = !!(data.botToken && data.botUsername && data.channelId)
+        setSnapshotReady(true)
+        const data = doc.exists ? (doc.data() || {}) : null
+        // ANY presence (even just botToken from an in-flight /startSetup) means
+        // the bot/channel exist and we must NEVER call /startSetup again.
+        setDocExists(!!(data && data.botToken))
+        const complete = !!(data && data.botToken && data.botUsername && data.channelId)
         if (!complete) return
         setAlreadyConfigured(true)
         const transferred = data.ownership_transferred || data.ownershipTransferred
@@ -734,14 +748,21 @@ function SetupPage() {
                   </p>
                   <Button
                     onClick={handleStartAutomatedSetup}
-                    disabled={isLoading || !!statusMessage}
+                    disabled={isLoading || !!statusMessage || !snapshotReady}
                     className="w-full mt-4"
                   >
-                    {isLoading ? (
+                    {!snapshotReady ? (
+                      <span className="flex items-center justify-center gap-2">
+                        <Spinner size={14} className="text-white" />
+                        Checking…
+                      </span>
+                    ) : isLoading ? (
                       <span className="flex items-center justify-center gap-2">
                         <Spinner size={14} className="text-white" />
                         Setting up...
                       </span>
+                    ) : docExists && !alreadyConfigured ? (
+                      'Resume Setup'
                     ) : (
                       'Create My Secure Storage'
                     )}

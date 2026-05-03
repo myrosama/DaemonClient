@@ -84,6 +84,20 @@ async function handleLogin(request: Request, env: Env): Promise<Response> {
     workerUrl,
   };
 
+  // Fire-and-forget auto-update of the user's per-user worker. The deployment
+  // service compares the embedded shim version against the user's worker and
+  // silently redeploys if they've drifted, so shim fixes reach existing users
+  // without them touching anything. Login response isn't blocked on this.
+  if (env.DEPLOYMENT_SERVICE_URL && env.waitUntil && workerUrl) {
+    env.waitUntil(
+      fetch(env.DEPLOYMENT_SERVICE_URL.replace(/\/$/, '') + '/auto-update', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${data.idToken}`, 'Content-Type': 'application/json' },
+        body: '{}',
+      }).catch(err => console.error('[auto-update] dispatch failed:', err))
+    );
+  }
+
   const response = json(userResponse, 201);
   
   // Set cookies for subsequent requests

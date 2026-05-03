@@ -9,6 +9,7 @@ FIREBASE_PROJECT_ID = "daemonclient-c0625"
 APP_IDENTIFIER = "default-daemon-client"
 TELEGRAM_PROXY = "https://daemonclient-proxy.sadrikov49.workers.dev"
 ALLOWED_ORIGINS = "https://photos.daemonclient.uz,http://localhost:5173"
+DEPLOYMENT_SERVICE_URL = "https://daemonclient-deployment.sadrikov49.workers.dev"
 
 # D1 binding is per-user only. Per-user deploys via deployment-service inject
 # the binding at deploy time. The central worker mainly handles login then

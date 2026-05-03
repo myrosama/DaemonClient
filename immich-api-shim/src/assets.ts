@@ -13,6 +13,12 @@ const KEY_LENGTH = 256;
 const PBKDF2_ITERATIONS = 100000;
 const CHUNK_SIZE = 19 * 1024 * 1024; // 19 MB
 
+// Module-level file_path cache. Telegram file paths are valid for ~1 hour;
+// caching them avoids the getFile round-trip on every thumbnail request.
+// Shared across all requests within the same CF isolate instance.
+const filePathCache = new Map<string, { path: string; expiresAt: number }>();
+const FILE_PATH_TTL_MS = 55 * 60 * 1000; // 55 min — safely under Telegram's 1-hour validity
+
 async function deriveKey(password: string, saltStr: string): Promise<CryptoKey> {
   const salt = Uint8Array.from(atob(saltStr), c => c.charCodeAt(0));
   const keyMaterial = await crypto.subtle.importKey(
@@ -431,7 +437,7 @@ async function handleUpload(request: Request, env: Env, uid: string, idToken: st
       const end = Math.min(start + CHUNK_SIZE, fileSize);
       
       // CRITICAL: Slice the file instead of reading the whole thing into memory
-      const chunk = file.slice(start, end);
+      const chunk = file!.slice(start, end);
       let chunkData = await chunk.arrayBuffer();
 
       if (i === 0 && (width === 0 || height === 0)) {
@@ -537,9 +543,12 @@ async function handleUpload(request: Request, env: Env, uid: string, idToken: st
     }
 
     // --- Thumbnail generation ---
-    // For ALL uploads: send raw file via sendPhoto/sendVideo to get Telegram-generated thumb
-    // This happens REGARDLESS of encryption — thumbs are always unencrypted small JPEGs on Telegram
-    // The original file is encrypted separately via sendDocument above
+    // Thumbnail strategy:
+    //   - Encrypted upload: encrypt thumb bytes with the same AES key, push via
+    //     sendDocument as opaque .bin so Telegram never sees plaintext. Read
+    //     path detects `thumbEncrypted=1` and decrypts before serving.
+    //   - Unencrypted upload: send raw via sendPhoto/sendVideo so Telegram
+    //     generates a small thumb we can serve directly.
     const isVideo = mimeType.startsWith('video/') && !isHeic;
     const isImage = mimeType.startsWith('image/') || isHeic;
     const isSingleChunk = totalChunks === 1;
@@ -547,21 +556,39 @@ async function handleUpload(request: Request, env: Env, uid: string, idToken: st
     // Strategy 1: Mobile-provided JPEG thumbnail
     if (!telegramThumbId && thumbBase64) {
       try {
-        const thumbBytes = Uint8Array.from(atob(thumbBase64), c => c.charCodeAt(0));
+        let thumbBytes: ArrayBuffer = Uint8Array.from(atob(thumbBase64), c => c.charCodeAt(0)).buffer;
+        const encryptThumb = isEncryptedByServer && !!key;
+        if (encryptThumb) {
+          thumbBytes = await encryptChunk(thumbBytes, key!);
+        }
+
         const thumbForm = new FormData();
         thumbForm.append('chat_id', channelId);
-        thumbForm.append('photo', new Blob([thumbBytes], { type: 'image/jpeg' }), 'thumb.jpg');
 
         const queue = getTgQueue(botToken);
         await queue.acquire(undefined, 5);
         try {
-          const thumbRes = await fetch(`https://api.telegram.org/bot${botToken}/sendPhoto`, { method: 'POST', body: thumbForm });
-          const thumbJson = await thumbRes.json() as any;
-          if (thumbJson.ok && thumbJson.result.photo?.length > 0) {
-            telegramThumbId = thumbJson.result.photo[0].file_id;
-            console.log(`[Upload] Stored mobile thumbnail for ${fileName}`);
+          if (encryptThumb) {
+            thumbForm.append('document', new Blob([thumbBytes], { type: 'application/octet-stream' }), 'thumb.bin');
+            const r = await fetch(`https://api.telegram.org/bot${botToken}/sendDocument`, { method: 'POST', body: thumbForm });
+            const j = await r.json() as any;
+            if (j.ok && j.result?.document?.file_id) {
+              telegramThumbId = j.result.document.file_id;
+              thumbEncrypted = true;
+              console.log(`[Upload] Stored encrypted mobile thumbnail for ${fileName}`);
+            } else {
+              console.log(`[Upload] encrypted sendDocument thumb failed:`, JSON.stringify(j).slice(0, 200));
+            }
           } else {
-            console.log(`[Upload] sendPhoto failed for mobile thumb:`, JSON.stringify(thumbJson).slice(0, 200));
+            thumbForm.append('photo', new Blob([thumbBytes], { type: 'image/jpeg' }), 'thumb.jpg');
+            const r = await fetch(`https://api.telegram.org/bot${botToken}/sendPhoto`, { method: 'POST', body: thumbForm });
+            const j = await r.json() as any;
+            if (j.ok && j.result.photo?.length > 0) {
+              telegramThumbId = j.result.photo[0].file_id;
+              console.log(`[Upload] Stored mobile thumbnail for ${fileName}`);
+            } else {
+              console.log(`[Upload] sendPhoto failed for mobile thumb:`, JSON.stringify(j).slice(0, 200));
+            }
           }
         } finally { queue.release(); }
       } catch (e) {
@@ -569,9 +596,11 @@ async function handleUpload(request: Request, env: Env, uid: string, idToken: st
       }
     }
 
-    // Strategy 2: sendPhoto/sendVideo — ONLY for unencrypted uploads
-    // Encrypted uploads must NOT send raw files to Telegram
-    if (!telegramThumbId && !isEncryptedByServer && (isImage || isVideo) && isSingleChunk && file) {
+    // Strategy 2: derive a thumb from the raw file. If the upload is
+    // unencrypted, sendPhoto/sendVideo gives us a Telegram-generated thumb.
+    // If encrypted, we read up to CHUNK_SIZE off the head, encrypt it, and
+    // push as an opaque document — same shape as the chunked original.
+    if (!telegramThumbId && (isImage || isVideo) && isSingleChunk && file) {
       try {
         const rawSlice = file.slice(0, Math.min(file.size, CHUNK_SIZE));
         const rawData = await rawSlice.arrayBuffer();
@@ -582,7 +611,19 @@ async function handleUpload(request: Request, env: Env, uid: string, idToken: st
         const queue = getTgQueue(botToken);
         await queue.acquire(undefined, 5);
         try {
-          if (isVideo) {
+          if (isEncryptedByServer && key) {
+            const encrypted = await encryptChunk(rawData, key);
+            thumbForm.append('document', new Blob([encrypted], { type: 'application/octet-stream' }), 'thumb.bin');
+            const r = await fetch(`https://api.telegram.org/bot${botToken}/sendDocument`, { method: 'POST', body: thumbForm });
+            const j = await r.json() as any;
+            if (j.ok && j.result?.document?.file_id) {
+              telegramThumbId = j.result.document.file_id;
+              thumbEncrypted = true;
+              console.log(`[Upload] Stored encrypted server-derived thumbnail for ${fileName}`);
+            } else {
+              console.log(`[Upload] encrypted sendDocument thumb failed:`, JSON.stringify(j).slice(0, 200));
+            }
+          } else if (isVideo) {
             thumbForm.append('video', new Blob([rawData], { type: mimeType }), fileName);
             const res = await fetch(`https://api.telegram.org/bot${botToken}/sendVideo`, { method: 'POST', body: thumbForm });
             const j = await res.json() as any;
@@ -793,14 +834,16 @@ async function handleThumbnail(request: Request, env: Env, uid: string, assetId:
   const isServerZke = photo.encryptionMode === 'server' || (photo.encrypted === true && !photo.encryptionMode);
   const isClientZke = photo.encryptionMode === 'client';
 
-  // `servingThumb` covers both the small thumbnail and the multi-chunk preview
-  // fallback path — anywhere we end up downloading `telegramThumbId`. Thumbs
-  // are always plain JPEGs (Telegram-generated, mobile-provided, or sent via
-  // sendPhoto), never encrypted, so decrypting them with the AES key fails
-  // GCM auth ("Decryption failed... Input length was N, output length expected
-  // to be N"). Skip decryption for thumbs entirely.
+  // `servingThumb` is true when we end up downloading the small thumb file_id
+  // (vs falling back to the original). Thumbs MAY be encrypted — newer
+  // encrypted uploads store an opaque .bin via sendDocument and set
+  // photo.thumbEncrypted=1. Older encrypted uploads (and all unencrypted
+  // uploads) stored a plain JPEG via sendPhoto. Decrypt only when both:
+  // server-zke is on AND the stored thumb is flagged encrypted.
   const servingThumb = !!photo.telegramThumbId && fileId === photo.telegramThumbId;
-  const key = isServerZke && !servingThumb ? await getEncryptionKey(env, uid, idToken) : null;
+  const thumbIsEncrypted = servingThumb && (photo.thumbEncrypted === 1 || photo.thumbEncrypted === true || photo.thumbEncrypted === '1');
+  const decryptThis = isServerZke && (!servingThumb || thumbIsEncrypted);
+  const key = decryptThis ? await getEncryptionKey(env, uid, idToken) : null;
   let mimeType = photo.mimeType;
   if (photo.isHeic) mimeType = 'image/heic';
   if (servingThumb) {
@@ -821,10 +864,9 @@ async function handleThumbnail(request: Request, env: Env, uid: string, assetId:
     if (!result.ok) return json({ message: result.error }, 502);
 
     let responseData = result.data!;
-    if (isServerZke && key && !servingThumb) {
+    if (decryptThis && key) {
       try {
         responseData = await decryptChunk(responseData, key);
-        console.log(`[Thumbnail] Decrypted to ${responseData.byteLength} bytes`);
       } catch (e: any) {
         console.error(`[Thumbnail] Decryption failed for ${assetId}:`, e?.message);
         return json({ message: 'Decryption failed', error: e?.message }, 500);
@@ -1096,10 +1138,41 @@ async function tgFetchWithRetry(url: string, options?: RequestInit, maxRetries =
 }
 
 async function tgGetFileUrl(botToken: string, fileId: string): Promise<{ ok: boolean; url?: string; error?: string }> {
+  const now = Date.now();
+
+  // L1: module-level in-memory cache (fastest, same isolate lifetime)
+  const mem = filePathCache.get(fileId);
+  if (mem && mem.expiresAt > now) {
+    return { ok: true, url: `https://api.telegram.org/file/bot${botToken}/${mem.path}` };
+  }
+
+  // L2: CF edge cache (persists across worker restarts + shared within PoP)
+  const edgeCache = (caches as any).default as Cache;
+  const cfCacheKey = `https://dc-tg-path/${fileId}`;
+  try {
+    const cfHit = await edgeCache.match(cfCacheKey);
+    if (cfHit) {
+      const path = await cfHit.text();
+      filePathCache.set(fileId, { path, expiresAt: now + FILE_PATH_TTL_MS });
+      return { ok: true, url: `https://api.telegram.org/file/bot${botToken}/${path}` };
+    }
+  } catch { /* edge cache unavailable — fall through */ }
+
+  // L3: Telegram API
   const res = await tgFetchWithRetry(`https://api.telegram.org/bot${botToken}/getFile?file_id=${fileId}`);
   const data = await res.json() as any;
   if (!data.ok) return { ok: false, error: data.description || 'getFile failed' };
-  return { ok: true, url: `https://api.telegram.org/file/bot${botToken}/${data.result.file_path}` };
+
+  const path = data.result.file_path;
+  filePathCache.set(fileId, { path, expiresAt: now + FILE_PATH_TTL_MS });
+  try {
+    // Cache for 55 min at CF edge (well within Telegram's stated ~1 hr validity)
+    edgeCache.put(cfCacheKey, new Response(path, {
+      headers: { 'Cache-Control': 'public, max-age=3300' },
+    }));
+  } catch { /* best-effort */ }
+
+  return { ok: true, url: `https://api.telegram.org/file/bot${botToken}/${path}` };
 }
 
 async function tgDownloadFile(botToken: string, fileId: string): Promise<{ ok: boolean; data?: ArrayBuffer; error?: string }> {

@@ -11,9 +11,9 @@ export interface Photo {
   duration?: string | null;
   fileCreatedAt: string;
   uploadedAt: string;
-  telegramOriginalId?: string;
-  telegramThumbId?: string;
-  telegramChunks?: string; // JSON string
+  telegramOriginalId?: string | null;
+  telegramThumbId?: string | null;
+  telegramChunks?: string | null; // JSON string
   encryptionMode?: string;
   thumbEncrypted?: number;
   checksum?: string;
@@ -33,7 +33,7 @@ export interface Album {
   description?: string;
   createdAt: string;
   updatedAt: string;
-  albumThumbnailAssetId?: string;
+  albumThumbnailAssetId?: string | null;
 }
 
 export class D1Adapter {

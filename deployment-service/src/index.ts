@@ -1,7 +1,7 @@
 import { CloudflareAPI } from './cloudflare-api';
 import { SHIM_BUNDLE, SHIM_VERSION } from './shim-bundle';
 
-// Inline encryption helper
+// Inline encryption helpers
 const IV_LENGTH = 12;
 async function encryptToken(token: string, masterKeyString: string): Promise<string> {
   const key = await crypto.subtle.importKey(
@@ -17,6 +17,21 @@ async function encryptToken(token: string, masterKeyString: string): Promise<str
   combined.set(iv, 0);
   combined.set(new Uint8Array(encrypted), iv.length);
   return btoa(String.fromCharCode(...combined));
+}
+
+async function decryptToken(combinedB64: string, masterKeyString: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(masterKeyString),
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['decrypt']
+  );
+  const combined = Uint8Array.from(atob(combinedB64), c => c.charCodeAt(0));
+  const iv = combined.slice(0, IV_LENGTH);
+  const ciphertext = combined.slice(IV_LENGTH);
+  const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ciphertext);
+  return new TextDecoder().decode(plain);
 }
 
 export interface Env {
@@ -82,6 +97,7 @@ export default {
     const url = new URL(request.url);
     if (url.pathname === '/deploy-worker' && request.method === 'POST') return handleDeployWorker(request, env);
     if (url.pathname === '/validate-cf-token' && request.method === 'POST') return handleValidateToken(request, env);
+    if (url.pathname === '/auto-update' && request.method === 'POST') return handleAutoUpdate(request, env);
     return corsResponse(JSON.stringify({ error: 'Not found' }), { status: 404 });
   },
 };
@@ -201,6 +217,59 @@ async function handleDeployWorker(request: Request, env: Env): Promise<Response>
   }
 }
 
+// Silently re-deploy the user's per-user worker if its embedded shim version
+// has drifted from the current SHIM_VERSION. Called fire-and-forget from the
+// central router on /api/auth/login. Idempotent — no-op when versions match.
+async function handleAutoUpdate(request: Request, env: Env): Promise<Response> {
+  try {
+    const auth = await validateFirebaseToken(request, env);
+    if (!auth) return corsResponse(JSON.stringify({ error: 'Unauthorized' }), { status: 401 });
+    const { uid, idToken } = auth;
+
+    const cfg = await fetchWorkerConfig(uid, idToken, env);
+    if (!cfg || !cfg.apiToken || !cfg.accountId || !cfg.workerName) {
+      return corsResponse(JSON.stringify({ updated: false, reason: 'no-config' }));
+    }
+    if (cfg.autoUpdateEnabled === 'false') {
+      return corsResponse(JSON.stringify({ updated: false, reason: 'disabled' }));
+    }
+    if (cfg.lastDeployedVersion === SHIM_VERSION) {
+      return corsResponse(JSON.stringify({ updated: false, reason: 'current', version: SHIM_VERSION }));
+    }
+
+    const apiToken = await decryptToken(cfg.apiToken, env.ENCRYPTION_MASTER_KEY);
+    const cfApi = new CloudflareAPI();
+    const deployResult = await cfApi.deployWorker({
+      accountId: cfg.accountId,
+      workerName: cfg.workerName,
+      apiToken,
+      workerCode: SHIM_BUNDLE,
+      bindings: [
+        { type: 'd1', name: 'DB', id: cfg.databaseId },
+        { type: 'plain_text', name: 'FIREBASE_API_KEY', text: env.FIREBASE_API_KEY },
+        { type: 'plain_text', name: 'FIREBASE_PROJECT_ID', text: env.FIREBASE_PROJECT_ID },
+        { type: 'plain_text', name: 'APP_IDENTIFIER', text: env.APP_IDENTIFIER },
+        { type: 'plain_text', name: 'TELEGRAM_PROXY', text: env.TELEGRAM_PROXY },
+        { type: 'plain_text', name: 'ALLOWED_ORIGINS', text: env.ALLOWED_ORIGINS },
+      ]
+    });
+    if (!deployResult.success) {
+      return corsResponse(JSON.stringify({ updated: false, reason: 'deploy-failed', error: deployResult.error }), { status: 500 });
+    }
+
+    await saveWorkerConfig(uid, idToken, {
+      ...cfg,
+      lastDeployedVersion: SHIM_VERSION,
+      lastUpdatedAt: new Date().toISOString(),
+    }, env);
+
+    return corsResponse(JSON.stringify({ updated: true, from: cfg.lastDeployedVersion || 'unknown', to: SHIM_VERSION }));
+  } catch (error: any) {
+    console.error('Auto-update error:', error);
+    return corsResponse(JSON.stringify({ updated: false, error: error.message }), { status: 500 });
+  }
+}
+
 async function handleValidateToken(request: Request, env: Env): Promise<Response> {
   try {
     const { token } = await request.json() as any;
@@ -230,6 +299,20 @@ async function validateFirebaseToken(request: Request, env: Env): Promise<{ uid:
   const u = data.users?.[0];
   const uid = u?.localId;
   return uid ? { uid, idToken, email: u?.email } : null;
+}
+
+async function fetchWorkerConfig(uid: string, idToken: string, env: Env): Promise<Record<string, string> | null> {
+  const path = `artifacts/default-daemon-client/users/${uid}/config/cloudflare`;
+  const url = `https://firestore.googleapis.com/v1/projects/${env.FIREBASE_PROJECT_ID}/databases/(default)/documents/${path}`;
+  const res = await fetch(url, { headers: { 'Authorization': `Bearer ${idToken}` } });
+  if (!res.ok) return null;
+  const data = await res.json() as any;
+  if (!data.fields) return null;
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries<any>(data.fields)) {
+    if (v.stringValue !== undefined) out[k] = v.stringValue;
+  }
+  return out;
 }
 
 async function saveWorkerConfig(uid: string, idToken: string, config: any, env: Env): Promise<void> {

@@ -5,11 +5,11 @@
 import { installMessageListener } from './messaging';
 import { handleCancel } from './request';
 
-// Custom domain for the central router worker. Per-user workers live on
-// *.workers.dev which is blocked by some ISPs (notably in CIS/Russia/UZ),
-// so clients always talk to this domain and the central worker proxies
-// per-user requests internally.
-const DEFAULT_WORKER_URL = 'https://api.daemonclient.uz';
+// Fallback for /api/auth/login only — that's the one endpoint the SW must hit
+// before it knows the user's per-user worker URL. Login response includes
+// `workerUrl`, which we persist and route everything else to directly so the
+// user's own worker handles all their data.
+const DEFAULT_WORKER_URL = 'https://immich-api.sadrikov49.workers.dev';
 const ASSET_BINARY_REGEX = /^\/api\/assets\/[a-f0-9-]+\/(original|thumbnail)/;
 const API_REGEX = /^\/api\//;
 const TOKEN_CACHE_KEY = 'https://dc-internal/auth-token';
@@ -22,7 +22,7 @@ let cachedWorkerUrl: string | null = null;
 
 async function persistToken(token: string | null) {
   cachedToken = token;
-  const cache = await caches.open('dc-auth-v1');
+  const cache = await caches.open('dc-auth-v3');
   if (token) {
     await cache.put(TOKEN_CACHE_KEY, new Response(token));
   } else {
@@ -32,7 +32,7 @@ async function persistToken(token: string | null) {
 
 async function loadToken(): Promise<string | null> {
   if (cachedToken) return cachedToken;
-  const cache = await caches.open('dc-auth-v1');
+  const cache = await caches.open('dc-auth-v3');
   const res = await cache.match(TOKEN_CACHE_KEY);
   if (res) {
     cachedToken = await res.text();
@@ -43,7 +43,7 @@ async function loadToken(): Promise<string | null> {
 
 async function persistWorkerUrl(url: string | null) {
   cachedWorkerUrl = url;
-  const cache = await caches.open('dc-auth-v1');
+  const cache = await caches.open('dc-auth-v3');
   if (url) {
     await cache.put(WORKER_URL_CACHE_KEY, new Response(url));
   } else {
@@ -51,16 +51,49 @@ async function persistWorkerUrl(url: string | null) {
   }
 }
 
+function decodeWorkerUrlFromToken(token: string): string | null {
+  try {
+    const payload = token.includes('.') ? token.split('.')[0] : token;
+    const data = JSON.parse(atob(payload));
+    return typeof data.workerUrl === 'string' && data.workerUrl ? data.workerUrl : null;
+  } catch { return null; }
+}
+
 async function getWorkerUrl(): Promise<string> {
-  // Always route through the central router (DEFAULT_WORKER_URL). Cached
-  // per-user *.workers.dev URLs from old SW versions are deliberately
-  // ignored — the central worker proxies per-user requests internally so
-  // clients only ever hit the custom domain.
+  if (cachedWorkerUrl) return cachedWorkerUrl;
+  const cache = await caches.open('dc-auth-v3');
+  const res = await cache.match(WORKER_URL_CACHE_KEY);
+  if (res) {
+    cachedWorkerUrl = await res.text();
+    return cachedWorkerUrl;
+  }
+  // Fall back to decoding the workerUrl from the persisted session JWT.
+  // This lets already-logged-in users get their per-user worker URL without
+  // re-logging in, even after the SW cache was cleared (e.g. version bump).
+  const token = await loadToken();
+  if (token) {
+    const workerUrl = decodeWorkerUrlFromToken(token);
+    if (workerUrl) {
+      await persistWorkerUrl(workerUrl);
+      return workerUrl;
+    }
+  }
   return DEFAULT_WORKER_URL;
 }
 
 const handleActivate = (event: ExtendableEvent) => {
-  event.waitUntil(sw.clients.claim());
+  // Drop every old cache namespace so a stale workerUrl from a prior SW
+  // version (e.g. when the SW briefly hard-coded api.daemonclient.uz) cannot
+  // mis-route a user's API calls to the wrong worker. Only the v3 namespaces
+  // survive the activation.
+  event.waitUntil((async () => {
+    const KEEP = new Set(['dc-auth-v3', 'dc-assets-v3']);
+    const names = await caches.keys();
+    await Promise.all(names.filter(n => !KEEP.has(n)).map(n => caches.delete(n)));
+    cachedToken = null;
+    cachedWorkerUrl = null;
+    await sw.clients.claim();
+  })());
 };
 
 const handleInstall = (event: ExtendableEvent) => {
@@ -84,7 +117,7 @@ async function directWorkerFetch(request: Request, cacheable: boolean, pathname:
   const workerUrl = base + url.pathname + url.search;
 
   if (cacheable) {
-    const cache = await caches.open('dc-assets-v1');
+    const cache = await caches.open('dc-assets-v3');
     const cached = await cache.match(workerUrl);
     if (cached) {
       return cached;
@@ -112,7 +145,7 @@ async function directWorkerFetch(request: Request, cacheable: boolean, pathname:
   } catch (err) {
     // Network error - try to serve from cache
     if (cacheable) {
-      const cache = await caches.open('dc-assets-v1');
+      const cache = await caches.open('dc-assets-v3');
       const cached = await cache.match(workerUrl);
       if (cached) {
         console.log('[SW] Network error, serving from cache:', pathname);
@@ -138,14 +171,8 @@ async function directWorkerFetch(request: Request, cacheable: boolean, pathname:
     const cloned = response.clone();
     try {
       const data = await cloned.json() as any;
-      if (data.accessToken) {
-        await persistToken(data.accessToken);
-      }
-      // Intentionally do NOT cache data.workerUrl. The central router worker
-      // at DEFAULT_WORKER_URL proxies per-user requests on our behalf. If we
-      // cached the per-user *.workers.dev URL, clients would try to fetch it
-      // directly and hit ISP blocks. The workerUrl stays embedded in the
-      // session JWT — only the central router reads it.
+      if (data.accessToken) await persistToken(data.accessToken);
+      if (data.workerUrl) await persistWorkerUrl(data.workerUrl);
     } catch {}
   }
 
@@ -155,7 +182,7 @@ async function directWorkerFetch(request: Request, cacheable: boolean, pathname:
   }
 
   if (cacheable && response.ok) {
-    const cache = await caches.open('dc-assets-v1');
+    const cache = await caches.open('dc-assets-v3');
     cache.put(workerUrl, response.clone());
   }
 
