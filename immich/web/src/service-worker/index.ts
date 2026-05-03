@@ -113,6 +113,21 @@ async function extractToken(request: Request): Promise<string | null> {
 
 async function directWorkerFetch(request: Request, cacheable: boolean, pathname: string): Promise<Response> {
   const url = new URL(request.url);
+
+  const headers: Record<string, string> = {};
+  const token = await extractToken(request);
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+
+  // If the SW cache was wiped (e.g. version bump) but the user is still
+  // logged in via a browser cookie, bootstrap the per-user workerUrl from
+  // the JWT baked into that cookie — zero extra network calls.
+  if (!cachedWorkerUrl && token) {
+    const workerUrlFromToken = decodeWorkerUrlFromToken(token);
+    if (workerUrlFromToken) {
+      await persistWorkerUrl(workerUrlFromToken);
+    }
+  }
+
   const base = await getWorkerUrl();
   const workerUrl = base + url.pathname + url.search;
 
@@ -123,10 +138,6 @@ async function directWorkerFetch(request: Request, cacheable: boolean, pathname:
       return cached;
     }
   }
-
-  const headers: Record<string, string> = {};
-  const token = await extractToken(request);
-  if (token) headers['Authorization'] = `Bearer ${token}`;
   if (request.headers.get('range')) headers['Range'] = request.headers.get('range')!;
   if (request.headers.get('content-type')) headers['Content-Type'] = request.headers.get('content-type')!;
 
