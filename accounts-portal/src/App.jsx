@@ -84,6 +84,119 @@ async function destroySession() {
 }
 
 // ============================================================================
+// DAEMON LOGO SVG
+// ============================================================================
+
+function DaemonLogo({ size = 44, className = '' }) {
+  return (
+    <img
+      src="/logo.png"
+      alt="DaemonClient"
+      width={size}
+      height={size}
+      className={`object-contain ${className}`}
+      style={{ width: size, height: size }}
+    />
+  )
+}
+
+// ============================================================================
+// CLUSTER BACKGROUND — scattered dot constellations
+// ============================================================================
+
+function ClusterBackground() {
+  const DOT_GAP = 22 // px between dots within a cluster
+  const DOT_OPACITY = 'rgba(255,255,255,0.18)'
+
+  const clusters = [
+    { style: { left: '1%', top: '2%' },    cols: 4, rows: 7 },
+    { style: { right: '1%', top: '1%' },   cols: 5, rows: 5 },
+    { style: { right: '0%', top: '32%' },  cols: 3, rows: 6 },
+    { style: { left: '0%', top: '42%' },   cols: 4, rows: 5 },
+    { style: { left: '1%', bottom: '10%' },cols: 5, rows: 7 },
+    { style: { right: '2%', bottom: '14%'},cols: 4, rows: 5 },
+    { style: { right: '7%', bottom: '3%' },cols: 3, rows: 4 },
+    { style: { left: '37%', top: '0%' },   cols: 5, rows: 3 },
+    { style: { left: '28%', bottom: '2%' },cols: 6, rows: 3 },
+  ]
+
+  return (
+    <div className="fixed inset-0 overflow-hidden pointer-events-none z-0">
+      {clusters.map((cluster, ci) => (
+        <div key={ci} className="absolute" style={cluster.style}>
+          {Array.from({ length: cluster.rows }, (_, row) =>
+            Array.from({ length: cluster.cols }, (_, col) => (
+              <div
+                key={`${row}-${col}`}
+                style={{
+                  position: 'absolute',
+                  width: 2,
+                  height: 2,
+                  borderRadius: '50%',
+                  background: DOT_OPACITY,
+                  left: col * DOT_GAP,
+                  top: row * DOT_GAP,
+                }}
+              />
+            ))
+          )}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// ============================================================================
+// DOT GRID BACKGROUND
+// ============================================================================
+
+function DotGridPage({ children, className = '' }) {
+  return (
+    <div className={`min-h-screen dot-grid flex flex-col relative ${className}`}>
+      <ClusterBackground />
+      {children}
+    </div>
+  )
+}
+
+// ============================================================================
+// TERMINAL BAR — decorative header for setup pages
+// ============================================================================
+
+function TerminalBar({ command = 'curl -fsL https://daemonclient.uz/install.sh | bash' }) {
+  return (
+    <div className="w-full flex justify-center pt-6 px-4">
+      <div className="inline-flex items-center gap-3 bg-[#111318] border border-white/[0.08] rounded-lg px-5 py-2.5">
+        <div className="flex gap-1.5">
+          <div className="w-2.5 h-2.5 rounded-full bg-[#FF5F57]" />
+          <div className="w-2.5 h-2.5 rounded-full bg-[#FEBC2E]" />
+          <div className="w-2.5 h-2.5 rounded-full bg-[#28C840]" />
+        </div>
+        <span className="font-mono text-[12px] text-linear-text-secondary tracking-wide select-none">
+          {command}
+        </span>
+      </div>
+    </div>
+  )
+}
+
+// ============================================================================
+// AUTH FOOTER
+// ============================================================================
+
+function AuthFooter() {
+  return (
+    <div className="mt-6 text-center">
+      <div className="flex items-center justify-center gap-4 text-[11px] text-linear-text-secondary">
+        <a href="https://daemonclient.uz/terms" className="hover:text-linear-text transition-colors">Terms</a>
+        <a href="https://daemonclient.uz/privacy" className="hover:text-linear-text transition-colors">Privacy</a>
+        <a href="https://daemonclient.uz/help" className="hover:text-linear-text transition-colors">Help</a>
+      </div>
+    </div>
+  )
+}
+
+// ============================================================================
 // SPINNER
 // ============================================================================
 
@@ -108,7 +221,7 @@ function FullScreenSpinner({ message }) {
 }
 
 // ============================================================================
-// LAYOUT — Sidebar + Header
+// LAYOUT — Topbar (used for all protected pages)
 // ============================================================================
 
 function Layout({ children, user }) {
@@ -127,80 +240,60 @@ function Layout({ children, user }) {
 
   if (!user) return <>{children}</>
 
-  const navItems = [
-    { path: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-    { path: '/profile', label: 'Profile', icon: User },
-    { path: '/security', label: 'Security', icon: Shield },
-  ]
-
   const initials = user.displayName
     ? user.displayName.charAt(0).toUpperCase()
     : user.email.charAt(0).toUpperCase()
 
+  const isDashboard = location.pathname === '/dashboard'
+
   return (
-    <div className="min-h-screen bg-linear-bg flex">
-      {/* Sidebar */}
-      <div className="w-60 bg-linear-surface border-r border-white/[0.06] fixed h-screen flex flex-col">
-        <div className="p-6">
-          <Link to="/dashboard" className="flex items-center gap-2">
-            <div className="w-7 h-7 rounded-lg bg-linear-purple flex items-center justify-center">
-              <span className="text-white text-xs font-bold">D</span>
-            </div>
-            <h1 className="text-[15px] font-semibold text-linear-text tracking-tighter">
-              DaemonClient
-            </h1>
-          </Link>
-        </div>
+    <div className="min-h-screen bg-linear-bg">
+      {/* Top bar */}
+      <header className="h-13 border-b border-white/[0.06] flex items-center justify-between px-6 sticky top-0 bg-linear-bg/90 backdrop-blur-xl z-10">
+        <Link to="/dashboard" className="flex items-center gap-2.5">
+          <DaemonLogo size={30} />
+          <span className="text-[15px] font-semibold text-linear-text">DaemonClient</span>
+        </Link>
 
-        <nav className="px-3 space-y-0.5 flex-1">
-          {navItems.map(({ path, label, icon: Icon }) => {
-            const active = location.pathname === path
-            return (
-              <Link
-                key={path}
-                to={path}
-                className={`flex items-center gap-3 px-3 py-[7px] text-[13px] rounded-md transition-colors ${
-                  active
-                    ? 'bg-white/[0.08] text-linear-text font-medium'
-                    : 'text-linear-text-secondary hover:bg-white/[0.04] hover:text-linear-text'
-                }`}
-              >
-                <Icon size={16} strokeWidth={1.8} />
-                {label}
-              </Link>
-            )
-          })}
-        </nav>
-
-        {/* Sidebar footer */}
-        <div className="p-3 border-t border-white/[0.06]">
-          <div className="flex items-center gap-3 px-3 py-2">
-            <div className="w-7 h-7 rounded-full bg-linear-purple flex items-center justify-center shrink-0">
-              <span className="text-white text-xs font-medium">{initials}</span>
-            </div>
-            <div className="min-w-0 flex-1">
-              <p className="text-[13px] text-linear-text truncate">
-                {user.displayName || user.email.split('@')[0]}
-              </p>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Main content */}
-      <div className="flex-1 ml-60">
-        <header className="h-12 border-b border-white/[0.06] flex items-center justify-between px-6 sticky top-0 bg-linear-bg/80 backdrop-blur-xl z-10">
-          <div className="text-[13px] text-linear-text-secondary">{user.email}</div>
+        <div className="flex items-center gap-3">
+          {!isDashboard && (
+            <Link
+              to="/dashboard"
+              className="flex items-center gap-1.5 text-[13px] text-linear-text-secondary hover:text-linear-text transition-colors"
+            >
+              <ArrowLeft size={13} />
+              Dashboard
+            </Link>
+          )}
           <button
             onClick={handleLogout}
-            className="flex items-center gap-2 text-[13px] text-linear-text-secondary hover:text-linear-text transition-colors"
+            className="flex items-center gap-1.5 text-[13px] text-linear-text-secondary hover:text-linear-text transition-colors"
           >
-            <LogOut size={14} strokeWidth={1.8} />
-            Sign out
+            <LogOut size={13} strokeWidth={1.8} />
           </button>
-        </header>
-        <main className="p-8">{children}</main>
-      </div>
+          <div className="w-8 h-8 rounded-full bg-linear-purple flex items-center justify-center shrink-0">
+            <span className="text-white text-[13px] font-semibold">{initials}</span>
+          </div>
+        </div>
+      </header>
+
+      <main className={isDashboard ? '' : 'max-w-3xl mx-auto p-8'}>{children}</main>
+
+      {/* Footer */}
+      <footer className="mt-auto py-6 border-t border-white/[0.04] px-8">
+        <div className="flex items-center justify-between text-[11px] text-linear-text-secondary">
+          <div className="flex gap-4">
+            <a href="https://daemonclient.uz/help" className="hover:text-linear-text transition-colors">Help</a>
+            <a href="https://daemonclient.uz/terms" className="hover:text-linear-text transition-colors">Terms</a>
+            <a href="https://daemonclient.uz/privacy" className="hover:text-linear-text transition-colors">Privacy</a>
+          </div>
+          <div className="flex gap-4">
+            <a href="https://daemonclient.uz/help" className="hover:text-linear-text transition-colors">Help</a>
+            <a href="https://daemonclient.uz/terms" className="hover:text-linear-text transition-colors">Terms</a>
+            <a href="https://daemonclient.uz/privacy" className="hover:text-linear-text transition-colors">Privacy</a>
+          </div>
+        </div>
+      </footer>
     </div>
   )
 }
@@ -262,36 +355,35 @@ function LoginPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-linear-bg px-4">
+    <DotGridPage className="items-center justify-center px-4">
       <motion.div
-        initial={{ opacity: 0, y: 12 }}
+        initial={{ opacity: 0, y: 14 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.3 }}
-        className="w-full max-w-[380px]"
+        transition={{ duration: 0.35 }}
+        className="w-full max-w-[420px]"
       >
-        <div className="text-center mb-8">
-          <div className="w-10 h-10 rounded-xl bg-linear-purple flex items-center justify-center mx-auto mb-5">
-            <span className="text-white text-lg font-bold">D</span>
+        {/* Logo + heading */}
+        <div className="text-center mb-7">
+          <div className="flex justify-center mb-4">
+            <DaemonLogo size={72} />
           </div>
-          <h1 className="text-xl font-semibold text-linear-text tracking-tighter">
-            Sign in
+          <h1 className="text-[20px] font-semibold text-linear-text">
+            Sign in to DaemonClient
           </h1>
-          <p className="text-[13px] text-linear-text-secondary mt-1">
-            to continue to DaemonClient
-          </p>
         </div>
 
-        <Card className="p-6">
-          <form onSubmit={handleLogin} className="space-y-3">
+        {/* Card */}
+        <div className="bg-[#111318] border border-white/[0.08] rounded-xl p-7 shadow-xl shadow-black/40">
+          <form onSubmit={handleLogin} className="space-y-5">
             <div>
-              <label className="block text-[13px] text-linear-text-secondary mb-1.5">
-                Email
+              <label className="block text-[13px] text-linear-text-secondary mb-1.5 font-medium">
+                Email address
               </label>
               <Input
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="you@example.com"
+                placeholder="name@example.com"
                 required
                 error={!!error}
                 className="w-full"
@@ -299,25 +391,33 @@ function LoginPage() {
             </div>
 
             <div>
-              <label className="block text-[13px] text-linear-text-secondary mb-1.5">
-                Password
-              </label>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="text-[13px] text-linear-text-secondary font-medium">
+                  Password
+                </label>
+                <button
+                  type="button"
+                  className="text-[12px] text-linear-text-secondary hover:text-linear-text transition-colors"
+                >
+                  Forgot password?
+                </button>
+              </div>
               <div className="relative">
                 <Input
                   type={showPassword ? 'text' : 'password'}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  placeholder="Enter password"
+                  placeholder="Enter a password"
                   required
                   error={!!error}
-                  className="w-full pr-9"
+                  className="w-full pr-10"
                 />
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-linear-text-secondary hover:text-linear-text transition-colors"
+                  className="absolute right-3.5 top-1/2 -translate-y-1/2 text-linear-text-secondary hover:text-linear-text transition-colors"
                 >
-                  {showPassword ? <EyeOff size={14} /> : <Eye size={14} />}
+                  {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
                 </button>
               </div>
             </div>
@@ -326,43 +426,34 @@ function LoginPage() {
               <p className="text-[13px] text-linear-error">{error}</p>
             )}
 
-            <Button
-              type="submit"
-              disabled={loading}
-              className="w-full mt-1"
-            >
+            <Button type="submit" disabled={loading} className="w-full h-12 text-[14px] font-medium mt-1">
               {loading ? (
                 <span className="flex items-center justify-center gap-2">
                   <Spinner size={14} className="text-white" />
                   Signing in...
                 </span>
               ) : (
-                'Sign in'
+                'Sign In'
               )}
             </Button>
           </form>
 
-          <div className="mt-5 pt-5 border-t border-white/[0.06] text-center">
+          <div className="mt-5 pt-4 border-t border-white/[0.06] text-center">
+            <span className="text-[13px] text-linear-text-secondary">
+              New to DaemonClient?{' '}
+            </span>
             <Link
               to="/signup"
-              className="text-[13px] text-linear-purple hover:text-linear-purple-hover transition-colors"
+              className="text-[13px] text-daemon-green hover:text-daemon-green-hover transition-colors font-medium"
             >
               Create account
             </Link>
           </div>
-        </Card>
-
-        <div className="mt-5 text-center">
-          <a
-            href="https://daemonclient.uz"
-            className="text-[13px] text-linear-text-secondary hover:text-linear-text transition-colors inline-flex items-center gap-1"
-          >
-            <ArrowLeft size={12} />
-            Back to home
-          </a>
         </div>
+
+        <AuthFooter />
       </motion.div>
-    </div>
+    </DotGridPage>
   )
 }
 
@@ -371,9 +462,9 @@ function LoginPage() {
 // ============================================================================
 
 function SignupPage() {
+  const [displayName, setDisplayName] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
-  const [confirmPassword, setConfirmPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
@@ -382,11 +473,6 @@ function SignupPage() {
   const handleSignup = async (e) => {
     e.preventDefault()
     setError('')
-
-    if (password !== confirmPassword) {
-      setError('Passwords do not match')
-      return
-    }
 
     if (password.length < 6) {
       setError('Password must be at least 6 characters')
@@ -398,6 +484,10 @@ function SignupPage() {
     try {
       const userCredential = await auth.createUserWithEmailAndPassword(email, password)
       const user = userCredential.user
+      // Set display name if provided
+      if (displayName.trim()) {
+        try { await user.updateProfile({ displayName: displayName.trim() }) } catch (e) {}
+      }
       const idToken = await user.getIdToken()
 
       // Call Render backend to start setup
@@ -446,36 +536,48 @@ function SignupPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-linear-bg px-4">
+    <DotGridPage className="items-center justify-center px-4">
       <motion.div
-        initial={{ opacity: 0, y: 12 }}
+        initial={{ opacity: 0, y: 14 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.3 }}
-        className="w-full max-w-[380px]"
+        transition={{ duration: 0.35 }}
+        className="w-full max-w-[420px]"
       >
-        <div className="text-center mb-8">
-          <div className="w-10 h-10 rounded-xl bg-linear-purple flex items-center justify-center mx-auto mb-5">
-            <span className="text-white text-lg font-bold">D</span>
+        {/* Logo + heading */}
+        <div className="text-center mb-7">
+          <div className="flex justify-center mb-4">
+            <DaemonLogo size={72} />
           </div>
-          <h1 className="text-xl font-semibold text-linear-text tracking-tighter">
+          <h1 className="text-[20px] font-semibold text-linear-text">
             Create your account
           </h1>
-          <p className="text-[13px] text-linear-text-secondary mt-1">
-            to continue to DaemonClient
-          </p>
         </div>
 
-        <Card className="p-6">
-          <form onSubmit={handleSignup} className="space-y-3">
+        {/* Card */}
+        <div className="bg-[#111318] border border-white/[0.08] rounded-xl p-7 shadow-xl shadow-black/40">
+          <form onSubmit={handleSignup} className="space-y-5">
             <div>
-              <label className="block text-[13px] text-linear-text-secondary mb-1.5">
-                Email
+              <label className="block text-[13px] text-linear-text-secondary mb-1.5 font-medium">
+                Full Name
+              </label>
+              <Input
+                type="text"
+                value={displayName}
+                onChange={(e) => setDisplayName(e.target.value)}
+                placeholder="Your Name"
+                className="w-full"
+              />
+            </div>
+
+            <div>
+              <label className="block text-[13px] text-linear-text-secondary mb-1.5 font-medium">
+                Email address
               </label>
               <Input
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="you@example.com"
+                placeholder="name@example.com"
                 required
                 error={!!error}
                 className="w-full"
@@ -483,7 +585,7 @@ function SignupPage() {
             </div>
 
             <div>
-              <label className="block text-[13px] text-linear-text-secondary mb-1.5">
+              <label className="block text-[13px] text-linear-text-secondary mb-1.5 font-medium">
                 Password
               </label>
               <div className="relative">
@@ -491,45 +593,26 @@ function SignupPage() {
                   type={showPassword ? 'text' : 'password'}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  placeholder="At least 6 characters"
+                  placeholder="Enter a password"
                   required
                   error={!!error}
-                  className="w-full pr-9"
+                  className="w-full pr-10"
                 />
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-linear-text-secondary hover:text-linear-text transition-colors"
+                  className="absolute right-3.5 top-1/2 -translate-y-1/2 text-linear-text-secondary hover:text-linear-text transition-colors"
                 >
-                  {showPassword ? <EyeOff size={14} /> : <Eye size={14} />}
+                  {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
                 </button>
               </div>
-            </div>
-
-            <div>
-              <label className="block text-[13px] text-linear-text-secondary mb-1.5">
-                Confirm password
-              </label>
-              <Input
-                type={showPassword ? 'text' : 'password'}
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                placeholder="Repeat password"
-                required
-                error={!!error && password !== confirmPassword}
-                className="w-full"
-              />
             </div>
 
             {error && (
               <p className="text-[13px] text-linear-error">{error}</p>
             )}
 
-            <Button
-              type="submit"
-              disabled={loading}
-              className="w-full mt-1"
-            >
+            <Button type="submit" disabled={loading} className="w-full h-12 text-[14px] font-medium mt-1">
               {loading ? (
                 <span className="flex items-center justify-center gap-2">
                   <Spinner size={14} className="text-white" />
@@ -541,27 +624,19 @@ function SignupPage() {
             </Button>
           </form>
 
-          <div className="mt-5 pt-5 border-t border-white/[0.06] text-center">
+          <div className="mt-5 pt-4 border-t border-white/[0.06] text-center">
             <Link
               to="/login"
-              className="text-[13px] text-linear-purple hover:text-linear-purple-hover transition-colors"
+              className="text-[13px] text-linear-text-secondary hover:text-linear-text transition-colors"
             >
-              Sign in instead
+              Sign in Instead
             </Link>
           </div>
-        </Card>
-
-        <div className="mt-5 text-center">
-          <a
-            href="https://daemonclient.uz"
-            className="text-[13px] text-linear-text-secondary hover:text-linear-text transition-colors inline-flex items-center gap-1"
-          >
-            <ArrowLeft size={12} />
-            Back to home
-          </a>
         </div>
+
+        <AuthFooter />
       </motion.div>
-    </div>
+    </DotGridPage>
   )
 }
 
@@ -706,179 +781,170 @@ function SetupPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-linear-bg px-4">
-      <motion.div
-        initial={{ opacity: 0, y: 12 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.3 }}
-        className="w-full max-w-[520px]"
-      >
-        <div className="text-center mb-8">
-          <div className="w-10 h-10 rounded-xl bg-linear-purple flex items-center justify-center mx-auto mb-5">
-            <Bot size={20} className="text-white" />
-          </div>
-          <h1 className="text-xl font-semibold text-linear-text tracking-tighter">
-            One-Time Setup
-          </h1>
-          <p className="text-[13px] text-linear-text-secondary mt-1">
-            Create your private, secure Telegram storage
-          </p>
-        </div>
+    <DotGridPage>
+      {/* Terminal bar at top */}
+      <TerminalBar />
 
-        <Card className="p-6">
-          <AnimatePresence mode="wait">
-            {!showManualForm ? (
-              <motion.div
-                key="options"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                className="space-y-4"
-              >
-                {/* Automated setup */}
-                <div className="relative border border-linear-purple/40 rounded-md p-5">
-                  <span className="absolute -top-2.5 right-4 bg-linear-purple text-white text-[11px] font-medium px-2.5 py-0.5 rounded-full">
-                    Recommended
-                  </span>
-                  <h2 className="text-[15px] font-medium text-linear-text">
-                    Automated Setup
+      <div className="flex-1 flex items-center justify-center px-4 py-8">
+        <motion.div
+          initial={{ opacity: 0, y: 14 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.35 }}
+          className="w-full max-w-[480px]"
+        >
+          <div className="text-center mb-7">
+            <h1 className="text-[22px] font-semibold text-linear-text">
+              DaemonClient Setup
+            </h1>
+            <p className="text-[13px] text-linear-text-secondary mt-1.5">
+              Create your private, secure DaemonClient storage
+            </p>
+          </div>
+
+          <div className="bg-[#111318] border border-white/[0.08] rounded-xl overflow-hidden shadow-xl shadow-black/40">
+            <AnimatePresence mode="wait">
+              {!showManualForm ? (
+                <motion.div
+                  key="options"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  className="p-5 space-y-3"
+                >
+                  {/* Automated setup */}
+                  <div className="relative border border-linear-purple/30 bg-linear-purple/[0.04] rounded-lg p-5">
+                    <span className="absolute -top-2.5 right-4 bg-linear-purple text-white text-[11px] font-medium px-2.5 py-0.5 rounded-full">
+                      Recommended
+                    </span>
+                    <h2 className="text-[15px] font-semibold text-linear-text">
+                      Automated Setup
+                    </h2>
+                    <p className="text-[13px] text-linear-text-secondary mt-1.5 leading-relaxed">
+                      We create and configure a private bot and channel for you automatically.
+                    </p>
+                    <Button
+                      onClick={handleStartAutomatedSetup}
+                      disabled={isLoading || !!statusMessage || !snapshotReady}
+                      className="w-full mt-4 h-9 text-[14px] font-medium"
+                    >
+                      {!snapshotReady ? (
+                        <span className="flex items-center justify-center gap-2">
+                          <Spinner size={14} className="text-white" />
+                          Checking…
+                        </span>
+                      ) : isLoading ? (
+                        <span className="flex items-center justify-center gap-2">
+                          <Spinner size={14} className="text-white" />
+                          Setting up...
+                        </span>
+                      ) : docExists && !alreadyConfigured ? (
+                        'Resume Setup'
+                      ) : (
+                        'Create My Secure Storage'
+                      )}
+                    </Button>
+                  </div>
+
+                  {/* Manual setup */}
+                  <div className="border border-white/[0.07] rounded-lg p-5">
+                    <h2 className="text-[15px] font-semibold text-linear-text">
+                      Manual Setup
+                    </h2>
+                    <p className="text-[13px] text-linear-text-secondary mt-1.5 leading-relaxed">
+                      For advanced users with an existing bot and channel.
+                    </p>
+                    <Button
+                      variant="outline"
+                      onClick={() => setShowManualForm(true)}
+                      className="w-full mt-4 h-9 text-[13px]"
+                    >
+                      Enter Credentials Manually
+                    </Button>
+                  </div>
+
+                  {/* Status / error */}
+                  {statusMessage && (
+                    <motion.div
+                      initial={{ opacity: 0, y: 4 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className="p-3 bg-linear-purple/10 border border-linear-purple/20 rounded-lg flex items-center gap-3"
+                    >
+                      <Spinner size={15} />
+                      <p className="text-[13px] text-linear-purple">{statusMessage}</p>
+                    </motion.div>
+                  )}
+                  {error && !statusMessage && (
+                    <p className="text-[13px] text-linear-error text-center">{error}</p>
+                  )}
+                </motion.div>
+              ) : (
+                <motion.div
+                  key="manual"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  className="p-5 space-y-4"
+                >
+                  <h2 className="text-[15px] font-semibold text-linear-text text-center">
+                    Enter Your Credentials
                   </h2>
-                  <p className="text-[13px] text-linear-text-secondary mt-1.5">
-                    We create and configure a private bot and channel for you automatically.
-                  </p>
-                  <Button
-                    onClick={handleStartAutomatedSetup}
-                    disabled={isLoading || !!statusMessage || !snapshotReady}
-                    className="w-full mt-4"
-                  >
-                    {!snapshotReady ? (
+                  <div>
+                    <label className="block text-[13px] text-linear-text-secondary mb-1.5 font-medium">
+                      Telegram Bot Token
+                    </label>
+                    <Input
+                      type="password"
+                      value={botToken}
+                      onChange={(e) => setBotToken(e.target.value)}
+                      placeholder="From @BotFather"
+                      className="w-full"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[13px] text-linear-text-secondary mb-1.5 font-medium">
+                      Private Channel ID
+                    </label>
+                    <Input
+                      type="text"
+                      value={channelId}
+                      onChange={(e) => setChannelId(e.target.value)}
+                      placeholder="From @userinfobot"
+                      className="w-full"
+                    />
+                  </div>
+                  {error && <p className="text-[13px] text-linear-error">{error}</p>}
+                  <Button onClick={handleSaveManualSetup} disabled={isLoading} className="w-full h-9 text-[14px] font-medium">
+                    {isLoading ? (
                       <span className="flex items-center justify-center gap-2">
                         <Spinner size={14} className="text-white" />
-                        Checking…
+                        Saving...
                       </span>
-                    ) : isLoading ? (
-                      <span className="flex items-center justify-center gap-2">
-                        <Spinner size={14} className="text-white" />
-                        Setting up...
-                      </span>
-                    ) : docExists && !alreadyConfigured ? (
-                      'Resume Setup'
                     ) : (
-                      'Create My Secure Storage'
+                      'Save & Continue'
                     )}
                   </Button>
-                </div>
-
-                {/* Manual setup */}
-                <div className="border border-white/[0.06] rounded-md p-5">
-                  <h2 className="text-[15px] font-medium text-linear-text">
-                    Manual Setup
-                  </h2>
-                  <p className="text-[13px] text-linear-text-secondary mt-1.5">
-                    For advanced users with an existing bot and channel.
-                  </p>
-                  <Button
-                    variant="outline"
-                    onClick={() => setShowManualForm(true)}
-                    className="w-full mt-4"
+                  <button
+                    onClick={() => setShowManualForm(false)}
+                    className="w-full text-center text-[13px] text-linear-text-secondary hover:text-linear-text transition-colors"
                   >
-                    Enter Credentials Manually
-                  </Button>
-                </div>
-              </motion.div>
-            ) : (
-              <motion.div
-                key="manual"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                className="space-y-3"
-              >
-                <h2 className="text-[15px] font-medium text-linear-text text-center mb-4">
-                  Enter Your Credentials
-                </h2>
-                <div>
-                  <label className="block text-[13px] text-linear-text-secondary mb-1.5">
-                    <Bot size={12} className="inline mr-1" />
-                    Telegram Bot Token
-                  </label>
-                  <Input
-                    type="password"
-                    value={botToken}
-                    onChange={(e) => setBotToken(e.target.value)}
-                    placeholder="From @BotFather"
-                    className="w-full"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[13px] text-linear-text-secondary mb-1.5">
-                    <Hash size={12} className="inline mr-1" />
-                    Private Channel ID
-                  </label>
-                  <Input
-                    type="text"
-                    value={channelId}
-                    onChange={(e) => setChannelId(e.target.value)}
-                    placeholder="From @userinfobot"
-                    className="w-full"
-                  />
-                </div>
+                    Back to setup options
+                  </button>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
 
-                <Button
-                  onClick={handleSaveManualSetup}
-                  disabled={isLoading}
-                  className="w-full mt-2"
-                >
-                  {isLoading ? (
-                    <span className="flex items-center justify-center gap-2">
-                      <Spinner size={14} className="text-white" />
-                      Saving...
-                    </span>
-                  ) : (
-                    'Save & Continue'
-                  )}
-                </Button>
-
-                <button
-                  onClick={() => setShowManualForm(false)}
-                  className="w-full text-center text-[13px] text-linear-text-secondary hover:text-linear-text transition-colors mt-2"
-                >
-                  Back to setup options
-                </button>
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          {/* Status bar */}
-          {statusMessage && (
-            <motion.div
-              initial={{ opacity: 0, y: 4 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="mt-4 p-3 bg-linear-purple/10 border border-linear-purple/20 rounded-md flex items-center gap-3"
+          <div className="mt-5 text-center">
+            <button
+              onClick={handleLogout}
+              className="text-[13px] text-linear-text-secondary hover:text-linear-text transition-colors"
             >
-              <Spinner size={16} />
-              <p className="text-[13px] text-linear-purple">{statusMessage}</p>
-            </motion.div>
-          )}
-
-          {/* Error */}
-          {error && !statusMessage && (
-            <p className="text-[13px] text-linear-error mt-4 text-center">
-              {error}
-            </p>
-          )}
-        </Card>
-
-        <div className="mt-5 text-center">
-          <button
-            onClick={handleLogout}
-            className="text-[13px] text-linear-text-secondary hover:text-linear-text transition-colors"
-          >
-            Sign out
-          </button>
-        </div>
-      </motion.div>
-    </div>
+              Sign out
+            </button>
+          </div>
+        </motion.div>
+      </div>
+    </DotGridPage>
   )
 }
 
@@ -1054,152 +1120,154 @@ function OwnershipPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-linear-bg px-4">
-      <motion.div
-        initial={{ opacity: 0, y: 12 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.3 }}
-        className="w-full max-w-[480px]"
-      >
-        <Card className="p-6">
-          <AnimatePresence mode="wait">
-            {step === 1 && (
-              <motion.div
-                key="step1"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                className="space-y-5 text-center"
-              >
-                <div>
-                  <p className="text-[11px] font-medium text-linear-purple uppercase tracking-wider mb-2">
-                    Step 1 of 2
-                  </p>
-                  <h1 className="text-lg font-semibold text-linear-text tracking-tighter">
-                    Start Your Bot
+    <DotGridPage>
+      <TerminalBar />
+      <div className="flex-1 flex items-center justify-center px-4 py-8">
+        <motion.div
+          initial={{ opacity: 0, y: 14 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.35 }}
+          className="w-full max-w-[440px]"
+        >
+          {/* Step indicator */}
+          <div className="flex items-center justify-center gap-2 mb-6">
+            {[1, 2, 3].map((n) => (
+              <div
+                key={n}
+                className={`h-1.5 rounded-full transition-all ${
+                  n === 2
+                    ? 'w-6 bg-daemon-green'
+                    : n < 2
+                    ? 'w-4 bg-daemon-green/40'
+                    : 'w-4 bg-white/[0.12]'
+                }`}
+              />
+            ))}
+          </div>
+
+          <div className="bg-[#111318] border border-white/[0.08] rounded-xl overflow-hidden shadow-xl shadow-black/40">
+            <AnimatePresence mode="wait">
+              {step === 1 && (
+                <motion.div
+                  key="step1"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  className="p-6 space-y-5 text-center"
+                >
+                  <div>
+                    <p className="text-[11px] font-semibold text-linear-purple uppercase tracking-widest mb-2">
+                      Step 1 of 2
+                    </p>
+                    <h1 className="text-[20px] font-semibold text-linear-text">
+                      Start Your Bot
+                    </h1>
+                    <p className="text-[13px] text-linear-text-secondary mt-2 leading-relaxed">
+                      Click the link below, press <strong className="text-linear-text">START</strong> in Telegram, then come back here.
+                    </p>
+                  </div>
+
+                  <a
+                    href={config ? `https://t.me/${config.botUsername}` : '#'}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={handleLinkClicked}
+                    className="inline-flex items-center gap-2 bg-[#2AABEE] hover:bg-[#229ED9] text-white text-[13px] font-semibold px-6 py-2.5 rounded-lg transition-colors"
+                  >
+                    {config?.botUsername ? (
+                      <>
+                        Open @{config.botUsername}
+                        <ExternalLink size={13} />
+                      </>
+                    ) : (
+                      <Spinner size={14} className="text-white" />
+                    )}
+                  </a>
+
+                  <Button onClick={handleNextStep} disabled={isButtonDisabled} className="w-full h-9 text-[14px] font-medium">
+                    {isButtonDisabled ? `Next Step (${countdown}s)` : 'Next Step →'}
+                  </Button>
+                </motion.div>
+              )}
+
+              {step === 2 && (
+                <motion.div
+                  key="step2"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  className="p-6 space-y-5 text-center"
+                >
+                  <div>
+                    <p className="text-[11px] font-semibold text-linear-purple uppercase tracking-widest mb-2">
+                      Step 2 of 2
+                    </p>
+                    <h1 className="text-[20px] font-semibold text-linear-text">
+                      Join Your Channel
+                    </h1>
+                    <p className="text-[13px] text-linear-text-secondary mt-2 leading-relaxed">
+                      Click the link to join your secure storage channel, then finalize the transfer.
+                    </p>
+                  </div>
+
+                  <a
+                    href={config ? config.invite_link : '#'}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={handleLinkClicked}
+                    className="inline-flex items-center gap-2 bg-[#2AABEE] hover:bg-[#229ED9] text-white text-[13px] font-semibold px-6 py-2.5 rounded-lg transition-colors"
+                  >
+                    Join Secure Channel
+                    <ExternalLink size={13} />
+                  </a>
+
+                  <Button onClick={handleFinalize} disabled={isButtonDisabled} className="w-full h-9 text-[14px] font-medium">
+                    {isButtonDisabled ? `Finalize (${countdown}s)` : 'Finalize Transfer'}
+                  </Button>
+                </motion.div>
+              )}
+
+              {step === 3 && (
+                <motion.div
+                  key="step3"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  className="p-6"
+                >
+                  <h1 className="text-[18px] font-semibold text-linear-text text-center mb-5">
+                    Finalizing Setup...
                   </h1>
-                  <p className="text-[13px] text-linear-text-secondary mt-2">
-                    Click the link below, press START in Telegram, then come back here.
-                  </p>
-                </div>
+                  <div className="space-y-1 bg-linear-bg/60 rounded-lg p-4">
+                    {transferStatus && (
+                      <>
+                        <StatusItem status={transferStatus.bot.status} message={transferStatus.bot.message} />
+                        <StatusItem status={transferStatus.channel.status} message={transferStatus.channel.message} />
+                      </>
+                    )}
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
 
-                <a
-                  href={config ? `https://t.me/${config.botUsername}` : '#'}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  onClick={handleLinkClicked}
-                  className="inline-flex items-center gap-2 bg-[#2AABEE] hover:bg-[#229ED9] text-white text-[13px] font-medium px-5 py-2 rounded-md transition-colors"
-                >
-                  {config?.botUsername ? (
-                    <>
-                      Open @{config.botUsername}
-                      <ExternalLink size={13} />
-                    </>
-                  ) : (
-                    <Spinner size={14} className="text-white" />
-                  )}
-                </a>
-
-                <Button
-                  onClick={handleNextStep}
-                  disabled={isButtonDisabled}
-                  className="w-full"
-                >
-                  {isButtonDisabled
-                    ? `Next Step (${countdown}s)`
-                    : 'Next Step'}
-                </Button>
-              </motion.div>
+            {error && (
+              <p className="text-[13px] text-linear-error text-center px-6 pb-5">
+                {error}
+              </p>
             )}
+          </div>
 
-            {step === 2 && (
-              <motion.div
-                key="step2"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                className="space-y-5 text-center"
-              >
-                <div>
-                  <p className="text-[11px] font-medium text-linear-purple uppercase tracking-wider mb-2">
-                    Step 2 of 2
-                  </p>
-                  <h1 className="text-lg font-semibold text-linear-text tracking-tighter">
-                    Join Your Channel
-                  </h1>
-                  <p className="text-[13px] text-linear-text-secondary mt-2">
-                    Click the link to join your secure channel, then finalize the transfer.
-                  </p>
-                </div>
-
-                <a
-                  href={config ? config.invite_link : '#'}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  onClick={handleLinkClicked}
-                  className="inline-flex items-center gap-2 bg-[#2AABEE] hover:bg-[#229ED9] text-white text-[13px] font-medium px-5 py-2 rounded-md transition-colors"
-                >
-                  Join Secure Channel
-                  <ExternalLink size={13} />
-                </a>
-
-                <Button
-                  onClick={handleFinalize}
-                  disabled={isButtonDisabled}
-                  className="w-full"
-                >
-                  {isButtonDisabled
-                    ? `Finalize (${countdown}s)`
-                    : 'Finalize Transfer'}
-                </Button>
-              </motion.div>
-            )}
-
-            {step === 3 && (
-              <motion.div
-                key="step3"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-              >
-                <h1 className="text-lg font-semibold text-linear-text tracking-tighter text-center mb-4">
-                  Finalizing Setup...
-                </h1>
-                <ul className="space-y-1 bg-linear-bg rounded-md p-4">
-                  {transferStatus && (
-                    <>
-                      <StatusItem
-                        status={transferStatus.bot.status}
-                        message={transferStatus.bot.message}
-                      />
-                      <StatusItem
-                        status={transferStatus.channel.status}
-                        message={transferStatus.channel.message}
-                      />
-                    </>
-                  )}
-                </ul>
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          {error && (
-            <p className="text-[13px] text-linear-error text-center mt-4">
-              {error}
-            </p>
-          )}
-        </Card>
-
-        <div className="mt-5 text-center">
-          <button
-            onClick={handleLogout}
-            className="text-[13px] text-linear-text-secondary hover:text-linear-text transition-colors"
-          >
-            Sign out
-          </button>
-        </div>
-      </motion.div>
-    </div>
+          <div className="mt-5 text-center">
+            <button
+              onClick={handleLogout}
+              className="text-[13px] text-linear-text-secondary hover:text-linear-text transition-colors"
+            >
+              Sign out
+            </button>
+          </div>
+        </motion.div>
+      </div>
+    </DotGridPage>
   )
 }
 
@@ -1293,133 +1361,144 @@ function DashboardPage() {
     },
   ]
 
+  const user = auth.currentUser
+  const displayName = user?.displayName || user?.email?.split('@')[0] || 'User'
+
   return (
-    <div className="max-w-4xl">
-      <div className="mb-8">
-        <h1 className="text-xl font-semibold text-linear-text tracking-tighter">
-          Dashboard
-        </h1>
-        <p className="text-[13px] text-linear-text-secondary mt-1">
-          Manage your services and storage
-        </p>
-      </div>
+    <div className="px-8 pt-8 pb-4 max-w-5xl mx-auto">
+      {/* Welcome heading */}
+      <h1 className="text-[32px] font-bold text-linear-text mb-8 tracking-tight">
+        Welcome, {displayName}
+      </h1>
 
       {loading ? (
-        <div className="flex items-center justify-center py-16">
-          <Spinner size={24} />
+        <div className="flex items-center justify-center py-24">
+          <Spinner size={28} />
         </div>
       ) : (
-        <div className="grid md:grid-cols-2 gap-4">
-          {serviceCards.map((svc) => {
-            const Icon = svc.icon
-            return (
-              <motion.a
-                key={svc.key}
-                href={svc.href}
-                whileHover={{ y: -2 }}
-                transition={{ duration: 0.15 }}
-                className={`block p-5 bg-linear-surface border border-white/[0.06] rounded-md ${svc.borderHover} transition-colors group`}
-              >
-                <div className="flex items-start justify-between mb-4">
-                  <div className={`p-2.5 rounded-lg ${svc.bgColor}`}>
-                    <Icon size={20} className={svc.color} strokeWidth={1.8} />
-                  </div>
-                  <div className="flex items-center gap-1.5">
-                    <div className="w-1.5 h-1.5 rounded-full bg-linear-success" />
-                    <span className="text-[11px] text-linear-success font-medium">
-                      Active
-                    </span>
-                  </div>
-                </div>
-
-                <h3 className="text-[15px] font-medium text-linear-text mb-1">
-                  {svc.title}
-                </h3>
-                <p className="text-[13px] text-linear-text-secondary mb-3">
-                  {svc.description}
-                </p>
-
-                {svc.stats && (
-                  <div className="text-[12px] text-linear-text-secondary">
-                    {svc.stats}
-                    {svc.lastAccessed &&
-                      ` · Last used ${new Date(svc.lastAccessed.toDate()).toLocaleDateString()}`}
-                  </div>
-                )}
-
-                <div className="flex items-center gap-1 mt-3 text-[12px] text-linear-text-secondary group-hover:text-linear-purple transition-colors">
-                  Open
-                  <ChevronRight size={12} />
-                </div>
-              </motion.a>
-            )
-          })}
-        </div>
-      )}
-
-      {backend?.workerUrl && (
-        <div className="mt-6">
-          <div className="flex items-center gap-2 mb-3">
-            <Server size={14} className="text-linear-text-secondary" />
-            <h2 className="text-[13px] font-medium text-linear-text">Your Backend</h2>
-          </div>
-          <div className="bg-linear-surface border border-white/[0.06] rounded-md p-5 space-y-4">
-            <div>
-              <div className="flex items-center justify-between mb-1.5">
-                <label className="text-[11px] font-medium text-linear-text-secondary uppercase tracking-wider">
-                  Worker URL
-                </label>
-                <button
-                  onClick={() => copyToClipboard(backend.workerUrl, 'Worker URL')}
-                  className="flex items-center gap-1 text-[11px] text-linear-text-secondary hover:text-linear-text transition-colors"
-                >
-                  <Copy size={11} />
-                  Copy
-                </button>
+        <>
+          {/* Top row: Personal Info, Security, Your Services */}
+          <div className="grid grid-cols-3 gap-4 mb-4">
+            {/* Personal Info */}
+            <Link
+              to="/profile"
+              className="bg-[#111318] border border-white/[0.07] rounded-xl p-5 hover:border-white/[0.14] transition-colors group"
+            >
+              <div className="w-10 h-10 rounded-full bg-white/[0.06] flex items-center justify-center mb-3">
+                <User size={18} className="text-linear-text-secondary" strokeWidth={1.8} />
               </div>
-              <div className="font-mono text-[12px] text-linear-text bg-linear-bg border border-white/[0.04] rounded px-3 py-2 break-all">
-                {backend.workerUrl}
-              </div>
-            </div>
-
-            <div>
-              <div className="flex items-center justify-between mb-1.5">
-                <label className="text-[11px] font-medium text-linear-text-secondary uppercase tracking-wider flex items-center gap-1.5">
-                  <Smartphone size={11} />
-                  Immich Mobile App — Server Endpoint URL
-                </label>
-                <button
-                  onClick={() => copyToClipboard(`${backend.workerUrl}/api`, 'Server URL')}
-                  className="flex items-center gap-1 text-[11px] text-linear-text-secondary hover:text-linear-text transition-colors"
-                >
-                  <Copy size={11} />
-                  Copy
-                </button>
-              </div>
-              <div className="font-mono text-[12px] text-linear-text bg-linear-bg border border-white/[0.04] rounded px-3 py-2 break-all">
-                {backend.workerUrl}/api
-              </div>
-              <p className="text-[11px] text-linear-text-secondary mt-1.5">
-                Paste this in the Immich mobile app's "Server Endpoint URL" field on the login screen.
+              <h3 className="text-[15px] font-semibold text-linear-text mb-1">Personal Info</h3>
+              <p className="text-[12px] text-linear-text-secondary leading-relaxed">
+                Manage your profile details and contact info.
               </p>
+            </Link>
+
+            {/* Security */}
+            <Link
+              to="/security"
+              className="bg-[#111318] border border-white/[0.07] rounded-xl p-5 hover:border-white/[0.14] transition-colors group"
+            >
+              <div className="w-10 h-10 rounded-full bg-white/[0.06] flex items-center justify-center mb-3">
+                <Shield size={18} className="text-linear-text-secondary" strokeWidth={1.8} />
+              </div>
+              <h3 className="text-[15px] font-semibold text-linear-text mb-1">Security</h3>
+              <p className="text-[12px] text-linear-text-secondary leading-relaxed">
+                Review your password and account activity.
+              </p>
+            </Link>
+
+            {/* Your Services */}
+            <div className="bg-[#111318] border border-white/[0.07] rounded-xl p-5 flex flex-col items-center justify-center text-center">
+              <DaemonLogo size={44} />
+              <h3 className="text-[15px] font-semibold text-linear-text mt-3">Your Services</h3>
+            </div>
+          </div>
+
+          {/* Bottom row: Drive + Photos */}
+          <div className="grid grid-cols-2 gap-4">
+            {/* Drive */}
+            <div className="bg-[#111318] border border-white/[0.07] rounded-xl p-5">
+              <div className="w-10 h-10 rounded-xl bg-[#0D9488]/20 flex items-center justify-center mb-3">
+                <FolderOpen size={20} className="text-[#2DD4BF]" strokeWidth={1.8} />
+              </div>
+              <h3 className="text-[17px] font-semibold text-linear-text mb-1.5">Drive</h3>
+              <p className="text-[13px] text-linear-text-secondary leading-relaxed mb-4">
+                Your unlimited cloud storage. Store and access any file.
+              </p>
+              {services.drive && (
+                <p className="text-[12px] text-linear-text-secondary mb-3">
+                  {services.drive.totalFiles || 0} files stored
+                </p>
+              )}
+              <a
+                href="https://app.daemonclient.uz"
+                className="block w-full text-center bg-daemon-green hover:bg-daemon-green-hover text-white text-[13px] font-semibold py-2.5 rounded-lg transition-colors"
+              >
+                Go to Drive
+              </a>
             </div>
 
-            {backend.databaseName && (
-              <div className="grid grid-cols-2 gap-4 pt-2 border-t border-white/[0.04]">
-                <div>
-                  <p className="text-[11px] text-linear-text-secondary mb-0.5">Database</p>
-                  <p className="font-mono text-[12px] text-linear-text">{backend.databaseName}</p>
-                </div>
-                <div>
-                  <p className="text-[11px] text-linear-text-secondary mb-0.5">Account ID</p>
-                  <p className="font-mono text-[12px] text-linear-text truncate" title={backend.accountId}>
-                    {backend.accountId}
-                  </p>
+            {/* Photos */}
+            <div className="bg-[#111318] border border-white/[0.07] rounded-xl p-5">
+              <div className="w-10 h-10 rounded-xl bg-[#0D9488]/20 flex items-center justify-center mb-3">
+                <Image size={20} className="text-[#2DD4BF]" strokeWidth={1.8} />
+              </div>
+              <h3 className="text-[17px] font-semibold text-linear-text mb-1.5">Photos</h3>
+              <p className="text-[13px] text-linear-text-secondary leading-relaxed mb-4">
+                Your photo library. Backup and organize your memories.
+              </p>
+              {services.photos && (
+                <p className="text-[12px] text-linear-text-secondary mb-3">
+                  {services.photos.totalAssets || 0} photos
+                </p>
+              )}
+              <a
+                href="https://photos.daemonclient.uz"
+                className="block w-full text-center bg-daemon-green hover:bg-daemon-green-hover text-white text-[13px] font-semibold py-2.5 rounded-lg transition-colors"
+              >
+                Go to Photos
+              </a>
+            </div>
+          </div>
+
+          {/* Backend info (if set up) */}
+          {backend?.workerUrl && (
+            <div className="mt-4 bg-[#111318] border border-white/[0.07] rounded-xl p-5">
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-2">
+                  <Server size={14} className="text-linear-text-secondary" />
+                  <h3 className="text-[13px] font-semibold text-linear-text">Your Backend</h3>
+                  <div className="flex items-center gap-1.5 ml-2">
+                    <div className="w-1.5 h-1.5 rounded-full bg-linear-success" />
+                    <span className="text-[11px] text-linear-success font-medium">Active</span>
+                  </div>
                 </div>
               </div>
-            )}
-          </div>
-        </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <p className="text-[11px] text-linear-text-secondary mb-1 uppercase tracking-wider font-medium">Worker URL</p>
+                  <div className="flex items-center gap-2">
+                    <p className="font-mono text-[12px] text-linear-text truncate">{backend.workerUrl}</p>
+                    <button onClick={() => copyToClipboard(backend.workerUrl, 'Worker URL')} className="shrink-0 text-linear-text-secondary hover:text-linear-text transition-colors">
+                      <Copy size={12} />
+                    </button>
+                  </div>
+                </div>
+                <div>
+                  <p className="text-[11px] text-linear-text-secondary mb-1 uppercase tracking-wider font-medium flex items-center gap-1">
+                    <Smartphone size={11} /> Mobile Server URL
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <p className="font-mono text-[12px] text-linear-text truncate">{backend.workerUrl}/api</p>
+                    <button onClick={() => copyToClipboard(`${backend.workerUrl}/api`, 'Server URL')} className="shrink-0 text-linear-text-secondary hover:text-linear-text transition-colors">
+                      <Copy size={12} />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+        </>
       )}
     </div>
   )

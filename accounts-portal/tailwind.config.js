@@ -15,9 +15,11 @@ export default {
         'linear-text-secondary': '#A1A1AA',
         'linear-success': '#30A46C',
         'linear-error': '#E5484D',
+        'daemon-green': '#22C55E',
+        'daemon-green-hover': '#16A34A',
       },
       fontFamily: {
-        sans: ['Inter', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'sans-serif'],
+        sans: ['Space Grotesk', 'Inter', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'sans-serif'],
       },
       letterSpacing: {
         tighter: '-0.01em',

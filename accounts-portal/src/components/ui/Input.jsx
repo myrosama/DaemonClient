@@ -9,10 +9,10 @@ export function Input({
   error = false,
   className = ''
 }) {
-  const baseStyles = 'h-8 px-3 bg-[#27272A] border rounded-md text-sm text-linear-text placeholder:text-gray-500 focus:outline-none focus:ring-1 transition-colors duration-150'
+  const baseStyles = 'h-12 px-4 bg-[#27272A] border rounded-md text-[15px] text-linear-text placeholder:text-white/25 focus:outline-none focus:ring-1 transition-colors duration-150'
   const borderStyles = error
     ? 'border-linear-error focus:border-linear-error focus:ring-linear-error'
-    : 'border-white/10 focus:border-violet-500 focus:ring-violet-500'
+    : 'border-white/[0.1] focus:border-daemon-green/50 focus:ring-daemon-green/20'
 
   return (
     <input
