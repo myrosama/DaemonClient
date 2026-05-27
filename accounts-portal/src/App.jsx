@@ -104,45 +104,83 @@ function DaemonLogo({ size = 44, className = '' }) {
 // CLUSTER BACKGROUND — scattered dot constellations
 // ============================================================================
 
-function ClusterBackground() {
-  const DOT_GAP = 22 // px between dots within a cluster
-  const DOT_OPACITY = 'rgba(255,255,255,0.18)'
+function AnimatedBackground() {
+  const canvasRef = useRef(null)
 
-  const clusters = [
-    { style: { left: '1%', top: '2%' },    cols: 4, rows: 7 },
-    { style: { right: '1%', top: '1%' },   cols: 5, rows: 5 },
-    { style: { right: '0%', top: '32%' },  cols: 3, rows: 6 },
-    { style: { left: '0%', top: '42%' },   cols: 4, rows: 5 },
-    { style: { left: '1%', bottom: '10%' },cols: 5, rows: 7 },
-    { style: { right: '2%', bottom: '14%'},cols: 4, rows: 5 },
-    { style: { right: '7%', bottom: '3%' },cols: 3, rows: 4 },
-    { style: { left: '37%', top: '0%' },   cols: 5, rows: 3 },
-    { style: { left: '28%', bottom: '2%' },cols: 6, rows: 3 },
-  ]
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const ctx = canvas.getContext('2d')
+    let raf
+
+    const resize = () => {
+      canvas.width = window.innerWidth
+      canvas.height = window.innerHeight
+    }
+    resize()
+    window.addEventListener('resize', resize)
+
+    const COUNT = 75
+    const MAX_DIST = 150
+    const particles = Array.from({ length: COUNT }, () => ({
+      x: Math.random() * window.innerWidth,
+      y: Math.random() * window.innerHeight,
+      vx: (Math.random() - 0.5) * 0.3,
+      vy: (Math.random() - 0.5) * 0.3,
+      r: Math.random() * 1.3 + 0.7,
+    }))
+
+    const tick = () => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height)
+
+      for (const p of particles) {
+        p.x += p.vx
+        p.y += p.vy
+        if (p.x < 0 || p.x > canvas.width)  p.vx *= -1
+        if (p.y < 0 || p.y > canvas.height) p.vy *= -1
+      }
+
+      // connecting lines
+      for (let i = 0; i < particles.length; i++) {
+        for (let j = i + 1; j < particles.length; j++) {
+          const dx = particles[i].x - particles[j].x
+          const dy = particles[i].y - particles[j].y
+          const d = Math.sqrt(dx * dx + dy * dy)
+          if (d < MAX_DIST) {
+            ctx.beginPath()
+            ctx.strokeStyle = `rgba(255,255,255,${(1 - d / MAX_DIST) * 0.1})`
+            ctx.lineWidth = 0.5
+            ctx.moveTo(particles[i].x, particles[i].y)
+            ctx.lineTo(particles[j].x, particles[j].y)
+            ctx.stroke()
+          }
+        }
+      }
+
+      // dots
+      for (const p of particles) {
+        ctx.beginPath()
+        ctx.fillStyle = 'rgba(255,255,255,0.2)'
+        ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2)
+        ctx.fill()
+      }
+
+      raf = requestAnimationFrame(tick)
+    }
+
+    tick()
+    return () => {
+      cancelAnimationFrame(raf)
+      window.removeEventListener('resize', resize)
+    }
+  }, [])
 
   return (
-    <div className="fixed inset-0 overflow-hidden pointer-events-none z-0">
-      {clusters.map((cluster, ci) => (
-        <div key={ci} className="absolute" style={cluster.style}>
-          {Array.from({ length: cluster.rows }, (_, row) =>
-            Array.from({ length: cluster.cols }, (_, col) => (
-              <div
-                key={`${row}-${col}`}
-                style={{
-                  position: 'absolute',
-                  width: 2,
-                  height: 2,
-                  borderRadius: '50%',
-                  background: DOT_OPACITY,
-                  left: col * DOT_GAP,
-                  top: row * DOT_GAP,
-                }}
-              />
-            ))
-          )}
-        </div>
-      ))}
-    </div>
+    <canvas
+      ref={canvasRef}
+      className="fixed inset-0 pointer-events-none"
+      style={{ zIndex: 0 }}
+    />
   )
 }
 
@@ -153,7 +191,7 @@ function ClusterBackground() {
 function DotGridPage({ children, className = '' }) {
   return (
     <div className={`min-h-screen dot-grid flex flex-col relative ${className}`}>
-      <ClusterBackground />
+      <AnimatedBackground />
       {children}
     </div>
   )
@@ -355,103 +393,115 @@ function LoginPage() {
   }
 
   return (
-    <DotGridPage className="items-center justify-center px-4">
+    <DotGridPage className="items-center justify-center px-4 py-8">
       <motion.div
-        initial={{ opacity: 0, y: 14 }}
+        initial={{ opacity: 0, y: 16 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.35 }}
-        className="w-full max-w-[420px]"
+        className="w-full max-w-[400px] relative z-10"
       >
-        {/* Logo + heading */}
-        <div className="text-center mb-7">
-          <div className="flex justify-center mb-4">
-            <DaemonLogo size={72} />
-          </div>
-          <h1 className="text-[20px] font-semibold text-linear-text">
-            Sign in to DaemonClient
-          </h1>
-        </div>
+        {/* Single card — logo + title + form all inside */}
+        <div className="bg-[#13151B] border border-white/[0.09] rounded-2xl shadow-2xl shadow-black/60 overflow-hidden">
 
-        {/* Card */}
-        <div className="bg-[#111318] border border-white/[0.08] rounded-xl p-7 shadow-xl shadow-black/40">
-          <form onSubmit={handleLogin} className="space-y-5">
-            <div>
-              <label className="block text-[13px] text-linear-text-secondary mb-1.5 font-medium">
-                Email address
-              </label>
-              <Input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="name@example.com"
-                required
-                error={!!error}
-                className="w-full"
-              />
+          {/* Logo + title */}
+          <div className="text-center pt-9 pb-6 px-8">
+            <div className="flex justify-center mb-4">
+              <DaemonLogo size={64} />
             </div>
+            <h1 className="text-[21px] font-semibold text-linear-text tracking-tight">
+              Sign in to DaemonClient
+            </h1>
+          </div>
 
-            <div>
-              <div className="flex items-center justify-between mb-1.5">
-                <label className="text-[13px] text-linear-text-secondary font-medium">
-                  Password
+          {/* Form */}
+          <div className="px-8 pb-6">
+            <form onSubmit={handleLogin} className="space-y-4">
+              <div>
+                <label className="block text-[13px] text-linear-text-secondary mb-1.5 font-medium">
+                  Email address
                 </label>
-                <button
-                  type="button"
-                  className="text-[12px] text-linear-text-secondary hover:text-linear-text transition-colors"
-                >
-                  Forgot password?
-                </button>
-              </div>
-              <div className="relative">
                 <Input
-                  type={showPassword ? 'text' : 'password'}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="Enter a password"
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="name@example.com"
                   required
                   error={!!error}
-                  className="w-full pr-10"
+                  className="w-full"
                 />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3.5 top-1/2 -translate-y-1/2 text-linear-text-secondary hover:text-linear-text transition-colors"
-                >
-                  {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
-                </button>
               </div>
-            </div>
 
-            {error && (
-              <p className="text-[13px] text-linear-error">{error}</p>
-            )}
+              <div>
+                <label className="block text-[13px] text-linear-text-secondary mb-1.5 font-medium">
+                  Password
+                </label>
+                <div className="relative">
+                  <Input
+                    type={showPassword ? 'text' : 'password'}
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="Enter a password"
+                    required
+                    error={!!error}
+                    className="w-full pr-10"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-3.5 top-1/2 -translate-y-1/2 text-linear-text-secondary hover:text-linear-text transition-colors"
+                  >
+                    {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                  </button>
+                </div>
+              </div>
 
-            <Button type="submit" disabled={loading} className="w-full h-12 text-[14px] font-medium mt-1">
-              {loading ? (
-                <span className="flex items-center justify-center gap-2">
-                  <Spinner size={14} className="text-white" />
-                  Signing in...
-                </span>
-              ) : (
-                'Sign In'
+              {error && (
+                <p className="text-[13px] text-linear-error">{error}</p>
               )}
-            </Button>
-          </form>
 
-          <div className="mt-5 pt-4 border-t border-white/[0.06] text-center">
-            <span className="text-[13px] text-linear-text-secondary">
+              <button
+                type="submit"
+                disabled={loading}
+                className="w-full h-11 rounded-full bg-daemon-green hover:bg-daemon-green-hover text-white text-[14px] font-semibold transition-all duration-150 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 mt-1"
+              >
+                {loading ? (
+                  <>
+                    <Spinner size={14} className="text-white" />
+                    Signing in…
+                  </>
+                ) : 'Sign In'}
+              </button>
+            </form>
+
+            {/* Forgot password — below button */}
+            <div className="text-center mt-3">
+              <button
+                type="button"
+                className="text-[12px] text-linear-text-secondary hover:text-linear-text transition-colors"
+              >
+                Forgot password?
+              </button>
+            </div>
+          </div>
+
+          {/* Bottom — create account + terms */}
+          <div className="border-t border-white/[0.06] px-8 py-5 text-center space-y-3">
+            <p className="text-[13px] text-linear-text-secondary">
               New to DaemonClient?{' '}
-            </span>
-            <Link
-              to="/signup"
-              className="text-[13px] text-daemon-green hover:text-daemon-green-hover transition-colors font-medium"
-            >
-              Create account
-            </Link>
+              <Link
+                to="/signup"
+                className="text-daemon-green hover:text-daemon-green-hover transition-colors font-medium"
+              >
+                Create account
+              </Link>
+            </p>
+            <div className="flex items-center justify-center gap-5 text-[11px] text-linear-text-secondary/50">
+              <a href="https://daemonclient.uz/terms" className="hover:text-linear-text-secondary transition-colors">Terms</a>
+              <a href="https://daemonclient.uz/privacy" className="hover:text-linear-text-secondary transition-colors">Privacy</a>
+              <a href="https://daemonclient.uz/help" className="hover:text-linear-text-secondary transition-colors">Help</a>
+            </div>
           </div>
         </div>
-
-        <AuthFooter />
       </motion.div>
     </DotGridPage>
   )
@@ -536,105 +586,117 @@ function SignupPage() {
   }
 
   return (
-    <DotGridPage className="items-center justify-center px-4">
+    <DotGridPage className="items-center justify-center px-4 py-8">
       <motion.div
-        initial={{ opacity: 0, y: 14 }}
+        initial={{ opacity: 0, y: 16 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.35 }}
-        className="w-full max-w-[420px]"
+        className="w-full max-w-[400px] relative z-10"
       >
-        {/* Logo + heading */}
-        <div className="text-center mb-7">
-          <div className="flex justify-center mb-4">
-            <DaemonLogo size={72} />
+        <div className="bg-[#13151B] border border-white/[0.09] rounded-2xl shadow-2xl shadow-black/60 overflow-hidden">
+
+          {/* Logo + title */}
+          <div className="text-center pt-9 pb-6 px-8">
+            <div className="flex justify-center mb-4">
+              <DaemonLogo size={64} />
+            </div>
+            <h1 className="text-[21px] font-semibold text-linear-text tracking-tight">
+              Create your account
+            </h1>
           </div>
-          <h1 className="text-[20px] font-semibold text-linear-text">
-            Create your account
-          </h1>
-        </div>
 
-        {/* Card */}
-        <div className="bg-[#111318] border border-white/[0.08] rounded-xl p-7 shadow-xl shadow-black/40">
-          <form onSubmit={handleSignup} className="space-y-5">
-            <div>
-              <label className="block text-[13px] text-linear-text-secondary mb-1.5 font-medium">
-                Full Name
-              </label>
-              <Input
-                type="text"
-                value={displayName}
-                onChange={(e) => setDisplayName(e.target.value)}
-                placeholder="Your Name"
-                className="w-full"
-              />
-            </div>
-
-            <div>
-              <label className="block text-[13px] text-linear-text-secondary mb-1.5 font-medium">
-                Email address
-              </label>
-              <Input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="name@example.com"
-                required
-                error={!!error}
-                className="w-full"
-              />
-            </div>
-
-            <div>
-              <label className="block text-[13px] text-linear-text-secondary mb-1.5 font-medium">
-                Password
-              </label>
-              <div className="relative">
+          {/* Form */}
+          <div className="px-8 pb-6">
+            <form onSubmit={handleSignup} className="space-y-4">
+              <div>
+                <label className="block text-[13px] text-linear-text-secondary mb-1.5 font-medium">
+                  Full Name
+                </label>
                 <Input
-                  type={showPassword ? 'text' : 'password'}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="Enter a password"
+                  type="text"
+                  value={displayName}
+                  onChange={(e) => setDisplayName(e.target.value)}
+                  placeholder="Your Name"
+                  className="w-full"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[13px] text-linear-text-secondary mb-1.5 font-medium">
+                  Email address
+                </label>
+                <Input
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="name@example.com"
                   required
                   error={!!error}
-                  className="w-full pr-10"
+                  className="w-full"
                 />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3.5 top-1/2 -translate-y-1/2 text-linear-text-secondary hover:text-linear-text transition-colors"
-                >
-                  {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
-                </button>
               </div>
-            </div>
 
-            {error && (
-              <p className="text-[13px] text-linear-error">{error}</p>
-            )}
+              <div>
+                <label className="block text-[13px] text-linear-text-secondary mb-1.5 font-medium">
+                  Password
+                </label>
+                <div className="relative">
+                  <Input
+                    type={showPassword ? 'text' : 'password'}
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="At least 6 characters"
+                    required
+                    error={!!error}
+                    className="w-full pr-10"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-3.5 top-1/2 -translate-y-1/2 text-linear-text-secondary hover:text-linear-text transition-colors"
+                  >
+                    {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                  </button>
+                </div>
+              </div>
 
-            <Button type="submit" disabled={loading} className="w-full h-12 text-[14px] font-medium mt-1">
-              {loading ? (
-                <span className="flex items-center justify-center gap-2">
-                  <Spinner size={14} className="text-white" />
-                  Creating account...
-                </span>
-              ) : (
-                'Create account'
+              {error && (
+                <p className="text-[13px] text-linear-error">{error}</p>
               )}
-            </Button>
-          </form>
 
-          <div className="mt-5 pt-4 border-t border-white/[0.06] text-center">
-            <Link
-              to="/login"
-              className="text-[13px] text-linear-text-secondary hover:text-linear-text transition-colors"
-            >
-              Sign in Instead
-            </Link>
+              <button
+                type="submit"
+                disabled={loading}
+                className="w-full h-11 rounded-full bg-daemon-green hover:bg-daemon-green-hover text-white text-[14px] font-semibold transition-all duration-150 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 mt-1"
+              >
+                {loading ? (
+                  <>
+                    <Spinner size={14} className="text-white" />
+                    Creating account…
+                  </>
+                ) : 'Create account'}
+              </button>
+            </form>
+          </div>
+
+          {/* Bottom — sign in + terms */}
+          <div className="border-t border-white/[0.06] px-8 py-5 text-center space-y-3">
+            <p className="text-[13px] text-linear-text-secondary">
+              Already have an account?{' '}
+              <Link
+                to="/login"
+                className="text-daemon-green hover:text-daemon-green-hover transition-colors font-medium"
+              >
+                Sign in
+              </Link>
+            </p>
+            <div className="flex items-center justify-center gap-5 text-[11px] text-linear-text-secondary/50">
+              <a href="https://daemonclient.uz/terms" className="hover:text-linear-text-secondary transition-colors">Terms</a>
+              <a href="https://daemonclient.uz/privacy" className="hover:text-linear-text-secondary transition-colors">Privacy</a>
+              <a href="https://daemonclient.uz/help" className="hover:text-linear-text-secondary transition-colors">Help</a>
+            </div>
           </div>
         </div>
-
-        <AuthFooter />
       </motion.div>
     </DotGridPage>
   )
