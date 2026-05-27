@@ -1409,24 +1409,37 @@ function DashboardBackground({ preset }) {
   )
 }
 
-// ── iOS-style app icon ────────────────────────────────────────────────────────
-function AppIcon({ bg, children, label, href, disabled }) {
-  const inner = (
-    <div className="flex flex-col items-center gap-2 group">
-      <div
-        className={`w-[62px] h-[62px] rounded-[14px] flex items-center justify-center transition-transform duration-150 ${
-          disabled ? 'opacity-30' : 'group-hover:scale-105'
-        }`}
-        style={{ background: bg }}
-      >
-        {children}
-      </div>
-      <span className={`text-[11px] font-medium ${disabled ? 'text-white/30' : 'text-white/80'}`}>{label}</span>
+// ── file type badge (iCloud Drive style) ─────────────────────────────────────
+function FileBadge({ type }) {
+  const MAP = {
+    PDF:  '#5A1A1A', ZIP: '#1A2D45', MP4: '#2D1A45',
+    MOV:  '#2D1A45', XLS: '#1A3020', XLSX:'#1A3020',
+    FIG:  '#3A1A30', PNG: '#3A2E10', JPG: '#3A2E10',
+    JPEG: '#3A2E10', TXT: '#22262E', DOC: '#1A2545',
+  }
+  const bg = MAP[type?.toUpperCase()] || '#22262E'
+  return (
+    <div className="w-9 h-[42px] rounded-[6px] flex items-center justify-center shrink-0 text-white/70 font-bold text-[8px] tracking-wide border border-white/[0.06]" style={{ background: bg }}>
+      {(type || '???').slice(0, 4).toUpperCase()}
     </div>
   )
-  if (href && !disabled) return <a href={href} className="flex flex-col items-center gap-2 group">{inner.props.children}</a>
-  return <div className={disabled ? 'cursor-default' : 'cursor-pointer'}>{inner}</div>
 }
+
+// ── placeholder data ──────────────────────────────────────────────────────────
+const DRIVE_FILES = [
+  { name: 'vacation_photos_2026.zip',    type: 'ZIP'  },
+  { name: 'project_presentation.pdf',   type: 'PDF'  },
+  { name: 'intro_reel.mp4',             type: 'MP4'  },
+  { name: 'design_mockups.fig',         type: 'FIG'  },
+  { name: 'budget_2026.xlsx',           type: 'XLSX' },
+  { name: 'Aesthetic_Wallpaper.jpeg',   type: 'JPEG' },
+]
+const PHOTO_GRADIENTS = [
+  'linear-gradient(140deg,#1A2B4A,#263866)',
+  'linear-gradient(140deg,#1B3020,#263D28)',
+  'linear-gradient(140deg,#2B1A28,#3D2535)',
+  'linear-gradient(140deg,#1A1B2B,#262740)',
+]
 
 function DashboardPage() {
   const [services, setServices] = useState({ photos: null, drive: null })
@@ -1441,39 +1454,24 @@ function DashboardPage() {
     if (!user) return
     const uid = user.uid
     const unsubs = []
-
-    unsubs.push(
-      db.doc(`${userPath(uid)}/services/photos`).onSnapshot((doc) => {
-        if (doc.exists) setServices(p => ({ ...p, photos: doc.data() }))
-        setLoading(false)
-      })
-    )
-    unsubs.push(
-      db.doc(`${userPath(uid)}/services/drive`).onSnapshot((doc) => {
-        if (doc.exists) setServices(p => ({ ...p, drive: doc.data() }))
-        setLoading(false)
-      })
-    )
-    unsubs.push(
-      db.doc(`${configPath(uid)}/cloudflare`).onSnapshot((doc) => {
-        if (doc.exists) setBackend(doc.data())
-      })
-    )
+    unsubs.push(db.doc(`${userPath(uid)}/services/photos`).onSnapshot(doc => {
+      if (doc.exists) setServices(p => ({ ...p, photos: doc.data() }))
+      setLoading(false)
+    }))
+    unsubs.push(db.doc(`${userPath(uid)}/services/drive`).onSnapshot(doc => {
+      if (doc.exists) setServices(p => ({ ...p, drive: doc.data() }))
+      setLoading(false)
+    }))
+    unsubs.push(db.doc(`${configPath(uid)}/cloudflare`).onSnapshot(doc => {
+      if (doc.exists) setBackend(doc.data())
+    }))
     const t = setTimeout(() => setLoading(false), 3000)
     return () => { unsubs.forEach(u => u()); clearTimeout(t) }
   }, [])
 
-  const handleBgPreset = (id) => {
-    setBgPreset(id)
-    localStorage.setItem('dc-bg-preset', id)
-  }
-
-  const copyToClipboard = (text, label) => {
-    navigator.clipboard.writeText(text).then(
-      () => toast.success(`${label} copied`),
-      () => toast.error('Copy failed')
-    )
-  }
+  const handleBgPreset = id => { setBgPreset(id); localStorage.setItem('dc-bg-preset', id) }
+  const copyToClipboard = (text, label) =>
+    navigator.clipboard.writeText(text).then(() => toast.success(`${label} copied`), () => toast.error('Copy failed'))
 
   const user = auth.currentUser
   const displayName = user?.displayName || user?.email?.split('@')[0] || 'User'
@@ -1481,24 +1479,13 @@ function DashboardPage() {
   const avatarColorIndex = user?.uid ? parseInt(user.uid.slice(0, 6), 16) % AVATAR_COLORS.length : 0
   const avatarBg = AVATAR_COLORS[avatarColorIndex]
 
-  // App grid — Drive + Photos live, rest coming soon
   const apps = [
-    {
-      label: 'Drive',
-      href: 'https://app.daemonclient.uz',
-      bg: 'linear-gradient(145deg, #1A3B90, #2D5DC8)',
-      icon: <FolderOpen size={28} className="text-white" strokeWidth={1.6} />,
-    },
-    {
-      label: 'Photos',
-      href: 'https://photos.daemonclient.uz',
-      bg: 'linear-gradient(145deg, #2A1800, #6B3A0A)',
-      icon: <Image size={28} className="text-orange-400" strokeWidth={1.6} />,
-    },
-    { label: 'Mail',     disabled: true, bg: '#14151C', icon: null },
-    { label: 'Contacts', disabled: true, bg: '#14151C', icon: null },
-    { label: 'Notes',    disabled: true, bg: '#14151C', icon: null },
-    { label: 'More soon',disabled: true, bg: '#14151C', icon: null },
+    { label: 'Drive',   href: 'https://app.daemonclient.uz',    bg: 'linear-gradient(145deg,#1A3B90,#2D5DC8)', icon: <FolderOpen size={27} className="text-white" strokeWidth={1.5}/> },
+    { label: 'Photos',  href: 'https://photos.daemonclient.uz', bg: 'linear-gradient(145deg,#0A4520,#15803D)', icon: <Image      size={27} className="text-green-300" strokeWidth={1.5}/> },
+    { label: 'Hosting', disabled: true, bg: 'linear-gradient(145deg,#1A0A30,#2D1550)', icon: <Server  size={27} className="text-purple-400" strokeWidth={1.5}/> },
+    { label: 'Movies',  disabled: true, bg: 'linear-gradient(145deg,#300808,#501212)', icon: <Monitor size={27} className="text-red-400"    strokeWidth={1.5}/> },
+    { label: 'API',     disabled: true, bg: 'linear-gradient(145deg,#082028,#103040)', icon: <Hash    size={27} className="text-cyan-400"   strokeWidth={1.5}/> },
+    { label: 'Notes',   disabled: true, bg: 'linear-gradient(145deg,#1A1400,#2A2000)', icon: <Clock   size={27} className="text-yellow-500" strokeWidth={1.5}/> },
   ]
 
   return (
@@ -1513,50 +1500,52 @@ function DashboardPage() {
         ) : (
           <>
             {/* ── blue section ── */}
-            <div className="px-6 pt-5 pb-5">
-              <div className="max-w-[1180px] mx-auto space-y-4">
+            <div className="px-4 sm:px-8 lg:px-12 pt-5 pb-5">
+              <div className="max-w-[1020px] mx-auto space-y-4">
 
                 {/* Row 1: Profile card + App grid */}
-                <div className="flex gap-4">
-                  {/* Profile card */}
-                  <div className="w-[260px] shrink-0 bg-white/[0.09] backdrop-blur-xl border border-white/[0.1] rounded-2xl p-6">
+                <div className="flex flex-col md:flex-row gap-4">
+
+                  {/* Profile card — clickable → /profile */}
+                  <Link
+                    to="/profile"
+                    className="md:w-[248px] shrink-0 bg-white/[0.09] hover:bg-white/[0.13] backdrop-blur-xl border border-white/[0.1] hover:border-white/[0.2] rounded-2xl p-6 transition-all duration-200 group"
+                  >
                     <div
-                      className="w-[72px] h-[72px] rounded-full flex items-center justify-center text-white text-2xl font-bold mb-5 shadow-lg"
+                      className="w-[70px] h-[70px] rounded-full flex items-center justify-center text-white text-2xl font-bold mb-5 shadow-lg ring-2 ring-white/10 group-hover:ring-white/25 transition-all duration-200"
                       style={{ background: avatarBg }}
                     >
                       {initials}
                     </div>
-                    <h2 className="text-[26px] font-bold text-white leading-tight mb-1">{displayName}</h2>
+                    <h2 className="text-[24px] font-bold text-white leading-tight mb-0.5">{displayName}</h2>
                     <p className="text-[12px] text-white/50 mb-4 truncate">{user?.email}</p>
                     <div className="flex items-center gap-2">
-                      <img src="/logo.png" className="w-4 h-4 object-contain opacity-80" alt="" />
-                      <span className="text-[13px] font-semibold text-white/70">DaemonClient</span>
+                      <img src="/logo.png" className="w-4 h-4 object-contain opacity-75" alt="" />
+                      <span className="text-[12px] font-semibold text-white/60">DaemonClient</span>
                     </div>
-                  </div>
+                    <div className="mt-4 text-[11px] text-white/30 group-hover:text-white/50 transition-colors flex items-center gap-1">
+                      Manage profile <ChevronRight size={11}/>
+                    </div>
+                  </Link>
 
-                  {/* App grid */}
-                  <div className="flex-1 bg-white/[0.09] backdrop-blur-xl border border-white/[0.1] rounded-2xl p-6 flex flex-col justify-center">
-                    <div className="grid grid-cols-6 gap-6">
-                      {apps.map((app) =>
+                  {/* App grid — clickable card header routes to /dashboard */}
+                  <div className="flex-1 bg-white/[0.09] backdrop-blur-xl border border-white/[0.1] rounded-2xl p-5 sm:p-6">
+                    <p className="text-[11px] text-white/30 font-medium uppercase tracking-widest mb-4">Services</p>
+                    <div className="grid grid-cols-3 sm:grid-cols-6 gap-4 sm:gap-5">
+                      {apps.map(app =>
                         app.disabled ? (
-                          <div key={app.label} className="flex flex-col items-center gap-2 cursor-default">
-                            <div
-                              className="w-[62px] h-[62px] rounded-[14px] flex items-center justify-center opacity-25"
-                              style={{ background: app.bg }}
-                            >
-                              <div className="w-5 h-5 rounded-full border-2 border-white/30" />
+                          <div key={app.label} className="flex flex-col items-center gap-2">
+                            <div className="w-[58px] h-[58px] sm:w-[62px] sm:h-[62px] rounded-[14px] flex items-center justify-center opacity-20" style={{ background: app.bg }}>
+                              {app.icon}
                             </div>
-                            <span className="text-[11px] text-white/25 font-medium">{app.label}</span>
+                            <span className="text-[11px] text-white/20 font-medium text-center">{app.label}</span>
                           </div>
                         ) : (
                           <a key={app.label} href={app.href} className="flex flex-col items-center gap-2 group">
-                            <div
-                              className="w-[62px] h-[62px] rounded-[14px] flex items-center justify-center group-hover:scale-105 transition-transform duration-150 shadow-md"
-                              style={{ background: app.bg }}
-                            >
+                            <div className="w-[58px] h-[58px] sm:w-[62px] sm:h-[62px] rounded-[14px] flex items-center justify-center group-hover:scale-[1.07] transition-transform duration-150 shadow-lg" style={{ background: app.bg }}>
                               {app.icon}
                             </div>
-                            <span className="text-[11px] text-white/80 font-medium">{app.label}</span>
+                            <span className="text-[11px] text-white/80 font-medium text-center">{app.label}</span>
                           </a>
                         )
                       )}
@@ -1564,80 +1553,112 @@ function DashboardPage() {
                   </div>
                 </div>
 
-                {/* Row 2: Service cards */}
-                <div className="grid grid-cols-2 gap-4">
-                  {/* Drive card */}
-                  <div className="bg-white/[0.08] backdrop-blur-xl border border-white/[0.1] rounded-2xl overflow-hidden">
-                    <div className="flex items-center gap-3 px-5 py-4">
-                      <div className="w-10 h-10 rounded-[10px] flex items-center justify-center shadow" style={{ background: 'linear-gradient(145deg, #1A3B90, #2D5DC8)' }}>
-                        <FolderOpen size={18} className="text-white" strokeWidth={1.6} />
+                {/* Row 2: Drive + Photos — iCloud widget style */}
+                <div className="grid grid-cols-1 md:grid-cols-[3fr_2fr] gap-4">
+
+                  {/* ── Drive card ── */}
+                  <div className="bg-white/[0.08] backdrop-blur-xl border border-white/[0.1] rounded-2xl overflow-hidden flex flex-col">
+                    {/* header */}
+                    <div className="flex items-center gap-3 px-5 py-4 bg-white/[0.04]">
+                      <div className="w-11 h-11 rounded-[12px] flex items-center justify-center shadow-lg" style={{ background: 'linear-gradient(145deg,#1A3B90,#2D5DC8)' }}>
+                        <FolderOpen size={20} className="text-white" strokeWidth={1.5}/>
                       </div>
                       <div>
-                        <p className="text-[15px] font-semibold text-white">Drive</p>
-                        <p className="text-[11px] text-white/40">
-                          {services.drive ? `${services.drive.totalFiles || 0} files stored` : 'Unlimited cloud storage'}
+                        <p className="text-[17px] font-bold text-white">Drive</p>
+                        <p className="text-[11px] text-blue-300/70 flex items-center gap-1.5">
+                          <span className="w-1.5 h-1.5 rounded-full bg-blue-400 inline-block"/>
+                          Recents · {services.drive?.totalFiles || 0} files
                         </p>
                       </div>
                     </div>
-                    <div className="border-t border-white/[0.07] px-5 py-3 space-y-3">
-                      {['Encrypted & private', 'Access from anywhere', 'Powered by Telegram'].map(f => (
-                        <div key={f} className="flex items-center gap-2.5 text-[12px] text-white/50">
-                          <Check size={12} className="text-daemon-green shrink-0" />
-                          {f}
+
+                    {/* file list — 2 cols, each row clickable */}
+                    <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 divide-y sm:divide-y-0 sm:divide-x divide-white/[0.06] bg-black/20">
+                      {[DRIVE_FILES.slice(0,3), DRIVE_FILES.slice(3,6)].map((col, ci) => (
+                        <div key={ci} className="divide-y divide-white/[0.05]">
+                          {col.map(f => (
+                            <a
+                              key={f.name}
+                              href="https://app.daemonclient.uz"
+                              className="flex items-center gap-3 px-4 py-3 hover:bg-white/[0.05] transition-colors group"
+                            >
+                              <FileBadge type={f.type}/>
+                              <div className="min-w-0">
+                                <p className="text-[13px] text-white font-medium truncate group-hover:text-white">{f.name}</p>
+                                <p className="text-[11px] text-white/35">{f.type}</p>
+                              </div>
+                            </a>
+                          ))}
                         </div>
                       ))}
                     </div>
-                    <div className="px-5 pb-4 pt-2">
-                      <a href="https://app.daemonclient.uz" className="block w-full text-center text-[13px] font-medium text-white bg-white/[0.1] hover:bg-white/[0.18] rounded-xl py-2.5 transition-colors">
-                        Open Drive
+
+                    {/* footer */}
+                    <div className="px-4 py-2.5 border-t border-white/[0.06] flex items-center justify-between">
+                      <span className="text-white/25 text-[18px] leading-none tracking-[3px]">···</span>
+                      <a href="https://app.daemonclient.uz" className="text-[11px] text-white/30 hover:text-white/60 transition-colors">
+                        Open Drive →
                       </a>
                     </div>
                   </div>
 
-                  {/* Photos card */}
-                  <div className="bg-white/[0.08] backdrop-blur-xl border border-white/[0.1] rounded-2xl overflow-hidden">
-                    <div className="flex items-center gap-3 px-5 py-4">
-                      <div className="w-10 h-10 rounded-[10px] flex items-center justify-center shadow" style={{ background: 'linear-gradient(145deg, #2A1800, #6B3A0A)' }}>
-                        <Image size={18} className="text-orange-400" strokeWidth={1.6} />
+                  {/* ── Photos card ── */}
+                  <div className="bg-white/[0.08] backdrop-blur-xl border border-white/[0.1] rounded-2xl overflow-hidden flex flex-col">
+                    {/* header */}
+                    <div className="flex items-center gap-3 px-5 py-4 bg-white/[0.04]">
+                      <div className="w-11 h-11 rounded-[12px] flex items-center justify-center shadow-lg" style={{ background: 'linear-gradient(145deg,#0A4520,#15803D)' }}>
+                        <Image size={20} className="text-green-300" strokeWidth={1.5}/>
                       </div>
                       <div>
-                        <p className="text-[15px] font-semibold text-white">Photos</p>
-                        <p className="text-[11px] text-white/40">
-                          {services.photos ? `${services.photos.totalAssets || 0} photos` : 'Your photo library'}
+                        <p className="text-[17px] font-bold text-white">Photos</p>
+                        <p className="text-[11px] text-green-400/70 flex items-center gap-1.5">
+                          <span className="w-1.5 h-1.5 rounded-full bg-green-400 inline-block"/>
+                          Library · {services.photos?.totalAssets || 0} Photos
                         </p>
                       </div>
                     </div>
-                    <div className="border-t border-white/[0.07] px-5 py-3 space-y-3">
-                      {['Unlimited backup', 'Smart organization', 'Share & collaborate'].map(f => (
-                        <div key={f} className="flex items-center gap-2.5 text-[12px] text-white/50">
-                          <Check size={12} className="text-daemon-green shrink-0" />
-                          {f}
+
+                    {/* 2×2 thumbnail grid */}
+                    <a href="https://photos.daemonclient.uz" className="flex-1 grid grid-cols-2 grid-rows-2 gap-px bg-white/[0.04] min-h-[160px]">
+                      {PHOTO_GRADIENTS.map((grad, i) => (
+                        <div
+                          key={i}
+                          className="relative flex items-center justify-center hover:brightness-110 transition-all duration-200"
+                          style={{ background: grad }}
+                        >
+                          <Image size={22} className="text-white/10"/>
+                          {i === 0 && (
+                            <div className="absolute inset-0 flex items-center justify-center opacity-0 hover:opacity-100 bg-black/30 transition-opacity duration-150">
+                              <span className="text-white text-[10px] font-medium">Open</span>
+                            </div>
+                          )}
                         </div>
                       ))}
-                    </div>
-                    <div className="px-5 pb-4 pt-2">
-                      <a href="https://photos.daemonclient.uz" className="block w-full text-center text-[13px] font-medium text-white bg-white/[0.1] hover:bg-white/[0.18] rounded-xl py-2.5 transition-colors">
-                        Open Photos
+                    </a>
+
+                    {/* footer */}
+                    <div className="px-4 py-2.5 border-t border-white/[0.06] flex items-center justify-between">
+                      <span className="text-white/25 text-[18px] leading-none tracking-[3px]">···</span>
+                      <a href="https://photos.daemonclient.uz" className="text-[11px] text-white/30 hover:text-white/60 transition-colors">
+                        Open Photos →
                       </a>
                     </div>
                   </div>
                 </div>
 
-                {/* Background preset picker */}
-                <div className="flex justify-center pb-2">
+                {/* Theme picker */}
+                <div className="flex justify-center pb-1">
                   <div className="inline-flex items-center gap-3 bg-black/30 backdrop-blur-xl border border-white/[0.08] rounded-full px-5 py-2.5">
-                    <Palette size={13} className="text-white/40" />
-                    <span className="text-[11px] text-white/40 font-medium">Theme</span>
+                    <Palette size={13} className="text-white/35"/>
+                    <span className="text-[11px] text-white/35 font-medium">Theme</span>
                     <div className="flex gap-2">
-                      {BG_PRESETS.map((p) => (
+                      {BG_PRESETS.map(p => (
                         <button
                           key={p.id}
                           onClick={() => handleBgPreset(p.id)}
                           title={p.name}
-                          className={`w-5 h-5 rounded-full border-2 transition-all duration-150 ${
-                            bgPreset === p.id ? 'border-white scale-125' : 'border-white/20 hover:border-white/50'
-                          }`}
-                          style={{ background: `linear-gradient(135deg, ${p.swatch[0]}, ${p.swatch[1]})` }}
+                          className={`w-5 h-5 rounded-full border-2 transition-all duration-150 ${bgPreset === p.id ? 'border-white scale-125' : 'border-white/20 hover:border-white/50'}`}
+                          style={{ background: `linear-gradient(135deg,${p.swatch[0]},${p.swatch[1]})` }}
                         />
                       ))}
                     </div>
@@ -1648,7 +1669,7 @@ function DashboardPage() {
 
             {/* ── dark bottom section ── */}
             <div className="bg-black/50 backdrop-blur-sm border-t border-white/[0.06]">
-              <div className="max-w-[1180px] mx-auto px-6 py-10 grid grid-cols-3 gap-8">
+              <div className="max-w-[1020px] mx-auto px-4 sm:px-8 lg:px-12 py-10 grid grid-cols-1 sm:grid-cols-3 gap-8">
                 {/* Plan */}
                 <div>
                   <p className="text-[20px] font-bold text-white mb-3 flex items-center gap-1">
@@ -1708,8 +1729,8 @@ function DashboardPage() {
               </div>
 
               {/* Footer bar */}
-              <div className="border-t border-white/[0.04] px-6 py-4">
-                <div className="max-w-[1180px] mx-auto flex items-center justify-between text-[11px] text-white/20">
+              <div className="border-t border-white/[0.04] px-4 sm:px-8 lg:px-12 py-4">
+                <div className="max-w-[1020px] mx-auto flex flex-col sm:flex-row items-center justify-between gap-2 text-[11px] text-white/20">
                   <div className="flex gap-5">
                     <a href="https://daemonclient.uz/help" className="hover:text-white/40 transition-colors">Help</a>
                     <a href="https://daemonclient.uz/terms" className="hover:text-white/40 transition-colors">Terms & Conditions</a>

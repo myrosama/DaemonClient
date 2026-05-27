@@ -429,6 +429,9 @@ async function handleUpload(request: Request, env: Env, uid: string, idToken: st
         telegramOriginalId = formData.get('telegramOriginalId') as string;
         telegramThumbId = formData.get('telegramThumbId') as string || null;
         encryptionMode = formData.get('encryptionMode') as string || 'off';
+        // Honour client-reported thumbEncrypted so the read path knows whether to decrypt
+        const teVal = formData.get('thumbEncrypted');
+        if (teVal === 'true' || teVal === '1') thumbEncrypted = true;
     } else {
         // --- Legacy Server-Side Upload Logic ---
         const totalChunks = Math.ceil(fileSize / CHUNK_SIZE);
@@ -842,8 +845,11 @@ async function handleThumbnail(request: Request, env: Env, uid: string, assetId:
   // server-zke is on AND the stored thumb is flagged encrypted.
   const servingThumb = !!photo.telegramThumbId && fileId === photo.telegramThumbId;
   const thumbIsEncrypted = servingThumb && (photo.thumbEncrypted === 1 || photo.thumbEncrypted === true || photo.thumbEncrypted === '1');
-  const decryptThis = isServerZke && (!servingThumb || thumbIsEncrypted);
-  const key = decryptThis ? await getEncryptionKey(env, uid, idToken) : null;
+  // Always attempt decryption for server-ZKE photos. thumbEncrypted flag may be 0 for
+  // clientUpload paths that encrypted the thumb but didn't pass the flag through.
+  // We try-decrypt and fall back to raw bytes if AES-GCM auth fails (plain JPEG thumb).
+  const decryptThis = isServerZke;
+  const key = isServerZke ? await getEncryptionKey(env, uid, idToken) : null;
   let mimeType = photo.mimeType;
   if (photo.isHeic) mimeType = 'image/heic';
   if (servingThumb) {
@@ -868,8 +874,9 @@ async function handleThumbnail(request: Request, env: Env, uid: string, assetId:
       try {
         responseData = await decryptChunk(responseData, key);
       } catch (e: any) {
-        console.error(`[Thumbnail] Decryption failed for ${assetId}:`, e?.message);
-        return json({ message: 'Decryption failed', error: e?.message }, 500);
+        // AES-GCM auth failure → thumb was stored unencrypted (old sendPhoto path or plain thumb).
+        // Fall through and serve the raw bytes — they're a valid JPEG already.
+        console.warn(`[Thumbnail] ${assetId}: decrypt attempted, thumb not encrypted — serving raw (${e?.message})`);
       }
     }
 
