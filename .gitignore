@@ -53,6 +53,11 @@ firebase-debug.log*
 # Ignore build output
 lib/
 lib-es6/
+# ...but immich/web/src/lib is application SOURCE, not build output. The bare
+# lib/ rule above would otherwise swallow ~160 real source files (managers,
+# components, utils), making them untrackable.
+!immich/web/src/lib/
+!immich/web/src/lib/**
 
 
 # =========================================
