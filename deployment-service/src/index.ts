@@ -41,6 +41,33 @@ export interface Env {
   APP_IDENTIFIER: string;
   TELEGRAM_PROXY: string;
   ALLOWED_ORIGINS: string;
+  // URL of this deployment service. Injected into each per-user worker so the
+  // worker can dispatch its own /auto-update on login (self-propagating shim
+  // upgrades). Without it, only the central worker's login path can trigger an
+  // update — which silently never fires once a user's SW pins traffic to their
+  // personal worker, leaving them stuck on an old shim version.
+  DEPLOYMENT_SERVICE_URL?: string;
+  // Shared secret guarding the /admin/force-update endpoint (operator-triggered
+  // re-deploy of a specific user's worker, bypassing the login-time path).
+  ADMIN_SECRET?: string;
+}
+
+// The bindings every per-user shim worker needs. Centralised so deploy,
+// auto-update, and force-update all stay in lockstep — a binding added here
+// reaches all three deploy paths.
+function buildShimBindings(env: Env, databaseId: string): any[] {
+  const bindings: any[] = [
+    { type: 'd1', name: 'DB', id: databaseId },
+    { type: 'plain_text', name: 'FIREBASE_API_KEY', text: env.FIREBASE_API_KEY },
+    { type: 'plain_text', name: 'FIREBASE_PROJECT_ID', text: env.FIREBASE_PROJECT_ID },
+    { type: 'plain_text', name: 'APP_IDENTIFIER', text: env.APP_IDENTIFIER },
+    { type: 'plain_text', name: 'TELEGRAM_PROXY', text: env.TELEGRAM_PROXY },
+    { type: 'plain_text', name: 'ALLOWED_ORIGINS', text: env.ALLOWED_ORIGINS },
+  ];
+  if (env.DEPLOYMENT_SERVICE_URL) {
+    bindings.push({ type: 'plain_text', name: 'DEPLOYMENT_SERVICE_URL', text: env.DEPLOYMENT_SERVICE_URL });
+  }
+  return bindings;
 }
 
 const MIGRATION_SQL = `
@@ -98,6 +125,7 @@ export default {
     if (url.pathname === '/deploy-worker' && request.method === 'POST') return handleDeployWorker(request, env);
     if (url.pathname === '/validate-cf-token' && request.method === 'POST') return handleValidateToken(request, env);
     if (url.pathname === '/auto-update' && request.method === 'POST') return handleAutoUpdate(request, env);
+    if (url.pathname === '/admin/force-update' && request.method === 'POST') return handleForceUpdate(request, env);
     return corsResponse(JSON.stringify({ error: 'Not found' }), { status: 404 });
   },
 };
@@ -152,14 +180,7 @@ async function handleDeployWorker(request: Request, env: Env): Promise<Response>
     const workerName = `dc-${shortId}`;
     const deployResult = await cfApi.deployWorker({
       accountId, workerName, apiToken, workerCode: SHIM_BUNDLE,
-      bindings: [
-        { type: 'd1', name: 'DB', id: databaseId },
-        { type: 'plain_text', name: 'FIREBASE_API_KEY', text: env.FIREBASE_API_KEY },
-        { type: 'plain_text', name: 'FIREBASE_PROJECT_ID', text: env.FIREBASE_PROJECT_ID },
-        { type: 'plain_text', name: 'APP_IDENTIFIER', text: env.APP_IDENTIFIER },
-        { type: 'plain_text', name: 'TELEGRAM_PROXY', text: env.TELEGRAM_PROXY },
-        { type: 'plain_text', name: 'ALLOWED_ORIGINS', text: env.ALLOWED_ORIGINS },
-      ]
+      bindings: buildShimBindings(env, databaseId)
     });
     if (!deployResult.success) return corsResponse(JSON.stringify({ error: deployResult.error }), { status: 500 });
 
@@ -244,14 +265,7 @@ async function handleAutoUpdate(request: Request, env: Env): Promise<Response> {
       workerName: cfg.workerName,
       apiToken,
       workerCode: SHIM_BUNDLE,
-      bindings: [
-        { type: 'd1', name: 'DB', id: cfg.databaseId },
-        { type: 'plain_text', name: 'FIREBASE_API_KEY', text: env.FIREBASE_API_KEY },
-        { type: 'plain_text', name: 'FIREBASE_PROJECT_ID', text: env.FIREBASE_PROJECT_ID },
-        { type: 'plain_text', name: 'APP_IDENTIFIER', text: env.APP_IDENTIFIER },
-        { type: 'plain_text', name: 'TELEGRAM_PROXY', text: env.TELEGRAM_PROXY },
-        { type: 'plain_text', name: 'ALLOWED_ORIGINS', text: env.ALLOWED_ORIGINS },
-      ]
+      bindings: buildShimBindings(env, cfg.databaseId)
     });
     if (!deployResult.success) {
       return corsResponse(JSON.stringify({ updated: false, reason: 'deploy-failed', error: deployResult.error }), { status: 500 });
@@ -267,6 +281,42 @@ async function handleAutoUpdate(request: Request, env: Env): Promise<Response> {
   } catch (error: any) {
     console.error('Auto-update error:', error);
     return corsResponse(JSON.stringify({ updated: false, error: error.message }), { status: 500 });
+  }
+}
+
+// Operator-triggered re-deploy of a single user's worker. Bypasses the
+// login-time auto-update path (which can silently never fire) and forces the
+// current SHIM_BUNDLE onto the user's worker. Guarded by ADMIN_SECRET. The
+// caller passes the user's stored cloudflare config (accountId, workerName,
+// databaseId, encrypted apiToken) — read from Firestore by an operator with
+// admin access — so this endpoint needs no user idToken.
+async function handleForceUpdate(request: Request, env: Env): Promise<Response> {
+  try {
+    const secret = request.headers.get('X-Admin-Secret');
+    if (!env.ADMIN_SECRET || secret !== env.ADMIN_SECRET) {
+      return corsResponse(JSON.stringify({ error: 'Unauthorized' }), { status: 401 });
+    }
+    const { accountId, workerName, databaseId, apiToken: encApiToken } = await request.json() as any;
+    if (!accountId || !workerName || !databaseId || !encApiToken) {
+      return corsResponse(JSON.stringify({ error: 'Missing required fields: accountId, workerName, databaseId, apiToken' }), { status: 400 });
+    }
+
+    const apiToken = await decryptToken(encApiToken, env.ENCRYPTION_MASTER_KEY);
+    const cfApi = new CloudflareAPI();
+    const deployResult = await cfApi.deployWorker({
+      accountId, workerName, apiToken, workerCode: SHIM_BUNDLE,
+      bindings: buildShimBindings(env, databaseId)
+    });
+    if (!deployResult.success) {
+      return corsResponse(JSON.stringify({ success: false, error: deployResult.error }), { status: 500 });
+    }
+    // Keep workers.dev serving the new code (no-op if already enabled).
+    await cfApi.enableWorkersDev(accountId, workerName, apiToken).catch(() => {});
+
+    return corsResponse(JSON.stringify({ success: true, version: SHIM_VERSION, workerName }));
+  } catch (error: any) {
+    console.error('Force-update error:', error);
+    return corsResponse(JSON.stringify({ success: false, error: error.message }), { status: 500 });
   }
 }
 

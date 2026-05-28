@@ -87,7 +87,7 @@ const handleActivate = (event: ExtendableEvent) => {
   // mis-route a user's API calls to the wrong worker. Only the v3 namespaces
   // survive the activation.
   event.waitUntil((async () => {
-    const KEEP = new Set(['dc-auth-v3', 'dc-assets-v3']);
+    const KEEP = new Set(['dc-auth-v3', 'dc-assets-v4']);
     const names = await caches.keys();
     await Promise.all(names.filter(n => !KEEP.has(n)).map(n => caches.delete(n)));
     cachedToken = null;
@@ -129,10 +129,22 @@ async function directWorkerFetch(request: Request, cacheable: boolean, pathname:
   }
 
   const base = await getWorkerUrl();
-  const workerUrl = base + url.pathname + url.search;
+  // Cache-bust binary assets (thumbnails/originals). A prior shim bug served
+  // ENCRYPTED bytes for server-ZKE thumbnails and cached them as immutable for
+  // a year across three layers: this SW cache, the browser HTTP cache, and the
+  // worker's own caches.default (all keyed on the full URL). Bumping the SW
+  // namespace clears this cache; appending a version param changes the URL so
+  // the browser HTTP cache and the worker edge cache also miss the poisoned
+  // entries and refetch freshly-decrypted bytes. Bump ASSET_CACHE_BUST when a
+  // future change requires re-busting these layers.
+  const ASSET_CACHE_BUST = 'v4';
+  let workerUrl = base + url.pathname + url.search;
+  if (cacheable) {
+    workerUrl += (url.search ? '&' : '?') + `dcv=${ASSET_CACHE_BUST}`;
+  }
 
   if (cacheable) {
-    const cache = await caches.open('dc-assets-v3');
+    const cache = await caches.open('dc-assets-v4');
     const cached = await cache.match(workerUrl);
     if (cached) {
       return cached;
@@ -156,7 +168,7 @@ async function directWorkerFetch(request: Request, cacheable: boolean, pathname:
   } catch (err) {
     // Network error - try to serve from cache
     if (cacheable) {
-      const cache = await caches.open('dc-assets-v3');
+      const cache = await caches.open('dc-assets-v4');
       const cached = await cache.match(workerUrl);
       if (cached) {
         console.log('[SW] Network error, serving from cache:', pathname);
@@ -193,7 +205,7 @@ async function directWorkerFetch(request: Request, cacheable: boolean, pathname:
   }
 
   if (cacheable && response.ok) {
-    const cache = await caches.open('dc-assets-v3');
+    const cache = await caches.open('dc-assets-v4');
     cache.put(workerUrl, response.clone());
   }
 

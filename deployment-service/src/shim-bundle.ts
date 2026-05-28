@@ -5267,7 +5267,7 @@ __name(linkExistingLivePhotos, "linkExistingLivePhotos");
 
 // src/index.ts
 init_helpers();
-var WORKER_VERSION = "458b6d0cdee4";
+var WORKER_VERSION = "thumb-decrypt-fix-1";
 function corsHeaders(request, env2) {
   const origin = request.headers.get("Origin") || "";
   const allowed = env2.ALLOWED_ORIGINS.split(",");
