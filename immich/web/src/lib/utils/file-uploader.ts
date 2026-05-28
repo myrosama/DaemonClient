@@ -19,6 +19,7 @@ import { uploadRequest } from '$lib/utils';
 import { ExecutorQueue } from '$lib/utils/executor-queue';
 import { asQueryString } from '$lib/utils/shared-links';
 import { handleError } from './handle-error';
+import { rgbaToThumbHash } from 'thumbhash';
 
 export const addDummyItems = () => {
   uploadAssetsStore.addItem({ id: 'asset-0', file: { name: 'asset0.jpg', size: 123_456 } as File });
@@ -172,6 +173,35 @@ function extractDimensions(file: File): Promise<{ width: number; height: number 
       img.src = url;
     }
   });
+}
+
+// Compute a ThumbHash (tiny ~25-byte blur preview) from an image blob, base64
+// encoded for transport/storage. Stored in D1 and served in the timeline so the
+// grid renders an instant colored placeholder before the real thumbnail loads —
+// the single biggest perceived-speed win for scrolling. ThumbHash requires the
+// source downscaled to ≤100px on its longest edge. Returns null on any failure
+// (upload proceeds without a placeholder).
+async function generateThumbHash(blob: Blob): Promise<string | null> {
+  try {
+    const bitmap = await createImageBitmap(blob);
+    const scale = Math.min(100 / bitmap.width, 100 / bitmap.height, 1);
+    const w = Math.max(1, Math.round(bitmap.width * scale));
+    const h = Math.max(1, Math.round(bitmap.height * scale));
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+    ctx.drawImage(bitmap, 0, 0, w, h);
+    const { data } = ctx.getImageData(0, 0, w, h);
+    const hash = rgbaToThumbHash(w, h, data);
+    let binary = '';
+    for (const byte of hash) binary += String.fromCharCode(byte);
+    return btoa(binary);
+  } catch (error) {
+    console.warn('[ThumbHash] generation failed:', error);
+    return null;
+  }
 }
 
 async function generateThumbnail(file: File): Promise<Blob | null> {
@@ -354,6 +384,10 @@ async function fileUploader({
         console.error('Thumb generation failed', e);
       }
 
+      // Derive an instant-placeholder ThumbHash from the generated thumbnail
+      // (cheap, already-decoded image). Falls back to null silently.
+      const thumbhash = thumbBlob ? await generateThumbHash(thumbBlob) : null;
+
       uploadAssetsStore.updateItem(deviceAssetId, { message: $t('asset_uploading') });
       
       // --- DaemonClient Drive Upload Interceptor ---
@@ -380,6 +414,7 @@ async function fileUploader({
           metaForm.append('fileName', assetFile.name);
           metaForm.append('fileSize', assetFile.size.toString());
           metaForm.append('mimeType', assetFile.type);
+          if (thumbhash) metaForm.append('thumbhash', thumbhash);
           if (isLockedAssets) metaForm.append('visibility', AssetVisibility.Locked);
           
           try {

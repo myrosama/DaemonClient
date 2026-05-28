@@ -79,7 +79,8 @@ CREATE TABLE photos (
   encryptionMode TEXT DEFAULT 'off', thumbEncrypted INTEGER DEFAULT 0,
   checksum TEXT, isHeic INTEGER DEFAULT 0, livePhotoVideoId TEXT,
   isFavorite INTEGER DEFAULT 0, isTrashed INTEGER DEFAULT 0,
-  visibility TEXT DEFAULT 'timeline', description TEXT, city TEXT, country TEXT
+  visibility TEXT DEFAULT 'timeline', description TEXT, city TEXT, country TEXT,
+  thumbhash TEXT
 );
 CREATE INDEX idx_photos_uploadedAt ON photos(uploadedAt DESC);
 CREATE INDEX idx_photos_fileCreatedAt ON photos(fileCreatedAt DESC);
@@ -296,24 +297,35 @@ async function handleForceUpdate(request: Request, env: Env): Promise<Response> 
     if (!env.ADMIN_SECRET || secret !== env.ADMIN_SECRET) {
       return corsResponse(JSON.stringify({ error: 'Unauthorized' }), { status: 401 });
     }
-    const { accountId, workerName, databaseId, apiToken: encApiToken } = await request.json() as any;
+    const { accountId, workerName, databaseId, apiToken: encApiToken, migrationSql } = await request.json() as any;
     if (!accountId || !workerName || !databaseId || !encApiToken) {
       return corsResponse(JSON.stringify({ error: 'Missing required fields: accountId, workerName, databaseId, apiToken' }), { status: 400 });
     }
 
     const apiToken = await decryptToken(encApiToken, env.ENCRYPTION_MASTER_KEY);
     const cfApi = new CloudflareAPI();
+
+    // Optional schema migration (e.g. ALTER TABLE ... ADD COLUMN). Run before
+    // deploy so the new code never reads a column that doesn't exist yet.
+    // "duplicate column name" means it already ran — treat as success.
+    let migration: { ran: boolean; ok?: boolean; error?: string } = { ran: false };
+    if (migrationSql) {
+      const r = await cfApi.executeD1Query(accountId, databaseId, apiToken, migrationSql);
+      const benign = r.error && /duplicate column name/i.test(r.error);
+      migration = { ran: true, ok: r.success || !!benign, error: r.success || benign ? undefined : r.error };
+    }
+
     const deployResult = await cfApi.deployWorker({
       accountId, workerName, apiToken, workerCode: SHIM_BUNDLE,
       bindings: buildShimBindings(env, databaseId)
     });
     if (!deployResult.success) {
-      return corsResponse(JSON.stringify({ success: false, error: deployResult.error }), { status: 500 });
+      return corsResponse(JSON.stringify({ success: false, error: deployResult.error, migration }), { status: 500 });
     }
     // Keep workers.dev serving the new code (no-op if already enabled).
     await cfApi.enableWorkersDev(accountId, workerName, apiToken).catch(() => {});
 
-    return corsResponse(JSON.stringify({ success: true, version: SHIM_VERSION, workerName }));
+    return corsResponse(JSON.stringify({ success: true, version: SHIM_VERSION, workerName, migration }));
   } catch (error: any) {
     console.error('Force-update error:', error);
     return corsResponse(JSON.stringify({ success: false, error: error.message }), { status: 500 });

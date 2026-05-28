@@ -408,6 +408,10 @@ async function handleUpload(request: Request, env: Env, uid: string, idToken: st
 
     const isHeic = /\.(heic|heif)$/i.test(fileName) || mimeType === 'image/heic' || mimeType === 'image/heif';
     const thumbBase64 = formData.get('thumbData_base64') as string | null;
+    // Client-computed ThumbHash (base64) → instant blur placeholder in the grid.
+    // The serving (timeline/bucket/asset payloads) and web-render paths already
+    // exist; we only need to persist the value the client sends here.
+    const thumbhash = (formData.get('thumbhash') as string) || null;
 
     // CRITICAL DEBUG: Check if mobile sends thumbnail
     if (thumbBase64) {
@@ -669,6 +673,7 @@ async function handleUpload(request: Request, env: Env, uid: string, idToken: st
       telegramOriginalId,
       telegramThumbId,
       thumbEncrypted: thumbEncrypted ? 1 : 0,
+      thumbhash: thumbhash || undefined,
       encryptionMode,
       checksum,
       isHeic: isHeic ? 1 : 0,
