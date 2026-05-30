@@ -320,63 +320,55 @@ async function handleBulkUpdate(request: Request, env: Env, uid: string, idToken
 
 // ── Upload ──────────────────────────────────────────────────────────
 
-// Briefly send the plaintext bytes to Telegram to obtain a real downscaled
-// thumbnail, then return its bytes + the temp message id (caller deletes it).
-// Prefers sendPhoto — it forces Telegram to decode and RE-ENCODE to a clean
-// JPEG and returns a size ladder, which is reliable across JPEG/PNG (incl.
-// 16-bit PNG screenshots) where sendDocument's optional auto-thumb often comes
-// back empty. Falls back to sendDocument for HEIC / >10 MB / sendPhoto refusals.
-// Retries with backoff on 429 so a burst of uploads doesn't drop the last few.
+// Briefly send the plaintext bytes to Telegram as a document so Telegram
+// auto-generates a small thumbnail, then return its bytes + the temp message id
+// (caller deletes it). This is the original approach; the only thing it lacked
+// was rate-limit resilience — a burst of uploads (each doing this extra send)
+// would 429 the last few. So every Telegram call here retries with exponential
+// backoff, honouring Telegram's `retry_after`, which is what was actually
+// dropping thumbnails for the tail of a batch.
 async function fetchTelegramThumb(
   botToken: string,
   channelId: string,
   rawData: ArrayBuffer,
   fileName: string,
   mimeType: string,
-  isImage: boolean,
-  isHeic: boolean,
 ): Promise<{ thumbBytes: ArrayBuffer | null; tmpMsgId: number | null }> {
   const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
-  let usePhoto = isImage && !isHeic && rawData.byteLength <= 10 * 1024 * 1024;
   let tmpMsgId: number | null = null;
 
-  for (let attempt = 0; attempt < 3; attempt++) {
-    if (attempt > 0) await sleep(400 * Math.pow(2, attempt)); // 0.8s, 1.6s
+  for (let attempt = 0; attempt < 4; attempt++) {
+    if (attempt > 0) await sleep(Math.min(500 * Math.pow(2, attempt), 6000)); // 1s, 2s, 4s
     try {
       const form = new FormData();
       form.append('chat_id', channelId);
-      const endpoint = usePhoto ? 'sendPhoto' : 'sendDocument';
-      form.append(
-        usePhoto ? 'photo' : 'document',
-        new Blob([rawData], { type: mimeType || (usePhoto ? 'image/jpeg' : 'application/octet-stream') }),
-        fileName,
-      );
-      const res = await fetch(`https://api.telegram.org/bot${botToken}/${endpoint}`, { method: 'POST', body: form });
+      form.append('document', new Blob([rawData], { type: mimeType || 'application/octet-stream' }), fileName);
+      const res = await fetch(`https://api.telegram.org/bot${botToken}/sendDocument`, { method: 'POST', body: form });
       const j = await res.json() as any;
 
       if (res.status === 429 || j?.error_code === 429) {
-        await sleep(Math.min(((j?.parameters?.retry_after || 1) * 1000), 5000));
-        continue;
+        await sleep(Math.min(((j?.parameters?.retry_after || 1) * 1000), 8000));
+        continue; // rate-limited — back off and retry
       }
       if (!j?.ok) {
-        // sendPhoto can refuse odd inputs — retry the same bytes as a document.
-        if (usePhoto) { usePhoto = false; continue; }
-        console.log(`[Thumb] ${endpoint} failed for ${fileName}: ${JSON.stringify(j).slice(0, 160)}`);
+        console.log(`[Thumb] sendDocument failed for ${fileName}: ${JSON.stringify(j).slice(0, 160)}`);
         return { thumbBytes: null, tmpMsgId };
       }
 
       tmpMsgId = j.result?.message_id ?? null;
-      let thumbFileId: string | null = null;
-      if (usePhoto && Array.isArray(j.result?.photo) && j.result.photo.length) {
-        const sizes = j.result.photo; // ascending by size
-        thumbFileId = (sizes[Math.min(1, sizes.length - 1)] || sizes[0]).file_id;
-      } else {
-        thumbFileId = j.result?.document?.thumb?.file_id || j.result?.document?.thumbnail?.file_id || null;
+      const thumbFileId = j.result?.document?.thumb?.file_id || j.result?.document?.thumbnail?.file_id || null;
+      if (!thumbFileId) {
+        console.log(`[Thumb] Telegram generated no thumb for ${fileName} (mime=${mimeType})`);
+        return { thumbBytes: null, tmpMsgId };
       }
-      if (!thumbFileId) return { thumbBytes: null, tmpMsgId };
 
-      const dl = await tgDownloadFile(botToken, thumbFileId);
-      return { thumbBytes: dl.ok ? (dl.data ?? null) : null, tmpMsgId };
+      // Download the generated thumb, also retrying on 429.
+      for (let dlAttempt = 0; dlAttempt < 3; dlAttempt++) {
+        if (dlAttempt > 0) await sleep(800 * dlAttempt);
+        const dl = await tgDownloadFile(botToken, thumbFileId);
+        if (dl.ok && dl.data) return { thumbBytes: dl.data, tmpMsgId };
+      }
+      return { thumbBytes: null, tmpMsgId };
     } catch (e: any) {
       console.log(`[Thumb] attempt ${attempt} error for ${fileName}: ${e?.message}`);
     }
@@ -699,7 +691,7 @@ async function handleUpload(request: Request, env: Env, uid: string, idToken: st
             // only the encrypted original + encrypted thumb persist. Mobile-only
             // path; the web clientUpload path ships its own thumb and skips this.
             const { thumbBytes, tmpMsgId } = await fetchTelegramThumb(
-              botToken, channelId, rawData, fileName, mimeType, isImage, isHeic,
+              botToken, channelId, rawData, fileName, mimeType,
             );
 
             if (thumbBytes) {
