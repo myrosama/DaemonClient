@@ -320,6 +320,70 @@ async function handleBulkUpdate(request: Request, env: Env, uid: string, idToken
 
 // ── Upload ──────────────────────────────────────────────────────────
 
+// Briefly send the plaintext bytes to Telegram to obtain a real downscaled
+// thumbnail, then return its bytes + the temp message id (caller deletes it).
+// Prefers sendPhoto — it forces Telegram to decode and RE-ENCODE to a clean
+// JPEG and returns a size ladder, which is reliable across JPEG/PNG (incl.
+// 16-bit PNG screenshots) where sendDocument's optional auto-thumb often comes
+// back empty. Falls back to sendDocument for HEIC / >10 MB / sendPhoto refusals.
+// Retries with backoff on 429 so a burst of uploads doesn't drop the last few.
+async function fetchTelegramThumb(
+  botToken: string,
+  channelId: string,
+  rawData: ArrayBuffer,
+  fileName: string,
+  mimeType: string,
+  isImage: boolean,
+  isHeic: boolean,
+): Promise<{ thumbBytes: ArrayBuffer | null; tmpMsgId: number | null }> {
+  const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
+  let usePhoto = isImage && !isHeic && rawData.byteLength <= 10 * 1024 * 1024;
+  let tmpMsgId: number | null = null;
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) await sleep(400 * Math.pow(2, attempt)); // 0.8s, 1.6s
+    try {
+      const form = new FormData();
+      form.append('chat_id', channelId);
+      const endpoint = usePhoto ? 'sendPhoto' : 'sendDocument';
+      form.append(
+        usePhoto ? 'photo' : 'document',
+        new Blob([rawData], { type: mimeType || (usePhoto ? 'image/jpeg' : 'application/octet-stream') }),
+        fileName,
+      );
+      const res = await fetch(`https://api.telegram.org/bot${botToken}/${endpoint}`, { method: 'POST', body: form });
+      const j = await res.json() as any;
+
+      if (res.status === 429 || j?.error_code === 429) {
+        await sleep(Math.min(((j?.parameters?.retry_after || 1) * 1000), 5000));
+        continue;
+      }
+      if (!j?.ok) {
+        // sendPhoto can refuse odd inputs — retry the same bytes as a document.
+        if (usePhoto) { usePhoto = false; continue; }
+        console.log(`[Thumb] ${endpoint} failed for ${fileName}: ${JSON.stringify(j).slice(0, 160)}`);
+        return { thumbBytes: null, tmpMsgId };
+      }
+
+      tmpMsgId = j.result?.message_id ?? null;
+      let thumbFileId: string | null = null;
+      if (usePhoto && Array.isArray(j.result?.photo) && j.result.photo.length) {
+        const sizes = j.result.photo; // ascending by size
+        thumbFileId = (sizes[Math.min(1, sizes.length - 1)] || sizes[0]).file_id;
+      } else {
+        thumbFileId = j.result?.document?.thumb?.file_id || j.result?.document?.thumbnail?.file_id || null;
+      }
+      if (!thumbFileId) return { thumbBytes: null, tmpMsgId };
+
+      const dl = await tgDownloadFile(botToken, thumbFileId);
+      return { thumbBytes: dl.ok ? (dl.data ?? null) : null, tmpMsgId };
+    } catch (e: any) {
+      console.log(`[Thumb] attempt ${attempt} error for ${fileName}: ${e?.message}`);
+    }
+  }
+  return { thumbBytes: null, tmpMsgId };
+}
+
 async function handleUpload(request: Request, env: Env, uid: string, idToken: string): Promise<Response> {
   const flags = await getFlagsForUser(env, uid, idToken);
   if (!flags.directBytePath) {
@@ -413,6 +477,12 @@ async function handleUpload(request: Request, env: Env, uid: string, idToken: st
     // sends one directly; for mobile/server uploads we derive it below from the
     // Telegram-generated thumbnail. Serving + web-render paths already exist.
     let thumbhash = (formData.get('thumbhash') as string) || null;
+    // Authoritative live-photo link from the (mobile) client: the app uploads
+    // the MOV first, then the still with livePhotoVideoId = the video's asset id.
+    // Honour it directly — the flaky timestamp/duration heuristic in
+    // linkLivePhoto is only a fallback. Once the still carries livePhotoVideoId
+    // the timeline auto-hides the paired video (timeline.ts filters those out).
+    const livePhotoVideoId = (formData.get('livePhotoVideoId') as string) || null;
 
     // CRITICAL DEBUG: Check if mobile sends thumbnail
     if (thumbBase64) {
@@ -621,53 +691,42 @@ async function handleUpload(request: Request, env: Env, uid: string, idToken: st
         try {
           if (isEncryptedByServer && key) {
             // Real downscaled thumbnail for ENCRYPTED (mobile) uploads.
-            // Sending the encrypted blob to Telegram yields no thumbnail
-            // (random bytes). Instead: briefly send the *plaintext* original as
-            // a temp document so Telegram auto-generates a small thumbnail
-            // (works for JPEG/PNG/HEIC/video alike), download that tiny thumb,
-            // re-encrypt it as thumb.bin (so it's stored zero-knowledge like
-            // every other thumb), then DELETE the temp plaintext message. Only
-            // the encrypted original + encrypted thumb persist in the channel.
-            // This is the mobile-only path; the web clientUpload path already
-            // ships its own generated thumbnail and never reaches here.
-            const tmpForm = new FormData();
-            tmpForm.append('chat_id', channelId);
-            tmpForm.append('document', new Blob([rawData], { type: mimeType || 'application/octet-stream' }), fileName);
-            const tmpRes = await fetch(`https://api.telegram.org/bot${botToken}/sendDocument`, { method: 'POST', body: tmpForm });
-            const tmpJson = await tmpRes.json() as any;
-            const genThumbId = tmpJson?.result?.document?.thumb?.file_id || tmpJson?.result?.document?.thumbnail?.file_id || null;
-            const tmpMsgId = tmpJson?.result?.message_id;
+            // Sending the encrypted blob to Telegram yields no thumbnail (random
+            // bytes), so briefly send the *plaintext* original, let Telegram
+            // produce a small JPEG thumb (sendPhoto re-encode, retried on 429),
+            // re-encrypt that thumb as thumb.bin so it's stored zero-knowledge
+            // like every other thumb, then DELETE the temp plaintext message —
+            // only the encrypted original + encrypted thumb persist. Mobile-only
+            // path; the web clientUpload path ships its own thumb and skips this.
+            const { thumbBytes, tmpMsgId } = await fetchTelegramThumb(
+              botToken, channelId, rawData, fileName, mimeType, isImage, isHeic,
+            );
 
-            if (genThumbId) {
-              const dl = await tgDownloadFile(botToken, genThumbId);
-              if (dl.ok && dl.data) {
-                // Derive a ThumbHash from the small plaintext thumb (cheap JPEG
-                // decode) before encrypting it — gives mobile uploads the same
-                // instant blur placeholder the web client produces.
-                if (!thumbhash) {
-                  thumbhash = computeThumbHashFromJpeg(new Uint8Array(dl.data));
-                  if (thumbhash) console.log(`[Upload] Derived ThumbHash for ${fileName}`);
-                }
-                const encThumb = await encryptChunk(dl.data, key);
-                const encForm = new FormData();
-                encForm.append('chat_id', channelId);
-                encForm.append('document', new Blob([encThumb], { type: 'application/octet-stream' }), 'thumb.bin');
-                const r = await fetch(`https://api.telegram.org/bot${botToken}/sendDocument`, { method: 'POST', body: encForm });
-                const j = await r.json() as any;
-                if (j.ok && j.result?.document?.file_id) {
-                  telegramThumbId = j.result.document.file_id;
-                  thumbEncrypted = true;
-                  console.log(`[Upload] Generated + encrypted Telegram thumbnail for ${fileName}`);
-                } else {
-                  console.log(`[Upload] re-encrypt thumb sendDocument failed:`, JSON.stringify(j).slice(0, 200));
-                }
+            if (thumbBytes) {
+              // Derive a ThumbHash from the small plaintext thumb (cheap JPEG
+              // decode) before encrypting — instant blur placeholder for mobile.
+              if (!thumbhash) {
+                thumbhash = computeThumbHashFromJpeg(new Uint8Array(thumbBytes));
+                if (thumbhash) console.log(`[Upload] Derived ThumbHash for ${fileName}`);
+              }
+              const encThumb = await encryptChunk(thumbBytes, key);
+              const encForm = new FormData();
+              encForm.append('chat_id', channelId);
+              encForm.append('document', new Blob([encThumb], { type: 'application/octet-stream' }), 'thumb.bin');
+              const r = await fetch(`https://api.telegram.org/bot${botToken}/sendDocument`, { method: 'POST', body: encForm });
+              const j = await r.json() as any;
+              if (j.ok && j.result?.document?.file_id) {
+                telegramThumbId = j.result.document.file_id;
+                thumbEncrypted = true;
+                console.log(`[Upload] Generated + encrypted thumbnail for ${fileName}`);
+              } else {
+                console.log(`[Upload] thumb.bin sendDocument failed: ${JSON.stringify(j).slice(0, 160)}`);
               }
             } else {
-              console.log(`[Upload] Telegram generated no thumbnail for ${fileName} (mime=${mimeType})`);
+              console.log(`[Upload] No Telegram thumbnail obtained for ${fileName} (mime=${mimeType})`);
             }
 
-            // Remove the temporary plaintext message regardless of outcome so
-            // the channel only ever retains the encrypted original + thumb.
+            // Remove the temporary plaintext message regardless of outcome.
             if (tmpMsgId) {
               await fetch(`https://api.telegram.org/bot${botToken}/deleteMessage`, {
                 method: 'POST',
@@ -719,6 +778,7 @@ async function handleUpload(request: Request, env: Env, uid: string, idToken: st
       telegramThumbId,
       thumbEncrypted: thumbEncrypted ? 1 : 0,
       thumbhash: thumbhash || undefined,
+      livePhotoVideoId: livePhotoVideoId || undefined,
       encryptionMode,
       checksum,
       isHeic: isHeic ? 1 : 0,
