@@ -138,6 +138,14 @@
             const finalBlob = Array.isArray(converted) ? converted[0] : converted;
             if (destroyed) return;
             objectUrl = URL.createObjectURL(finalBlob);
+            // Persist a real thumbnail + thumbhash back to the worker so future
+            // views (web AND the mobile app) are instant and skip this decode.
+            // Fire-and-forget, deduped per session.
+            if (asset?.id) {
+              void import('$lib/utils/heic-backfill').then(({ backfillFromConvertedBlob }) =>
+                backfillFromConvertedBlob(asset.id, finalBlob),
+              );
+            }
           } else {
             if (destroyed) return;
             objectUrl = URL.createObjectURL(blob);

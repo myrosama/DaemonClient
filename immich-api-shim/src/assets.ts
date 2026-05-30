@@ -898,6 +898,10 @@ async function handleThumbnailUpload(request: Request, env: Env, uid: string, as
     const formData = await request.formData();
     const thumbFile = formData.get('thumbnail') as File | null;
     const thumbBase64 = formData.get('thumbData_base64') as string | null;
+    // Client-computed ThumbHash (base64) accompanying the thumbnail. Storing it
+    // also changes the timeline payload's thumbhash → the thumbnail URL's
+    // cacheKey changes → clients refetch the new thumb (built-in cache-bust).
+    const thumbhash = (formData.get('thumbhash') as string) || null;
 
     if (!thumbFile && !thumbBase64) {
       return json({ message: 'No thumbnail data provided' }, 400);
@@ -910,35 +914,54 @@ async function handleThumbnailUpload(request: Request, env: Env, uid: string, as
       thumbBytes = await thumbFile!.arrayBuffer();
     }
 
-    const thumbForm = new FormData();
-    thumbForm.append('chat_id', channelId);
-    thumbForm.append('photo', new Blob([thumbBytes], { type: 'image/jpeg' }), 'thumb.jpg');
+    // Store the thumb the same way the upload path does: encrypted as thumb.bin
+    // for server-ZKE assets (so the client-generated HEIC/backfill thumbnail is
+    // zero-knowledge like every other thumb), else a plain Telegram photo.
+    const isServerZke = photo.encryptionMode === 'server' || (photo.encrypted === true && !photo.encryptionMode);
+    const key = isServerZke ? await getEncryptionKey(env, uid, idToken) : null;
 
     const queue = getTgQueue(botToken);
     await queue.acquire(undefined, 5);
     let telegramThumbId: string | null = null;
+    let thumbEncrypted = false;
     try {
-      const res = await fetch(`https://api.telegram.org/bot${botToken}/sendPhoto`, { method: 'POST', body: thumbForm });
-      const data = await res.json() as any;
-      if (data.ok && data.result.photo?.length > 0) {
-        telegramThumbId = data.result.photo[0].file_id;
+      if (isServerZke && key) {
+        const enc = await encryptChunk(thumbBytes, key);
+        const form = new FormData();
+        form.append('chat_id', channelId);
+        form.append('document', new Blob([enc], { type: 'application/octet-stream' }), 'thumb.bin');
+        const res = await fetch(`https://api.telegram.org/bot${botToken}/sendDocument`, { method: 'POST', body: form });
+        const data = await res.json() as any;
+        if (data.ok && data.result?.document?.file_id) {
+          telegramThumbId = data.result.document.file_id;
+          thumbEncrypted = true;
+        }
+      } else {
+        const form = new FormData();
+        form.append('chat_id', channelId);
+        form.append('photo', new Blob([thumbBytes], { type: 'image/jpeg' }), 'thumb.jpg');
+        const res = await fetch(`https://api.telegram.org/bot${botToken}/sendPhoto`, { method: 'POST', body: form });
+        const data = await res.json() as any;
+        if (data.ok && data.result.photo?.length > 0) telegramThumbId = data.result.photo[0].file_id;
       }
     } finally {
       queue.release();
     }
 
     if (!telegramThumbId) {
-      return json({ message: 'Telegram sendPhoto failed' }, 500);
+      return json({ message: 'Telegram thumbnail upload failed' }, 500);
     }
 
+    const update: any = { id: assetId, telegramThumbId, thumbEncrypted: thumbEncrypted ? 1 : 0 };
+    if (thumbhash) update.thumbhash = thumbhash;
     if (env.DB) {
-      await new D1Adapter(env.DB).savePhoto({ id: assetId, telegramThumbId });
+      await new D1Adapter(env.DB).savePhoto(update);
     } else {
-      await firestoreSet(env, uid, `photos/${assetId}`, { telegramThumbId }, idToken);
+      await firestoreSet(env, uid, `photos/${assetId}`, update, idToken);
     }
-    console.log(`[ThumbnailUpload] Successfully stored thumbnail for ${assetId}`);
+    console.log(`[ThumbnailUpload] Stored backfilled thumbnail for ${assetId} (encrypted=${thumbEncrypted}, thumbhash=${!!thumbhash})`);
 
-    return json({ success: true, telegramThumbId });
+    return json({ success: true, telegramThumbId, thumbhash: thumbhash || null });
   } catch (err: any) {
     console.error(`[ThumbnailUpload] Error for ${assetId}:`, err);
     return json({ message: err.message }, 500);

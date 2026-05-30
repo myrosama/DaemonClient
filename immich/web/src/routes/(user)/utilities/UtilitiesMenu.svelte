@@ -1,5 +1,6 @@
 <script lang="ts">
   import AppDownloadModal from '$lib/modals/AppDownloadModal.svelte';
+  import FixThumbnailsModal from '$lib/modals/FixThumbnailsModal.svelte';
   import ObtainiumConfigModal from '$lib/modals/ObtainiumConfigModal.svelte';
   import { Route } from '$lib/route';
   import { Icon, modalManager, Text } from '@immich/ui';
@@ -7,6 +8,7 @@
     mdiCellphoneArrowDownVariant,
     mdiContentDuplicate,
     mdiCrosshairsGps,
+    mdiImageBrokenVariant,
     mdiImageSizeSelectLarge,
     mdiLinkEdit,
   } from '@mdi/js';
@@ -29,6 +31,15 @@
       {link.label}
     </a>
   {/each}
+
+  <button
+    type="button"
+    onclick={() => modalManager.show(FixThumbnailsModal, {})}
+    class="w-full hover:bg-gray-100 dark:hover:bg-immich-dark-gray flex items-center gap-4 p-4 text-start"
+  >
+    <span><Icon icon={mdiImageBrokenVariant} class="text-primary" size="24" /></span>
+    Fix HEIC &amp; missing thumbnails
+  </button>
 </div>
 <br />
 <div class="border border-gray-300 dark:border-immich-dark-gray rounded-3xl pt-1 pb-6 dark:text-white">
