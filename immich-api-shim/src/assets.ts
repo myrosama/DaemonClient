@@ -1090,11 +1090,21 @@ async function handleOriginal(request: Request, env: Env, uid: string, assetId: 
     if (rangeHeader && totalSize > 0) {
       const parts = rangeHeader.replace(/bytes=/, "").split("-");
       const start = parseInt(parts[0], 10) || 0;
-      const end = parts[1] ? parseInt(parts[1], 10) : totalSize - 1;
+      let end = parts[1] ? parseInt(parts[1], 10) : totalSize - 1;
 
       if (isNaN(start) || isNaN(end) || start < 0 || end >= totalSize || start > end) {
         return json({ message: 'Invalid range', requested: `${start}-${end}`, totalSize }, 416);
       }
+
+      // Cap the served window. Native mobile video players (ExoPlayer/AVPlayer)
+      // open playback with `Range: bytes=0-`, i.e. they ask for the ENTIRE file.
+      // Fulfilling that allocates `new Uint8Array(totalSize)` below — for a
+      // multi-hundred-MB video that blows the Worker's 128MB memory limit and
+      // the Worker (and the app's player) crash. Returning a smaller 206 than
+      // requested is valid HTTP: the player simply requests the next window.
+      // Browsers tolerate it too, so this fixes mobile without regressing web.
+      const MAX_RANGE_BYTES = 8 * 1024 * 1024; // 8 MB per response
+      if (end - start + 1 > MAX_RANGE_BYTES) end = start + MAX_RANGE_BYTES - 1;
 
       // Calculate which chunks we need for this byte range
       const firstChunkIdx = Math.floor(start / chunkSize);
