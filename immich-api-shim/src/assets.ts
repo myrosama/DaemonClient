@@ -134,6 +134,15 @@ export async function handleAssets(request: Request, env: Env, path: string, url
     resourceId = assetMatch[1];
   }
 
+  // Native mobile video players (AVPlayer/ExoPlayer) send a HEAD probe before
+  // streaming to read Content-Length / Content-Type / Accept-Ranges. We only
+  // routed GET, so HEAD fell through to a 404 JSON — the player treated the
+  // video as missing and the app crashed (browsers skip HEAD, which is why web
+  // worked). Answer HEAD with the headers GET would send, no body.
+  if (resourceId && request.method === 'HEAD' &&
+      (path.endsWith('/video/playback') || path.endsWith('/original') || path.includes('/file/') || path.endsWith('/thumbnail'))) {
+    return handleMediaHead(env, uid, resourceId, idToken, path);
+  }
   if (resourceId && path.endsWith('/thumbnail') && request.method === 'GET') {
     return handleThumbnail(request, env, uid, resourceId, idToken);
   }
@@ -1033,6 +1042,25 @@ async function handleThumbnail(request: Request, env: Env, uid: string, assetId:
   } finally {
     queue.release();
   }
+}
+
+// Answer a HEAD probe for a media endpoint with the headers a GET would send,
+// without fetching/decrypting any bytes. Lets native mobile players validate
+// the resource (size, type, range support) before they start streaming.
+async function handleMediaHead(env: Env, uid: string, assetId: string, idToken: string, path: string): Promise<Response> {
+  const photo = await loadPhotoById(env, uid, assetId, idToken);
+  if (!photo) return new Response(null, { status: 404 });
+  const isThumb = path.endsWith('/thumbnail');
+  let mimeType = photo.mimeType || 'application/octet-stream';
+  if (isThumb) mimeType = (photo.isHeic || !mimeType.startsWith('image/')) ? 'image/jpeg' : mimeType;
+  const headers: Record<string, string> = {
+    'Content-Type': mimeType,
+    'Accept-Ranges': 'bytes',
+    'Cache-Control': 'public, max-age=86400',
+  };
+  // Original/video have a known size; thumbnails are generated so size is unknown.
+  if (!isThumb && photo.fileSize) headers['Content-Length'] = String(photo.fileSize);
+  return new Response(null, { status: 200, headers });
 }
 
 async function handleOriginal(request: Request, env: Env, uid: string, assetId: string, idToken: string): Promise<Response> {

@@ -33,7 +33,7 @@ function corsHeaders(request: Request, env: Env): Record<string, string> {
   const isAllowed = allowed.includes(origin) || origin.includes('localhost');
   return {
     'Access-Control-Allow-Origin': isAllowed ? origin : allowed[0],
-    'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
+    'Access-Control-Allow-Methods': 'GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-api-key, Cookie',
     'Access-Control-Allow-Credentials': 'true',
     'Access-Control-Max-Age': '86400',
