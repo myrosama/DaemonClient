@@ -5,6 +5,7 @@ import { normalizePhotoManifest } from './contracts';
 import { getFlagsForUser } from './feature-flags';
 import { D1Adapter } from './d1-adapter';
 import { getCachedConfig } from './cached-config';
+import { computeThumbHashFromJpeg } from './thumbhash-util';
 
 // --- ZKE Crypto Implementation ---
 const SALT_LENGTH = 16;
@@ -408,10 +409,10 @@ async function handleUpload(request: Request, env: Env, uid: string, idToken: st
 
     const isHeic = /\.(heic|heif)$/i.test(fileName) || mimeType === 'image/heic' || mimeType === 'image/heif';
     const thumbBase64 = formData.get('thumbData_base64') as string | null;
-    // Client-computed ThumbHash (base64) → instant blur placeholder in the grid.
-    // The serving (timeline/bucket/asset payloads) and web-render paths already
-    // exist; we only need to persist the value the client sends here.
-    const thumbhash = (formData.get('thumbhash') as string) || null;
+    // ThumbHash (base64) → instant blur placeholder in the grid. The web client
+    // sends one directly; for mobile/server uploads we derive it below from the
+    // Telegram-generated thumbnail. Serving + web-render paths already exist.
+    let thumbhash = (formData.get('thumbhash') as string) || null;
 
     // CRITICAL DEBUG: Check if mobile sends thumbnail
     if (thumbBase64) {
@@ -640,6 +641,13 @@ async function handleUpload(request: Request, env: Env, uid: string, idToken: st
             if (genThumbId) {
               const dl = await tgDownloadFile(botToken, genThumbId);
               if (dl.ok && dl.data) {
+                // Derive a ThumbHash from the small plaintext thumb (cheap JPEG
+                // decode) before encrypting it — gives mobile uploads the same
+                // instant blur placeholder the web client produces.
+                if (!thumbhash) {
+                  thumbhash = computeThumbHashFromJpeg(new Uint8Array(dl.data));
+                  if (thumbhash) console.log(`[Upload] Derived ThumbHash for ${fileName}`);
+                }
                 const encThumb = await encryptChunk(dl.data, key);
                 const encForm = new FormData();
                 encForm.append('chat_id', channelId);
