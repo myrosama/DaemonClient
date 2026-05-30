@@ -619,16 +619,53 @@ async function handleUpload(request: Request, env: Env, uid: string, idToken: st
         await queue.acquire(undefined, 5);
         try {
           if (isEncryptedByServer && key) {
-            const encrypted = await encryptChunk(rawData, key);
-            thumbForm.append('document', new Blob([encrypted], { type: 'application/octet-stream' }), 'thumb.bin');
-            const r = await fetch(`https://api.telegram.org/bot${botToken}/sendDocument`, { method: 'POST', body: thumbForm });
-            const j = await r.json() as any;
-            if (j.ok && j.result?.document?.file_id) {
-              telegramThumbId = j.result.document.file_id;
-              thumbEncrypted = true;
-              console.log(`[Upload] Stored encrypted server-derived thumbnail for ${fileName}`);
+            // Real downscaled thumbnail for ENCRYPTED (mobile) uploads.
+            // Sending the encrypted blob to Telegram yields no thumbnail
+            // (random bytes). Instead: briefly send the *plaintext* original as
+            // a temp document so Telegram auto-generates a small thumbnail
+            // (works for JPEG/PNG/HEIC/video alike), download that tiny thumb,
+            // re-encrypt it as thumb.bin (so it's stored zero-knowledge like
+            // every other thumb), then DELETE the temp plaintext message. Only
+            // the encrypted original + encrypted thumb persist in the channel.
+            // This is the mobile-only path; the web clientUpload path already
+            // ships its own generated thumbnail and never reaches here.
+            const tmpForm = new FormData();
+            tmpForm.append('chat_id', channelId);
+            tmpForm.append('document', new Blob([rawData], { type: mimeType || 'application/octet-stream' }), fileName);
+            const tmpRes = await fetch(`https://api.telegram.org/bot${botToken}/sendDocument`, { method: 'POST', body: tmpForm });
+            const tmpJson = await tmpRes.json() as any;
+            const genThumbId = tmpJson?.result?.document?.thumb?.file_id || tmpJson?.result?.document?.thumbnail?.file_id || null;
+            const tmpMsgId = tmpJson?.result?.message_id;
+
+            if (genThumbId) {
+              const dl = await tgDownloadFile(botToken, genThumbId);
+              if (dl.ok && dl.data) {
+                const encThumb = await encryptChunk(dl.data, key);
+                const encForm = new FormData();
+                encForm.append('chat_id', channelId);
+                encForm.append('document', new Blob([encThumb], { type: 'application/octet-stream' }), 'thumb.bin');
+                const r = await fetch(`https://api.telegram.org/bot${botToken}/sendDocument`, { method: 'POST', body: encForm });
+                const j = await r.json() as any;
+                if (j.ok && j.result?.document?.file_id) {
+                  telegramThumbId = j.result.document.file_id;
+                  thumbEncrypted = true;
+                  console.log(`[Upload] Generated + encrypted Telegram thumbnail for ${fileName}`);
+                } else {
+                  console.log(`[Upload] re-encrypt thumb sendDocument failed:`, JSON.stringify(j).slice(0, 200));
+                }
+              }
             } else {
-              console.log(`[Upload] encrypted sendDocument thumb failed:`, JSON.stringify(j).slice(0, 200));
+              console.log(`[Upload] Telegram generated no thumbnail for ${fileName} (mime=${mimeType})`);
+            }
+
+            // Remove the temporary plaintext message regardless of outcome so
+            // the channel only ever retains the encrypted original + thumb.
+            if (tmpMsgId) {
+              await fetch(`https://api.telegram.org/bot${botToken}/deleteMessage`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ chat_id: channelId, message_id: tmpMsgId }),
+              }).catch(() => { /* best-effort cleanup */ });
             }
           } else if (isVideo) {
             thumbForm.append('video', new Blob([rawData], { type: mimeType }), fileName);
