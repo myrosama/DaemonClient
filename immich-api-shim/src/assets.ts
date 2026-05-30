@@ -376,6 +376,32 @@ async function fetchTelegramThumb(
   return { thumbBytes: null, tmpMsgId };
 }
 
+// HEIC can't be thumbnailed by Telegram, nor decoded in-Worker (libheif is far
+// too heavy for the 10ms free CPU limit). The Python backend (Render, real CPU)
+// decodes it via pillow-heif. We POST the raw HEIC and get back a downscaled
+// JPEG, which the caller encrypts + stores like any other thumb. Auth reuses
+// the user's Firebase idToken (the backend verifies it). Returns null on any
+// failure → caller falls back to serving the original.
+const HEIC_CONVERT_URL = 'https://daemonclient-elnj.onrender.com/convertHeicThumbnail';
+async function convertHeicThumbViaBackend(heicBytes: ArrayBuffer, idToken: string): Promise<ArrayBuffer | null> {
+  try {
+    const res = await fetch(HEIC_CONVERT_URL, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${idToken}`, 'Content-Type': 'application/octet-stream' },
+      body: heicBytes,
+    });
+    if (!res.ok) {
+      console.log(`[HEIC] backend convert failed: ${res.status}`);
+      return null;
+    }
+    const buf = await res.arrayBuffer();
+    return buf.byteLength > 0 ? buf : null;
+  } catch (e: any) {
+    console.log(`[HEIC] backend convert error: ${e?.message}`);
+    return null;
+  }
+}
+
 async function handleUpload(request: Request, env: Env, uid: string, idToken: string): Promise<Response> {
   const flags = await getFlagsForUser(env, uid, idToken);
   if (!flags.directBytePath) {
@@ -690,9 +716,18 @@ async function handleUpload(request: Request, env: Env, uid: string, idToken: st
             // like every other thumb, then DELETE the temp plaintext message —
             // only the encrypted original + encrypted thumb persist. Mobile-only
             // path; the web clientUpload path ships its own thumb and skips this.
-            const { thumbBytes, tmpMsgId } = await fetchTelegramThumb(
-              botToken, channelId, rawData, fileName, mimeType,
-            );
+            let thumbBytes: ArrayBuffer | null = null;
+            let tmpMsgId: number | null = null;
+            if (isHeic) {
+              // Telegram can't thumbnail HEIC — decode it on the Python backend
+              // (real CPU) and get a JPEG back. No Telegram temp-send needed.
+              thumbBytes = await convertHeicThumbViaBackend(rawData, idToken);
+              if (thumbBytes) console.log(`[Upload] HEIC converted to JPEG via backend for ${fileName}`);
+            } else {
+              const r = await fetchTelegramThumb(botToken, channelId, rawData, fileName, mimeType);
+              thumbBytes = r.thumbBytes;
+              tmpMsgId = r.tmpMsgId;
+            }
 
             if (thumbBytes) {
               // Derive a ThumbHash from the small plaintext thumb (cheap JPEG

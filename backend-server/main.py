@@ -50,6 +50,23 @@ load_dotenv()
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
 
+# --- HEIC support ---
+# Cloudflare Workers can't decode HEIC (libheif is too heavy for the 10ms free
+# CPU budget) and Telegram won't auto-thumbnail HEIC documents. This real CPU
+# (Render) can, via pillow-heif. The per-user worker POSTs raw HEIC bytes here
+# and gets back a downscaled JPEG it then encrypts + stores as the thumbnail.
+# Guarded so the server still boots if the dependency isn't installed yet.
+try:
+    import io
+    import pillow_heif
+    from PIL import Image
+    pillow_heif.register_heif_opener()
+    _HEIC_OK = True
+    print("✅ pillow-heif registered — HEIC→JPEG conversion available")
+except Exception as _heic_err:
+    _HEIC_OK = False
+    print(f"⚠️ HEIC conversion unavailable: {_heic_err}")
+
 # --- Initialize Firebase Admin SDK ---
 try:
     firebase_creds_json = os.getenv("FIREBASE_CREDENTIALS_JSON")
@@ -391,6 +408,33 @@ def get_zke_config():
 @app.route("/")
 def index():
     return "DaemonClient API is running."
+
+@app.route("/convertHeicThumbnail", methods=["POST"])
+@check_auth
+def convert_heic_thumbnail():
+    """Decode HEIC (raw bytes in the request body) and return a downscaled JPEG.
+    Called by the per-user worker at upload time when a HEIC is uploaded from the
+    mobile app — Telegram can't thumbnail HEIC and the Worker can't decode it.
+    The worker then encrypts the returned JPEG and stores it as the thumbnail,
+    so this server never persists anything (transient, in-memory only)."""
+    if not _HEIC_OK:
+        return jsonify({'error': 'HEIC conversion unavailable on server'}), 503
+    data = request.get_data()
+    if not data:
+        return jsonify({'error': 'empty body'}), 400
+    try:
+        img = Image.open(io.BytesIO(data))
+        img = img.convert("RGB")
+        # 720px longest edge: small enough for a fast grid thumbnail, sharp
+        # enough to double as a preview. ThumbHash (computed in the worker from
+        # this JPEG) provides the instant blur placeholder.
+        img.thumbnail((720, 720))
+        out = io.BytesIO()
+        img.save(out, format="JPEG", quality=80, optimize=True)
+        return out.getvalue(), 200, {'Content-Type': 'image/jpeg'}
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': f'HEIC decode failed: {str(e)}'}), 500
 
 @app.route("/startSetup", methods=["POST"])
 def start_setup_endpoint():
