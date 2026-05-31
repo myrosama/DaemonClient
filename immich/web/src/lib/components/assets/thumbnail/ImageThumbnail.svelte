@@ -132,27 +132,28 @@
           }
 
           if (isHeic) {
-            const { decodeHeicToBlob } = await import('$lib/utils/heic-decode');
-            const finalBlob = await decodeHeicToBlob(blob);
-            if (destroyed) return;
-            objectUrl = URL.createObjectURL(finalBlob);
-            // Persist a real thumbnail + thumbhash back to the worker so future
-            // views (web AND the mobile app) are instant and skip this decode.
-            // Fire-and-forget, deduped per session.
-            if (asset?.id) {
-              void import('$lib/utils/heic-backfill').then(({ backfillFromConvertedBlob }) =>
-                backfillFromConvertedBlob(asset.id, finalBlob),
-              );
-            }
-          } else {
-            if (destroyed) return;
-            objectUrl = URL.createObjectURL(blob);
+            // Do NOT decode HEIC inline here. Decoding a full HEIC per grid
+            // tile is heavy and made the whole library lag. Instead leave the
+            // tile in its broken/placeholder state — the user runs
+            // Utilities → "Fix HEIC & missing thumbnails" once, which converts
+            // them to real JPEG thumbnails server-side. After that the worker
+            // serves a JPEG and this branch is never hit again. `HEIC_SKIP` is
+            // handled below without burning retries.
+            throw new Error('HEIC_SKIP');
           }
+          if (destroyed) return;
+          objectUrl = URL.createObjectURL(blob);
           setLoaded();
         });
         await queueTicket.promise;
       } catch (err: any) {
         if (err?.name === 'AbortError' || err?.message === 'cancelled') return;
+        // HEIC with no real thumbnail yet — show the placeholder immediately,
+        // don't retry (retrying re-fetches the same un-decodable HEIC).
+        if (err?.message === 'HEIC_SKIP') {
+          if (!destroyed) setErrored();
+          return;
+        }
         if (retryCount < MAX_RETRIES && !destroyed) {
           retryCount++;
           const delay = Math.pow(2, retryCount) * 500;

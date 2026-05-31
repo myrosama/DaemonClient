@@ -90,6 +90,22 @@ export class D1Adapter {
     ).bind(...values).run();
   }
 
+  // Partial UPDATE of an existing photo — only the given columns, leaving every
+  // other column (ownerId, fileName, fileCreatedAt, all metadata/timestamps)
+  // untouched. Use this instead of savePhoto for "patch a few fields on a row
+  // that already exists": savePhoto's INSERT…ON CONFLICT upsert first attempts
+  // an INSERT, which fails the NOT NULL constraints (ownerId etc.) when the
+  // object is partial, before the conflict-update can run.
+  async updatePhoto(id: string, fields: Partial<Photo>): Promise<void> {
+    const entries = Object.entries(fields).filter(([k, v]) => k !== 'id' && v !== undefined).map(
+      ([k, v]) => [k, typeof v === 'number' && Number.isNaN(v) ? null : v] as const
+    );
+    if (entries.length === 0) return;
+    const setClause = entries.map(([k]) => `${k} = ?`).join(', ');
+    const values = entries.map(([, v]) => v);
+    await this.db.prepare(`UPDATE photos SET ${setClause} WHERE id = ?`).bind(...values, id).run();
+  }
+
   async deletePhoto(id: string): Promise<void> {
     await this.db.prepare('DELETE FROM photos WHERE id = ?').bind(id).run();
   }

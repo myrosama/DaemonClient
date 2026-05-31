@@ -956,10 +956,14 @@ async function handleThumbnailUpload(request: Request, env: Env, uid: string, as
       return json({ message: 'Telegram thumbnail upload failed' }, 500);
     }
 
-    const update: any = { id: assetId, telegramThumbId, thumbEncrypted: thumbEncrypted ? 1 : 0 };
+    // Partial UPDATE only — never re-INSERT. This patches just the thumbnail
+    // columns and leaves ownerId / fileName / fileCreatedAt / all metadata and
+    // timestamps untouched. (savePhoto's upsert would fail NOT NULL on a
+    // partial row, which is what made the Fix-HEIC tool report 0 fixed.)
+    const update: any = { telegramThumbId, thumbEncrypted: thumbEncrypted ? 1 : 0 };
     if (thumbhash) update.thumbhash = thumbhash;
     if (env.DB) {
-      await new D1Adapter(env.DB).savePhoto(update);
+      await new D1Adapter(env.DB).updatePhoto(assetId, update);
     } else {
       await firestoreSet(env, uid, `photos/${assetId}`, update, idToken);
     }
