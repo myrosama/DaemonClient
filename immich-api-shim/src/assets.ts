@@ -211,6 +211,14 @@ export async function handleAssets(request: Request, env: Env, path: string, url
     return handleThumbnailUpload(request, env, uid, thumbUploadMatch[1], idToken);
   }
 
+  // Replace an asset's stored video with a client-processed (faststart + AAC)
+  // version so iOS can stream it. Re-encrypts/chunks like the upload path and
+  // atomically swaps the telegram refs, leaving all metadata/timestamps intact.
+  const replaceVideoMatch = path.match(/^\/api\/assets\/([^/]+)\/replace-video$/);
+  if (replaceVideoMatch && request.method === 'POST') {
+    return handleReplaceVideo(request, env, uid, replaceVideoMatch[1], idToken);
+  }
+
   if (path === '/api/assets/worker-config' && request.method === 'GET') {
     const workerConfig = await getCachedConfig<{ url?: string }>(env, uid, idToken, 'worker');
     return json({ url: workerConfig?.url || null });
@@ -910,6 +918,77 @@ async function loadPhotoById(env: Env, uid: string, assetId: string, idToken: st
     return row ? D1Adapter.normalizeRow(row) : null;
   }
   return firestoreGet(env, uid, `photos/${assetId}`, idToken);
+}
+
+// Replace the stored video bytes for an asset with a client-processed version
+// (faststart + AAC audio, video stream copied losslessly). Chunks + encrypts
+// exactly like the upload path, then ATOMICALLY swaps telegramChunks /
+// telegramOriginalId / fileSize in a single partial UPDATE (metadata untouched),
+// and only then deletes the old chunks — so a mid-upload failure never leaves
+// the asset pointing at a mix of old and new chunks.
+async function handleReplaceVideo(request: Request, env: Env, uid: string, assetId: string, idToken: string): Promise<Response> {
+  const photo = await loadPhotoById(env, uid, assetId, idToken);
+  if (!photo) return json({ message: 'Asset not found' }, 404);
+  if (!env.DB) return json({ message: 'Not supported without D1' }, 400);
+
+  const config = await getCachedConfig<any>(env, uid, idToken, 'telegram');
+  if (!config) return json({ message: 'No config' }, 500);
+  const botToken = config.botToken || config.bot_token;
+  const channelId = config.channelId || config.channel_id;
+
+  const isServerZke = photo.encryptionMode === 'server' || (photo.encrypted === true && !photo.encryptionMode);
+  const isClientZke = photo.encryptionMode === 'client';
+  const key = isServerZke ? await getEncryptionKey(env, uid, idToken) : null;
+
+  const form = await request.formData();
+  const videoFile = form.get('video') as File | null;
+  if (!videoFile) return json({ message: 'No video provided' }, 400);
+  const size = videoFile.size;
+  const totalChunks = Math.max(1, Math.ceil(size / CHUNK_SIZE));
+
+  // Upload all new chunks first (nothing is swapped until they all succeed).
+  const newChunks: Array<{ index: number; message_id: number; file_id: string }> = [];
+  let newOriginalId = '';
+  for (let i = 0; i < totalChunks; i++) {
+    const slice = videoFile.slice(i * CHUNK_SIZE, Math.min((i + 1) * CHUNK_SIZE, size));
+    let data: ArrayBuffer = await slice.arrayBuffer();
+    if (isServerZke && key) data = await encryptChunk(data, key);
+    const partName = (isServerZke || isClientZke)
+      ? (totalChunks === 1 ? 'blob.bin' : `blob.bin.part${String(i + 1).padStart(3, '0')}`)
+      : (totalChunks === 1 ? videoFile.name : `${videoFile.name}.part${String(i + 1).padStart(3, '0')}`);
+    const f = new FormData();
+    f.append('chat_id', channelId);
+    f.append('document', new Blob([data], { type: 'application/octet-stream' }), partName);
+    const res = await tgFetchWithRetry(`https://api.telegram.org/bot${botToken}/sendDocument`, { method: 'POST', body: f });
+    const j = await res.json() as any;
+    if (!j.ok || !j.result?.document?.file_id) {
+      return json({ message: 'Telegram upload failed', chunk: i, details: j }, 502);
+    }
+    const fid = j.result.document.file_id;
+    if (totalChunks === 1) newOriginalId = fid;
+    newChunks.push({ index: i, message_id: j.result.message_id, file_id: fid });
+  }
+
+  const oldChunks: any[] = Array.isArray(photo.telegramChunks) ? photo.telegramChunks : [];
+  const oldOriginalId = photo.telegramOriginalId;
+
+  // Atomic swap: single UPDATE pointing the asset at the new bytes.
+  await new D1Adapter(env.DB).updatePhoto(assetId, totalChunks === 1
+    ? { telegramChunks: '[]', telegramOriginalId: newOriginalId, fileSize: size }
+    : { telegramChunks: JSON.stringify(newChunks), telegramOriginalId: '', fileSize: size });
+
+  // Best-effort cleanup of the old messages (after the swap, so a failure here
+  // is harmless — the asset already points at the new chunks).
+  const toDelete = [...oldChunks.map((c: any) => c.message_id).filter(Boolean)];
+  for (const messageId of toDelete) {
+    fetch(`https://api.telegram.org/bot${botToken}/deleteMessage`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: channelId, message_id: messageId }),
+    }).catch(() => {});
+  }
+
+  console.log(`[ReplaceVideo] ${assetId}: ${totalChunks} chunk(s), ${size} bytes (was originalId=${oldOriginalId})`);
+  return json({ success: true, chunks: totalChunks, fileSize: size });
 }
 
 async function handleThumbnailUpload(request: Request, env: Env, uid: string, assetId: string, idToken: string): Promise<Response> {
