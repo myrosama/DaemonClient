@@ -906,6 +906,11 @@ async function handleThumbnailUpload(request: Request, env: Env, uid: string, as
     // also changes the timeline payload's thumbhash → the thumbnail URL's
     // cacheKey changes → clients refetch the new thumb (built-in cache-bust).
     const thumbhash = (formData.get('thumbhash') as string) || null;
+    // Optional full-size JPEG preview. Lets the web viewer load a JPEG instead
+    // of decoding the HEIC original (which is slow/fails in browsers). The
+    // original HEIC is left untouched for true-original download.
+    const previewFile = formData.get('preview') as File | null;
+    const previewBytes = previewFile ? await previewFile.arrayBuffer() : null;
 
     if (!thumbFile && !thumbBase64) {
       return json({ message: 'No thumbnail data provided' }, 400);
@@ -924,52 +929,60 @@ async function handleThumbnailUpload(request: Request, env: Env, uid: string, as
     const isServerZke = photo.encryptionMode === 'server' || (photo.encrypted === true && !photo.encryptionMode);
     const key = isServerZke ? await getEncryptionKey(env, uid, idToken) : null;
 
-    const queue = getTgQueue(botToken);
-    await queue.acquire(undefined, 5);
-    let telegramThumbId: string | null = null;
-    let thumbEncrypted = false;
-    try {
-      if (isServerZke && key) {
-        const enc = await encryptChunk(thumbBytes, key);
-        const form = new FormData();
-        form.append('chat_id', channelId);
-        form.append('document', new Blob([enc], { type: 'application/octet-stream' }), 'thumb.bin');
-        const res = await fetch(`https://api.telegram.org/bot${botToken}/sendDocument`, { method: 'POST', body: form });
-        const data = await res.json() as any;
-        if (data.ok && data.result?.document?.file_id) {
-          telegramThumbId = data.result.document.file_id;
-          thumbEncrypted = true;
+    // Store one image (thumb or preview) the same zero-knowledge way as every
+    // other thumb: encrypted as a .bin document for server-ZKE, else a plain
+    // Telegram photo. Returns { fileId, encrypted } or null on failure.
+    const storeOne = async (bytes: ArrayBuffer): Promise<{ fileId: string; encrypted: boolean } | null> => {
+      const queue = getTgQueue(botToken);
+      await queue.acquire(undefined, 5);
+      try {
+        if (isServerZke && key) {
+          const enc = await encryptChunk(bytes, key);
+          const form = new FormData();
+          form.append('chat_id', channelId);
+          form.append('document', new Blob([enc], { type: 'application/octet-stream' }), 'thumb.bin');
+          const res = await tgFetchWithRetry(`https://api.telegram.org/bot${botToken}/sendDocument`, { method: 'POST', body: form });
+          const data = await res.json() as any;
+          return data.ok && data.result?.document?.file_id ? { fileId: data.result.document.file_id, encrypted: true } : null;
         }
-      } else {
         const form = new FormData();
         form.append('chat_id', channelId);
-        form.append('photo', new Blob([thumbBytes], { type: 'image/jpeg' }), 'thumb.jpg');
-        const res = await fetch(`https://api.telegram.org/bot${botToken}/sendPhoto`, { method: 'POST', body: form });
+        form.append('photo', new Blob([bytes], { type: 'image/jpeg' }), 'thumb.jpg');
+        const res = await tgFetchWithRetry(`https://api.telegram.org/bot${botToken}/sendPhoto`, { method: 'POST', body: form });
         const data = await res.json() as any;
-        if (data.ok && data.result.photo?.length > 0) telegramThumbId = data.result.photo[0].file_id;
+        return data.ok && data.result.photo?.length > 0 ? { fileId: data.result.photo[0].file_id, encrypted: false } : null;
+      } finally {
+        queue.release();
       }
-    } finally {
-      queue.release();
-    }
+    };
 
-    if (!telegramThumbId) {
-      return json({ message: 'Telegram thumbnail upload failed' }, 500);
-    }
+    const thumb = await storeOne(thumbBytes);
+    if (!thumb) return json({ message: 'Telegram thumbnail upload failed' }, 500);
 
-    // Partial UPDATE only — never re-INSERT. This patches just the thumbnail
-    // columns and leaves ownerId / fileName / fileCreatedAt / all metadata and
-    // timestamps untouched. (savePhoto's upsert would fail NOT NULL on a
-    // partial row, which is what made the Fix-HEIC tool report 0 fixed.)
-    const update: any = { telegramThumbId, thumbEncrypted: thumbEncrypted ? 1 : 0 };
+    // Partial UPDATE only — never re-INSERT. Patches just the thumbnail/preview
+    // columns; ownerId / fileName / fileCreatedAt / all metadata + timestamps
+    // stay untouched. (savePhoto's upsert would fail NOT NULL on a partial row.)
+    const update: any = { telegramThumbId: thumb.fileId, thumbEncrypted: thumb.encrypted ? 1 : 0 };
     if (thumbhash) update.thumbhash = thumbhash;
+
+    // Optional full-size preview — best-effort; a failed preview must not fail
+    // the thumbnail. Served for preview/fullsize requests so web shows a JPEG.
+    if (previewBytes) {
+      const preview = await storeOne(previewBytes);
+      if (preview) {
+        update.telegramPreviewId = preview.fileId;
+        update.previewEncrypted = preview.encrypted ? 1 : 0;
+      }
+    }
+
     if (env.DB) {
       await new D1Adapter(env.DB).updatePhoto(assetId, update);
     } else {
       await firestoreSet(env, uid, `photos/${assetId}`, update, idToken);
     }
-    console.log(`[ThumbnailUpload] Stored backfilled thumbnail for ${assetId} (encrypted=${thumbEncrypted}, thumbhash=${!!thumbhash})`);
+    console.log(`[ThumbnailUpload] Stored thumb${update.telegramPreviewId ? '+preview' : ''} for ${assetId}`);
 
-    return json({ success: true, telegramThumbId, thumbhash: thumbhash || null });
+    return json({ success: true, telegramThumbId: thumb.fileId, preview: !!update.telegramPreviewId, thumbhash: thumbhash || null });
   } catch (err: any) {
     console.error(`[ThumbnailUpload] Error for ${assetId}:`, err);
     return json({ message: err.message }, 500);
@@ -989,10 +1002,14 @@ async function handleThumbnail(request: Request, env: Env, uid: string, assetId:
   const isMultiChunk = photo.telegramChunks && photo.telegramChunks.length > 1;
   let fileId: string;
 
-  if (wantsHighQuality && !isMultiChunk) {
+  if (wantsHighQuality && photo.telegramPreviewId) {
+    // A client-generated JPEG preview exists (e.g. from the HEIC fixer) — serve
+    // it for full-view requests so the browser never has to decode the HEIC.
+    fileId = photo.telegramPreviewId;
+  } else if (wantsHighQuality && !isMultiChunk) {
     fileId = photo.telegramOriginalId || photo.telegramThumbId;
   } else {
-    fileId = photo.telegramThumbId || photo.telegramOriginalId;
+    fileId = photo.telegramThumbId || photo.telegramPreviewId || photo.telegramOriginalId;
   }
 
   if (!fileId) {
@@ -1021,15 +1038,16 @@ async function handleThumbnail(request: Request, env: Env, uid: string, assetId:
   // uploads) stored a plain JPEG via sendPhoto. Decrypt only when both:
   // server-zke is on AND the stored thumb is flagged encrypted.
   const servingThumb = !!photo.telegramThumbId && fileId === photo.telegramThumbId;
-  const thumbIsEncrypted = servingThumb && (photo.thumbEncrypted === 1 || photo.thumbEncrypted === true || photo.thumbEncrypted === '1');
-  // Always attempt decryption for server-ZKE photos. thumbEncrypted flag may be 0 for
-  // clientUpload paths that encrypted the thumb but didn't pass the flag through.
-  // We try-decrypt and fall back to raw bytes if AES-GCM auth fails (plain JPEG thumb).
+  const servingPreview = !!photo.telegramPreviewId && fileId === photo.telegramPreviewId;
+  // Always attempt decryption for server-ZKE photos. The encrypted flag may be 0
+  // for clientUpload paths that encrypted but didn't pass the flag through.
+  // We try-decrypt and fall back to raw bytes if AES-GCM auth fails (plain JPEG).
   const decryptThis = isServerZke;
   const key = isServerZke ? await getEncryptionKey(env, uid, idToken) : null;
+  // Thumb and preview are always JPEG; only the original keeps its real mime
+  // (e.g. image/heic). So a served thumb/preview must advertise image/jpeg.
   let mimeType = photo.mimeType;
-  if (photo.isHeic) mimeType = 'image/heic';
-  if (servingThumb) {
+  if (servingThumb || servingPreview) {
     mimeType = 'image/jpeg';
   } else if (photo.isHeic) {
     mimeType = 'image/heic';

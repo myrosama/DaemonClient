@@ -1,82 +1,64 @@
 import { rgbaToThumbHash } from 'thumbhash';
 
-// Persists a real server-side thumbnail + ThumbHash for assets the worker
-// can't thumbnail itself (HEIC, and HEIC live-photo stills). The decode happens
-// in the browser — $0 and scales per-user, no central bottleneck. Used two ways:
-//   1. passively, when an HEIC is converted for display in ImageThumbnail; and
-//   2. in bulk, from the Utilities "Fix HEIC thumbnails" tool.
-// Once stored, every future view (web AND the mobile app) gets an instant
-// thumbnail, and the changed ThumbHash naturally busts the old cached URL.
+// Used by the Utilities "Fix HEIC & missing thumbnails" tool. For each asset
+// the worker can't thumbnail itself (HEIC, HEIC live-photo stills), the browser
+// decodes it and produces THREE things, which are stored on the worker:
+//   - a 720px JPEG thumbnail (fast grid), and its ThumbHash (instant blur), and
+//   - a ~2048px high-quality JPEG preview (so the web viewer shows a JPEG
+//     instead of decoding the HEIC original — full view loads fast).
+// The original HEIC is never touched, so downloads stay true-original and no
+// metadata/timestamps change. Decode is on the user's device → $0, scales.
 
-const backfilled = new Set<string>();
+function drawScaled(bitmap: ImageBitmap, maxEdge: number) {
+  const s = Math.min(maxEdge / bitmap.width, maxEdge / bitmap.height, 1);
+  const w = Math.max(1, Math.round(bitmap.width * s));
+  const h = Math.max(1, Math.round(bitmap.height * s));
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d')!;
+  ctx.drawImage(bitmap, 0, 0, w, h);
+  return { canvas, ctx, w, h };
+}
 
-async function blobToThumbAndHash(imageBlob: Blob): Promise<{ jpeg: Blob; thumbhash: string }> {
+function toJpeg(canvas: HTMLCanvasElement, quality: number): Promise<Blob> {
+  return new Promise((resolve, reject) =>
+    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('toBlob failed'))), 'image/jpeg', quality),
+  );
+}
+
+async function deriveAssets(imageBlob: Blob): Promise<{ thumb: Blob; preview: Blob; thumbhash: string }> {
   const bitmap = await createImageBitmap(imageBlob);
   try {
-    // Downscaled JPEG thumbnail (≤720px longest edge) — small but sharp.
-    const ts = Math.min(720 / bitmap.width, 720 / bitmap.height, 1);
-    const tw = Math.max(1, Math.round(bitmap.width * ts));
-    const th = Math.max(1, Math.round(bitmap.height * ts));
-    const tc = document.createElement('canvas');
-    tc.width = tw;
-    tc.height = th;
-    tc.getContext('2d')!.drawImage(bitmap, 0, 0, tw, th);
-    const jpeg = await new Promise<Blob>((resolve, reject) =>
-      tc.toBlob((b) => (b ? resolve(b) : reject(new Error('toBlob failed'))), 'image/jpeg', 0.8),
-    );
-
-    // ThumbHash needs ≤100px on the longest edge.
-    const hs = Math.min(100 / bitmap.width, 100 / bitmap.height, 1);
-    const hw = Math.max(1, Math.round(bitmap.width * hs));
-    const hh = Math.max(1, Math.round(bitmap.height * hs));
-    const hc = document.createElement('canvas');
-    hc.width = hw;
-    hc.height = hh;
-    const hctx = hc.getContext('2d')!;
-    hctx.drawImage(bitmap, 0, 0, hw, hh);
-    const { data } = hctx.getImageData(0, 0, hw, hh);
-    const hash = rgbaToThumbHash(hw, hh, data);
+    const thumb = await toJpeg(drawScaled(bitmap, 720).canvas, 0.8);
+    // ~2048px, high quality — close to the original for on-screen viewing.
+    const preview = await toJpeg(drawScaled(bitmap, 2048).canvas, 0.85);
+    // ThumbHash needs ≤100px.
+    const { ctx, w, h } = drawScaled(bitmap, 100);
+    const { data } = ctx.getImageData(0, 0, w, h);
+    const hash = rgbaToThumbHash(w, h, data);
     let bin = '';
     for (const b of hash) bin += String.fromCharCode(b);
-    return { jpeg, thumbhash: btoa(bin) };
+    return { thumb, preview, thumbhash: btoa(bin) };
   } finally {
     bitmap.close?.();
   }
 }
 
-async function postThumbnail(assetId: string, jpeg: Blob, thumbhash: string): Promise<boolean> {
+async function postBackfill(assetId: string, thumb: Blob, preview: Blob, thumbhash: string): Promise<boolean> {
   const form = new FormData();
-  form.append('thumbnail', jpeg, 'thumb.jpg');
+  form.append('thumbnail', thumb, 'thumb.jpg');
+  form.append('preview', preview, 'preview.jpg');
   form.append('thumbhash', thumbhash);
-  // Relative /api path → the service worker adds auth + routes to the user's worker.
+  // Relative /api → the service worker adds auth + routes to the user's worker.
   const res = await fetch(`/api/assets/${assetId}/thumbnail`, { method: 'POST', body: form });
   return res.ok;
 }
 
 /**
- * Passive backfill: called with the JPEG already produced by heic2any when an
- * HEIC tile is rendered. Fire-and-forget; deduped per session so we don't
- * re-upload on every re-render before the timeline reloads with the new hash.
- */
-export async function backfillFromConvertedBlob(assetId: string, convertedJpeg: Blob): Promise<boolean> {
-  if (!assetId || backfilled.has(assetId)) return false;
-  backfilled.add(assetId);
-  try {
-    const { jpeg, thumbhash } = await blobToThumbAndHash(convertedJpeg);
-    const ok = await postThumbnail(assetId, jpeg, thumbhash);
-    if (!ok) backfilled.delete(assetId);
-    return ok;
-  } catch (e) {
-    backfilled.delete(assetId);
-    console.warn('[heic-backfill] passive failed', assetId, e);
-    return false;
-  }
-}
-
-/**
- * Bulk backfill for the Utilities tool: fetch the asset's original (the worker
- * serves the decrypted HEIC), decode it in-browser via heic2any, then store the
- * thumbnail + thumbhash. Heavy (full HEIC decode), so callers must throttle.
+ * Fetch an asset's original, decode it in-browser (HEIC via libheif, others
+ * directly), and store a thumbnail + preview + thumbhash on the worker.
+ * Heavy (full-image decode), so the caller must run these sequentially.
  */
 export async function backfillAssetById(assetId: string): Promise<boolean> {
   if (!assetId) return false;
@@ -84,21 +66,18 @@ export async function backfillAssetById(assetId: string): Promise<boolean> {
     const res = await fetch(`/api/assets/${assetId}/original`);
     if (!res.ok) return false;
     const blob = await res.blob();
-    // HEIC needs heic2any first; other images decode directly via createImageBitmap.
     const head = new Uint8Array(await blob.slice(0, 16).arrayBuffer());
     const txt = String.fromCharCode(...head);
     const isHeic = txt.includes('heic') || txt.includes('heif') || txt.includes('hevc') || txt.includes('mif1');
     let imageBlob: Blob = blob;
     if (isHeic) {
       const { decodeHeicToBlob } = await import('$lib/utils/heic-decode');
-      imageBlob = await decodeHeicToBlob(blob);
+      imageBlob = await decodeHeicToBlob(blob, 0.95);
     }
-    const { jpeg, thumbhash } = await blobToThumbAndHash(imageBlob);
-    const ok = await postThumbnail(assetId, jpeg, thumbhash);
-    if (ok) backfilled.add(assetId);
-    return ok;
+    const { thumb, preview, thumbhash } = await deriveAssets(imageBlob);
+    return await postBackfill(assetId, thumb, preview, thumbhash);
   } catch (e) {
-    console.warn('[heic-backfill] bulk failed', assetId, e);
+    console.warn('[heic-backfill] failed', assetId, e);
     return false;
   }
 }

@@ -80,7 +80,7 @@ CREATE TABLE photos (
   checksum TEXT, isHeic INTEGER DEFAULT 0, livePhotoVideoId TEXT,
   isFavorite INTEGER DEFAULT 0, isTrashed INTEGER DEFAULT 0,
   visibility TEXT DEFAULT 'timeline', description TEXT, city TEXT, country TEXT,
-  thumbhash TEXT
+  thumbhash TEXT, telegramPreviewId TEXT, previewEncrypted INTEGER DEFAULT 0
 );
 CREATE INDEX idx_photos_uploadedAt ON photos(uploadedAt DESC);
 CREATE INDEX idx_photos_fileCreatedAt ON photos(fileCreatedAt DESC);
