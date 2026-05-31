@@ -12,10 +12,20 @@
   let failed = $state(0);
   let cancel = false;
 
-  // Find IMAGE assets with no stored ThumbHash — these are the ones whose
-  // thumbnail the worker couldn't generate (HEIC, HEIC live-photo stills). The
-  // timeline bucket payload exposes id/isImage/thumbhash as parallel arrays.
+  // Ask the worker exactly which assets still need fixing: HEIC images without a
+  // JPEG preview yet (incl. ones that already got a thumbnail), plus any image
+  // missing a thumbhash. Falls back to scanning the timeline for no-thumbhash
+  // images if the endpoint isn't available.
   async function findCandidates(): Promise<string[]> {
+    try {
+      const res = await fetch('/api/assets/pending-thumbnail-fix');
+      if (res.ok) {
+        const d = (await res.json()) as { ids?: string[] };
+        if (Array.isArray(d.ids)) return d.ids;
+      }
+    } catch {
+      // fall through to timeline scan
+    }
     const res = await fetch('/api/timeline/buckets?isTrashed=false');
     if (!res.ok) return [];
     const buckets = (await res.json()) as Array<{ timeBucket: string }>;

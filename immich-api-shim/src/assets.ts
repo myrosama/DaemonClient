@@ -76,6 +76,22 @@ export async function handleAssets(request: Request, env: Env, path: string, url
   const idToken = session.idToken;
 
   try {
+  // Asset IDs that still need the client-side Fix-HEIC tool: HEIC images with
+  // no JPEG preview yet, plus any image missing a thumbhash. Lets the tool
+  // target exactly what's left (incl. HEICs that already got a thumbnail but
+  // not yet a preview), instead of rescanning the whole timeline.
+  if (path === '/api/assets/pending-thumbnail-fix' && request.method === 'GET') {
+    if (!env.DB) return json({ ids: [] });
+    const rows = await env.DB.prepare(
+      `SELECT id FROM photos
+         WHERE ownerId = ? AND (isTrashed = 0 OR isTrashed IS NULL) AND mimeType LIKE 'image/%'
+           AND ( ((isHeic = 1 OR mimeType LIKE '%hei%') AND (telegramPreviewId IS NULL OR telegramPreviewId = ''))
+                 OR thumbhash IS NULL OR thumbhash = '' )
+         LIMIT 5000`
+    ).bind(uid).all();
+    return json({ ids: (rows.results || []).map((r: any) => r.id) });
+  }
+
   if (path === '/api/assets/zke-status' && request.method === 'GET') {
     if (env.DB) {
       const adapter = new D1Adapter(env.DB);
