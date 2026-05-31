@@ -736,11 +736,14 @@ async function handleUpload(request: Request, env: Env, uid: string, idToken: st
       }
     }
 
-    // Strategy 2: derive a thumb from the raw file. If the upload is
-    // unencrypted, sendPhoto/sendVideo gives us a Telegram-generated thumb.
-    // If encrypted, we read up to CHUNK_SIZE off the head, encrypt it, and
-    // push as an opaque document — same shape as the chunked original.
-    if (!telegramThumbId && (isImage || isVideo) && isSingleChunk && file) {
+    // Strategy 2: derive a thumb from the raw file — ONLY for non-HEIC images.
+    // HEIC and video are deliberately skipped here: Telegram can't thumbnail
+    // HEIC (the temp-send produces nothing — pure wasted Telegram ops + pacing
+    // delay), and at auto-backup scale that wasted work timed out the worker and
+    // triggered Cloudflare 5xx. The Utilities "Fix" tool handles HEIC + video
+    // thumbnails client-side instead, so these uploads just store the blob and
+    // return fast.
+    if (!telegramThumbId && isImage && !isHeic && !isVideo && isSingleChunk && file) {
       try {
         const rawSlice = file.slice(0, Math.min(file.size, CHUNK_SIZE));
         const rawData = await rawSlice.arrayBuffer();

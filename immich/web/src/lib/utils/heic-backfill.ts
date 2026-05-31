@@ -30,7 +30,11 @@ function toJpeg(canvas: HTMLCanvasElement, quality: number): Promise<Blob> {
 async function deriveAssets(imageBlob: Blob): Promise<{ thumb: Blob; preview: Blob; thumbhash: string }> {
   const bitmap = await createImageBitmap(imageBlob);
   try {
-    const thumb = await toJpeg(drawScaled(bitmap, 720).canvas, 0.8);
+    // 256px @ q0.8 — exactly matches the web uploader's thumbnail size, so
+    // fixed-HEIC grid tiles download as fast as normally-uploaded photos
+    // (~20KB, not the ~70KB a 720px thumb produced). The full-size preview
+    // below is what carries the quality for the detail view.
+    const thumb = await toJpeg(drawScaled(bitmap, 256).canvas, 0.8);
     // Near-native resolution, high quality (~2-3MB) so the web full view feels
     // like the real photo. The untouched HEIC original is still what downloads.
     const preview = await toJpeg(drawScaled(bitmap, 4096).canvas, 0.9);
