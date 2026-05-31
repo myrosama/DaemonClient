@@ -1383,22 +1383,37 @@ function toAssetResponseDto(photo: any, ownerId: string): any {
 // NOT paced (they don't go through here) so thumbnails stay fast.
 const lastSendAt: Record<string, number> = {};
 const SEND_INTERVAL_MS = 1500;
+const MAX_PACE_WAIT_MS = 4000; // never hang a single send longer than this
 async function paceSend(botToken: string): Promise<void> {
   const now = Date.now();
-  const slot = Math.max(now, (lastSendAt[botToken] || 0) + SEND_INTERVAL_MS);
-  lastSendAt[botToken] = slot;
+  const last = lastSendAt[botToken] || 0;
+  const slot = Math.max(now, last + SEND_INTERVAL_MS);
   const wait = slot - now;
+  // BOUND the backlog. Under concurrency, reserving cumulative future slots
+  // would otherwise stack into minute-long hangs that overwhelm the worker and
+  // make Cloudflare 503 the whole isolate. If the backlog exceeds the cap, stop
+  // pacing this send (reset the clock) and let it through — the 429-retry
+  // handles any overflow. So a send waits at most MAX_PACE_WAIT_MS.
+  if (wait > MAX_PACE_WAIT_MS) {
+    lastSendAt[botToken] = now;
+    return;
+  }
+  lastSendAt[botToken] = slot;
   if (wait > 0) await new Promise((r) => setTimeout(r, wait));
 }
 
-async function tgFetchWithRetry(url: string, options?: RequestInit, maxRetries = 4): Promise<Response> {
+async function tgFetchWithRetry(url: string, options?: RequestInit, maxRetries = 3): Promise<Response> {
   const botToken = url.match(/\/bot([^/]+)\//)?.[1] || '';
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     if (botToken) await paceSend(botToken); // rate-limit sends per bot
     const res = await fetch(url, options);
     if (res.status === 429 || res.status === 420) {
       const body = await res.json().catch(() => ({})) as any;
-      const retryAfter = body?.parameters?.retry_after || 5;
+      // Cap the wait: Telegram flood-waits can be 30-60s, and hanging the worker
+      // request that long (×retries) overwhelms the isolate → 503. Wait a
+      // bounded amount; if it's still limited after retries, return the 429 and
+      // let the client re-queue (background backup retries failed photos later).
+      const retryAfter = Math.min(body?.parameters?.retry_after || 3, 6);
       console.warn(`[tgFetch] 429 on ${url.substring(0, 80)}..., waiting ${retryAfter}s (attempt ${attempt + 1})`);
       await new Promise(r => setTimeout(r, (retryAfter + 1) * 1000));
       continue;
