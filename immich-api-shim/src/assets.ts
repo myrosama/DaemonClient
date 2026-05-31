@@ -1463,25 +1463,31 @@ function toAssetResponseDto(photo: any, ownerId: string): any {
 // keeps big background batch uploads under the limit instead of slamming into
 // the 429 wall (which is what was failing the tail of a batch). Downloads are
 // NOT paced (they don't go through here) so thumbnails stay fast.
-const lastSendAt: Record<string, number> = {};
-const SEND_INTERVAL_MS = 1500;
+// Token-bucket send pacer per bot. Telegram allows ~20 sendDocument / 30s to a
+// chat with short bursts tolerated. Strict 1.5s-per-send spacing made a single
+// video upload slow (each of its chunks waited 1.5s) and starved foreground
+// uploads while a backup ran. A bucket fixes that: SEND_BURST tokens let a
+// file's chunks (or a few quick ops) fire immediately, and tokens refill at the
+// sustained safe rate. Waits are capped so a send never hangs the worker into a
+// 503; overflow falls through to the 429-retry.
+const sendBuckets: Record<string, { tokens: number; last: number }> = {};
+const SEND_INTERVAL_MS = 1500; // sustained refill: 1 token / 1.5s (~20 per 30s)
+const SEND_BURST = 8;          // immediate burst capacity
 const MAX_PACE_WAIT_MS = 4000; // never hang a single send longer than this
 async function paceSend(botToken: string): Promise<void> {
   const now = Date.now();
-  const last = lastSendAt[botToken] || 0;
-  const slot = Math.max(now, last + SEND_INTERVAL_MS);
-  const wait = slot - now;
-  // BOUND the backlog. Under concurrency, reserving cumulative future slots
-  // would otherwise stack into minute-long hangs that overwhelm the worker and
-  // make Cloudflare 503 the whole isolate. If the backlog exceeds the cap, stop
-  // pacing this send (reset the clock) and let it through — the 429-retry
-  // handles any overflow. So a send waits at most MAX_PACE_WAIT_MS.
-  if (wait > MAX_PACE_WAIT_MS) {
-    lastSendAt[botToken] = now;
-    return;
+  let b = sendBuckets[botToken];
+  if (!b) { b = { tokens: SEND_BURST, last: now }; sendBuckets[botToken] = b; }
+  const refill = Math.floor((now - b.last) / SEND_INTERVAL_MS);
+  if (refill > 0) {
+    b.tokens = Math.min(SEND_BURST, b.tokens + refill);
+    b.last += refill * SEND_INTERVAL_MS;
   }
-  lastSendAt[botToken] = slot;
+  if (b.tokens >= 1) { b.tokens -= 1; return; } // token available → send now
+  // Bucket empty: wait for the next token, but never longer than the cap.
+  const wait = Math.min(Math.max(b.last + SEND_INTERVAL_MS - now, 0), MAX_PACE_WAIT_MS);
   if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+  b.last = Date.now(); // consumed the refilled token
 }
 
 async function tgFetchWithRetry(url: string, options?: RequestInit, maxRetries = 3): Promise<Response> {
