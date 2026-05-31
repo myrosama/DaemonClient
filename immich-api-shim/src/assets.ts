@@ -82,11 +82,17 @@ export async function handleAssets(request: Request, env: Env, path: string, url
   // not yet a preview), instead of rescanning the whole timeline.
   if (path === '/api/assets/pending-thumbnail-fix' && request.method === 'GET') {
     if (!env.DB) return json({ ids: [] });
+    // ?all=1 re-processes EVERY HEIC (even ones already fixed) — used to upgrade
+    // older low-quality previews to the current quality. Default only returns
+    // what's actually missing (HEIC without preview, or image without thumbhash).
+    const all = new URL(request.url).searchParams.get('all') === '1';
+    const where = all
+      ? `(isHeic = 1 OR mimeType LIKE '%hei%') OR thumbhash IS NULL OR thumbhash = ''`
+      : `((isHeic = 1 OR mimeType LIKE '%hei%') AND (telegramPreviewId IS NULL OR telegramPreviewId = '')) OR thumbhash IS NULL OR thumbhash = ''`;
     const rows = await env.DB.prepare(
       `SELECT id FROM photos
          WHERE ownerId = ? AND (isTrashed = 0 OR isTrashed IS NULL) AND mimeType LIKE 'image/%'
-           AND ( ((isHeic = 1 OR mimeType LIKE '%hei%') AND (telegramPreviewId IS NULL OR telegramPreviewId = ''))
-                 OR thumbhash IS NULL OR thumbhash = '' )
+           AND ( ${where} )
          LIMIT 5000`
     ).bind(uid).all();
     return json({ ids: (rows.results || []).map((r: any) => r.id) });

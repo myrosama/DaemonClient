@@ -10,6 +10,7 @@
   let processed = $state(0);
   let fixed = $state(0);
   let failed = $state(0);
+  let reprocessAll = $state(false);
   let cancel = false;
 
   // Ask the worker exactly which assets still need fixing: HEIC images without a
@@ -18,7 +19,7 @@
   // images if the endpoint isn't available.
   async function findCandidates(): Promise<string[]> {
     try {
-      const res = await fetch('/api/assets/pending-thumbnail-fix');
+      const res = await fetch(`/api/assets/pending-thumbnail-fix${reprocessAll ? '?all=1' : ''}`);
       if (res.ok) {
         const d = (await res.json()) as { ids?: string[] };
         if (Array.isArray(d.ids)) return d.ids;
@@ -79,6 +80,10 @@
     </Text>
 
     {#if phase === 'idle'}
+      <label class="flex items-center gap-2 mt-4 text-sm cursor-pointer">
+        <input type="checkbox" bind:checked={reprocessAll} />
+        <span>Re-process already-fixed HEICs (upgrade preview quality)</span>
+      </label>
       <div class="flex justify-end mt-4">
         <Button size="small" onclick={start}>Start</Button>
       </div>
