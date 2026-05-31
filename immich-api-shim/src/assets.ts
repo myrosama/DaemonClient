@@ -575,10 +575,14 @@ async function handleUpload(request: Request, env: Env, uid: string, idToken: st
 
       const queue = getTgQueue(botToken);
       await queue.acquire(undefined, 1); // Priority 1 for uploads (low)
-      let tgRes: Response;
       let tgData: any;
       try {
-        tgRes = await fetch(`https://api.telegram.org/bot${botToken}/sendDocument`, {
+        // Retry on 429 with backoff (tgFetchWithRetry honours Telegram's
+        // retry_after). A big batch upload fires many sends per photo (blob +
+        // thumb), so without this the tail of a batch gets rate-limited and
+        // those photos fail. The backoff is the "delay" that kicks in exactly
+        // when Telegram throttles.
+        const tgRes = await tgFetchWithRetry(`https://api.telegram.org/bot${botToken}/sendDocument`, {
           method: 'POST', body: tgFormData,
         });
         tgData = await tgRes.json() as any;

@@ -132,10 +132,8 @@
           }
 
           if (isHeic) {
-            const module = await import('$lib/utils/heic2any.js');
-            const heic2any = module.default || module;
-            const converted = await heic2any({ blob, toType: 'image/jpeg' });
-            const finalBlob = Array.isArray(converted) ? converted[0] : converted;
+            const { decodeHeicToBlob } = await import('$lib/utils/heic-decode');
+            const finalBlob = await decodeHeicToBlob(blob);
             if (destroyed) return;
             objectUrl = URL.createObjectURL(finalBlob);
             // Persist a real thumbnail + thumbhash back to the worker so future

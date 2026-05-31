@@ -90,10 +90,8 @@ export async function backfillAssetById(assetId: string): Promise<boolean> {
     const isHeic = txt.includes('heic') || txt.includes('heif') || txt.includes('hevc') || txt.includes('mif1');
     let imageBlob: Blob = blob;
     if (isHeic) {
-      const module = await import('$lib/utils/heic2any.js');
-      const heic2any = (module as any).default || module;
-      const converted = await heic2any({ blob, toType: 'image/jpeg' });
-      imageBlob = Array.isArray(converted) ? converted[0] : converted;
+      const { decodeHeicToBlob } = await import('$lib/utils/heic-decode');
+      imageBlob = await decodeHeicToBlob(blob);
     }
     const { jpeg, thumbhash } = await blobToThumbAndHash(imageBlob);
     const ok = await postThumbnail(assetId, jpeg, thumbhash);
