@@ -368,6 +368,7 @@ async function fetchTelegramThumb(
       const form = new FormData();
       form.append('chat_id', channelId);
       form.append('document', new Blob([rawData], { type: mimeType || 'application/octet-stream' }), fileName);
+      await paceSend(botToken); // rate-limit sends per bot
       const res = await fetch(`https://api.telegram.org/bot${botToken}/sendDocument`, { method: 'POST', body: form });
       const j = await res.json() as any;
 
@@ -769,7 +770,7 @@ async function handleUpload(request: Request, env: Env, uid: string, idToken: st
               const encForm = new FormData();
               encForm.append('chat_id', channelId);
               encForm.append('document', new Blob([encThumb], { type: 'application/octet-stream' }), 'thumb.bin');
-              const r = await fetch(`https://api.telegram.org/bot${botToken}/sendDocument`, { method: 'POST', body: encForm });
+              const r = await tgFetchWithRetry(`https://api.telegram.org/bot${botToken}/sendDocument`, { method: 'POST', body: encForm });
               const j = await r.json() as any;
               if (j.ok && j.result?.document?.file_id) {
                 telegramThumbId = j.result.document.file_id;
@@ -1367,8 +1368,27 @@ function toAssetResponseDto(photo: any, ownerId: string): any {
 }
 
 // --- Telegram Fetch with Retry ---
+// Per-bot send pacer. Telegram allows ~20 sendDocument / 30s to one chat (and
+// ~1 msg/s generally); exceeding it returns a 429 that blocks the WHOLE bot for
+// retry_after (up to ~35s). So we serialise sends to >=SEND_INTERVAL_MS apart
+// per bot — reserving a future slot so concurrent calls still space out. This
+// keeps big background batch uploads under the limit instead of slamming into
+// the 429 wall (which is what was failing the tail of a batch). Downloads are
+// NOT paced (they don't go through here) so thumbnails stay fast.
+const lastSendAt: Record<string, number> = {};
+const SEND_INTERVAL_MS = 1500;
+async function paceSend(botToken: string): Promise<void> {
+  const now = Date.now();
+  const slot = Math.max(now, (lastSendAt[botToken] || 0) + SEND_INTERVAL_MS);
+  lastSendAt[botToken] = slot;
+  const wait = slot - now;
+  if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+}
+
 async function tgFetchWithRetry(url: string, options?: RequestInit, maxRetries = 4): Promise<Response> {
+  const botToken = url.match(/\/bot([^/]+)\//)?.[1] || '';
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    if (botToken) await paceSend(botToken); // rate-limit sends per bot
     const res = await fetch(url, options);
     if (res.status === 429 || res.status === 420) {
       const body = await res.json().catch(() => ({})) as any;

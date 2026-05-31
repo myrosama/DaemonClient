@@ -48,6 +48,7 @@
 
   let loaded = $state(false);
   let errored = $state(false);
+  let heicNeedsFix = $state(false);
   let objectUrl = $state('');
   let destroyed = false;
 
@@ -148,10 +149,10 @@
         await queueTicket.promise;
       } catch (err: any) {
         if (err?.name === 'AbortError' || err?.message === 'cancelled') return;
-        // HEIC with no real thumbnail yet — show the placeholder immediately,
-        // don't retry (retrying re-fetches the same un-decodable HEIC).
+        // HEIC with no real thumbnail yet — show a "needs fixing" hint (not the
+        // broken icon), and don't retry (re-fetching the same HEIC won't help).
         if (err?.message === 'HEIC_SKIP') {
-          if (!destroyed) setErrored();
+          if (!destroyed) { heicNeedsFix = true; onComplete?.(true); }
           return;
         }
         if (retryCount < MAX_RETRIES && !destroyed) {
@@ -207,6 +208,7 @@
           }
           loaded = false;
           errored = false;
+          heicNeedsFix = false;
           retryCount = 0;
           if (preload) {
             performLoad();
@@ -229,7 +231,20 @@
   }
 </script>
 
-{#if errored}
+{#if heicNeedsFix}
+  <div
+    class={['bg-gray-200 dark:bg-gray-800 flex flex-col items-center justify-center text-center p-2 gap-1', sharedClasses, brokenAssetClass].filter(Boolean).join(' ')}
+    {style}
+    title="HEIC can't be shown on the web yet — run Utilities → Fix HEIC & missing thumbnails"
+  >
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="w-6 h-6 text-gray-400 opacity-60">
+      <path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/>
+    </svg>
+    <span class="text-[10px] leading-tight text-gray-500 dark:text-gray-400 @min-[90px]:block hidden">
+      HEIC — run Utilities → Fix to view on web
+    </span>
+  </div>
+{:else if errored}
   <div
     class={['bg-gray-300 dark:bg-gray-700 flex items-center justify-center', sharedClasses, brokenAssetClass].filter(Boolean).join(' ')}
     {style}

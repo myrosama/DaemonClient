@@ -31,8 +31,9 @@ async function deriveAssets(imageBlob: Blob): Promise<{ thumb: Blob; preview: Bl
   const bitmap = await createImageBitmap(imageBlob);
   try {
     const thumb = await toJpeg(drawScaled(bitmap, 720).canvas, 0.8);
-    // ~2048px, high quality — close to the original for on-screen viewing.
-    const preview = await toJpeg(drawScaled(bitmap, 2048).canvas, 0.85);
+    // Near-native resolution, high quality (~2-3MB) so the web full view feels
+    // like the real photo. The untouched HEIC original is still what downloads.
+    const preview = await toJpeg(drawScaled(bitmap, 4096).canvas, 0.9);
     // ThumbHash needs ≤100px.
     const { ctx, w, h } = drawScaled(bitmap, 100);
     const { data } = ctx.getImageData(0, 0, w, h);
