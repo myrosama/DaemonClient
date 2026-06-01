@@ -57,9 +57,12 @@ const websocket: Socket<Events> = io({
   autoConnect: false,
 });
 
+// DaemonClient has no real WebSocket backend — the socket never connects.
+// Pre-seed connected=true and a static server version so the sidebar shows
+// "Server Online v2.7.5" instead of "Server Offline / Unknown".
 export const websocketStore = {
-  connected: writable<boolean>(false),
-  serverVersion: writable<ServerVersionResponseDto>(),
+  connected: writable<boolean>(true),
+  serverVersion: writable<ServerVersionResponseDto>({ major: 2, minor: 7, patch: 5 }),
   serverRestarting: writable<undefined | AppRestartEvent>(),
 };
 

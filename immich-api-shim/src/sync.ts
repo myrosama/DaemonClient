@@ -75,7 +75,12 @@ export async function handleSyncStream(request: Request, env: Env): Promise<Resp
           duration: (!photo.duration || photo.duration === '0' || photo.duration === '0.000' || photo.duration === '0:00:00.00000') ? null : photo.duration,
           height: photo.height || 0,
           isEdited: false,
-          isFavorite: photo.isFavorite || false,
+          // MUST be a real boolean: D1 stores isFavorite as INTEGER (0/1).
+          // `1 || false` evaluates to the number 1, and the native Dart app's
+          // AssetV1.fromJson requires a bool — an int 1 throws in the sync
+          // isolate (runInIsolateGentle) and aborts ALL remote sync, so no
+          // photos load. `!!` coerces both D1 ints and Firestore bools correctly.
+          isFavorite: !!photo.isFavorite,
           libraryId: null,
           livePhotoVideoId: photo.livePhotoVideoId || null,
           localDateTime: dateStr,

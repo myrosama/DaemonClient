@@ -150,13 +150,15 @@ export async function handleAssets(request: Request, env: Env, path: string, url
     // "Fix video thumbnails" utility). Kept separate from the default (images) so
     // existing HEIC tooling is unaffected and the candidate lists never mix.
     if (qp.get('type') === 'video') {
+      // Exclude live-photo partners — they're paired MOVs, not standalone videos
       const rows = await env.DB.prepare(
         `SELECT id FROM photos
            WHERE ownerId = ? AND (isTrashed = 0 OR isTrashed IS NULL)
              AND mimeType LIKE 'video/%'
              AND (telegramThumbId IS NULL OR telegramThumbId = '')
+             AND id NOT IN (SELECT livePhotoVideoId FROM photos WHERE livePhotoVideoId IS NOT NULL AND ownerId = ?)
            LIMIT 5000`
-      ).bind(uid).all();
+      ).bind(uid, uid).all();
       return json({ ids: (rows.results || []).map((r: any) => r.id) });
     }
     // ?all=1 re-processes EVERY HEIC (even ones already fixed) — used to upgrade
@@ -355,39 +357,77 @@ export async function handleAssets(request: Request, env: Env, path: string, url
     return json({});
   }
 
-  // Notifications — real count of assets needing the HEIC/thumbnail fix
+  // Notifications — real count of assets needing the HEIC/thumbnail fix,
+  // plus any operator broadcast announcement stored in Firestore global/announcement.
   if (path === '/api/notifications' && request.method === 'GET') {
-    if (!env.DB) return json([]);
-    // Use exactly the same WHERE as pending-thumbnail-fix default so the count
-    // matches what the HEIC fixer and video fixer actually process.
-    const [heicRow, videoRow] = await Promise.all([
-      env.DB.prepare(
-        `SELECT COUNT(*) as c FROM photos WHERE ownerId = ? AND (isTrashed = 0 OR isTrashed IS NULL)
-         AND mimeType LIKE 'image/%'
-         AND ((isHeic = 1 OR mimeType LIKE '%hei%') AND (telegramPreviewId IS NULL OR telegramPreviewId = ''))`
-      ).bind(uid).first<{ c: number }>(),
-      env.DB.prepare(
-        `SELECT COUNT(*) as c FROM photos WHERE ownerId = ? AND (isTrashed = 0 OR isTrashed IS NULL)
-         AND mimeType LIKE 'video/%' AND (telegramThumbId IS NULL OR telegramThumbId = '')`
-      ).bind(uid).first<{ c: number }>(),
-    ]);
-    const heicCount = heicRow?.c || 0;
-    const videoCount = videoRow?.c || 0;
-    const total = heicCount + videoCount;
-    if (total === 0) return json([]);
-    const parts = [];
-    if (heicCount > 0) parts.push(`${heicCount} HEIC photo${heicCount > 1 ? 's' : ''}`);
-    if (videoCount > 0) parts.push(`${videoCount} video${videoCount > 1 ? 's' : ''}`);
-    return json([{
-      id: 'heic-fix',
-      type: 'system',
-      level: 'warning',
-      title: 'Media needs attention',
-      message: `${parts.join(' and ')} need${total === 1 ? 's' : ''} fixing — open Utilities`,
-      read: false,
-      createdAt: new Date().toISOString(),
-      readAt: null,
-    }]);
+    const notifications: any[] = [];
+
+    // Per-user media-fix counts (requires D1).
+    if (env.DB) {
+      // Use exactly the same WHERE as pending-thumbnail-fix default so the count
+      // matches what the HEIC fixer and video fixer actually process.
+      const [heicRow, videoRow] = await Promise.all([
+        env.DB.prepare(
+          `SELECT COUNT(*) as c FROM photos WHERE ownerId = ? AND (isTrashed = 0 OR isTrashed IS NULL)
+           AND mimeType LIKE 'image/%'
+           AND ((isHeic = 1 OR mimeType LIKE '%hei%') AND (telegramPreviewId IS NULL OR telegramPreviewId = ''))`
+        ).bind(uid).first<{ c: number }>(),
+        // Exclude live-photo partner MOVs — those are paired stills, not standalone videos.
+        // A video is a live-photo partner when another photo's livePhotoVideoId points to it.
+        env.DB.prepare(
+          `SELECT COUNT(*) as c FROM photos WHERE ownerId = ? AND (isTrashed = 0 OR isTrashed IS NULL)
+           AND mimeType LIKE 'video/%' AND (telegramThumbId IS NULL OR telegramThumbId = '')
+           AND id NOT IN (SELECT livePhotoVideoId FROM photos WHERE livePhotoVideoId IS NOT NULL AND ownerId = ?)`
+        ).bind(uid, uid).first<{ c: number }>(),
+      ]);
+      const heicCount = heicRow?.c || 0;
+      const videoCount = videoRow?.c || 0;
+      const total = heicCount + videoCount;
+      if (total > 0) {
+        const parts: string[] = [];
+        if (heicCount > 0) parts.push(`${heicCount} HEIC photo${heicCount > 1 ? 's' : ''}`);
+        if (videoCount > 0) parts.push(`${videoCount} video${videoCount > 1 ? 's' : ''}`);
+        notifications.push({
+          id: 'heic-fix',
+          type: 'system',
+          level: 'warning',
+          title: 'Media needs attention',
+          message: `${parts.join(' and ')} need${total === 1 ? 's' : ''} fixing — open Utilities`,
+          read: false,
+          createdAt: new Date().toISOString(),
+          readAt: null,
+        });
+      }
+    }
+
+    // Operator broadcast announcement — stored in Firestore global/announcement.
+    // Any authenticated user can read this document (Firestore rule: allow read if request.auth != null).
+    try {
+      const announcementRes = await fetch(
+        `https://firestore.googleapis.com/v1/projects/${env.FIREBASE_PROJECT_ID}/databases/(default)/documents/global/announcement`,
+        { headers: { 'Authorization': `Bearer ${idToken}` } }
+      );
+      if (announcementRes.ok) {
+        const doc = await announcementRes.json() as any;
+        const f = doc?.fields;
+        if (f?.active?.booleanValue === true) {
+          notifications.push({
+            id: 'global-announcement',
+            type: 'system',
+            level: 'info',
+            title: f.title?.stringValue || 'Announcement',
+            message: f.message?.stringValue || '',
+            read: false,
+            createdAt: f.createdAt?.stringValue || new Date().toISOString(),
+            readAt: null,
+          });
+        }
+      }
+    } catch {
+      // Firestore unreachable — skip silently so per-user notifications still show.
+    }
+
+    return json(notifications);
   }
 
   // Map markers — photos with GPS coordinates
@@ -758,7 +798,11 @@ async function handleUpload(request: Request, env: Env, uid: string, idToken: st
         if (teVal === 'true' || teVal === '1') thumbEncrypted = true;
     } else {
         // --- Legacy Server-Side Upload Logic ---
+        // Define these before the loop so GPS extraction + Strategy 2 can reference them.
+        const isVideo = mimeType.startsWith('video/') && !isHeic;
+        const isImage = mimeType.startsWith('image/') || isHeic;
         const totalChunks = Math.ceil(fileSize / CHUNK_SIZE);
+        const isSingleChunk = totalChunks === 1;
     for (let i = 0; i < totalChunks; i++) {
       const start = i * CHUNK_SIZE;
       const end = Math.min(start + CHUNK_SIZE, fileSize);
@@ -887,10 +931,6 @@ async function handleUpload(request: Request, env: Env, uid: string, idToken: st
     //     path detects `thumbEncrypted=1` and decrypts before serving.
     //   - Unencrypted upload: send raw via sendPhoto/sendVideo so Telegram
     //     generates a small thumb we can serve directly.
-    const isVideo = mimeType.startsWith('video/') && !isHeic;
-    const isImage = mimeType.startsWith('image/') || isHeic;
-    const isSingleChunk = totalChunks === 1;
-
     // Strategy 1: Mobile-provided JPEG thumbnail
     if (!telegramThumbId && thumbBase64) {
       try {
@@ -1475,8 +1515,18 @@ async function handleOriginal(request: Request, env: Env, uid: string, assetId: 
 
     if (rangeHeader && totalSize > 0) {
       const parts = rangeHeader.replace(/bytes=/, "").split("-");
-      const start = parseInt(parts[0], 10) || 0;
-      let end = parts[1] ? parseInt(parts[1], 10) : totalSize - 1;
+      // RFC 7233 §2.1 suffix-range: "bytes=-N" means last N bytes.
+      // The naive `parseInt("", 10) || 0` coerces the empty prefix to 0,
+      // serving the FIRST N bytes instead — the wrong data for moov-at-end probes.
+      let start: number, end: number;
+      if (parts[0] === '') {
+        const suffixLen = parseInt(parts[1], 10);
+        end = totalSize - 1;
+        start = Math.max(0, totalSize - suffixLen);
+      } else {
+        start = parseInt(parts[0], 10);
+        end = parts[1] !== '' ? parseInt(parts[1], 10) : totalSize - 1;
+      }
 
       if (isNaN(start) || isNaN(end) || start < 0 || end >= totalSize || start > end) {
         return json({ message: 'Invalid range', requested: `${start}-${end}`, totalSize }, 416);
@@ -1581,8 +1631,15 @@ async function handleOriginal(request: Request, env: Env, uid: string, assetId: 
 
   if (rangeHeader && totalSize > 0 && data) {
       const parts = rangeHeader.replace(/bytes=/, "").split("-");
-      const start = parseInt(parts[0], 10) || 0;
-      const end = parts[1] ? parseInt(parts[1], 10) : totalSize - 1;
+      let start: number, end: number;
+      if (parts[0] === '') {
+        const suffixLen = parseInt(parts[1], 10);
+        end = totalSize - 1;
+        start = Math.max(0, totalSize - suffixLen);
+      } else {
+        start = parseInt(parts[0], 10);
+        end = parts[1] !== '' ? parseInt(parts[1], 10) : totalSize - 1;
+      }
 
       // Validate range header
       if (isNaN(start) || isNaN(end) || start < 0 || end >= totalSize || start > end) {
@@ -1632,9 +1689,9 @@ function toAssetResponseDto(photo: any, ownerId: string): any {
     fileModifiedAt: photo.uploadedAt || new Date().toISOString(),
     localDateTime: photo.fileCreatedAt || new Date().toISOString(),
     updatedAt: photo.uploadedAt || new Date().toISOString(),
-    isFavorite: photo.isFavorite || false,
+    isFavorite: !!photo.isFavorite,
     isArchived: photo.visibility === 'archive',
-    isTrashed: photo.isTrashed || false,
+    isTrashed: !!photo.isTrashed,
     isOffline: false,
     isEdited: false,
     hasMetadata: true,

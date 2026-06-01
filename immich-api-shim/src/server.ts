@@ -27,16 +27,30 @@ export async function handleServer(request: Request, env: Env, path: string): Pr
     return json({ photos: 0, videos: 0, usage: 0, usageByUser: [] });
   }
   if (path === '/api/server/storage') {
-    // diskSizeRaw / diskUseRaw must be real numbers — Immich renders them with
-    // formatBytes() which does Math.log(n) → NaN for ∞ string or -1.
-    // We return a large but finite number so the sidebar shows "X of 100 TB used"
-    // instead of "NaN undefined".
-    const HUNDRED_TB = 100 * 1024 * 1024 * 1024 * 1024;
+    // "Large storage" sentinel — effectively unlimited. MUST stay well under
+    // signed-int64 max (9.2e18): the native Flutter/Dart app parses diskSizeRaw
+    // as int64, and a value above that (the old 67676767 TiB ≈ 7.4e19) overflows
+    // → server-info deserialization throws → the whole app fails to load photos.
+    // JS/web tolerates any magnitude, which is why web worked but mobile broke.
+    // 1 PiB is huge (reads as unlimited) and parses safely on every client; the
+    // web sidebar renders anything over 1 PB as the ∞ glyph (StorageSpace.svelte).
+    const BIG = 1024 ** 5; // 1 PiB = 1,125,899,906,842,624 bytes — safe int64
+    let usedBytes = 0;
+    if (env.DB) {
+      try {
+        const { requireAuth } = await import('./helpers');
+        const session = await requireAuth(request, env);
+        const row = await env.DB.prepare(
+          `SELECT SUM(fileSize) as s FROM photos WHERE ownerId = ? AND (isTrashed = 0 OR isTrashed IS NULL)`
+        ).bind(session.uid).first<{ s: number }>();
+        usedBytes = row?.s || 0;
+      } catch { /* non-auth or DB error → stay at 0 */ }
+    }
     return json({
-      diskAvailable: '100 TB', diskAvailableRaw: HUNDRED_TB,
-      diskSize: '100 TB', diskSizeRaw: HUNDRED_TB,
-      diskUse: '0 B', diskUseRaw: 0,
-      diskUsagePercentage: 0,
+      diskAvailable: 'Unlimited', diskAvailableRaw: BIG - usedBytes,
+      diskSize: 'Unlimited', diskSizeRaw: BIG,
+      diskUse: '', diskUseRaw: usedBytes,
+      diskUsagePercentage: usedBytes / BIG,
     });
   }
   if (path === '/api/server/license') return json({});

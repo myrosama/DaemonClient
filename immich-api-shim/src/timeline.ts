@@ -102,13 +102,13 @@ async function getTimeBucket(env: Env, uid: string, idToken: string, url: URL): 
       return p.duration;
     }),
     fileCreatedAt: filtered.map(p => p.fileCreatedAt || p.uploadedAt || new Date().toISOString()),
-    isFavorite: filtered.map(p => p.isFavorite || false),
+    isFavorite: filtered.map(p => !!p.isFavorite),
     isImage: filtered.map(p => {
       if (p.mimeType?.startsWith('video/')) return false;
       if (p.type === 'VIDEO') return false;
       return true;
     }),
-    isTrashed: filtered.map(p => p.isTrashed || false),
+    isTrashed: filtered.map(p => !!p.isTrashed),
     livePhotoVideoId: filtered.map(p => p.livePhotoVideoId || null),
     localOffsetHours: filtered.map(p => p.localOffsetHours || 0),
     ownerId: filtered.map(() => uid),

@@ -1,0 +1,19 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Per-user data — only the owning user may read or write.
+    match /artifacts/{appId}/users/{userId}/{document=**} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // Operator broadcast announcements — any authenticated user may read;
+    // writes are performed by the deployment-service via a service account
+    // (which bypasses client-side rules), so no explicit write rule is
+    // needed here for client access.
+    match /global/{doc} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null;
+    }
+  }
+}

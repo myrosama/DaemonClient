@@ -50,6 +50,10 @@ export interface Env {
   // Shared secret guarding the /admin/force-update endpoint (operator-triggered
   // re-deploy of a specific user's worker, bypassing the login-time path).
   ADMIN_SECRET?: string;
+  // Firebase service-account credentials used by the /admin/announce endpoint
+  // to write the global announcement to Firestore without requiring a user token.
+  FIREBASE_SA_CLIENT_EMAIL?: string;
+  FIREBASE_SA_PRIVATE_KEY?: string;
 }
 
 // The bindings every per-user shim worker needs. Centralised so deploy,
@@ -108,8 +112,8 @@ CREATE TABLE upload_sessions (
 
 const CORS_HEADERS: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+  'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Admin-Secret',
 };
 
 function corsResponse(body: string | null, init: ResponseInit = {}): Response {
@@ -117,6 +121,79 @@ function corsResponse(body: string | null, init: ResponseInit = {}): Response {
   for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v);
   if (!headers.has('Content-Type') && body) headers.set('Content-Type', 'application/json');
   return new Response(body, { ...init, headers });
+}
+
+// ── Service-account JWT helpers ──────────────────────────────────────────────
+// Generate a short-lived Google OAuth2 access-token from a service account
+// private key (PEM) using only the Web Crypto API available in CF Workers.
+// Used exclusively by the /admin/announce endpoint — no external library needed.
+
+function pemToDer(pem: string): Uint8Array {
+  const b64 = pem.replace(/-----[^-]+-----/g, '').replace(/\s+/g, '');
+  const bin = atob(b64);
+  return Uint8Array.from(bin, c => c.charCodeAt(0));
+}
+
+function base64url(data: Uint8Array | string): string {
+  const bytes = typeof data === 'string'
+    ? new TextEncoder().encode(data)
+    : data;
+  let bin = '';
+  bytes.forEach(b => (bin += String.fromCharCode(b)));
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+async function getServiceAccountAccessToken(clientEmail: string, privateKeyPem: string): Promise<string> {
+  const now = Math.floor(Date.now() / 1000);
+  const header = base64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
+  const payload = base64url(JSON.stringify({
+    iss: clientEmail,
+    sub: clientEmail,
+    aud: 'https://oauth2.googleapis.com/token',
+    scope: 'https://www.googleapis.com/auth/datastore',
+    iat: now,
+    exp: now + 3600,
+  }));
+  const signingInput = `${header}.${payload}`;
+  const key = await crypto.subtle.importKey(
+    'pkcs8',
+    pemToDer(privateKeyPem),
+    { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
+    false,
+    ['sign']
+  );
+  const sigBuf = await crypto.subtle.sign('RSASSA-PKCS1-v1_5', key, new TextEncoder().encode(signingInput));
+  const jwt = `${signingInput}.${base64url(new Uint8Array(sigBuf))}`;
+
+  const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${jwt}`,
+  });
+  if (!tokenRes.ok) {
+    const txt = await tokenRes.text();
+    throw new Error(`SA token exchange failed: ${tokenRes.status} ${txt}`);
+  }
+  const { access_token } = await tokenRes.json() as any;
+  return access_token as string;
+}
+
+// Write (or clear) the global announcement document in Firestore.
+async function writeAnnouncement(env: Env, fields: Record<string, any>): Promise<void> {
+  if (!env.FIREBASE_SA_CLIENT_EMAIL || !env.FIREBASE_SA_PRIVATE_KEY) {
+    throw new Error('Service-account credentials not configured (FIREBASE_SA_CLIENT_EMAIL / FIREBASE_SA_PRIVATE_KEY)');
+  }
+  const accessToken = await getServiceAccountAccessToken(env.FIREBASE_SA_CLIENT_EMAIL, env.FIREBASE_SA_PRIVATE_KEY);
+  const url = `https://firestore.googleapis.com/v1/projects/${env.FIREBASE_PROJECT_ID}/databases/(default)/documents/global/announcement`;
+  const res = await fetch(url, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${accessToken}` },
+    body: JSON.stringify({ fields }),
+  });
+  if (!res.ok) {
+    const txt = await res.text();
+    throw new Error(`Firestore write failed: ${res.status} ${txt}`);
+  }
 }
 
 export default {
@@ -127,6 +204,8 @@ export default {
     if (url.pathname === '/validate-cf-token' && request.method === 'POST') return handleValidateToken(request, env);
     if (url.pathname === '/auto-update' && request.method === 'POST') return handleAutoUpdate(request, env);
     if (url.pathname === '/admin/force-update' && request.method === 'POST') return handleForceUpdate(request, env);
+    if (url.pathname === '/admin/announce' && request.method === 'POST') return handleAnnounce(request, env);
+    if (url.pathname === '/admin/announce' && request.method === 'DELETE') return handleClearAnnouncement(request, env);
     return corsResponse(JSON.stringify({ error: 'Not found' }), { status: 404 });
   },
 };
@@ -328,6 +407,48 @@ async function handleForceUpdate(request: Request, env: Env): Promise<Response> 
     return corsResponse(JSON.stringify({ success: true, version: SHIM_VERSION, workerName, migration }));
   } catch (error: any) {
     console.error('Force-update error:', error);
+    return corsResponse(JSON.stringify({ success: false, error: error.message }), { status: 500 });
+  }
+}
+
+// POST /admin/announce — write a broadcast notification to Firestore
+async function handleAnnounce(request: Request, env: Env): Promise<Response> {
+  try {
+    const secret = request.headers.get('X-Admin-Secret');
+    if (!env.ADMIN_SECRET || secret !== env.ADMIN_SECRET) {
+      return corsResponse(JSON.stringify({ error: 'Unauthorized' }), { status: 401 });
+    }
+    const { title, message } = await request.json() as any;
+    if (!title || !message) {
+      return corsResponse(JSON.stringify({ error: 'Missing required fields: title, message' }), { status: 400 });
+    }
+    await writeAnnouncement(env, {
+      title: { stringValue: String(title) },
+      message: { stringValue: String(message) },
+      active: { booleanValue: true },
+      createdAt: { stringValue: new Date().toISOString() },
+    });
+    return corsResponse(JSON.stringify({ success: true }));
+  } catch (error: any) {
+    console.error('Announce error:', error);
+    return corsResponse(JSON.stringify({ success: false, error: error.message }), { status: 500 });
+  }
+}
+
+// DELETE /admin/announce — deactivate the current broadcast announcement
+async function handleClearAnnouncement(request: Request, env: Env): Promise<Response> {
+  try {
+    const secret = request.headers.get('X-Admin-Secret');
+    if (!env.ADMIN_SECRET || secret !== env.ADMIN_SECRET) {
+      return corsResponse(JSON.stringify({ error: 'Unauthorized' }), { status: 401 });
+    }
+    await writeAnnouncement(env, {
+      active: { booleanValue: false },
+      clearedAt: { stringValue: new Date().toISOString() },
+    });
+    return corsResponse(JSON.stringify({ success: true, cleared: true }));
+  } catch (error: any) {
+    console.error('Clear announcement error:', error);
     return corsResponse(JSON.stringify({ success: false, error: error.message }), { status: 500 });
   }
 }

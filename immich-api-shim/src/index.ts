@@ -34,9 +34,13 @@ function corsHeaders(request: Request, env: Env): Record<string, string> {
   return {
     'Access-Control-Allow-Origin': isAllowed ? origin : allowed[0],
     'Access-Control-Allow-Methods': 'GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-api-key, Cookie',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-api-key, Cookie, Range',
     'Access-Control-Allow-Credentials': 'true',
     'Access-Control-Max-Age': '86400',
+    // Expose range/media headers so the browser's video element and SW can read them.
+    // Without this, cross-origin 206 responses hide Content-Range and Accept-Ranges,
+    // which breaks seek/duration on web and confuses AVPlayer diagnostics.
+    'Access-Control-Expose-Headers': 'Content-Range, Accept-Ranges, Content-Length, ETag, X-Worker-Version',
   };
 }
 

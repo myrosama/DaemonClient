@@ -295,8 +295,8 @@ const handleFetch = (event: FetchEvent): void => {
   if (url.origin !== self.location.origin) return;
   if (!API_REGEX.test(url.pathname)) return;
 
-  if (event.request.method === 'GET') {
-    const cacheable = ASSET_BINARY_REGEX.test(url.pathname);
+  if (event.request.method === 'GET' || event.request.method === 'HEAD') {
+    const cacheable = ASSET_BINARY_REGEX.test(url.pathname) && event.request.method === 'GET';
     event.respondWith(directWorkerFetch(event.request, cacheable, url.pathname));
     return;
   }
