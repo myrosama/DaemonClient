@@ -9,8 +9,36 @@ export async function handleServer(request: Request, env: Env, path: string): Pr
   if (path === '/api/server/version-history') return json([]);
   if (path === '/api/server/setup') return json({ isInitialized: true, isOnboarded: true });
   if (path === '/api/server/media-types') return json(mediaTypes());
-  if (path === '/api/server/statistics') return json({ photos: 0, videos: 0, usage: 0, usageByUser: [] });
-  if (path === '/api/server/storage') return json({ diskAvailable: '∞', diskSize: '∞', diskUse: '0', diskUsagePercentage: 0 });
+  if (path === '/api/server/statistics') {
+    if (env.DB) {
+      try {
+        const { requireAuth } = await import('./helpers');
+        const { D1Adapter } = await import('./d1-adapter');
+        const session = await requireAuth(request, env);
+        const db = env.DB;
+        const [photos, videos, usage] = await Promise.all([
+          db.prepare(`SELECT COUNT(*) as c FROM photos WHERE ownerId = ? AND mimeType LIKE 'image/%' AND (isTrashed = 0 OR isTrashed IS NULL)`).bind(session.uid).first<{c:number}>(),
+          db.prepare(`SELECT COUNT(*) as c FROM photos WHERE ownerId = ? AND mimeType LIKE 'video/%' AND (isTrashed = 0 OR isTrashed IS NULL)`).bind(session.uid).first<{c:number}>(),
+          db.prepare(`SELECT SUM(fileSize) as s FROM photos WHERE ownerId = ? AND (isTrashed = 0 OR isTrashed IS NULL)`).bind(session.uid).first<{s:number}>(),
+        ]);
+        return json({ photos: photos?.c || 0, videos: videos?.c || 0, usage: usage?.s || 0, usageByUser: [] });
+      } catch { /* fall through */ }
+    }
+    return json({ photos: 0, videos: 0, usage: 0, usageByUser: [] });
+  }
+  if (path === '/api/server/storage') {
+    // diskSizeRaw / diskUseRaw must be real numbers — Immich renders them with
+    // formatBytes() which does Math.log(n) → NaN for ∞ string or -1.
+    // We return a large but finite number so the sidebar shows "X of 100 TB used"
+    // instead of "NaN undefined".
+    const HUNDRED_TB = 100 * 1024 * 1024 * 1024 * 1024;
+    return json({
+      diskAvailable: '100 TB', diskAvailableRaw: HUNDRED_TB,
+      diskSize: '100 TB', diskSizeRaw: HUNDRED_TB,
+      diskUse: '0 B', diskUseRaw: 0,
+      diskUsagePercentage: 0,
+    });
+  }
   if (path === '/api/server/license') return json({});
   if (path === '/api/server/theme') return json({ customCss: '' });
   if (path === '/api/server/onboarding') return json({});

@@ -28,8 +28,7 @@ export async function handleStubs(_request: Request, _env: Env, path: string): P
   if (path === '/api/search/places') return json([]);
   if (path === '/api/search/cities') return json([]);
 
-  // Map
-  if (path === '/api/map/markers') return json([]);
+  // Map markers — handled in handleAssets with real D1 query
 
   // Partners
   if (path === '/api/partners') return json([]);
@@ -43,8 +42,7 @@ export async function handleStubs(_request: Request, _env: Env, path: string): P
   // API keys
   if (path === '/api/api-keys') return json([]);
 
-  // Notifications
-  if (path === '/api/notifications') return json([]);
+  // Notifications — handled in handleAssets with real D1 query
 
   // Jobs/Queues
   if (path === '/api/jobs') return json({});
@@ -56,10 +54,7 @@ export async function handleStubs(_request: Request, _env: Env, path: string): P
   // Admin
   if (path.startsWith('/api/admin')) return json({ message: 'Admin not available' }, 403);
 
-  // Trash
-  if (path === '/api/trash/empty') return json({});
-  if (path === '/api/trash/restore') return json({});
-  if (path === '/api/trash/restore/assets') return json({});
+  // Trash — handled in handleAssets with real D1 operations
 
   // Memories
   if (path === '/api/memories') return json([]);

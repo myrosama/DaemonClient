@@ -20,6 +20,69 @@ const CHUNK_SIZE = 19 * 1024 * 1024; // 19 MB
 const filePathCache = new Map<string, { path: string; expiresAt: number }>();
 const FILE_PATH_TTL_MS = 55 * 60 * 1000; // 55 min — safely under Telegram's 1-hour validity
 
+// Minimal JPEG EXIF GPS extractor — scans APP1 segment for GPS IFD tags.
+// Returns decimal lat/lon or null. Best-effort; silently ignores corrupt EXIF.
+function extractJpegGps(buf: Uint8Array): { latitude: number; longitude: number } | null {
+  try {
+    if (buf[0] !== 0xFF || buf[1] !== 0xD8) return null; // not JPEG
+    let i = 2;
+    while (i < buf.length - 4) {
+      if (buf[i] !== 0xFF) break;
+      const marker = (buf[i] << 8) | buf[i + 1];
+      const segLen = (buf[i + 2] << 8) | buf[i + 3];
+      if (marker === 0xFFE1) {
+        const exif = buf.slice(i + 4, i + 2 + segLen);
+        if (String.fromCharCode(exif[0], exif[1], exif[2], exif[3]) !== 'Exif') { i += 2 + segLen; continue; }
+        const tiff = exif.slice(6);
+        const le = tiff[0] === 0x49;
+        const r16 = (o: number) => le ? tiff[o] | (tiff[o+1] << 8) : (tiff[o] << 8) | tiff[o+1];
+        const r32 = (o: number) => le
+          ? tiff[o] | (tiff[o+1]<<8) | (tiff[o+2]<<16) | (tiff[o+3]<<24)
+          : (tiff[o]<<24)|(tiff[o+1]<<16)|(tiff[o+2]<<8)|tiff[o+3];
+        const ifd0Off = r32(4);
+        if (ifd0Off + 2 > tiff.length) break;
+        const numEntries = r16(ifd0Off);
+        let gpsIfdOff = 0;
+        for (let e = 0; e < numEntries; e++) {
+          const eOff = ifd0Off + 2 + e * 12;
+          if (eOff + 12 > tiff.length) break;
+          if (r16(eOff) === 0x8825) { gpsIfdOff = r32(eOff + 8); break; }
+        }
+        if (!gpsIfdOff || gpsIfdOff + 2 > tiff.length) break;
+        const gpsNum = r16(gpsIfdOff);
+        const gps: Record<number, any> = {};
+        for (let e = 0; e < gpsNum; e++) {
+          const eOff = gpsIfdOff + 2 + e * 12;
+          if (eOff + 12 > tiff.length) break;
+          const tag = r16(eOff);
+          const cnt = r32(eOff + 4);
+          const vOff = cnt <= 1 ? eOff + 8 : r32(eOff + 8);
+          if (tag === 0x0001 || tag === 0x0003) {
+            gps[tag] = String.fromCharCode(tiff[vOff]);
+          } else if ((tag === 0x0002 || tag === 0x0004) && vOff + 23 < tiff.length) {
+            const dms = [];
+            for (let j = 0; j < 3; j++) {
+              const num = r32(vOff + j * 8); const den = r32(vOff + j * 8 + 4);
+              dms.push(den ? num / den : 0);
+            }
+            gps[tag] = dms[0] + dms[1] / 60 + dms[2] / 3600;
+          }
+        }
+        if (gps[0x0002] !== undefined && gps[0x0004] !== undefined) {
+          return {
+            latitude: gps[0x0001] === 'S' ? -gps[0x0002] : gps[0x0002],
+            longitude: gps[0x0003] === 'W' ? -gps[0x0004] : gps[0x0004],
+          };
+        }
+        break;
+      }
+      if (marker === 0xFFD9) break; // EOI
+      i += 2 + segLen;
+    }
+  } catch { /* corrupt EXIF — ignore */ }
+  return null;
+}
+
 async function deriveKey(password: string, saltStr: string): Promise<CryptoKey> {
   const salt = Uint8Array.from(atob(saltStr), c => c.charCodeAt(0));
   const keyMaterial = await crypto.subtle.importKey(
@@ -82,10 +145,24 @@ export async function handleAssets(request: Request, env: Env, path: string, url
   // not yet a preview), instead of rescanning the whole timeline.
   if (path === '/api/assets/pending-thumbnail-fix' && request.method === 'GET') {
     if (!env.DB) return json({ ids: [] });
+    const qp = new URL(request.url).searchParams;
+    // ?type=video — returns video assets that have no thumbnail yet (used by the
+    // "Fix video thumbnails" utility). Kept separate from the default (images) so
+    // existing HEIC tooling is unaffected and the candidate lists never mix.
+    if (qp.get('type') === 'video') {
+      const rows = await env.DB.prepare(
+        `SELECT id FROM photos
+           WHERE ownerId = ? AND (isTrashed = 0 OR isTrashed IS NULL)
+             AND mimeType LIKE 'video/%'
+             AND (telegramThumbId IS NULL OR telegramThumbId = '')
+           LIMIT 5000`
+      ).bind(uid).all();
+      return json({ ids: (rows.results || []).map((r: any) => r.id) });
+    }
     // ?all=1 re-processes EVERY HEIC (even ones already fixed) — used to upgrade
     // older low-quality previews to the current quality. Default only returns
     // what's actually missing (HEIC without preview, or image without thumbhash).
-    const all = new URL(request.url).searchParams.get('all') === '1';
+    const all = qp.get('all') === '1';
     const where = all
       ? `(isHeic = 1 OR mimeType LIKE '%hei%') OR thumbhash IS NULL OR thumbhash = ''`
       : `((isHeic = 1 OR mimeType LIKE '%hei%') AND (telegramPreviewId IS NULL OR telegramPreviewId = '')) OR thumbhash IS NULL OR thumbhash = ''`;
@@ -177,7 +254,7 @@ export async function handleAssets(request: Request, env: Env, path: string, url
   if (resourceId && path.match(/^\/api\/assets?\/([^/]+)$/) && request.method === 'GET') {
     return handleAssetInfo(env, uid, resourceId, idToken);
   }
-  if (resourceId && path.match(/^\/api\/assets?\/([^/]+)$/) && request.method === 'PUT') {
+  if (resourceId && path.match(/^\/api\/assets?\/([^/]+)$/) && (request.method === 'PUT' || request.method === 'PATCH')) {
     return handleUpdateAsset(request, env, uid, resourceId, idToken);
   }
   if (resourceId && path.endsWith('/view')) {
@@ -228,6 +305,105 @@ export async function handleAssets(request: Request, env: Env, path: string, url
     return json({ ocr: null });
   }
 
+  // Trash — restore selected assets
+  if (path === '/api/trash/restore/assets' && request.method === 'POST') {
+    const body = await request.json() as any;
+    const ids: string[] = body.ids || [];
+    if (env.DB) {
+      const adapter = new D1Adapter(env.DB);
+      for (const id of ids) await adapter.updatePhoto(id, { isTrashed: 0 });
+    }
+    return json({});
+  }
+  // Trash — restore all
+  if (path === '/api/trash/restore' && request.method === 'POST') {
+    if (env.DB) {
+      await env.DB.prepare(`UPDATE photos SET isTrashed = 0 WHERE ownerId = ? AND isTrashed = 1`).bind(uid).run();
+    }
+    return json({});
+  }
+  // Trash — empty (permanently delete all trashed photos)
+  if (path === '/api/trash/empty' && request.method === 'DELETE') {
+    if (env.DB) {
+      const adapter = new D1Adapter(env.DB);
+      const rows = await adapter.queryPhotos({ ownerId: uid, isTrashed: 1 });
+      const ids = rows.map(r => r.id);
+      if (ids.length > 0) {
+        // Delegate to handleDeleteAssets logic with force=true — call inline
+        const config = await getCachedConfig<any>(env, uid, idToken, 'telegram');
+        const botToken = config?.botToken || config?.bot_token;
+        const channelId = config?.channelId || config?.channel_id;
+        for (const id of ids) {
+          const photo = await adapter.getPhoto(id);
+          if (photo && botToken && channelId) {
+            const chunks = typeof photo.telegramChunks === 'string'
+              ? JSON.parse(photo.telegramChunks || '[]')
+              : (photo.telegramChunks || []);
+            for (const chunk of chunks) {
+              try {
+                await fetch(`https://api.telegram.org/bot${botToken}/deleteMessage`, {
+                  method: 'POST', headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ chat_id: channelId, message_id: chunk.message_id }),
+                });
+              } catch { /* best effort */ }
+            }
+          }
+          await adapter.deletePhoto(id);
+        }
+      }
+    }
+    return json({});
+  }
+
+  // Notifications — real count of assets needing the HEIC/thumbnail fix
+  if (path === '/api/notifications' && request.method === 'GET') {
+    if (!env.DB) return json([]);
+    // Use exactly the same WHERE as pending-thumbnail-fix default so the count
+    // matches what the HEIC fixer and video fixer actually process.
+    const [heicRow, videoRow] = await Promise.all([
+      env.DB.prepare(
+        `SELECT COUNT(*) as c FROM photos WHERE ownerId = ? AND (isTrashed = 0 OR isTrashed IS NULL)
+         AND mimeType LIKE 'image/%'
+         AND ((isHeic = 1 OR mimeType LIKE '%hei%') AND (telegramPreviewId IS NULL OR telegramPreviewId = ''))`
+      ).bind(uid).first<{ c: number }>(),
+      env.DB.prepare(
+        `SELECT COUNT(*) as c FROM photos WHERE ownerId = ? AND (isTrashed = 0 OR isTrashed IS NULL)
+         AND mimeType LIKE 'video/%' AND (telegramThumbId IS NULL OR telegramThumbId = '')`
+      ).bind(uid).first<{ c: number }>(),
+    ]);
+    const heicCount = heicRow?.c || 0;
+    const videoCount = videoRow?.c || 0;
+    const total = heicCount + videoCount;
+    if (total === 0) return json([]);
+    const parts = [];
+    if (heicCount > 0) parts.push(`${heicCount} HEIC photo${heicCount > 1 ? 's' : ''}`);
+    if (videoCount > 0) parts.push(`${videoCount} video${videoCount > 1 ? 's' : ''}`);
+    return json([{
+      id: 'heic-fix',
+      type: 'system',
+      level: 'warning',
+      title: 'Media needs attention',
+      message: `${parts.join(' and ')} need${total === 1 ? 's' : ''} fixing — open Utilities`,
+      read: false,
+      createdAt: new Date().toISOString(),
+      readAt: null,
+    }]);
+  }
+
+  // Map markers — photos with GPS coordinates
+  if (path === '/api/map/markers' && request.method === 'GET') {
+    if (!env.DB) return json([]);
+    const rows = await env.DB.prepare(
+      `SELECT id, latitude, longitude, city, country, mimeType FROM photos
+       WHERE ownerId = ? AND latitude IS NOT NULL AND longitude IS NOT NULL
+       AND (isTrashed = 0 OR isTrashed IS NULL) LIMIT 5000`
+    ).bind(uid).all<{ id: string; latitude: number; longitude: number; city: string | null; country: string | null }>();
+    return json((rows.results || []).map(r => ({
+      id: r.id, lat: r.latitude, lon: r.longitude,
+      city: r.city || null, state: null, country: r.country || null,
+    })));
+  }
+
   return json({ message: 'Asset endpoint not found' }, 404);
 } catch (err: any) {
     console.error(`[handleAssets] Error at ${path}:`, err?.message, err?.stack);
@@ -264,16 +440,18 @@ async function handleAssetInfo(env: Env, uid: string, assetId: string, idToken: 
 async function handleUpdateAsset(request: Request, env: Env, uid: string, assetId: string, idToken: string): Promise<Response> {
   const body = await request.json() as any;
   const updates: Record<string, any> = {};
-  if (body.updateAssetDto) {
-    if (body.updateAssetDto.isFavorite !== undefined) updates.isFavorite = body.updateAssetDto.isFavorite;
-    if (body.updateAssetDto.isArchived !== undefined) updates.visibility = body.updateAssetDto.isArchived ? 'archive' : 'timeline';
-    if (body.updateAssetDto.description !== undefined) updates.description = body.updateAssetDto.description;
-  }
+  // Immich web wraps fields in updateAssetDto; native app sends them directly
+  const dto = body.updateAssetDto || body;
+  if (dto.isFavorite !== undefined) updates.isFavorite = dto.isFavorite ? 1 : 0;
+  if (dto.isArchived !== undefined) updates.visibility = dto.isArchived ? 'archive' : 'timeline';
+  if (dto.isTrashed !== undefined) updates.isTrashed = dto.isTrashed ? 1 : 0;
+  if (dto.description !== undefined) updates.description = dto.description;
+  if (dto.latitude !== undefined) updates.latitude = dto.latitude;
+  if (dto.longitude !== undefined) updates.longitude = dto.longitude;
 
   if (Object.keys(updates).length > 0) {
     if (env.DB) {
-      const adapter = new D1Adapter(env.DB);
-      await adapter.savePhoto({ id: assetId, ...updates });
+      await new D1Adapter(env.DB).updatePhoto(assetId, updates);
     } else {
       await firestoreSet(env, uid, `photos/${assetId}`, updates, idToken);
     }
@@ -293,40 +471,49 @@ async function handleUpdateAsset(request: Request, env: Env, uid: string, assetI
 async function handleDeleteAssets(request: Request, env: Env, uid: string, idToken: string): Promise<Response> {
   const body = await request.json() as any;
   const ids: string[] = body.ids || [];
-  const clientDelete = body.clientDelete === true;
+  // force=true means permanent delete (used by "Empty trash"). Default is soft-delete → trash.
+  const force = body.force === true;
+
+  if (!force) {
+    // Soft-delete: move to trash, nothing deleted from Telegram
+    if (env.DB) {
+      const adapter = new D1Adapter(env.DB);
+      for (const id of ids) await adapter.updatePhoto(id, { isTrashed: 1 });
+    } else {
+      for (const id of ids) await firestoreSet(env, uid, `photos/${id}`, { isTrashed: true }, idToken);
+    }
+    return json({});
+  }
+
+  // Hard-delete: remove Telegram files then D1/Firestore row
   const config = await getCachedConfig<any>(env, uid, idToken, 'telegram');
   const botToken = config?.botToken || config?.bot_token;
   const channelId = config?.channelId || config?.channel_id;
 
   for (const id of ids) {
-    if (!clientDelete) {
-      let photo;
-      if (env.DB) {
-        const adapter = new D1Adapter(env.DB);
-        photo = await adapter.getPhoto(id);
-      } else {
-        photo = await firestoreGet(env, uid, `photos/${id}`, idToken);
-      }
+    let photo: any;
+    if (env.DB) {
+      photo = await new D1Adapter(env.DB).getPhoto(id);
+    } else {
+      photo = await firestoreGet(env, uid, `photos/${id}`, idToken);
+    }
 
-      if (photo && botToken && channelId && photo.telegramChunks) {
-        const chunks = typeof photo.telegramChunks === 'string'
-          ? JSON.parse(photo.telegramChunks)
-          : photo.telegramChunks;
-
-        for (const chunk of chunks) {
-          try {
-            await fetch(`https://api.telegram.org/bot${botToken}/deleteMessage`, {
-              method: 'POST', headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ chat_id: channelId, message_id: chunk.message_id }),
-            });
-          } catch { /* best effort */ }
-        }
+    if (photo && botToken && channelId) {
+      const chunks = typeof photo.telegramChunks === 'string'
+        ? JSON.parse(photo.telegramChunks || '[]')
+        : (photo.telegramChunks || []);
+      for (const chunk of chunks) {
+        try {
+          await fetch(`https://api.telegram.org/bot${botToken}/deleteMessage`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chat_id: channelId, message_id: chunk.message_id }),
+          });
+        } catch { /* best effort */ }
       }
     }
 
     if (env.DB) {
-      const adapter = new D1Adapter(env.DB);
-      await adapter.deletePhoto(id);
+      await new D1Adapter(env.DB).deletePhoto(id);
     } else {
       await firestoreDelete(env, uid, `photos/${id}`, idToken);
     }
@@ -506,6 +693,10 @@ async function handleUpload(request: Request, env: Env, uid: string, idToken: st
     // Parse dimensions
     let width = parseInt(formData.get('width') as string) || 0;
     let height = parseInt(formData.get('height') as string) || 0;
+    // GPS coordinates — client may supply these; server-side path also extracts from JPEG EXIF below
+    const parseCoord = (s: string | null) => { const n = parseFloat(s || ''); return isNaN(n) ? null : n; };
+    let gpsLat: number | null = parseCoord(formData.get('latitude') as string | null);
+    let gpsLon: number | null = parseCoord(formData.get('longitude') as string | null);
     const fileCreatedAt = (formData.get('fileCreatedAt') as string) || new Date().toISOString();
     const fileModifiedAt = (formData.get('fileModifiedAt') as string) || new Date().toISOString();
     const durationRaw = formData.get('duration') ? (formData.get('duration') as string) : null;
@@ -576,16 +767,23 @@ async function handleUpload(request: Request, env: Env, uid: string, idToken: st
       const chunk = file!.slice(start, end);
       let chunkData = await chunk.arrayBuffer();
 
-      if (i === 0 && (width === 0 || height === 0)) {
-        try {
-          const buffer = new Uint8Array(chunkData);
-          const dimensions = sizeOf(buffer);
-          if (dimensions) {
-            width = dimensions.width || 0;
-            height = dimensions.height || 0;
+      if (i === 0) {
+        const buffer = new Uint8Array(chunkData);
+        if (width === 0 || height === 0) {
+          try {
+            const dimensions = sizeOf(buffer);
+            if (dimensions) {
+              width = dimensions.width || 0;
+              height = dimensions.height || 0;
+            }
+          } catch (e) {
+            console.log('Failed to extract dimensions:', e);
           }
-        } catch (e) {
-          console.log('Failed to extract dimensions:', e);
+        }
+        // Extract GPS from JPEG EXIF (best-effort, never overwrites client-supplied coords)
+        if (gpsLat === null && gpsLon === null && !isHeic && !isVideo) {
+          const gps = extractJpegGps(buffer);
+          if (gps) { gpsLat = gps.latitude; gpsLon = gps.longitude; }
         }
       }
 
@@ -856,7 +1054,9 @@ async function handleUpload(request: Request, env: Env, uid: string, idToken: st
       encryptionMode,
       checksum,
       isHeic: isHeic ? 1 : 0,
-      duration: duration || undefined
+      duration: duration || undefined,
+      latitude: gpsLat ?? undefined,
+      longitude: gpsLon ?? undefined,
     };
 
     if (env.DB) {
@@ -1011,6 +1211,8 @@ async function handleThumbnailUpload(request: Request, env: Env, uid: string, as
     // also changes the timeline payload's thumbhash → the thumbnail URL's
     // cacheKey changes → clients refetch the new thumb (built-in cache-bust).
     const thumbhash = (formData.get('thumbhash') as string) || null;
+    const uploadedWidth = parseInt(formData.get('width') as string) || 0;
+    const uploadedHeight = parseInt(formData.get('height') as string) || 0;
     // Optional full-size JPEG preview. Lets the web viewer load a JPEG instead
     // of decoding the HEIC original (which is slow/fails in browsers). The
     // original HEIC is left untouched for true-original download.
@@ -1069,6 +1271,8 @@ async function handleThumbnailUpload(request: Request, env: Env, uid: string, as
     // stay untouched. (savePhoto's upsert would fail NOT NULL on a partial row.)
     const update: any = { telegramThumbId: thumb.fileId, thumbEncrypted: thumb.encrypted ? 1 : 0 };
     if (thumbhash) update.thumbhash = thumbhash;
+    if (uploadedWidth > 0) update.width = uploadedWidth;
+    if (uploadedHeight > 0) update.height = uploadedHeight;
 
     // Optional full-size preview — best-effort; a failed preview must not fail
     // the thumbnail. Served for preview/fullsize requests so web shows a JPEG.
@@ -1442,7 +1646,7 @@ function toAssetResponseDto(photo: any, ownerId: string): any {
       make: null, model: null, exifImageWidth: photo.width || 0, exifImageHeight: photo.height || 0,
       fileSizeInByte: photo.fileSize || 0, orientation: null, dateTimeOriginal: photo.fileCreatedAt || null,
       modifyDate: null, timeZone: null, lensModel: null, fNumber: null, focalLength: null,
-      iso: null, exposureTime: null, latitude: null, longitude: null, city: photo.city || null,
+      iso: null, exposureTime: null, latitude: photo.latitude ?? null, longitude: photo.longitude ?? null, city: photo.city || null,
       state: null, country: photo.country || null, description: photo.description || null,
       projectionType: null, rating: null,
     },
@@ -1490,10 +1694,18 @@ async function paceSend(botToken: string): Promise<void> {
   b.last = Date.now(); // consumed the refilled token
 }
 
+// Only pace true Telegram send calls. Downloads (/file/bot, /getFile) must NOT
+// be paced — burning a send token for every thumbnail download was the root cause
+// of 503 storms: 20+ concurrent thumb fetches each waited up to 4s for a bucket
+// token → worker wall-clock exceeded → CF returned HTML 503 (no CORS) → cascade.
+function isSendUrl(url: string): boolean {
+  return /\/(send(Document|Photo|Video|Audio|Message)|copyMessage|forwardMessage)/i.test(url);
+}
+
 async function tgFetchWithRetry(url: string, options?: RequestInit, maxRetries = 3): Promise<Response> {
   const botToken = url.match(/\/bot([^/]+)\//)?.[1] || '';
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    if (botToken) await paceSend(botToken); // rate-limit sends per bot
+    if (botToken && isSendUrl(url)) await paceSend(botToken); // SENDS only, not downloads
     const res = await fetch(url, options);
     if (res.status === 429 || res.status === 420) {
       const body = await res.json().catch(() => ({})) as any;

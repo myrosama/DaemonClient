@@ -20,6 +20,66 @@ const sw = globalThis as unknown as ServiceWorkerGlobalScope;
 let cachedToken: string | null = null;
 let cachedWorkerUrl: string | null = null;
 
+// ── Thumbnail loading algorithm ─────────────────────────────────────────────
+// Goal: Google-Photos-like loading without 503 storms.
+//
+// Root cause of 503s:
+//   Scrolling fires 20-50 simultaneous thumbnail requests. Each hits the CF
+//   Worker which calls tgGetFileUrl + Telegram CDN. Before the worker fix,
+//   EVERY fetch (including downloads) burned a send-bucket token → 4s wait ×
+//   50 requests → worker wall-clock exceeded → Cloudflare returns HTML 503
+//   (no CORS headers) → SW fetch rejects with CORS TypeError → cascade.
+//
+// Three-layer fix (worker fix already deployed as of bundle e1ab97124127+):
+//   1. Worker: only pace SEND urls, not downloads (isSendUrl guard).
+//   2. SW: concurrency cap — max 6 in-flight thumbnail requests at once;
+//      the rest queue here rather than hammering the worker simultaneously.
+//   3. SW: in-flight deduplication — same URL requested twice shares one fetch.
+//   4. SW: retry with exponential backoff on 429/503, honouring Retry-After.
+
+const MAX_THUMB_CONCURRENCY = 6;
+let activeThumbFetches = 0;
+const thumbWaiters: Array<() => void> = [];
+
+function thumbAcquire(): Promise<void> {
+  if (activeThumbFetches < MAX_THUMB_CONCURRENCY) {
+    activeThumbFetches++;
+    return Promise.resolve();
+  }
+  return new Promise<void>((resolve) => thumbWaiters.push(resolve));
+}
+
+function thumbRelease(): void {
+  const next = thumbWaiters.shift();
+  if (next) {
+    next(); // already incremented — slot transfers directly to the waiter
+  } else {
+    activeThumbFetches--;
+  }
+}
+
+// In-flight deduplication: same URL → shared promise, one Telegram roundtrip.
+const inflight = new Map<string, Promise<Response>>();
+
+async function fetchWithBackoff(url: string, init: RequestInit, maxAttempts = 4): Promise<Response> {
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      const res = await fetch(url, init);
+      if ((res.status === 429 || res.status === 503) && attempt < maxAttempts - 1) {
+        const retryAfter = parseInt(res.headers.get('Retry-After') || '0') || 0;
+        const backoff = Math.max(retryAfter * 1000, Math.min(1000 * Math.pow(2, attempt), 16000));
+        await new Promise(r => setTimeout(r, backoff));
+        continue;
+      }
+      return res;
+    } catch (err) {
+      if (attempt === maxAttempts - 1) throw err;
+      await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt)));
+    }
+  }
+  throw new Error('fetchWithBackoff: max attempts reached');
+}
+
 async function persistToken(token: string | null) {
   cachedToken = token;
   const cache = await caches.open('dc-auth-v3');
@@ -158,36 +218,54 @@ async function directWorkerFetch(request: Request, cacheable: boolean, pathname:
     body = await request.arrayBuffer();
   }
 
+  // Thumbnail requests: apply concurrency cap + in-flight deduplication.
+  // Non-thumbnail requests (uploads, API calls) bypass the limiter entirely.
   let response: Response;
-  try {
-    response = await fetch(workerUrl, {
-      method: request.method,
-      headers,
-      body,
-    });
-  } catch (err) {
-    // Network error - try to serve from cache
-    if (cacheable) {
-      const cache = await caches.open('dc-assets-v4');
-      const cached = await cache.match(workerUrl);
-      if (cached) {
-        console.log('[SW] Network error, serving from cache:', pathname);
-        return cached;
-      }
-    }
-
-    // No cache available - return 503 with retry header
-    console.error('[SW] Network error, no cache available:', err);
-    return new Response(
-      JSON.stringify({ message: 'Service temporarily unavailable', error: 'Network error' }),
-      {
-        status: 503,
-        headers: {
-          'Content-Type': 'application/json',
-          'Retry-After': '10'
+  if (cacheable && (request.method === 'GET' || request.method === 'HEAD')) {
+    const key = workerUrl;
+    let pending = inflight.get(key);
+    if (!pending) {
+      pending = (async () => {
+        await thumbAcquire();
+        try {
+          return await fetchWithBackoff(workerUrl, { method: request.method, headers, body });
+        } finally {
+          thumbRelease();
+          inflight.delete(key);
         }
+      })();
+      inflight.set(key, pending);
+    }
+    try {
+      response = await pending;
+    } catch (err) {
+      // Network failure — serve cache or fall back to transparent placeholder
+      if (cacheable) {
+        const cache = await caches.open('dc-assets-v4');
+        const cached = await cache.match(workerUrl);
+        if (cached) return cached;
       }
-    );
+      console.error('[SW] Network error, no cache available:', err);
+      return new Response(
+        JSON.stringify({ message: 'Service temporarily unavailable' }),
+        { status: 503, headers: { 'Content-Type': 'application/json', 'Retry-After': '5' } }
+      );
+    }
+  } else {
+    try {
+      response = await fetch(workerUrl, { method: request.method, headers, body });
+    } catch (err) {
+      if (cacheable) {
+        const cache = await caches.open('dc-assets-v4');
+        const cached = await cache.match(workerUrl);
+        if (cached) return cached;
+      }
+      console.error('[SW] Network error, no cache available:', err);
+      return new Response(
+        JSON.stringify({ message: 'Service temporarily unavailable' }),
+        { status: 503, headers: { 'Content-Type': 'application/json', 'Retry-After': '5' } }
+      );
+    }
   }
 
   if (pathname === '/api/auth/login' && response.ok) {

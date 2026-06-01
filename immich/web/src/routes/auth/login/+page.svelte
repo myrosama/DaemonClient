@@ -200,7 +200,7 @@
     
     <div class="flex flex-col items-center justify-center gap-1">
       <span class="text-xs text-gray-500 dark:text-gray-400">Don't have an account?</span>
-      <a href="https://app.daemonclient.uz" target="_blank" class="w-full">
+      <a href="https://accounts.daemonclient.uz/signup?continue=https://photos.daemonclient.uz" target="_blank" class="w-full">
         <Button shape="round" size="medium" fullWidth color="secondary" class="border-2 border-immich-primary text-immich-primary hover:bg-immich-primary/10">
           Create Account
         </Button>

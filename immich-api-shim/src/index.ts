@@ -96,7 +96,9 @@ export default {
         response = await handleServer(request, env, path);
       } else if (path.startsWith('/api/timeline')) {
         response = await handleTimeline(request, env, path, url);
-      } else if (path.startsWith('/api/assets') || path.startsWith('/api/asset')) {
+      } else if (path.startsWith('/api/assets') || path.startsWith('/api/asset') ||
+                 path === '/api/notifications' || path === '/api/map/markers' ||
+                 path.startsWith('/api/trash')) {
         response = await handleAssets(request, env, path, url);
       } else if (path.startsWith('/api/users')) {
         response = await handleUser(request, env, path);

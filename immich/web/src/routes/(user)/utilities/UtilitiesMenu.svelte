@@ -1,6 +1,7 @@
 <script lang="ts">
   import AppDownloadModal from '$lib/modals/AppDownloadModal.svelte';
   import FixThumbnailsModal from '$lib/modals/FixThumbnailsModal.svelte';
+  import FixVideoThumbnailsModal from '$lib/modals/FixVideoThumbnailsModal.svelte';
   import ObtainiumConfigModal from '$lib/modals/ObtainiumConfigModal.svelte';
   import { Route } from '$lib/route';
   import { Icon, modalManager, Text } from '@immich/ui';
@@ -11,6 +12,7 @@
     mdiImageBrokenVariant,
     mdiImageSizeSelectLarge,
     mdiLinkEdit,
+    mdiVideoOutline,
   } from '@mdi/js';
   import { t } from 'svelte-i18n';
 
@@ -39,6 +41,15 @@
   >
     <span><Icon icon={mdiImageBrokenVariant} class="text-primary" size="24" /></span>
     Fix HEIC &amp; missing thumbnails
+  </button>
+
+  <button
+    type="button"
+    onclick={() => modalManager.show(FixVideoThumbnailsModal, {})}
+    class="w-full hover:bg-gray-100 dark:hover:bg-immich-dark-gray flex items-center gap-4 p-4 text-start"
+  >
+    <span><Icon icon={mdiVideoOutline} class="text-primary" size="24" /></span>
+    Fix video thumbnails
   </button>
 </div>
 <br />

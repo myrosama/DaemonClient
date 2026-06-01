@@ -27,8 +27,10 @@ function toJpeg(canvas: HTMLCanvasElement, quality: number): Promise<Blob> {
   );
 }
 
-async function deriveAssets(imageBlob: Blob): Promise<{ thumb: Blob; preview: Blob; thumbhash: string }> {
+async function deriveAssets(imageBlob: Blob): Promise<{ thumb: Blob; preview: Blob; thumbhash: string; width: number; height: number }> {
   const bitmap = await createImageBitmap(imageBlob);
+  const origWidth = bitmap.width;
+  const origHeight = bitmap.height;
   try {
     // 256px @ q0.8 — exactly matches the web uploader's thumbnail size, so
     // fixed-HEIC grid tiles download as fast as normally-uploaded photos
@@ -44,17 +46,19 @@ async function deriveAssets(imageBlob: Blob): Promise<{ thumb: Blob; preview: Bl
     const hash = rgbaToThumbHash(w, h, data);
     let bin = '';
     for (const b of hash) bin += String.fromCharCode(b);
-    return { thumb, preview, thumbhash: btoa(bin) };
+    return { thumb, preview, thumbhash: btoa(bin), width: origWidth, height: origHeight };
   } finally {
     bitmap.close?.();
   }
 }
 
-async function postBackfill(assetId: string, thumb: Blob, preview: Blob, thumbhash: string): Promise<boolean> {
+async function postBackfill(assetId: string, thumb: Blob, preview: Blob, thumbhash: string, width: number, height: number): Promise<boolean> {
   const form = new FormData();
   form.append('thumbnail', thumb, 'thumb.jpg');
   form.append('preview', preview, 'preview.jpg');
   form.append('thumbhash', thumbhash);
+  if (width > 0) form.append('width', String(width));
+  if (height > 0) form.append('height', String(height));
   // Relative /api → the service worker adds auth + routes to the user's worker.
   const res = await fetch(`/api/assets/${assetId}/thumbnail`, { method: 'POST', body: form });
   return res.ok;
@@ -62,7 +66,7 @@ async function postBackfill(assetId: string, thumb: Blob, preview: Blob, thumbha
 
 /**
  * Fetch an asset's original, decode it in-browser (HEIC via libheif, others
- * directly), and store a thumbnail + preview + thumbhash on the worker.
+ * directly), and store a thumbnail + preview + thumbhash + dimensions on the worker.
  * Heavy (full-image decode), so the caller must run these sequentially.
  */
 export async function backfillAssetById(assetId: string): Promise<boolean> {
@@ -79,8 +83,8 @@ export async function backfillAssetById(assetId: string): Promise<boolean> {
       const { decodeHeicToBlob } = await import('$lib/utils/heic-decode');
       imageBlob = await decodeHeicToBlob(blob, 0.95);
     }
-    const { thumb, preview, thumbhash } = await deriveAssets(imageBlob);
-    return await postBackfill(assetId, thumb, preview, thumbhash);
+    const { thumb, preview, thumbhash, width, height } = await deriveAssets(imageBlob);
+    return await postBackfill(assetId, thumb, preview, thumbhash, width, height);
   } catch (e) {
     console.warn('[heic-backfill] failed', assetId, e);
     return false;

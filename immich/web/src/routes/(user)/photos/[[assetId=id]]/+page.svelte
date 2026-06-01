@@ -41,8 +41,29 @@
   import { mdiDotsVertical } from '@mdi/js';
   import { t } from 'svelte-i18n';
 
+  import { onMount } from 'svelte';
+
   let timelineManager = $state<TimelineManager>() as TimelineManager;
   const options = { visibility: AssetVisibility.Timeline, withStacked: true, withPartners: true };
+
+  let heicFixCount = $state(0);
+  let heicBannerDismissed = $state(false);
+
+  onMount(async () => {
+    if (sessionStorage.getItem('dc-heic-banner-dismissed')) { heicBannerDismissed = true; return; }
+    try {
+      const res = await fetch('/api/notifications');
+      if (!res.ok) return;
+      const notifs: any[] = await res.json();
+      const w = notifs.find((n) => n.id === 'heic-fix');
+      if (w) { const m = w.message.match(/(\d+)/); heicFixCount = m ? parseInt(m[1]) : 1; }
+    } catch { /* network error — silent */ }
+  });
+
+  const dismissHeicBanner = () => {
+    heicBannerDismissed = true;
+    sessionStorage.setItem('dc-heic-banner-dismissed', '1');
+  };
 
   let selectedAssets = $derived(assetMultiSelectManager.assets);
   let isAssetStackSelected = $derived(selectedAssets.length === 1 && !!selectedAssets[0].stack);
@@ -93,6 +114,16 @@
 </script>
 
 <UserPageLayout hideNavbar={assetMultiSelectManager.selectionActive} scrollbar={false}>
+  {#if heicFixCount > 0 && !heicBannerDismissed}
+    <div class="mx-4 mt-2 flex items-center gap-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm dark:border-amber-700 dark:bg-amber-900/20">
+      <span class="text-amber-600 dark:text-amber-400">⚠</span>
+      <span class="flex-1 text-amber-800 dark:text-amber-200">
+        {heicFixCount} photo{heicFixCount > 1 ? 's' : ''} need{heicFixCount === 1 ? 's' : ''} fixing.
+        <a href="/utilities" class="font-medium underline">Open Utilities → Fix HEIC</a>
+      </span>
+      <button onclick={dismissHeicBanner} class="px-1 font-bold text-amber-500 hover:text-amber-700">×</button>
+    </div>
+  {/if}
   <Timeline
     enableRouting={true}
     bind:timelineManager

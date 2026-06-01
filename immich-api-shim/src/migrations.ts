@@ -98,6 +98,15 @@ CREATE TABLE upload_sessions (
   createdAt TEXT NOT NULL,
   expiresAt TEXT NOT NULL
 );`
+  },
+  {
+    version: '1.1.0',
+    sql: `ALTER TABLE photos ADD COLUMN thumbhash TEXT;
+ALTER TABLE photos ADD COLUMN telegramPreviewId TEXT;
+ALTER TABLE photos ADD COLUMN previewEncrypted INTEGER DEFAULT 0;
+ALTER TABLE photos ADD COLUMN latitude REAL;
+ALTER TABLE photos ADD COLUMN longitude REAL;
+CREATE INDEX idx_photos_gps ON photos(latitude, longitude) WHERE latitude IS NOT NULL;`
   }
 ];
 

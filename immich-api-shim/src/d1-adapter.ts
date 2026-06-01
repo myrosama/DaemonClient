@@ -25,6 +25,8 @@ export interface Photo {
   description?: string;
   city?: string;
   country?: string;
+  latitude?: number | null;
+  longitude?: number | null;
 }
 
 export interface Album {
