@@ -1,6 +1,7 @@
 {
-  "background_color": "#ffffff",
-  "description": "Self-hosted photo and video backup solution directly from your mobile phone.",
+  "background_color": "#000000",
+  "theme_color": "#6366f1",
+  "description": "DaemonClient Photos — your private, unlimited, end-to-end encrypted photo and video library. Free, self-sovereign, powered by your own storage.",
   "dir": "auto",
   "display": "standalone",
   "icons": [
@@ -24,8 +25,8 @@
     }
   ],
   "lang": "en",
-  "name": "Immich",
-  "short_name": "Immich",
+  "name": "DaemonClient Photos",
+  "short_name": "DC Photos",
   "shortcuts": [
     {
       "name": "Photos",
