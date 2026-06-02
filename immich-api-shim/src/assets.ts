@@ -324,8 +324,9 @@ export async function handleAssets(request: Request, env: Env, path: string, url
     }
     return json({});
   }
-  // Trash — empty (permanently delete all trashed photos)
-  if (path === '/api/trash/empty' && request.method === 'DELETE') {
+  // Trash — empty (permanently delete all trashed photos). Immich app uses
+  // POST; accept DELETE too for robustness.
+  if (path === '/api/trash/empty' && (request.method === 'POST' || request.method === 'DELETE')) {
     if (env.DB) {
       const adapter = new D1Adapter(env.DB);
       const rows = await adapter.queryPhotos({ ownerId: uid, isTrashed: 1 });
