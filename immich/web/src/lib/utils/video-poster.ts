@@ -34,6 +34,15 @@ export function extractVideoPoster(videoUrl: string): Promise<VideoPosterResult 
     const video = document.createElement('video');
     video.preload = 'metadata';
     video.muted = true;
+    // CRITICAL for iOS Safari — which is the platform that matters most here,
+    // because it's the only browser that can decode iPhone HEVC video. Without
+    // `playsinline` (+ the webkit-prefixed attribute), iOS refuses to decode a
+    // video inline for canvas capture and we get a black frame or nothing. With
+    // it (and muted), we're allowed to play/seek inline and draw to canvas.
+    video.playsInline = true;
+    video.setAttribute('playsinline', '');
+    video.setAttribute('webkit-playsinline', '');
+    video.setAttribute('muted', '');
     // crossOrigin is same-origin for /api/… routes — set it anyway so the
     // attribute is present; getImageData/toBlob still work either way.
     video.crossOrigin = 'anonymous';
@@ -43,7 +52,10 @@ export function extractVideoPoster(videoUrl: string): Promise<VideoPosterResult 
 
     // Use onloadedmetadata to set currentTime, then onseeked to draw so we
     // always get a decoded non-blank frame (frame-0 may be blank for some codecs).
+    // iOS often has no decoded frame from preload=metadata + a bare seek, so
+    // kick a brief muted inline play() first to force a real frame to decode.
     video.onloadedmetadata = () => {
+      video.play().catch(() => { /* autoplay may be blocked; seek still tries */ });
       // Seek 0.1 s in; clamped to within the video.
       video.currentTime = Math.min(0.1, (video.duration || 0) > 0.2 ? 0.1 : 0);
     };
