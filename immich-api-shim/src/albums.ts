@@ -186,7 +186,7 @@ function toAlbumDto(album: any) {
     createdAt: album.createdAt,
     updatedAt: album.updatedAt,
     albumThumbnailAssetId: album.albumThumbnailAssetId,
-    shared: album.shared || false,
+    shared: !!album.shared,
     assetCount: album.assetCount || 0,
     assets: [],
     owner: album.owner || { id: album.ownerId, email: '', name: '' },

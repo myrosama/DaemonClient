@@ -26,7 +26,7 @@ export async function backfillVideoById(assetId: string): Promise<boolean> {
     const result = await extractVideoPoster(`/api/assets/${assetId}/video/playback`);
     if (!result) return false;
 
-    const { blob: poster } = result;
+    const { blob: poster, videoWidth, videoHeight } = result;
 
     // Compute ThumbHash at ≤100px (library requirement).
     const bitmap = await createImageBitmap(poster);
@@ -46,12 +46,15 @@ export async function backfillVideoById(assetId: string): Promise<boolean> {
     }
 
     // Upload thumbnail + thumbhash. We deliberately omit `preview` (no HEIC-style
-    // full-res preview needed for video) and omit width/height (poster dimensions
-    // ≠ original video dimensions and we can't read videoWidth/Height reliably
-    // after the element is torn down at this point).
+    // full-res preview needed for video). Forward the video's native dimensions
+    // (videoWidth/videoHeight from extractVideoPoster) so the worker stores the
+    // correct width/height and video tiles get the right aspect ratio — mirrors
+    // how heic-backfill.ts sends width/height.
     const form = new FormData();
     form.append('thumbnail', poster, 'thumb.jpg');
     form.append('thumbhash', thumbhash);
+    if (videoWidth > 0) form.append('width', String(videoWidth));
+    if (videoHeight > 0) form.append('height', String(videoHeight));
 
     const res = await fetch(`/api/assets/${assetId}/thumbnail`, { method: 'POST', body: form });
     return res.ok;

@@ -104,7 +104,7 @@ async function handleSearchMetadata(request: Request, env: Env): Promise<Respons
       longitude: p.exifInfo?.longitude || null,
     },
     livePhotoVideoId: p.livePhotoVideoId || null,
-    isHeic: p.isHeic || false,
+    isHeic: !!p.isHeic,
     checksum: p.checksum || p._id,
   }));
 
