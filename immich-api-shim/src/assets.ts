@@ -388,12 +388,20 @@ export async function handleAssets(request: Request, env: Env, path: string, url
         const parts: string[] = [];
         if (heicCount > 0) parts.push(`${heicCount} HEIC photo${heicCount > 1 ? 's' : ''}`);
         if (videoCount > 0) parts.push(`${videoCount} video${videoCount > 1 ? 's' : ''}`);
+        // Honest explainer: this app can't display HEIC/video directly; the web
+        // viewer can. Tell the user exactly how to make them work — and that the
+        // fixer runs from a phone browser too (iPhone Safari decodes HEIC/HEVC
+        // natively, so it works great on the phone). Mention the optional
+        // self-hosted backend for instant viewing with no fix step.
         notifications.push({
           id: 'heic-fix',
           type: 'system',
           level: 'warning',
-          title: 'Media needs attention',
-          message: `${parts.join(' and ')} need${total === 1 ? 's' : ''} fixing — open Utilities`,
+          title: `${parts.join(' and ')} can't be shown in the app`,
+          message:
+            `HEIC photos and videos don't display directly in this app — but they're safe and they work on the web. ` +
+            `To fix them: open photos.daemonclient.uz in any browser (your phone works too) → Utilities → tap "Fix HEIC", then "Fix Videos". ` +
+            `After that they show everywhere. Advanced: connect your own backend server (e.g. Render) to view them instantly with no fixing — guide on the website.`,
           read: false,
           createdAt: new Date().toISOString(),
           readAt: null,
