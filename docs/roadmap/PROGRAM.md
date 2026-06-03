@@ -164,6 +164,13 @@ graph TD
 
 ## 9. Status Log (append-only; newest on top)
 
+- **2026-06-02 (cont. 2)** — Design method = prompts for user's Claude design tool;
+  **Drive landing designed first**. Sent reference screenshots
+  (`docs/roadmap/reference/`) + exact palette to user. Background hardening agent
+  shipped (`c47b742d047f`): fixed 2 more bool leaks (`search.ts` isHeic, `albums.ts`
+  shared) + video-backfill now forwards width/height. **Follow-up bug to fix:**
+  `search.ts:65` favorites filter compares D1 int `1` to bool `true` → favorites
+  search returns nothing (behavior fix, deferred).
 - **2026-06-02 (cont.)** — Decisions locked (§7). Both research agents returned full
   plans (folded into T1 + T3). Wrote landing-page design prompts ([[design-prompts]]).
   Shipped the `playsinline` fix so the web video-thumbnail fixer works on iPhone Safari.
