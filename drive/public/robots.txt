@@ -1,0 +1,7 @@
+# DaemonClient Drive
+User-agent: *
+Allow: /
+Disallow: /login
+Disallow: /dashboard
+
+Sitemap: https://drive.daemonclient.uz/sitemap.xml

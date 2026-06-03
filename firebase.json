@@ -199,7 +199,9 @@
       "headers": [
         { "source": "/sw.js", "headers": [ { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" } ] },
         { "source": "/index.html", "headers": [ { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" } ] },
-        { "source": "/app.html", "headers": [ { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" } ] }
+        { "source": "/app.html", "headers": [ { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" } ] },
+        { "source": "/login", "headers": [ { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" } ] },
+        { "source": "/dashboard", "headers": [ { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" } ] }
       ]
     },
     {
