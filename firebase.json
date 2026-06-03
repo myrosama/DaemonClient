@@ -184,6 +184,25 @@
       ]
     },
     {
+      "target": "drive",
+      "public": "drive/dist",
+      "ignore": [
+        "firebase.json",
+        "**/.*",
+        "**/node_modules/**"
+      ],
+      "rewrites": [
+        { "source": "/login", "destination": "/app.html" },
+        { "source": "/dashboard", "destination": "/app.html" },
+        { "source": "**", "destination": "/index.html" }
+      ],
+      "headers": [
+        { "source": "/sw.js", "headers": [ { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" } ] },
+        { "source": "/index.html", "headers": [ { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" } ] },
+        { "source": "/app.html", "headers": [ { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" } ] }
+      ]
+    },
+    {
       "target": "accounts",
       "public": "accounts-portal/dist",
       "ignore": [

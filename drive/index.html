@@ -1,0 +1,1620 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DaemonClient Drive — Unlimited Encrypted Storage</title>
+  <meta name="description" content="Free, unlimited, end-to-end encrypted file storage on infrastructure you own. No fees. No snooping. No limits.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Inter:ital,wght@0,300;0,400;0,500;0,600;1,400&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --blue:        #1E6BFF;
+      --blue-light:  #38BDF8;
+      --blue-dim:    rgba(30,107,255,0.12);
+      --blue-border: rgba(30,107,255,0.22);
+      --canvas:      #070B16;
+      --canvas-deep: #0A1730;
+      --text:        #F4F6FB;
+      --muted:       #8A93A6;
+      --green:       #10D9A0;
+      --border:      rgba(255,255,255,0.07);
+      --border-hi:   rgba(255,255,255,0.12);
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; font-size: 16px; }
+
+    body {
+      background: var(--canvas);
+      color: var(--text);
+      font-family: 'Inter', system-ui, sans-serif;
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+      overflow-x: hidden;
+    }
+
+    h1, h2, h3, h4 {
+      font-family: 'Space Grotesk', system-ui, sans-serif;
+      letter-spacing: -0.03em;
+      line-height: 1.08;
+    }
+
+    .mono { font-family: 'JetBrains Mono', monospace; }
+
+    /* ── NAV ── */
+    nav {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 200;
+      height: 62px;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0 2.5rem;
+      background: rgba(7,11,22,0.75);
+      backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+      border-bottom: 1px solid var(--border);
+      transition: background 0.3s;
+    }
+
+    .nav-logo {
+      display: flex; align-items: center; gap: 10px;
+      text-decoration: none; flex-shrink: 0;
+    }
+    .nav-logo img { height: 30px; width: auto; }
+    .nav-logo-text {
+      font-family: 'Space Grotesk', sans-serif;
+      font-weight: 600; font-size: 0.975rem;
+      color: var(--text); letter-spacing: -0.02em;
+    }
+
+    .nav-links {
+      display: flex; align-items: center; gap: 2.25rem;
+      list-style: none;
+    }
+    .nav-links a {
+      color: var(--muted); text-decoration: none;
+      font-size: 0.875rem; font-weight: 500;
+      transition: color 0.18s;
+    }
+    .nav-links a:hover { color: var(--text); }
+
+    .nav-actions { display: flex; align-items: center; gap: 0.625rem; }
+
+    .btn-ghost {
+      padding: 0.5rem 1.1rem;
+      border: 1px solid var(--border-hi); border-radius: 8px;
+      background: transparent; color: var(--text);
+      font-family: 'Inter', sans-serif; font-size: 0.85rem; font-weight: 500;
+      text-decoration: none; cursor: pointer;
+      transition: border-color 0.18s, background 0.18s;
+    }
+    .btn-ghost:hover { border-color: rgba(255,255,255,0.22); background: rgba(255,255,255,0.04); }
+
+    .btn-primary {
+      padding: 0.5rem 1.2rem;
+      background: var(--blue); border: 1px solid transparent; border-radius: 8px;
+      color: #fff; font-family: 'Inter', sans-serif;
+      font-size: 0.85rem; font-weight: 600;
+      text-decoration: none; cursor: pointer;
+      transition: background 0.18s, transform 0.12s, box-shadow 0.2s;
+    }
+    .btn-primary:hover {
+      background: #2f7aff; transform: translateY(-1px);
+      box-shadow: 0 6px 20px rgba(30,107,255,0.35);
+    }
+
+    .nav-hamburger {
+      display: none; flex-direction: column; gap: 5px;
+      background: none; border: none; cursor: pointer; padding: 4px;
+    }
+    .nav-hamburger span {
+      display: block; width: 22px; height: 2px;
+      background: var(--text); border-radius: 2px;
+      transition: all 0.28s;
+    }
+    .nav-hamburger.open span:nth-child(1) { transform: translateY(7px) rotate(45deg); }
+    .nav-hamburger.open span:nth-child(2) { opacity: 0; }
+    .nav-hamburger.open span:nth-child(3) { transform: translateY(-7px) rotate(-45deg); }
+
+    .mobile-menu {
+      display: none; position: fixed;
+      top: 62px; left: 0; right: 0;
+      background: rgba(7,11,22,0.98);
+      border-bottom: 1px solid var(--border);
+      padding: 2rem 2rem 2.5rem;
+      flex-direction: column; gap: 1.5rem; z-index: 199;
+    }
+    .mobile-menu.open { display: flex; }
+    .mobile-menu a {
+      color: var(--muted); text-decoration: none;
+      font-size: 1.05rem; font-weight: 500; transition: color 0.18s;
+    }
+    .mobile-menu a:hover { color: var(--text); }
+    .mobile-menu .mobile-cta {
+      margin-top: 0.5rem; padding: 0.875rem 1.5rem;
+      background: var(--blue); color: #fff;
+      font-weight: 600; border-radius: 10px; text-align: center;
+    }
+
+    /* ── HERO ── */
+    .hero {
+      min-height: 100svh;
+      display: flex; align-items: center;
+      padding: 7rem 2.5rem 5rem;
+      position: relative; overflow: hidden;
+    }
+
+    /* Radial glow overlays */
+    .hero-glow-left {
+      position: absolute; top: -180px; left: -180px;
+      width: 640px; height: 640px; border-radius: 50%;
+      background: radial-gradient(circle, rgba(30,107,255,0.09) 0%, transparent 70%);
+      pointer-events: none;
+    }
+    .hero-glow-right {
+      position: absolute; top: 0; right: -100px;
+      width: 700px; height: 500px;
+      background: radial-gradient(ellipse, rgba(56,189,248,0.06) 0%, transparent 70%);
+      pointer-events: none;
+    }
+
+    .hero-inner {
+      max-width: 1280px; margin: 0 auto; width: 100%;
+      display: grid; grid-template-columns: 1fr 1fr;
+      gap: 5rem; align-items: center;
+      position: relative; z-index: 1;
+    }
+
+    .hero-badge {
+      display: inline-flex; align-items: center; gap: 7px;
+      padding: 4px 13px;
+      background: var(--blue-dim); border: 1px solid var(--blue-border);
+      border-radius: 100px;
+      font-size: 0.75rem; font-weight: 500; color: var(--blue-light);
+      margin-bottom: 1.75rem;
+      letter-spacing: 0.01em;
+    }
+    .badge-dot {
+      width: 6px; height: 6px; border-radius: 50%; background: var(--blue);
+      animation: pulse-dot 2.4s ease-in-out infinite;
+    }
+    @keyframes pulse-dot {
+      0%,100% { opacity:1; transform:scale(1); }
+      50%      { opacity:0.45; transform:scale(0.75); }
+    }
+
+    .hero h1 {
+      font-size: clamp(2.6rem, 4.8vw, 4.2rem);
+      font-weight: 700; letter-spacing: -0.04em;
+      margin-bottom: 1.5rem; line-height: 1.03;
+    }
+    .h1-accent {
+      background: linear-gradient(125deg, #1E6BFF 0%, #38BDF8 100%);
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .hero-sub {
+      font-size: 1.075rem; color: var(--muted);
+      line-height: 1.72; max-width: 480px;
+      margin-bottom: 2.5rem;
+    }
+
+    .hero-actions {
+      display: flex; align-items: center; gap: 0.875rem;
+      flex-wrap: wrap; margin-bottom: 2.75rem;
+    }
+
+    .btn-hero {
+      padding: 0.875rem 2rem;
+      background: var(--blue); border: 1px solid transparent; border-radius: 10px;
+      color: #fff; font-family: 'Inter', sans-serif;
+      font-size: 0.975rem; font-weight: 600;
+      text-decoration: none; cursor: pointer;
+      transition: background 0.18s, transform 0.14s, box-shadow 0.2s;
+    }
+    .btn-hero:hover {
+      background: #2f7aff; transform: translateY(-2px);
+      box-shadow: 0 10px 32px rgba(30,107,255,0.38);
+    }
+
+    .btn-hero-sec {
+      padding: 0.875rem 2rem;
+      background: transparent; border: 1px solid var(--border-hi); border-radius: 10px;
+      color: var(--text); font-family: 'Inter', sans-serif;
+      font-size: 0.975rem; font-weight: 500;
+      text-decoration: none; cursor: pointer;
+      transition: border-color 0.18s, background 0.18s;
+    }
+    .btn-hero-sec:hover { border-color: var(--blue-border); background: rgba(30,107,255,0.04); }
+
+    .hero-trust {
+      display: flex; flex-wrap: wrap; gap: 1.5rem;
+    }
+    .trust-item {
+      display: flex; align-items: center; gap: 7px;
+      font-size: 0.8rem; color: var(--muted); font-weight: 500;
+    }
+    .trust-icon { color: var(--blue-light); flex-shrink: 0; }
+
+    /* ── HERO VISUAL ── */
+    .hero-visual {
+      position: relative;
+      display: flex; align-items: center; justify-content: center;
+    }
+
+    #shard-canvas {
+      position: absolute; inset: -60px;
+      width: calc(100% + 120px); height: calc(100% + 120px);
+      pointer-events: none;
+    }
+
+    .dashboard-mock {
+      position: relative; z-index: 2;
+      width: 100%; max-width: 555px;
+      background: #0C1422;
+      border: 1px solid rgba(255,255,255,0.09);
+      border-radius: 14px; overflow: hidden;
+      box-shadow:
+        0 0 0 1px rgba(30,107,255,0.08),
+        0 24px 60px rgba(0,0,0,0.55),
+        0 6px 20px rgba(0,0,0,0.3);
+      transform: perspective(1400px) rotateY(-4deg) rotateX(2deg);
+    }
+
+    .mock-bar {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0.7rem 1rem;
+      background: #08101C;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+      gap: 0.75rem;
+    }
+    .mock-brand { display: flex; align-items: center; gap: 7px; flex-shrink: 0; }
+    .mock-brand img { height: 18px; }
+    .mock-brand span {
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 0.75rem; font-weight: 600; color: var(--text);
+    }
+    .mock-search {
+      display: flex; align-items: center; gap: 6px;
+      padding: 4px 10px; flex: 1;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(255,255,255,0.07); border-radius: 6px;
+      font-size: 0.7rem; color: var(--muted);
+    }
+    .mock-up-btn {
+      display: flex; align-items: center; gap: 5px;
+      padding: 4px 10px; flex-shrink: 0;
+      background: var(--blue); border-radius: 6px;
+      font-size: 0.7rem; font-weight: 600; color: #fff;
+    }
+
+    .mock-body { display: grid; grid-template-columns: 130px 1fr; }
+
+    .mock-sidebar {
+      padding: 0.875rem 0;
+      background: rgba(8,14,26,0.5);
+      border-right: 1px solid rgba(255,255,255,0.05);
+    }
+    .mock-nav-item {
+      display: flex; align-items: center; gap: 7px;
+      padding: 5px 14px;
+      font-size: 0.72rem; color: var(--muted); cursor: default;
+    }
+    .mock-nav-item.on { color: var(--text); background: rgba(30,107,255,0.1); }
+    .sidebar-sep { height: 1px; background: var(--border); margin: 8px 12px; }
+    .sidebar-label { padding: 4px 14px; font-size: 0.62rem; color: var(--muted); }
+    .sidebar-val { padding: 0 14px 8px; font-size: 0.7rem; font-weight: 600; color: var(--blue-light); }
+
+    .mock-main { padding: 0.875rem; }
+    .mock-files-hdr {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 0.625rem;
+    }
+    .mock-files-hdr span { font-size: 0.68rem; color: var(--muted); }
+
+    .mock-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 7px; }
+
+    .mock-file {
+      display: flex; flex-direction: column; align-items: center; gap: 5px;
+      padding: 8px 6px;
+      background: rgba(255,255,255,0.025);
+      border: 1px solid rgba(255,255,255,0.06); border-radius: 8px;
+      cursor: default;
+    }
+    .mock-file.sel {
+      border-color: rgba(30,107,255,0.4);
+      background: rgba(30,107,255,0.07);
+    }
+    .ficon {
+      width: 30px; height: 34px; border-radius: 4px;
+      display: flex; align-items: center; justify-content: center;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.55rem; font-weight: 700; letter-spacing: 0;
+    }
+    .ft-mp4 { background: rgba(56,189,248,0.14); color: #38BDF8; }
+    .ft-pdf { background: rgba(255,90,90,0.13); color: #FF7070; }
+    .ft-png { background: rgba(16,217,160,0.14); color: #10D9A0; }
+    .ft-zip { background: rgba(255,180,50,0.13); color: #FFB432; }
+    .ft-doc { background: rgba(30,107,255,0.14); color: #1E6BFF; }
+    .ft-mp3 { background: rgba(180,100,255,0.13); color: #B464FF; }
+    .ft-dir { background: rgba(56,189,248,0.10); color: #38BDF8; }
+    .ft-psd { background: rgba(255,120,200,0.12); color: #FF78C8; }
+    .fname { font-size: 0.58rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; width: 100%; text-align: center; }
+
+    .mock-playbar {
+      margin-top: 8px; padding: 7px 9px;
+      background: rgba(30,107,255,0.06);
+      border: 1px solid rgba(30,107,255,0.16); border-radius: 7px;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .mock-playthumb {
+      width: 26px; height: 18px; flex-shrink: 0; border-radius: 3px;
+      background: rgba(56,189,248,0.14);
+      display: flex; align-items: center; justify-content: center;
+    }
+    .mock-playinfo { flex: 1; min-width: 0; }
+    .mock-playinfo .pname { font-size: 0.6rem; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .mock-playinfo .ptime { font-size: 0.56rem; color: var(--muted); }
+    .mock-enc-badge {
+      font-family: 'JetBrains Mono', monospace; font-size: 0.56rem;
+      color: var(--blue-light); padding: 2px 5px;
+      background: rgba(30,107,255,0.1); border-radius: 3px; flex-shrink: 0;
+    }
+
+    /* Floating chunk labels on hero */
+    .chunk-float {
+      position: absolute; z-index: 3;
+      padding: 3px 8px;
+      background: rgba(7,11,22,0.85); border-radius: 5px;
+      font-family: 'JetBrains Mono', monospace; font-size: 0.62rem;
+      border: 1px solid rgba(30,107,255,0.28);
+      color: #38BDF8;
+      animation: chunk-drift 6s ease-in-out infinite;
+    }
+    .chunk-float:nth-child(2) { animation-delay: -2s; top: 12%; right: -4%; }
+    .chunk-float:nth-child(3) { animation-delay: -4s; bottom: 22%; right: -2%; }
+    .chunk-float:nth-child(4) { animation-delay: -1s; top: 30%; left: -6%; }
+    @keyframes chunk-drift {
+      0%,100% { transform: translateY(0px); opacity:0.9; }
+      50%      { transform: translateY(-8px); opacity:1; }
+    }
+
+    /* ── SECTION COMMON ── */
+    .section-label {
+      display: inline-flex; align-items: center; gap: 8px;
+      font-size: 0.72rem; font-weight: 600;
+      color: var(--blue); letter-spacing: 0.13em;
+      text-transform: uppercase; margin-bottom: 1.1rem;
+    }
+    .section-label::before {
+      content: ''; display: block; width: 18px; height: 1px; background: var(--blue);
+    }
+
+    .container { max-width: 1280px; margin: 0 auto; padding: 0 2.5rem; }
+
+    /* ── SHARD DIVIDER ── */
+    .shard-divider {
+      height: 1px; position: relative; overflow: visible;
+    }
+    .shard-divider::after {
+      content: '';
+      position: absolute; left: 10%; right: 10%; top: 0; height: 1px;
+      background: linear-gradient(90deg, transparent, #1E6BFF 30%, #38BDF8 60%, transparent);
+    }
+
+    /* ── FEATURES ── */
+    #features { padding: 7rem 0; background: var(--canvas-deep); }
+
+    .features-intro {
+      text-align: center; max-width: 560px; margin: 0 auto 5rem;
+    }
+    .features-intro h2 {
+      font-size: clamp(2rem, 3.6vw, 2.8rem); margin-top: 0.5rem; margin-bottom: 1rem;
+    }
+    .features-intro p { color: var(--muted); }
+
+    .feat-row {
+      display: grid; grid-template-columns: 1fr 1fr;
+      gap: 4rem; align-items: center;
+      padding: 4.5rem 0;
+      border-top: 1px solid var(--border);
+    }
+    .feat-row:first-of-type { border-top: none; }
+    .feat-row.flip .feat-content { order: 2; }
+    .feat-row.flip .feat-vis    { order: 1; }
+
+    .feat-tag {
+      display: inline-flex; align-items: center;
+      padding: 3px 9px;
+      background: var(--blue-dim); border: 1px solid var(--blue-border);
+      border-radius: 5px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.7rem; font-weight: 600; color: var(--blue-light);
+      letter-spacing: 0.04em; margin-bottom: 1rem;
+    }
+    .feat-tag.soon {
+      background: rgba(255,180,50,0.09); border-color: rgba(255,180,50,0.22); color: #FFB432;
+      font-family: 'Inter', sans-serif; letter-spacing: 0;
+    }
+
+    .feat-content h3 {
+      font-size: clamp(1.5rem, 2.6vw, 2.1rem); margin-bottom: 1rem;
+    }
+    .feat-content p { color: var(--muted); line-height: 1.72; margin-bottom: 0.75rem; }
+    .feat-content p:last-child { margin-bottom: 0; }
+    .feat-content .detail {
+      font-size: 0.85rem; color: rgba(138,147,166,0.75);
+    }
+
+    /* Video player mock */
+    .vplayer {
+      background: #0C1422;
+      border: 1px solid var(--border); border-radius: 12px; overflow: hidden;
+    }
+    .vscreen {
+      position: relative; padding-top: 56.25%;
+      background: linear-gradient(140deg, #060D1E 0%, #0B1630 55%, #04080F 100%);
+    }
+    .vplay {
+      position: absolute; top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      width: 50px; height: 50px; border-radius: 50%;
+      background: rgba(30,107,255,0.88);
+      display: flex; align-items: center; justify-content: center;
+    }
+    .chunk-labels {
+      position: absolute; top: 10px; right: 10px;
+      display: flex; flex-direction: column; gap: 4px;
+    }
+    .clabel {
+      padding: 2px 7px;
+      background: rgba(30,107,255,0.12); border-radius: 4px;
+      border: 1px solid rgba(30,107,255,0.3);
+      font-family: 'JetBrains Mono', monospace; font-size: 0.58rem; color: #38BDF8;
+    }
+    .clabel.pending {
+      border-style: dashed; border-color: rgba(30,107,255,0.18);
+      color: var(--muted);
+    }
+    .vcontrols { padding: 0.875rem 1rem; }
+    .vseek { height: 3px; background: rgba(255,255,255,0.1); border-radius: 2px; overflow: hidden; margin-bottom: 0.5rem; }
+    .vseek-fill { height: 100%; width: 38%; background: linear-gradient(90deg, var(--blue), var(--blue-light)); border-radius: 2px; }
+    .vbottom {
+      display: flex; justify-content: space-between; align-items: center;
+      font-size: 0.68rem; color: var(--muted);
+    }
+    .vbottom .enc-label {
+      font-family: 'JetBrains Mono', monospace; color: var(--blue-light);
+    }
+
+    /* Encryption flow */
+    .enc-flow { display: flex; flex-direction: column; gap: 0.75rem; }
+    .enc-row { display: flex; align-items: center; gap: 0.625rem; }
+    .enc-block {
+      flex: 1; padding: 0.75rem 0.875rem;
+      background: #0C1422; border: 1px solid var(--border); border-radius: 8px;
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .enc-block .elabel {
+      font-size: 0.58rem; color: var(--blue-light);
+      text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 3px;
+    }
+    .enc-block .eval { font-size: 0.72rem; color: var(--text); }
+    .enc-block .emeta { font-size: 0.6rem; color: var(--muted); margin-top: 2px; }
+    .enc-block.blue { border-color: var(--blue-border); }
+    .enc-arrow { color: var(--blue); font-size: 1rem; flex-shrink: 0; }
+    .enc-chips { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+    .enc-chip {
+      flex: 1; padding: 0.6rem 0.75rem;
+      background: #080F1C; border: 1px solid var(--border); border-radius: 7px;
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .enc-chip .clabel2 { font-size: 0.58rem; color: var(--blue-light); margin-bottom: 2px; }
+    .enc-chip .cval { font-size: 0.65rem; color: var(--muted); }
+    .enc-chip.ok { border-color: rgba(16,217,160,0.22); }
+    .enc-chip.ok .clabel2 { color: var(--green); }
+    .enc-note {
+      padding: 0.75rem 1rem;
+      background: rgba(10,23,48,0.6); border: 1px solid var(--blue-border); border-radius: 8px;
+      font-size: 0.78rem; color: var(--muted); line-height: 1.6;
+    }
+
+    /* Terminal mock */
+    .terminal {
+      background: #050C14;
+      border: 1px solid rgba(255,255,255,0.07); border-radius: 12px; overflow: hidden;
+    }
+    .term-bar {
+      display: flex; align-items: center; gap: 6px;
+      padding: 0.6rem 1rem;
+      background: #091018; border-bottom: 1px solid rgba(255,255,255,0.05);
+    }
+    .term-dot { width: 10px; height: 10px; border-radius: 50%; }
+    .td-r { background: #FF5F56; } .td-y { background: #FFBD2E; } .td-g { background: #27C93F; }
+    .term-title {
+      margin-left: auto;
+      font-family: 'JetBrains Mono', monospace; font-size: 0.68rem; color: var(--muted);
+    }
+    .term-body {
+      padding: 1.25rem 1.5rem;
+      font-family: 'JetBrains Mono', monospace; font-size: 0.76rem; line-height: 1.9;
+    }
+    .tp { color: var(--blue-light); }
+    .tc { color: var(--text); }
+    .to { color: #4A6A50; }
+    .ts { color: var(--green); }
+    .tpath { color: #38BDF8; }
+    .tsize { color: var(--muted); }
+    .tcursor {
+      display: inline-block; width: 8px; height: 14px;
+      background: var(--blue-light); vertical-align: middle;
+      animation: blink 1.2s step-end infinite;
+    }
+    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+
+    /* Drive Anywhere */
+    .feat-anywhere {
+      padding: 4.5rem 0; border-top: 1px solid var(--border);
+      display: grid; grid-template-columns: 1fr 2fr;
+      gap: 4rem; align-items: center;
+    }
+    .mount-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; }
+    .mount-card {
+      padding: 1.25rem 1rem;
+      background: rgba(255,255,255,0.018); border: 1px solid var(--border);
+      border-radius: 12px;
+      display: flex; flex-direction: column; align-items: center; gap: 0.75rem;
+      text-align: center;
+    }
+    .mount-card.live { border-color: var(--blue-border); background: var(--blue-dim); }
+    .mount-card.dim { opacity: 0.5; }
+    .mount-icon { width: 38px; height: 38px; }
+    .mount-name { font-size: 0.75rem; color: var(--text); font-weight: 500; }
+    .mount-status { font-size: 0.65rem; font-weight: 600; }
+    .mount-card.live .mount-status { color: var(--blue); }
+    .mount-card.dim .mount-status { color: #FFB432; }
+
+    /* ── PRIVACY ── */
+    #privacy { padding: 8rem 0; background: var(--canvas); }
+    .privacy-headline {
+      font-size: clamp(2.6rem, 5vw, 4.8rem);
+      font-weight: 700; letter-spacing: -0.04em;
+      line-height: 1.04; margin-bottom: 2rem;
+    }
+    .privacy-headline .dim { color: rgba(244,246,251,0.22); }
+    .privacy-headline .blue-grad {
+      background: linear-gradient(125deg, #1E6BFF 0%, #38BDF8 100%);
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .privacy-sub { font-size: 1.05rem; color: var(--muted); max-width: 580px; line-height: 1.72; }
+
+    .privacy-cards {
+      display: grid; grid-template-columns: repeat(3, 1fr);
+      gap: 2rem; margin-top: 4.5rem;
+      padding-top: 3rem; border-top: 1px solid var(--border);
+    }
+    .pcard { display: flex; flex-direction: column; gap: 0.6rem; }
+    .pcard-tag {
+      display: inline-flex; align-items: center;
+      padding: 2px 8px; border-radius: 4px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.68rem; font-weight: 600;
+      width: fit-content; margin-bottom: 0.25rem;
+    }
+    .pcard-tag.green {
+      background: rgba(16,217,160,0.09); border: 1px solid rgba(16,217,160,0.22); color: var(--green);
+    }
+    .pcard-tag.blue-t {
+      background: var(--blue-dim); border: 1px solid var(--blue-border); color: var(--blue-light);
+    }
+    .pcard h4 { font-size: 1rem; font-family: 'Space Grotesk', sans-serif; letter-spacing: -0.02em; }
+    .pcard p { font-size: 0.875rem; color: var(--muted); line-height: 1.7; }
+
+    /* ── HOW IT WORKS ── */
+    #how-it-works { padding: 8rem 0; background: var(--canvas-deep); }
+
+    .steps-intro { max-width: 500px; }
+    .steps-intro h2 { font-size: clamp(2rem, 3.6vw, 2.8rem); margin-top: 0.5rem; margin-bottom: 0.75rem; }
+    .steps-intro p { color: var(--muted); line-height: 1.7; }
+
+    .steps-grid {
+      display: grid; grid-template-columns: repeat(3, 1fr);
+      gap: 2.5rem; margin-top: 4rem;
+      position: relative;
+    }
+    .steps-grid::before {
+      content: '';
+      position: absolute; top: 27px;
+      left: calc(16.66% + 12px); right: calc(16.66% + 12px);
+      height: 1px;
+      background: linear-gradient(90deg, var(--blue) 0%, var(--blue-light) 100%);
+      opacity: 0.5;
+    }
+
+    .step { display: flex; flex-direction: column; gap: 1rem; }
+    .step-num {
+      width: 54px; height: 54px;
+      background: var(--blue-dim); border: 1px solid var(--blue-border); border-radius: 13px;
+      display: flex; align-items: center; justify-content: center;
+      font-family: 'Space Grotesk', sans-serif; font-size: 1.15rem;
+      font-weight: 700; color: var(--blue); position: relative; z-index: 1;
+    }
+    .step h3 { font-size: 1.2rem; line-height: 1.2; }
+    .step p { font-size: 0.875rem; color: var(--muted); line-height: 1.72; }
+    .step-note { font-size: 0.78rem; font-weight: 600; color: var(--blue-light); }
+
+    /* ── DOWNLOAD ── */
+    #download { padding: 8rem 0; background: var(--canvas-deep); }
+    .download-intro { text-align: center; margin-bottom: 3.5rem; }
+    .download-intro h2 { font-size: clamp(2rem, 3.6vw, 2.8rem); margin-top: 0.5rem; margin-bottom: 0.75rem; }
+    .download-intro p { color: var(--muted); }
+
+    .dl-cards {
+      display: grid; grid-template-columns: repeat(4, 1fr);
+      gap: 1rem; margin-bottom: 2rem;
+    }
+    .dl-card {
+      padding: 1.5rem;
+      background: rgba(255,255,255,0.025);
+      border: 1px solid var(--border); border-radius: 14px;
+      display: flex; flex-direction: column; gap: 0.875rem;
+      cursor: pointer; transition: border-color 0.2s, background 0.2s;
+      position: relative;
+    }
+    .dl-card:hover { border-color: var(--blue-border); background: var(--blue-dim); }
+    .dl-card.dl-active {
+      border-color: rgba(30,107,255,0.45);
+      background: rgba(30,107,255,0.08);
+    }
+
+    .dl-card-top { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
+    .dl-card-icon-title { display: flex; align-items: center; gap: 0.625rem; }
+    .dl-card-icon {
+      width: 34px; height: 34px; border-radius: 8px;
+      background: rgba(255,255,255,0.05);
+      display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+      color: var(--text);
+    }
+    .dl-card h4 {
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 0.975rem; font-weight: 600; letter-spacing: -0.02em;
+    }
+    .dl-status {
+      padding: 2px 7px; border-radius: 4px;
+      font-size: 0.62rem; font-weight: 700;
+      letter-spacing: 0.06em; white-space: nowrap; flex-shrink: 0;
+    }
+    .dl-status.live { background: rgba(16,217,160,0.14); border: 1px solid rgba(16,217,160,0.28); color: var(--green); }
+    .dl-status.soon { background: rgba(255,180,50,0.1); border: 1px solid rgba(255,180,50,0.22); color: #FFB432; }
+
+    .dl-card p { font-size: 0.82rem; color: var(--muted); line-height: 1.6; flex: 1; }
+
+    .dl-btn {
+      display: block; width: 100%;
+      padding: 0.6rem 1rem; border-radius: 8px;
+      font-family: 'Inter', sans-serif; font-size: 0.82rem; font-weight: 600;
+      text-align: center; text-decoration: none; cursor: pointer;
+      border: 1px solid transparent; transition: all 0.18s;
+    }
+    .dl-btn.solid { background: var(--blue); color: #fff; }
+    .dl-btn.solid:hover { background: #2f7aff; box-shadow: 0 6px 20px rgba(30,107,255,0.3); }
+    .dl-btn.outline { background: transparent; border-color: var(--border-hi); color: var(--text); }
+    .dl-btn.outline:hover { border-color: var(--blue-border); background: var(--blue-dim); }
+    .dl-btn.disabled { background: rgba(255,255,255,0.04); border-color: var(--border); color: var(--muted); cursor: default; pointer-events: none; }
+
+    /* CLI install panel */
+    .dl-panel {
+      background: #050C14;
+      border: 1px solid rgba(255,255,255,0.07); border-radius: 12px;
+      overflow: hidden;
+      transition: opacity 0.3s, transform 0.3s;
+    }
+    .dl-panel.hidden { display: none; }
+    .dl-panel-bar {
+      display: flex; align-items: center; gap: 6px;
+      padding: 0.6rem 1rem;
+      background: #091018; border-bottom: 1px solid rgba(255,255,255,0.05);
+    }
+    .dl-panel-bar span {
+      margin-left: auto;
+      font-family: 'JetBrains Mono', monospace; font-size: 0.68rem; color: var(--muted);
+      letter-spacing: 0.1em;
+    }
+    .dl-panel-body { padding: 1.5rem 2rem; display: flex; flex-direction: column; gap: 1.25rem; }
+    .dl-option-label {
+      font-family: 'JetBrains Mono', monospace; font-size: 0.65rem;
+      color: var(--muted); letter-spacing: 0.1em; margin-bottom: 0.5rem;
+    }
+    .dl-cmd {
+      display: flex; align-items: center; gap: 0.75rem;
+      padding: 0.75rem 1rem;
+      background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06); border-radius: 8px;
+      font-family: 'JetBrains Mono', monospace; font-size: 0.82rem;
+    }
+    .dl-cmd .prompt { color: var(--green); }
+    .dl-cmd .cmd-text { color: var(--text); flex: 1; }
+    .dl-copy {
+      margin-left: auto; padding: 3px 9px; border-radius: 5px;
+      background: rgba(30,107,255,0.1); border: 1px solid var(--blue-border);
+      color: var(--blue-light); font-size: 0.68rem; font-family: 'JetBrains Mono', monospace;
+      cursor: pointer; transition: background 0.18s; white-space: nowrap;
+    }
+    .dl-copy:hover { background: rgba(30,107,255,0.2); }
+    .dl-copy.copied { color: var(--green); border-color: rgba(16,217,160,0.3); background: rgba(16,217,160,0.08); }
+    .dl-binary-btns { display: flex; gap: 0.625rem; flex-wrap: wrap; }
+    .dl-binary-btn {
+      padding: 0.45rem 1rem;
+      background: rgba(255,255,255,0.04); border: 1px solid var(--border-hi); border-radius: 7px;
+      color: var(--text); font-size: 0.8rem; font-weight: 500; text-decoration: none;
+      transition: border-color 0.18s, background 0.18s; cursor: pointer;
+    }
+    .dl-binary-btn:hover { border-color: var(--blue-border); background: var(--blue-dim); }
+
+    /* Notify panel */
+    .dl-notify-panel {
+      padding: 2.5rem; text-align: center;
+      background: rgba(255,255,255,0.018); border: 1px solid var(--border); border-radius: 12px;
+    }
+    .dl-notify-panel h4 { font-size: 1.1rem; margin-bottom: 0.5rem; }
+    .dl-notify-panel p { color: var(--muted); font-size: 0.875rem; margin-bottom: 1.25rem; }
+    .dl-notify-form { display: flex; gap: 0.625rem; max-width: 400px; margin: 0 auto; }
+    .dl-notify-input {
+      flex: 1; padding: 0.625rem 1rem;
+      background: rgba(255,255,255,0.05); border: 1px solid var(--border-hi); border-radius: 8px;
+      color: var(--text); font-family: 'Inter', sans-serif; font-size: 0.875rem; outline: none;
+    }
+    .dl-notify-input:focus { border-color: var(--blue-border); }
+    .dl-notify-input::placeholder { color: var(--muted); }
+    .dl-notify-submit {
+      padding: 0.625rem 1.25rem;
+      background: var(--blue); border: none; border-radius: 8px;
+      color: #fff; font-family: 'Inter', sans-serif; font-size: 0.875rem; font-weight: 600;
+      cursor: pointer; transition: background 0.18s;
+    }
+    .dl-notify-submit:hover { background: #2f7aff; }
+
+    @media (max-width: 960px) {
+      .dl-cards { grid-template-columns: repeat(2, 1fr); }
+    }
+    @media (max-width: 560px) {
+      .dl-cards { grid-template-columns: 1fr; }
+      .dl-notify-form { flex-direction: column; }
+    }
+
+    /* ── FINAL CTA ── */
+    #cta {
+      padding: 9rem 0; text-align: center;
+      background: var(--canvas); position: relative; overflow: hidden;
+    }
+    #cta::before {
+      content: ''; position: absolute; top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      width: 700px; height: 320px; border-radius: 50%;
+      background: radial-gradient(ellipse, rgba(30,107,255,0.1) 0%, transparent 70%);
+      pointer-events: none;
+    }
+    #cta h2 {
+      font-size: clamp(2.6rem, 5vw, 4.2rem);
+      letter-spacing: -0.04em; line-height: 1.05;
+      margin-bottom: 1rem; position: relative;
+    }
+    #cta .blue-grad {
+      background: linear-gradient(125deg, #1E6BFF 0%, #38BDF8 100%);
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    #cta p { color: var(--muted); font-size: 1.05rem; margin-bottom: 2.5rem; position: relative; }
+    .cta-actions { display: flex; justify-content: center; gap: 0.875rem; flex-wrap: wrap; position: relative; }
+
+    /* ── FOOTER ── */
+    footer {
+      padding: 3.5rem 0 2.5rem;
+      border-top: 1px solid var(--border);
+      background: var(--canvas);
+    }
+    .footer-top {
+      display: flex; justify-content: space-between; gap: 3rem;
+      flex-wrap: wrap; margin-bottom: 3rem;
+    }
+    .footer-brand img { height: 26px; display: block; margin-bottom: 0.75rem; }
+    .footer-brand p { font-size: 0.8rem; color: var(--muted); max-width: 220px; line-height: 1.6; }
+    .footer-cols { display: flex; gap: 4rem; flex-wrap: wrap; }
+    .footer-col h5 {
+      font-size: 0.68rem; font-weight: 700; color: var(--muted);
+      text-transform: uppercase; letter-spacing: 0.1em;
+      margin-bottom: 0.875rem;
+    }
+    .footer-col a {
+      display: block; font-size: 0.85rem; color: var(--muted);
+      text-decoration: none; margin-bottom: 0.5rem; transition: color 0.18s;
+    }
+    .footer-col a:hover { color: var(--text); }
+    .footer-bottom {
+      padding-top: 2rem; border-top: 1px solid var(--border);
+      font-size: 0.76rem; color: var(--muted);
+      display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem;
+    }
+
+    /* ── SCROLL REVEAL ── */
+    .reveal {
+      opacity: 0; transform: translateY(22px);
+      transition: opacity 0.62s ease, transform 0.62s ease;
+    }
+    .reveal.in { opacity: 1; transform: none; }
+    .reveal-d1 { transition-delay: 0.1s; }
+    .reveal-d2 { transition-delay: 0.2s; }
+    .reveal-d3 { transition-delay: 0.3s; }
+
+    /* ── RESPONSIVE ── */
+    @media (max-width: 960px) {
+      .hero-inner { grid-template-columns: 1fr; }
+      .hero-visual { display: none; }
+      .feat-row { grid-template-columns: 1fr; }
+      .feat-row.flip .feat-content { order: unset; }
+      .feat-row.flip .feat-vis    { order: unset; }
+      .feat-anywhere { grid-template-columns: 1fr; }
+      .privacy-cards { grid-template-columns: 1fr; gap: 2.5rem; }
+      .steps-grid { grid-template-columns: 1fr; }
+      .steps-grid::before { display: none; }
+      .nav-links, .nav-actions { display: none; }
+      .nav-hamburger { display: flex; }
+    }
+
+    @media (max-width: 640px) {
+      .hero { padding: 6.5rem 1.5rem 4rem; }
+      .container { padding: 0 1.5rem; }
+      nav { padding: 0 1.5rem; }
+      .mount-grid { grid-template-columns: repeat(3, 1fr); gap: 0.75rem; }
+      .footer-cols { gap: 2.5rem; }
+      .footer-bottom { flex-direction: column; align-items: flex-start; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ══ NAV ══ -->
+<nav id="nav">
+  <a href="/" class="nav-logo">
+    <img src="/logo.png" alt="DaemonClient Drive logo">
+    <span class="nav-logo-text">DaemonClient Drive</span>
+  </a>
+  <ul class="nav-links">
+    <li><a href="#features">Features</a></li>
+    <li><a href="#how-it-works">How it works</a></li>
+    <li><a href="#download">Download</a></li>
+    <li><a href="https://github.com/daemonclient" target="_blank" rel="noopener">Open Source</a></li>
+  </ul>
+  <div class="nav-actions">
+    <a href="/login" class="btn-ghost">Sign in</a>
+    <a href="https://accounts.daemonclient.uz/signup?continue=https://drive.daemonclient.uz/dashboard" class="btn-primary">Create free account</a>
+  </div>
+  <button class="nav-hamburger" id="hamburger" aria-label="Open menu">
+    <span></span><span></span><span></span>
+  </button>
+</nav>
+
+<div class="mobile-menu" id="mobile-menu">
+  <a href="#features">Features</a>
+  <a href="#how-it-works">How it works</a>
+  <a href="#download">Download</a>
+  <a href="https://github.com/daemonclient" target="_blank" rel="noopener">Open Source</a>
+  <a href="/login">Sign in</a>
+  <a href="https://accounts.daemonclient.uz/signup?continue=https://drive.daemonclient.uz/dashboard" class="mobile-cta">Create free account</a>
+</div>
+
+<!-- ══ HERO ══ -->
+<section class="hero">
+  <div class="hero-glow-left"></div>
+  <div class="hero-glow-right"></div>
+
+  <div class="hero-inner">
+    <!-- Left: text -->
+    <div class="hero-text">
+      <h1>
+        Unlimited storage.<br>
+        <span class="h1-accent">Sealed before it<br>leaves your device.</span>
+      </h1>
+
+      <p class="hero-sub">
+        DaemonClient Drive gives you limitless, end-to-end-encrypted file storage on infrastructure you own. No fees. No snooping. No limits.
+      </p>
+
+      <div class="hero-actions">
+        <a href="https://accounts.daemonclient.uz/signup?continue=https://drive.daemonclient.uz/dashboard" class="btn-hero">Get started free</a>
+        <a href="#how-it-works" class="btn-hero-sec">See how it works</a>
+      </div>
+
+      <div class="hero-trust">
+        <div class="trust-item">
+          <svg class="trust-icon" width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6">
+            <path d="M7 1.5L2 4v3.5c0 2.8 2.3 4.8 5 5.5 2.7-.7 5-2.7 5-5.5V4L7 1.5z"/>
+          </svg>
+          AES-256-GCM encrypted
+        </div>
+        <div class="trust-item">
+          <svg class="trust-icon" width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6">
+            <circle cx="7" cy="7" r="5.5"/>
+            <path d="M4.5 7h5M4.5 7l2-2M4.5 7l2 2" stroke-linecap="round"/>
+          </svg>
+          Zero monthly fees
+        </div>
+        <div class="trust-item">
+          <svg class="trust-icon" width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6">
+            <path d="M2 7c0-2.8 2.2-5 5-5s5 2.2 5 5-2.2 5-5 5" stroke-linecap="round"/>
+            <path d="M7 4.5v2.5l1.5 1.5" stroke-linecap="round"/>
+          </svg>
+          No storage limits
+        </div>
+      </div>
+    </div>
+
+    <!-- Right: Dashboard mock -->
+    <div class="hero-visual">
+      <canvas id="shard-canvas"></canvas>
+
+      <!-- Floating chunk labels -->
+      <div class="chunk-float" style="top:8%;right:-2%;">chunk_0041 ✓</div>
+      <div class="chunk-float" style="bottom:18%;right:-1%;">chunk_0042 ✓</div>
+      <div class="chunk-float" style="top:36%;left:-5%;">enc_key ✓</div>
+
+      <div class="dashboard-mock">
+        <!-- Top bar -->
+        <div class="mock-bar">
+          <div class="mock-brand">
+            <img src="/logo.png" alt="">
+            <span>Drive</span>
+          </div>
+          <div class="mock-search">
+            <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5">
+              <circle cx="4.5" cy="4.5" r="3"/><path d="M7 7l1.5 1.5" stroke-linecap="round"/>
+            </svg>
+            Search files...
+          </div>
+          <div class="mock-up-btn">
+            <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="white" stroke-width="1.6" stroke-linecap="round">
+              <path d="M5 8V2M2 5l3-3 3 3"/>
+            </svg>
+            Upload
+          </div>
+        </div>
+
+        <div class="mock-body">
+          <!-- Sidebar -->
+          <div class="mock-sidebar">
+            <div class="mock-nav-item on">
+              <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor" opacity="0.85">
+                <path d="M1 3h3.5l1.2 1.2H9V8H1V3z"/>
+              </svg>
+              My Files
+            </div>
+            <div class="mock-nav-item">
+              <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.3">
+                <circle cx="5" cy="5" r="3.8"/><path d="M5 3v2l1.2 1.2" stroke-linecap="round"/>
+              </svg>
+              Recent
+            </div>
+            <div class="mock-nav-item">
+              <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.3">
+                <path d="M2 5h6M6 3l2 2-2 2" stroke-linecap="round"/>
+              </svg>
+              Shared
+            </div>
+            <div class="sidebar-sep"></div>
+            <div class="sidebar-label">Storage</div>
+            <div class="sidebar-val">Unlimited</div>
+          </div>
+
+          <!-- Main area -->
+          <div class="mock-main">
+            <div class="mock-files-hdr">
+              <span>All files &nbsp;·&nbsp; 48 items</span>
+              <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.1" style="color:var(--muted);opacity:0.45;">
+                <rect x="0.5" y="0.5" width="5" height="5" rx="1"/>
+                <rect x="7.5" y="0.5" width="5" height="5" rx="1"/>
+                <rect x="0.5" y="7.5" width="5" height="5" rx="1"/>
+                <rect x="7.5" y="7.5" width="5" height="5" rx="1"/>
+              </svg>
+            </div>
+
+            <div class="mock-grid">
+              <div class="mock-file sel"><div class="ficon ft-mp4">MP4</div><div class="fname">demo.mp4</div></div>
+              <div class="mock-file"><div class="ficon ft-pdf">PDF</div><div class="fname">report.pdf</div></div>
+              <div class="mock-file"><div class="ficon ft-png">PNG</div><div class="fname">photo.png</div></div>
+              <div class="mock-file"><div class="ficon ft-zip">ZIP</div><div class="fname">archive.zip</div></div>
+              <div class="mock-file"><div class="ficon ft-doc">DOC</div><div class="fname">notes.doc</div></div>
+              <div class="mock-file"><div class="ficon ft-mp3">MP3</div><div class="fname">track.mp3</div></div>
+              <div class="mock-file"><div class="ficon ft-dir">DIR</div><div class="fname">Projects/</div></div>
+              <div class="mock-file"><div class="ficon ft-psd">PSD</div><div class="fname">design.psd</div></div>
+            </div>
+
+            <!-- Playbar -->
+            <div class="mock-playbar">
+              <div class="mock-playthumb">
+                <svg width="8" height="8" viewBox="0 0 8 8" fill="#38BDF8"><path d="M2 1.5l5 2.5-5 2.5V1.5z"/></svg>
+              </div>
+              <div class="mock-playinfo">
+                <div class="pname">demo.mp4</div>
+                <div class="ptime">Playing &nbsp;·&nbsp; 0:38 / 2:14</div>
+              </div>
+              <div class="mock-enc-badge">AES-256</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══ FEATURES ══ -->
+<section id="features">
+  <div class="container">
+    <div class="features-intro reveal">
+      <div class="section-label">Capabilities</div>
+      <h2>Everything you need.<br>Nothing you didn't ask for.</h2>
+      <p>Built for real workloads — 4K video, sensitive documents, whole server backups.</p>
+    </div>
+
+    <!-- Feature 1: Video streaming -->
+    <div class="feat-row">
+      <div class="feat-content reveal">
+        <div class="feat-tag">STREAM</div>
+        <h3>Big files. Live in your browser.</h3>
+        <p>Stream any video directly — no download required. Seek to any point instantly. The browser fetches and decrypts only the chunks it needs, on the fly.</p>
+        <p class="detail">Encrypted chunks arrive, are decrypted in-browser, and fed directly into the media decoder. Zero intermediate storage on any server. Zero re-upload.</p>
+      </div>
+      <div class="feat-vis reveal reveal-d1">
+        <div class="vplayer">
+          <div class="vscreen">
+            <div class="vplay">
+              <svg width="18" height="18" viewBox="0 0 18 18" fill="white">
+                <path d="M5 2.5l11 6.5-11 6.5V2.5z"/>
+              </svg>
+            </div>
+            <div class="chunk-labels">
+              <div class="clabel">chunk_0041 ✓</div>
+              <div class="clabel">chunk_0042 ✓</div>
+              <div class="clabel pending">chunk_0043 ···</div>
+            </div>
+          </div>
+          <div class="vcontrols">
+            <div class="vseek"><div class="vseek-fill"></div></div>
+            <div class="vbottom">
+              <span>0:38</span>
+              <span class="enc-label">AES-256-GCM</span>
+              <span>2:14</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Feature 2: Encryption (flipped) -->
+    <div class="feat-row flip">
+      <div class="feat-content reveal">
+        <div class="feat-tag">ENCRYPTION</div>
+        <h3>Your device encrypts.<br>Your cloud stores.</h3>
+        <p>Files are split into chunks, each encrypted with <span class="mono" style="font-size:0.88em;color:var(--blue-light);">AES-256-GCM</span> on your device before upload. The server receives ciphertext it cannot interpret. Your keys never leave your machine.</p>
+        <p class="detail">Key derivation is local. Every chunk gets a unique nonce. Authentication tags verify integrity on every download.</p>
+      </div>
+      <div class="feat-vis reveal reveal-d1">
+        <div class="enc-flow">
+          <div class="enc-row">
+            <div class="enc-block">
+              <div class="elabel">Source file</div>
+              <div class="eval">report.pdf</div>
+              <div class="emeta">24.8 MB &nbsp;·&nbsp; plaintext</div>
+            </div>
+            <div class="enc-arrow">→</div>
+            <div class="enc-block blue">
+              <div class="elabel" style="color:var(--blue);">Split + Encrypt</div>
+              <div class="eval" style="font-size:0.65rem;line-height:1.6;">chunk_0001<br>chunk_0002<br>···<br>chunk_0049</div>
+            </div>
+          </div>
+          <div class="enc-chips">
+            <div class="enc-chip">
+              <div class="clabel2">Nonce</div>
+              <div class="cval">a3f9…8c12</div>
+            </div>
+            <div class="enc-chip">
+              <div class="clabel2">Auth tag</div>
+              <div class="cval">7e2b…f104</div>
+            </div>
+            <div class="enc-chip ok">
+              <div class="clabel2">Integrity</div>
+              <div class="cval">verified ✓</div>
+            </div>
+          </div>
+          <div class="enc-note">
+            Server receives <span class="mono" style="color:var(--text);font-size:0.85em;">49 × ciphertext blobs</span>. Without your key, they are indistinguishable from random bytes.
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Feature 3: CLI -->
+    <div class="feat-row">
+      <div class="feat-content reveal">
+        <div class="feat-tag">CLI</div>
+        <h3>Power users.<br>Meet your tool.</h3>
+        <p>A first-class command-line client for scripting, automation, and bulk operations. Upload a directory, sync a backup, list your remote files — all from the terminal, all encrypted.</p>
+        <p class="detail">Pipe-friendly output, exit codes that scripts respect, progress streams for large transfers.</p>
+      </div>
+      <div class="feat-vis reveal reveal-d1">
+        <div class="terminal">
+          <div class="term-bar">
+            <div class="term-dot td-r"></div>
+            <div class="term-dot td-y"></div>
+            <div class="term-dot td-g"></div>
+            <div class="term-title">daemon-drive — zsh</div>
+          </div>
+          <div class="term-body">
+            <div><span class="tp">~/backups</span> <span class="tc">daemon-drive upload ./</span></div>
+            <div class="to">Scanning 2,847 files (12.3 GB)…</div>
+            <div class="to">Chunking: 512 KB per block</div>
+            <div class="to">Encrypting: AES-256-GCM locally</div>
+            <div class="ts">✓ block 0001/24601 uploaded</div>
+            <div class="ts">✓ block 0002/24601 uploaded</div>
+            <div class="to">···</div>
+            <div style="margin-top:4px;"><span class="tp">~/backups</span> <span class="tc">daemon-drive ls</span></div>
+            <div><span class="tpath">backups/</span><span class="tsize"> &nbsp; 12.3 GB &nbsp;·&nbsp; 2,847 files &nbsp;·&nbsp; encrypted</span></div>
+            <div><span class="tpath">photos/</span><span class="tsize">  &nbsp; 48.1 GB &nbsp;·&nbsp; 14,209 files &nbsp;·&nbsp; encrypted</span></div>
+            <div style="margin-top:2px;"><span class="tp">~/backups</span> <span class="tcursor"></span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Feature 4: Drive Anywhere -->
+    <div class="feat-anywhere reveal">
+      <div>
+        <div class="feat-tag soon">Coming soon</div>
+        <h3 style="font-size:clamp(1.5rem,2.6vw,2.1rem);margin-top:0.75rem;">Drive Anywhere.</h3>
+        <p style="color:var(--muted);margin-top:0.75rem;line-height:1.72;">Mount DaemonClient Drive natively — from your phone's Files app, as a virtual disk on macOS or Windows, or stream from any device. Your encrypted cloud, integrated everywhere.</p>
+      </div>
+      <div class="mount-grid">
+        <div class="mount-card live">
+          <svg class="mount-icon" viewBox="0 0 38 38" fill="none">
+            <rect width="38" height="38" rx="9" fill="rgba(30,107,255,0.1)"/>
+            <rect x="6" y="10" width="26" height="18" rx="3" stroke="#38BDF8" stroke-width="1.5"/>
+            <rect x="10" y="14" width="10" height="1.5" rx="0.75" fill="#38BDF8" opacity="0.45"/>
+            <rect x="10" y="17.5" width="7" height="1.5" rx="0.75" fill="#38BDF8" opacity="0.3"/>
+            <circle cx="28" cy="22" r="1.5" fill="#1E6BFF"/>
+          </svg>
+          <div class="mount-name">Web browser</div>
+          <div class="mount-status">Live now</div>
+        </div>
+        <div class="mount-card dim">
+          <svg class="mount-icon" viewBox="0 0 38 38" fill="none">
+            <rect width="38" height="38" rx="9" fill="rgba(255,255,255,0.03)"/>
+            <rect x="6" y="9" width="26" height="17" rx="2" stroke="#8A93A6" stroke-width="1.5"/>
+            <rect x="14" y="26" width="10" height="2" rx="1" fill="#8A93A6"/>
+            <rect x="10" y="13" width="18" height="1.5" rx="0.75" fill="#8A93A6" opacity="0.3"/>
+            <rect x="10" y="17" width="12" height="1.5" rx="0.75" fill="#8A93A6" opacity="0.2"/>
+          </svg>
+          <div class="mount-name">Desktop disk</div>
+          <div class="mount-status">Coming soon</div>
+        </div>
+        <div class="mount-card dim">
+          <svg class="mount-icon" viewBox="0 0 38 38" fill="none">
+            <rect width="38" height="38" rx="9" fill="rgba(255,255,255,0.03)"/>
+            <rect x="13" y="4" width="12" height="22" rx="3" stroke="#8A93A6" stroke-width="1.5"/>
+            <rect x="16" y="8" width="6" height="1.5" rx="0.75" fill="#8A93A6" opacity="0.3"/>
+            <circle cx="19" cy="21" r="1.5" fill="#8A93A6" opacity="0.5"/>
+            <path d="M11 30h16" stroke="#8A93A6" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+          <div class="mount-name">Phone Files app</div>
+          <div class="mount-status">Coming soon</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══ SHARD DIVIDER ══ -->
+<div class="shard-divider"></div>
+
+<!-- ══ PRIVACY ══ -->
+<section id="privacy">
+  <div class="container">
+    <div class="reveal">
+      <div class="section-label">Privacy</div>
+      <h2 class="privacy-headline">
+        <span class="dim">Your files are</span><br>
+        sealed on your device.<br>
+        <span class="blue-grad">We literally cannot<br>read your files.</span>
+      </h2>
+      <p class="privacy-sub">
+        Zero-knowledge is not a marketing claim here. Encryption keys are derived locally from your credentials. Our servers store only ciphertext. Even a court order would yield nothing interpretable.
+      </p>
+    </div>
+
+    <div class="privacy-cards">
+      <div class="pcard reveal">
+        <div class="pcard-tag green">ZERO_KNOWLEDGE</div>
+        <h4>No server-side keys</h4>
+        <p>Key derivation happens entirely on your device. Our servers handle only encrypted bytes — never your keys, never your plaintext, never your metadata in cleartext.</p>
+      </div>
+      <div class="pcard reveal reveal-d1">
+        <div class="pcard-tag green">AES-256-GCM</div>
+        <h4>Encrypted before upload</h4>
+        <p>Every chunk is independently encrypted with a unique nonce. Authentication tags detect any tampering. NIST-standard, widely audited, and resistant to near-term quantum attacks.</p>
+      </div>
+      <div class="pcard reveal reveal-d2">
+        <div class="pcard-tag blue-t">OPEN_SOURCE</div>
+        <h4>Verify every claim</h4>
+        <p>The entire client — encryption logic, chunking, key derivation — is public code. Don't trust our word. Read it, fork it, audit it. The server is yours anyway.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══ SHARD DIVIDER ══ -->
+<div class="shard-divider"></div>
+
+<!-- ══ HOW IT WORKS ══ -->
+<section id="how-it-works">
+  <div class="container">
+    <div class="steps-intro reveal">
+      <div class="section-label">Setup</div>
+      <h2>You own it.<br>We set it up.</h2>
+      <p>Three steps from zero to your own private, encrypted cloud. No DevOps degree required.</p>
+    </div>
+
+    <div class="steps-grid">
+      <div class="step reveal reveal-d1">
+        <div class="step-num">01</div>
+        <h3>Connect your own cloud + Telegram</h3>
+        <p>Link your cloud provider credentials and a Telegram bot token. That's your infrastructure — your accounts, your data residency, your rules.</p>
+        <div class="step-note">$0 &nbsp;·&nbsp; Your accounts, your rules</div>
+      </div>
+      <div class="step reveal reveal-d2">
+        <div class="step-num">02</div>
+        <h3>Your private server + database deploy</h3>
+        <p>DaemonClient provisions your backend on your infrastructure. You can inspect, modify, or fully self-host everything. No vendor lock-in, ever.</p>
+        <div class="step-note">Open source &nbsp;·&nbsp; No lock-in</div>
+      </div>
+      <div class="step reveal reveal-d3">
+        <div class="step-num">03</div>
+        <h3>Upload. Encrypted on your device first.</h3>
+        <p>Before anything leaves your browser or CLI, files are chunked and sealed with AES-256-GCM. Your server receives only authenticated ciphertext.</p>
+        <div class="step-note">E2E encrypted &nbsp;·&nbsp; Unlimited</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══ DOWNLOAD ══ -->
+<div class="shard-divider"></div>
+<section id="download">
+  <div class="container">
+    <div class="download-intro reveal">
+      <div class="section-label">Get started</div>
+      <h2>Access your files from any device.</h2>
+      <p>Pick your platform — the web app is live now, CLI ships today, desktop and mobile are on the way.</p>
+    </div>
+
+    <div class="dl-cards reveal">
+      <!-- Web App -->
+      <div class="dl-card dl-active" data-panel="web" onclick="switchPanel('web', this)">
+        <div class="dl-card-top">
+          <div class="dl-card-icon-title">
+            <div class="dl-card-icon">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+                <circle cx="8" cy="8" r="6.5"/>
+                <path d="M1.5 8h13M8 1.5c-2 2-3 4-3 6.5s1 4.5 3 6.5M8 1.5c2 2 3 4 3 6.5s-1 4.5-3 6.5"/>
+              </svg>
+            </div>
+            <h4>Web App</h4>
+          </div>
+          <div class="dl-status live">LIVE</div>
+        </div>
+        <p>Instant access from any browser. No installation required. Upload, preview, and stream immediately.</p>
+        <a href="https://accounts.daemonclient.uz/signup?continue=https://drive.daemonclient.uz/dashboard" class="dl-btn solid">Launch Now</a>
+      </div>
+
+      <!-- CLI -->
+      <div class="dl-card" data-panel="cli" onclick="switchPanel('cli', this)">
+        <div class="dl-card-top">
+          <div class="dl-card-icon-title">
+            <div class="dl-card-icon">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+                <path d="M2 4l4 4-4 4M9 12h5"/>
+              </svg>
+            </div>
+            <h4>Daemon CLI</h4>
+          </div>
+          <div class="dl-status live">LIVE</div>
+        </div>
+        <p>Powerful terminal tool for power users. Scriptable uploads, sync, and backup automation.</p>
+        <button class="dl-btn outline" onclick="switchPanel('cli', this.closest('.dl-card'))">Install</button>
+      </div>
+
+      <!-- Desktop -->
+      <div class="dl-card" data-panel="desktop" onclick="switchPanel('desktop', this)">
+        <div class="dl-card-top">
+          <div class="dl-card-icon-title">
+            <div class="dl-card-icon">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+                <rect x="1.5" y="2.5" width="13" height="9" rx="1.5"/>
+                <path d="M5.5 14.5h5M8 11.5v3" stroke-linecap="round"/>
+              </svg>
+            </div>
+            <h4>Desktop Sync</h4>
+          </div>
+          <div class="dl-status soon">COMING SOON</div>
+        </div>
+        <p>Native app for Windows, Mac, and Linux. Mounts Drive as a virtual disk with automatic folder sync.</p>
+        <button class="dl-btn disabled">Coming Soon</button>
+      </div>
+
+      <!-- Mobile -->
+      <div class="dl-card" data-panel="mobile" onclick="switchPanel('mobile', this)">
+        <div class="dl-card-top">
+          <div class="dl-card-icon-title">
+            <div class="dl-card-icon">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+                <rect x="4.5" y="1.5" width="7" height="13" rx="2"/>
+                <circle cx="8" cy="12" r="0.75" fill="currentColor" stroke="none"/>
+              </svg>
+            </div>
+            <h4>Mobile App</h4>
+          </div>
+          <div class="dl-status soon">COMING SOON</div>
+        </div>
+        <p>iOS and Android apps for on-the-go access. Browse, upload, and share from your phone's Files app.</p>
+        <button class="dl-btn outline" onclick="switchPanel('mobile', this.closest('.dl-card'))">Notify Me</button>
+      </div>
+    </div>
+
+    <!-- Web panel -->
+    <div class="dl-panel" id="panel-web">
+      <div class="dl-panel-bar">
+        <div class="term-dot td-r"></div><div class="term-dot td-y"></div><div class="term-dot td-g"></div>
+        <span>WEB APP</span>
+      </div>
+      <div class="dl-panel-body" style="flex-direction:row;align-items:center;gap:2rem;flex-wrap:wrap;">
+        <div style="flex:1;min-width:220px;">
+          <div style="font-size:1.5rem;font-family:'Space Grotesk',sans-serif;font-weight:700;letter-spacing:-0.03em;margin-bottom:0.5rem;">No install. Just open.</div>
+          <p style="color:var(--muted);font-size:0.9rem;line-height:1.7;">Your encrypted drive is available at <span class="mono" style="color:var(--blue-light);font-size:0.85em;">drive.daemonclient.uz/dashboard</span> from any modern browser. Chrome, Firefox, Safari — all supported.</p>
+        </div>
+        <a href="https://accounts.daemonclient.uz/signup?continue=https://drive.daemonclient.uz/dashboard" class="dl-btn solid" style="width:auto;padding:0.75rem 2rem;font-size:0.95rem;">Open Drive &rarr;</a>
+      </div>
+    </div>
+
+    <!-- CLI panel -->
+    <div class="dl-panel hidden" id="panel-cli">
+      <div class="dl-panel-bar">
+        <div class="term-dot td-r"></div><div class="term-dot td-y"></div><div class="term-dot td-g"></div>
+        <span>TERMINAL</span>
+      </div>
+      <div class="dl-panel-body">
+        <div>
+          <div class="dl-option-label">OPTION 1 — PIP INSTALL</div>
+          <div class="dl-cmd">
+            <span class="prompt">$</span>
+            <span class="cmd-text">pip install daemon-drive</span>
+            <button class="dl-copy" onclick="copyCmd(this, 'pip install daemon-drive')">copy</button>
+          </div>
+        </div>
+        <div>
+          <div class="dl-option-label">OPTION 2 — STANDALONE BINARY</div>
+          <div class="dl-binary-btns">
+            <a href="#" class="dl-binary-btn">Linux (x64)</a>
+            <a href="#" class="dl-binary-btn">Windows (.exe)</a>
+            <a href="#" class="dl-binary-btn">macOS (M1/Intel)</a>
+          </div>
+        </div>
+        <div>
+          <div class="dl-option-label">VERIFY INSTALL</div>
+          <div class="dl-cmd">
+            <span class="prompt">$</span>
+            <span class="cmd-text">daemon-drive --version</span>
+            <button class="dl-copy" onclick="copyCmd(this, 'daemon-drive --version')">copy</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Desktop panel -->
+    <div class="dl-panel hidden" id="panel-desktop">
+      <div class="dl-panel-body" style="align-items:center;text-align:center;padding:3rem 2rem;">
+        <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
+          <rect x="4" y="7" width="40" height="27" rx="4" stroke="#38BDF8" stroke-width="2"/>
+          <path d="M16 43h16M24 34v9" stroke="#38BDF8" stroke-width="2" stroke-linecap="round"/>
+          <path d="M14 18h20M14 24h12" stroke="#38BDF8" stroke-width="1.5" stroke-linecap="round" opacity="0.4"/>
+        </svg>
+        <div style="font-size:1.2rem;font-family:'Space Grotesk',sans-serif;font-weight:600;letter-spacing:-0.02em;margin-top:1rem;">Desktop Sync is in development.</div>
+        <p style="color:var(--muted);font-size:0.875rem;max-width:420px;line-height:1.7;">A native app that mounts DaemonClient Drive as a virtual disk on macOS, Windows, and Linux — with background sync and automatic encryption.</p>
+        <button class="dl-btn outline" style="width:auto;padding:0.625rem 1.5rem;margin-top:0.5rem;" onclick="switchPanel('mobile', document.querySelector('[data-panel=mobile]'))">Get notified when it ships</button>
+      </div>
+    </div>
+
+    <!-- Mobile panel -->
+    <div class="dl-panel hidden" id="panel-mobile">
+      <div class="dl-notify-panel" style="border:none;border-radius:0;">
+        <svg width="40" height="40" viewBox="0 0 40 40" fill="none" style="margin:0 auto 1rem;">
+          <rect x="10" y="3" width="20" height="34" rx="4" stroke="#38BDF8" stroke-width="2"/>
+          <circle cx="20" cy="32" r="2" fill="#38BDF8" opacity="0.6"/>
+          <rect x="15" y="8" width="10" height="1.5" rx="0.75" fill="#38BDF8" opacity="0.3"/>
+        </svg>
+        <h4>Mobile app coming soon.</h4>
+        <p>iOS and Android — browse, upload, and stream from your phone's native Files app integration.</p>
+        <form class="dl-notify-form" onsubmit="handleNotify(event, this)">
+          <input class="dl-notify-input" type="email" placeholder="your@email.com" required>
+          <button type="submit" class="dl-notify-submit">Notify me</button>
+        </form>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══ FINAL CTA ══ -->
+<section id="cta">
+  <div class="container">
+    <div class="reveal">
+      <h2>Your files.<br><span class="blue-grad">Actually yours.</span> Free.</h2>
+      <p>No credit card. No storage limits. No company that can read your files.</p>
+      <div class="cta-actions">
+        <a href="https://accounts.daemonclient.uz/signup?continue=https://drive.daemonclient.uz/dashboard" class="btn-hero">Get started free</a>
+        <a href="/login" class="btn-hero-sec">Sign in</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══ FOOTER ══ -->
+<footer>
+  <div class="container">
+    <div class="footer-top">
+      <div class="footer-brand">
+        <img src="/logo.png" alt="DaemonClient Drive">
+        <p>Free, open-source, end-to-end encrypted file storage on infrastructure you own.</p>
+      </div>
+      <div class="footer-cols">
+        <div class="footer-col">
+          <h5>Product</h5>
+          <a href="https://daemonclient.uz">DaemonClient</a>
+          <a href="https://photos.daemonclient.uz">DaemonClient Photos</a>
+          <a href="https://accounts.daemonclient.uz/signup?continue=https://drive.daemonclient.uz/dashboard">Drive</a>
+        </div>
+        <div class="footer-col">
+          <h5>Developers</h5>
+          <a href="https://github.com/daemonclient" target="_blank" rel="noopener">GitHub</a>
+          <a href="https://docs.daemonclient.uz">Documentation</a>
+        </div>
+        <div class="footer-col">
+          <h5>Company</h5>
+          <a href="mailto:contact@daemonclient.uz">Contact</a>
+          <a href="/privacy">Privacy Policy</a>
+        </div>
+      </div>
+    </div>
+    <div class="footer-bottom">
+      <span>© 2026 DaemonClient. All rights reserved.</span>
+      <span>drive.daemonclient.uz</span>
+    </div>
+  </div>
+</footer>
+
+<script>
+/* ── Download panel switcher ── */
+function switchPanel(name, card) {
+  // Update cards
+  document.querySelectorAll('.dl-card').forEach(c => c.classList.remove('dl-active'));
+  if (card) card.classList.add('dl-active');
+  // Update panels
+  document.querySelectorAll('.dl-panel').forEach(p => p.classList.add('hidden'));
+  const target = document.getElementById('panel-' + name);
+  if (target) target.classList.remove('hidden');
+}
+
+function copyCmd(btn, text) {
+  navigator.clipboard.writeText(text).then(() => {
+    btn.textContent = 'copied!';
+    btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = 'copy'; btn.classList.remove('copied'); }, 2000);
+  });
+}
+
+function handleNotify(e, form) {
+  e.preventDefault();
+  const input = form.querySelector('input');
+  const btn = form.querySelector('button');
+  btn.textContent = 'You\'re on the list!';
+  btn.style.background = 'var(--green)';
+  input.disabled = true;
+  btn.disabled = true;
+}
+
+// Init: show web panel by default
+switchPanel('web', document.querySelector('[data-panel="web"]'));
+
+/* ── Mobile nav ── */
+const hamburger = document.getElementById('hamburger');
+const mobileMenu = document.getElementById('mobile-menu');
+hamburger.addEventListener('click', () => {
+  hamburger.classList.toggle('open');
+  mobileMenu.classList.toggle('open');
+});
+mobileMenu.querySelectorAll('a').forEach(a => {
+  a.addEventListener('click', () => {
+    hamburger.classList.remove('open');
+    mobileMenu.classList.remove('open');
+  });
+});
+
+/* ── Scroll reveal ── */
+const revealObserver = new IntersectionObserver((entries) => {
+  entries.forEach(e => { if (e.isIntersecting) e.target.classList.add('in'); });
+}, { threshold: 0.1, rootMargin: '0px 0px -36px 0px' });
+document.querySelectorAll('.reveal').forEach(el => revealObserver.observe(el));
+
+/* ── Shard canvas animation ── */
+(function() {
+  const canvas = document.getElementById('shard-canvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+
+  function resize() {
+    const p = canvas.parentElement;
+    canvas.width  = p.offsetWidth  + 120;
+    canvas.height = p.offsetHeight + 120;
+  }
+  resize();
+  window.addEventListener('resize', resize);
+
+  const COLORS = ['#1E6BFF', '#38BDF8', '#0A4ACC', '#2A7FFF', '#1E6BFF'];
+  const shards = [];
+
+  for (let i = 0; i < 36; i++) {
+    shards.push({
+      x:       Math.random() * (canvas.width),
+      y:       Math.random() * (canvas.height),
+      w:       Math.random() * 38 + 10,
+      h:       Math.random() * 15 + 6,
+      angle:   Math.random() * Math.PI * 2,
+      rotV:    (Math.random() - 0.5) * 0.007,
+      vy:      -(Math.random() * 0.45 + 0.12),
+      vx:      (Math.random() - 0.5) * 0.14,
+      opacity: Math.random() * 0.48 + 0.06,
+      color:   COLORS[Math.floor(Math.random() * COLORS.length)],
+      phase:   Math.random() * Math.PI * 2,
+    });
+  }
+
+  let t = 0;
+  function animate() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    t += 0.015;
+
+    for (const s of shards) {
+      s.y += s.vy;
+      s.x += s.vx;
+      s.angle += s.rotV;
+
+      if (s.y < -60) { s.y = canvas.height + 60; s.x = Math.random() * canvas.width; }
+      if (s.x < -80) s.x = canvas.width + 40;
+      if (s.x > canvas.width + 80) s.x = -40;
+
+      const alpha = s.opacity * (0.65 + 0.35 * Math.sin(t * 0.55 + s.phase));
+      ctx.save();
+      ctx.translate(s.x, s.y);
+      ctx.rotate(s.angle);
+      ctx.globalAlpha = alpha;
+      ctx.strokeStyle = s.color;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(-s.w / 2, -s.h / 2, s.w, s.h);
+      ctx.fillStyle = s.color;
+      ctx.globalAlpha = alpha * 0.35;
+      ctx.fillRect(-1.5, -1.5, 3, 3);
+      ctx.restore();
+    }
+
+    requestAnimationFrame(animate);
+  }
+  animate();
+})();
+</script>
+</body>
+</html>

@@ -16,6 +16,9 @@
         ],
         "accounts": [
           "daemonclient-accounts"
+        ],
+        "drive": [
+          "daemonclient-drive"
         ]
       }
     }
