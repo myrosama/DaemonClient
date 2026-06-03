@@ -164,6 +164,17 @@ graph TD
 
 ## 9. Status Log (append-only; newest on top)
 
+- **2026-06-03** — Drive landing LIVE. New `drive/` folder (copy of `frontend/`)
+  on its own Firebase site `daemonclient-drive` → **https://daemonclient-drive.web.app**.
+  `/` = the blue Drive landing (design-tool output, integrated + CTAs wired + Download
+  nav link); `/login`+`/dashboard` = the React app (Vite multi-page app.html), signup
+  dropped (login-only → accounts signup). Removed old redirect stubs
+  (login/dashboard/signup/photos → app.daemonclient.uz) — that was why /login bounced.
+  Verified `/login` + `/app.html` load the app on the drive domain, no redirect.
+  **USER TODO: point DNS `drive.daemonclient.uz` → the daemonclient-drive site
+  (Firebase Hosting custom domain).** Still old shared backend — **NEXT: per-user
+  worker+D1 migration** (T1 backend: `/api/drive` routes + `files` table + SW rewrite,
+  drop the bot-token-in-browser model). Committed `061110e`.
 - **2026-06-02 (cont. 2)** — Design method = prompts for user's Claude design tool;
   **Drive landing designed first**. Sent reference screenshots
   (`docs/roadmap/reference/`) + exact palette to user. Background hardening agent
