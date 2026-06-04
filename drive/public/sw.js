@@ -32,7 +32,7 @@ self.addEventListener('activate', (event) => {
 // ── Message handler: register files for streaming ──
 self.addEventListener('message', async (event) => {
   if (event.data && event.data.type === 'REGISTER_FILE') {
-    const { fileId, messages, botToken, rawKeyBytes, isEncrypted, fileSize, fileType } = event.data;
+    const { fileId, messages, botToken, workerUrl, rawKeyBytes, isEncrypted, fileSize, fileType } = event.data;
 
     // Import raw key bytes as CryptoKey for AES-GCM decryption
     let decryptionKey = null;
@@ -46,7 +46,7 @@ self.addEventListener('message', async (event) => {
       }
     }
 
-    virtualFiles.set(fileId, { messages, botToken, decryptionKey, isEncrypted, fileSize, fileType });
+    virtualFiles.set(fileId, { messages, botToken, workerUrl, decryptionKey, isEncrypted, fileSize, fileType });
     // Send confirmation via MessageChannel
     if (event.ports && event.ports[0]) {
       event.ports[0].postMessage({ status: 'ok' });
@@ -94,7 +94,7 @@ async function handleStreamRequest(request, url) {
     return new Response('File not registered with Service Worker.', { status: 404 });
   }
 
-  const { messages, botToken, decryptionKey, isEncrypted, fileSize, fileType } = vFile;
+  const { messages, botToken, workerUrl, decryptionKey, isEncrypted, fileSize, fileType } = vFile;
   const CHUNK_SIZE = 19 * 1024 * 1024; // 19 MB plaintext chunk
 
   // ── Parse Range header ──
@@ -126,18 +126,17 @@ async function handleStreamRequest(request, url) {
     if (chunkCache.has(cacheKey)) {
       plaintext = chunkCache.get(cacheKey);
     } else {
-      // 1. Resolve Telegram file path
-      const infoRes = await fetch(
-        `https://api.telegram.org/bot${botToken}/getFile?file_id=${partData.file_id}`
-      );
+      // 1. Resolve Telegram file path — through the user's OWN worker /proxy
+      const infoUrl = `https://api.telegram.org/bot${botToken}/getFile?file_id=${partData.file_id}`;
+      const infoRes = await fetch(`${workerUrl}/proxy?url=${encodeURIComponent(infoUrl)}`);
       const infoData = await infoRes.json();
       if (!infoData.ok) throw new Error('Telegram getFile failed: ' + (infoData.description || ''));
 
       const tgPath = infoData.result.file_path;
       const downloadUrl = `https://api.telegram.org/file/bot${botToken}/${tgPath}`;
 
-      // 2. Fetch via Cloudflare proxy (CORS)
-      const proxyUrl = `https://daemonclient-proxy.sadrikov49.workers.dev?url=${encodeURIComponent(downloadUrl)}`;
+      // 2. Fetch via the user's OWN worker /proxy (CORS + zero shared infra)
+      const proxyUrl = `${workerUrl}/proxy?url=${encodeURIComponent(downloadUrl)}`;
       const fileRes = await fetch(proxyUrl);
       if (!fileRes.ok) throw new Error(`Proxy fetch failed: ${fileRes.status}`);
 

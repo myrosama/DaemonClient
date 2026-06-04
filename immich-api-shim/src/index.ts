@@ -9,11 +9,14 @@ import { handleSyncStream } from './sync';
 import { handlePolicy } from './policy';
 import { handleFeatureFlags } from './feature-flags';
 import { handleSearch } from './search';
+import { handleDrive } from './drive';
 import { linkExistingLivePhotos } from './link-live-photos';
 import { requireAuth } from './helpers';
 import type { D1Database } from '@cloudflare/workers-types';
 
-export const WORKER_VERSION = '1.0.0';
+// 1.1.0 — adds Drive (/api/drive metadata routes + files table). Additive over
+// Photos; bumped so /api/health confirms a test worker actually got this bundle.
+export const WORKER_VERSION = '1.1.0';
 
 export interface Env {
   FIREBASE_API_KEY: string;
@@ -84,14 +87,21 @@ export default {
         if (!target) {
           response = new Response('Missing url parameter', { status: 400 });
         } else {
-          let body: BodyInit | undefined;
-          if (request.method !== 'GET' && request.method !== 'HEAD') {
-            body = await request.arrayBuffer();
-          }
           const fwdHeaders = new Headers();
           const ct = request.headers.get('Content-Type');
           if (ct) fwdHeaders.set('Content-Type', ct);
-          const upstream = await fetch(target, { method: request.method, headers: fwdHeaders, body });
+          // STREAM the request body straight through instead of buffering it.
+          // Drive relays its Telegram chunk uploads (~19 MB each) through this
+          // endpoint on the user's own (free-tier) worker; buffering via
+          // arrayBuffer() would risk the 10 ms CPU limit on big chunks, whereas
+          // a streamed passthrough is near-zero CPU. duplex:'half' is required
+          // when the body is a stream.
+          const init: RequestInit = { method: request.method, headers: fwdHeaders };
+          if (request.method !== 'GET' && request.method !== 'HEAD') {
+            init.body = request.body;
+            (init as any).duplex = 'half';
+          }
+          const upstream = await fetch(target, init);
           response = new Response(upstream.body, { status: upstream.status, headers: upstream.headers });
         }
       } else if (path.startsWith('/api/auth')) {
@@ -116,6 +126,8 @@ export default {
         response = await handleSyncStream(request, env);
       } else if (path.startsWith('/api/search')) {
         response = await handleSearch(request, env, path);
+      } else if (path.startsWith('/api/drive')) {
+        response = await handleDrive(request, env, path, url);
       } else if (path === '/api/admin/link-live-photos' && request.method === 'POST') {
         const session = await requireAuth(request, env);
         response = await linkExistingLivePhotos(request, env, session.uid, session.idToken);

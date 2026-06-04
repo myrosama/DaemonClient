@@ -311,4 +311,71 @@ export class D1Adapter {
       await this.setConfig('zke_salt', config.salt);
     }
   }
+
+  // ────────────────────────────────────────────────────────────
+  // Drive files (file/folder metadata — bytes live in Telegram, uploaded
+  // client-side; this table never holds plaintext or keys)
+  // ────────────────────────────────────────────────────────────
+
+  // Parse the stored `messages` JSON back to an array and coerce `encrypted`
+  // to a real boolean for the JSON client (mirrors normalizeRow for photos).
+  static normalizeFile(row: any): any {
+    if (!row) return row;
+    let messages = row.messages;
+    if (typeof messages === 'string') {
+      try { messages = JSON.parse(messages); } catch { messages = []; }
+    }
+    return { ...row, messages: messages ?? [], encrypted: !!row.encrypted };
+  }
+
+  async listFiles(ownerId: string, parentId?: string): Promise<any[]> {
+    let query = 'SELECT * FROM files WHERE ownerId = ?';
+    const bindings: any[] = [ownerId];
+    if (parentId !== undefined) {
+      query += ' AND parentId = ?';
+      bindings.push(parentId);
+    }
+    // Folders first, then files, alphabetical — matches the old Drive ordering.
+    query += " ORDER BY (type = 'folder') DESC, fileName COLLATE NOCASE ASC";
+    const result = await this.db.prepare(query).bind(...bindings).all<any>();
+    return (result.results || []).map(D1Adapter.normalizeFile);
+  }
+
+  async getFile(id: string): Promise<any | null> {
+    const result = await this.db.prepare('SELECT * FROM files WHERE id = ?').bind(id).first<any>();
+    return result || null;
+  }
+
+  async saveFile(file: Record<string, any> & { id: string }): Promise<void> {
+    const entries = Object.entries(file).filter(([, v]) => v !== undefined);
+    const keys = entries.map(([k]) => k);
+    const values = entries.map(([, v]) => v);
+    const placeholders = keys.map(() => '?').join(', ');
+    const updateSet = keys.filter(k => k !== 'id').map(k => `${k} = excluded.${k}`).join(', ');
+    await this.db.prepare(
+      `INSERT INTO files (${keys.join(', ')}) VALUES (${placeholders})
+       ON CONFLICT(id) DO UPDATE SET ${updateSet}`
+    ).bind(...values).run();
+  }
+
+  async updateFile(id: string, fields: Record<string, any>): Promise<void> {
+    const entries = Object.entries(fields).filter(([k, v]) => k !== 'id' && v !== undefined);
+    if (entries.length === 0) return;
+    const setClause = entries.map(([k]) => `${k} = ?`).join(', ');
+    const values = entries.map(([, v]) => v);
+    await this.db.prepare(`UPDATE files SET ${setClause} WHERE id = ?`).bind(...values, id).run();
+  }
+
+  async deleteFile(id: string): Promise<void> {
+    await this.db.prepare('DELETE FROM files WHERE id = ?').bind(id).run();
+  }
+
+  // Total bytes a user has stored in Drive (folders count as 0). Feeds the
+  // storage/usage display without scanning Telegram.
+  async sumFileSizes(ownerId: string): Promise<number> {
+    const result = await this.db.prepare(
+      "SELECT COALESCE(SUM(fileSize), 0) AS total FROM files WHERE ownerId = ? AND type = 'file'"
+    ).bind(ownerId).first<{ total: number }>();
+    return result?.total || 0;
+  }
 }

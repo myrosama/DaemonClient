@@ -3,6 +3,15 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <script>
+    // Logged-in users skip the marketing landing and go straight to the app.
+    // Mirrors the session check in src/api.js (key + 7-day exp). Runs before
+    // paint to avoid a flash of the landing.
+    try {
+      var dcS = JSON.parse(localStorage.getItem('dc_drive_session') || 'null');
+      if (dcS && (!dcS.exp || dcS.exp > Date.now())) location.replace('/dashboard');
+    } catch (e) {}
+  </script>
   <title>DaemonClient Drive — Free Unlimited Encrypted Cloud Storage</title>
   <meta name="description" content="Free, unlimited, end-to-end encrypted file storage on infrastructure you own. A private, self-hosted alternative to Google Drive — no fees, no limits, no snooping.">
   <meta name="keywords" content="DaemonClient Drive, free cloud storage, unlimited storage, encrypted cloud storage, zero-knowledge, private cloud storage, Google Drive alternative, self-hosted storage, end-to-end encryption">
@@ -25,14 +34,60 @@
   <script type="application/ld+json">
   {
     "@context": "https://schema.org",
-    "@type": "SoftwareApplication",
-    "name": "DaemonClient Drive",
-    "url": "https://drive.daemonclient.uz/",
-    "applicationCategory": "UtilitiesApplication",
-    "operatingSystem": "Web, CLI (Windows, macOS, Linux)",
-    "description": "DaemonClient Drive is a free, open-source, end-to-end-encrypted file storage product. Files are chunked and AES-256-GCM encrypted on your device and stored on infrastructure you own — unlimited storage with no monthly fees.",
-    "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
-    "isPartOf": { "@type": "WebSite", "name": "DaemonClient", "url": "https://daemonclient.uz/" }
+    "@graph": [
+      {
+        "@type": "Organization",
+        "@id": "https://daemonclient.uz/#organization",
+        "name": "DaemonClient",
+        "url": "https://daemonclient.uz/",
+        "logo": "https://drive.daemonclient.uz/logo.png",
+        "description": "DaemonClient is a suite of free, end-to-end-encrypted products that run on infrastructure you own — including DaemonClient Drive (files) and DaemonClient Photos.",
+        "sameAs": [
+          "https://github.com/myrosama/DaemonClient",
+          "https://t.me/daemonclient"
+        ]
+      },
+      {
+        "@type": "WebSite",
+        "@id": "https://daemonclient.uz/#website",
+        "name": "DaemonClient",
+        "url": "https://daemonclient.uz/",
+        "publisher": { "@id": "https://daemonclient.uz/#organization" },
+        "potentialAction": {
+          "@type": "SearchAction",
+          "target": { "@type": "EntryPoint", "urlTemplate": "https://daemonclient.uz/?q={search_term_string}" },
+          "query-input": "required name=search_term_string"
+        }
+      },
+      {
+        "@type": "WebSite",
+        "@id": "https://drive.daemonclient.uz/#website",
+        "name": "DaemonClient Drive",
+        "url": "https://drive.daemonclient.uz/",
+        "isPartOf": { "@id": "https://daemonclient.uz/#website" },
+        "publisher": { "@id": "https://daemonclient.uz/#organization" }
+      },
+      {
+        "@type": "SoftwareApplication",
+        "@id": "https://drive.daemonclient.uz/#app",
+        "name": "DaemonClient Drive",
+        "url": "https://drive.daemonclient.uz/",
+        "applicationCategory": "UtilitiesApplication",
+        "applicationSubCategory": "Cloud Storage",
+        "operatingSystem": "Web, CLI (Windows, macOS, Linux)",
+        "description": "DaemonClient Drive is a free, open-source, end-to-end-encrypted file storage product. Files are chunked and AES-256-GCM encrypted on your device and stored on infrastructure you own — unlimited storage with no monthly fees.",
+        "featureList": [
+          "End-to-end AES-256-GCM encryption (client-side)",
+          "Unlimited storage on infrastructure you own",
+          "No monthly fees",
+          "Open source",
+          "Resumable uploads and downloads"
+        ],
+        "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+        "isPartOf": { "@id": "https://daemonclient.uz/#website" },
+        "publisher": { "@id": "https://daemonclient.uz/#organization" }
+      }
+    ]
   }
   </script>
   <link rel="preconnect" href="https://fonts.googleapis.com">

@@ -107,6 +107,31 @@ ALTER TABLE photos ADD COLUMN previewEncrypted INTEGER DEFAULT 0;
 ALTER TABLE photos ADD COLUMN latitude REAL;
 ALTER TABLE photos ADD COLUMN longitude REAL;
 CREATE INDEX idx_photos_gps ON photos(latitude, longitude) WHERE latitude IS NOT NULL;`
+  },
+  {
+    // Drive — file/folder metadata for the user's own storage, living beside
+    // photos in the same per-user D1. The browser chunks + client-encrypts and
+    // uploads straight to Telegram (via the proxy), then records only the chunk
+    // metadata here, so the worker never sees Drive bytes or keys. `messages` is
+    // the JSON array of Telegram {message_id, file_id} chunks (mirrors the old
+    // Firestore field names so the frontend swap is near 1:1). IF NOT EXISTS so
+    // a re-run on an already-migrated DB is a no-op.
+    version: '1.2.0',
+    sql: `CREATE TABLE IF NOT EXISTS files (
+  id TEXT PRIMARY KEY,
+  ownerId TEXT NOT NULL,
+  parentId TEXT NOT NULL DEFAULT 'root',
+  type TEXT NOT NULL DEFAULT 'file',
+  fileName TEXT NOT NULL,
+  fileSize INTEGER DEFAULT 0,
+  fileType TEXT,
+  messages TEXT,
+  encrypted INTEGER DEFAULT 0,
+  encryptionMode TEXT DEFAULT 'off',
+  uploadedAt TEXT NOT NULL,
+  updatedAt TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_files_owner_parent ON files(ownerId, parentId);`
   }
 ];
 

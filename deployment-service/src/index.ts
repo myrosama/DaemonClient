@@ -108,7 +108,25 @@ INSERT INTO config (key, value) VALUES ('zke_mode','server'),('zke_enabled','1')
 CREATE TABLE upload_sessions (
   sessionId TEXT PRIMARY KEY, status TEXT NOT NULL DEFAULT 'active',
   createdAt TEXT NOT NULL, expiresAt TEXT NOT NULL
-);`;
+);
+CREATE TABLE IF NOT EXISTS files (
+  id TEXT PRIMARY KEY, ownerId TEXT NOT NULL, parentId TEXT NOT NULL DEFAULT 'root',
+  type TEXT NOT NULL DEFAULT 'file', fileName TEXT NOT NULL, fileSize INTEGER DEFAULT 0,
+  fileType TEXT, messages TEXT, encrypted INTEGER DEFAULT 0,
+  encryptionMode TEXT DEFAULT 'off', uploadedAt TEXT NOT NULL, updatedAt TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_files_owner_parent ON files(ownerId, parentId);`;
+
+// Standalone Drive migration — passed as `migrationSql` to /admin/force-update so
+// existing per-user workers (provisioned before 1.2.0) get the files table + index
+// without a full reprovision. Safe to re-run (IF NOT EXISTS).
+export const DRIVE_MIGRATION_SQL = `CREATE TABLE IF NOT EXISTS files (
+  id TEXT PRIMARY KEY, ownerId TEXT NOT NULL, parentId TEXT NOT NULL DEFAULT 'root',
+  type TEXT NOT NULL DEFAULT 'file', fileName TEXT NOT NULL, fileSize INTEGER DEFAULT 0,
+  fileType TEXT, messages TEXT, encrypted INTEGER DEFAULT 0,
+  encryptionMode TEXT DEFAULT 'off', uploadedAt TEXT NOT NULL, updatedAt TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_files_owner_parent ON files(ownerId, parentId);`;
 
 const CORS_HEADERS: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',

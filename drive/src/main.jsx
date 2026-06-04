@@ -6,7 +6,7 @@ import './index.css' // This imports Tailwind
 // Register the Service Worker for file streaming
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js?v=2')
+    navigator.serviceWorker.register('/sw.js?v=3')
       .then(registration => {
         console.log('DaemonClient Service Worker registered successfully:', registration);
       })

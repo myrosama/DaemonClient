@@ -1,9 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Terminal, Cloud, Lock, ChevronRight, Command, Server, Globe, Smartphone, Laptop } from 'lucide-react';
-import firebase from 'firebase/compat/app';
-import 'firebase/compat/auth';
-import 'firebase/compat/firestore';
 import { deriveKey, encryptChunk, decryptChunk, generateSalt, generatePassword, bytesToBase64, base64ToBytes } from './crypto.js';
 
 import { getSyncEngine, destroySyncEngine } from './manifest-sync.js';
@@ -11,26 +8,18 @@ import {
     saveUploadSession, getUploadSession, getIncompleteUploads,
     deleteUploadSession, getAllUploadSessions
 } from './idb-store.js';
+// Per-user architecture: auth + provisioning stay central (Firebase, via the
+// central worker + accounts.daemonclient.uz), but ALL file data lives on the
+// user's own Cloudflare Worker + D1, reached through this client. No Firebase
+// SDK in the bundle anymore — login/list/upload/etc. go through ./api.js.
+import {
+    login as apiLogin, logout as apiLogout, getSession, getUid, getUserEmail,
+    onAuthChange, getDriveConfig, getWorkerUrl, driveApi,
+} from './api.js';
 
-// --- Firebase Initialization ---
-const firebaseConfig = {
-    apiKey: "AIzaSyBH5diC5M7MnOIuOWaNPmOB1AV6uJVZyS8",
-    authDomain: "daemonclient-c0625.firebaseapp.com",
-    databaseURL: "https://daemonclient-c0625-default-rtdb.firebaseio.com",
-    projectId: "daemonclient-c0625",
-    storageBucket: "daemonclient-c0625.firebasestorage.app",
-    messagingSenderId: "424457448611",
-    appId: "1:424457448611:web:bea9f7673fb40f137de316",
-    measurementId: "G-72V5NJ7F2C"
-};
-
-if (!firebase.apps.length) {
-    firebase.initializeApp(firebaseConfig);
-}
-
-const auth = firebase.auth();
-const db = firebase.firestore();
-const appIdentifier = 'default-daemon-client';
+// Onboarding (account creation + Telegram/Cloudflare setup) lives entirely on
+// accounts.daemonclient.uz; the Drive app is login → dashboard only.
+const ACCOUNTS_ONBOARDING_URL = 'https://accounts.daemonclient.uz/setup?continue=https://drive.daemonclient.uz/dashboard';
 
 // ============================================================================
 // --- CORE LOGIC & HELPER FUNCTIONS ---
@@ -58,7 +47,10 @@ function formatETA(seconds) {
 // --- UPLOAD FUNCTION (With Proxy + ZKE Encryption + Resumable Sessions) ---
 async function uploadFile(file, botToken, channelId, onProgress, abortSignal, parentId, encryptionKey = null, existingSession = null) {
     const totalParts = Math.ceil(file.size / CHUNK_SIZE);
-    const proxyBaseUrl = "https://daemonclient-proxy.sadrikov49.workers.dev";
+    // Relay through the USER'S OWN worker /proxy — not a shared proxy. The browser
+    // can't call api.telegram.org cross-origin, and routing through the user's own
+    // worker keeps the entire data path on their infrastructure (zero operator cost).
+    const proxyBaseUrl = getWorkerUrl() + '/proxy';
     const isEncrypted = encryptionKey !== null;
 
     // Create or resume upload session
@@ -198,11 +190,12 @@ async function uploadFile(file, botToken, channelId, onProgress, abortSignal, pa
         fileName: file.name,
         fileSize: file.size,
         fileType: file.type,
-        uploadedAt: firebase.firestore.Timestamp.now(),
+        uploadedAt: new Date().toISOString(),
         messages: uploadedMessageInfo,
         type: 'file',
         parentId: parentId,
-        encrypted: isEncrypted
+        encrypted: isEncrypted,
+        encryptionMode: isEncrypted ? 'client' : 'off'
     };
 }
 
@@ -246,7 +239,7 @@ async function downloadFile(fileInfo, botToken, onProgress, abortSignal, decrypt
             if (abortSignal.aborted) throw new Error("Download was cancelled by the user.");
             try {
                 const fileInfoUrl = `https://api.telegram.org/bot${botToken}/getFile?file_id=${partData.file_id}`;
-                const fileInfoRes = await fetch(fileInfoUrl, { signal: abortSignal });
+                const fileInfoRes = await fetch(`${getWorkerUrl()}/proxy?url=${encodeURIComponent(fileInfoUrl)}`, { signal: abortSignal });
                 const fileInfoData = await fileInfoRes.json();
 
                 if (!fileInfoData.ok) {
@@ -262,7 +255,7 @@ async function downloadFile(fileInfo, botToken, onProgress, abortSignal, decrypt
                 const filePath = fileInfoData.result.file_path;
                 const telegramUrl = `https://api.telegram.org/file/bot${botToken}/${filePath}`;
 
-                const proxyBaseUrl = "https://daemonclient-proxy.sadrikov49.workers.dev"; // Your Cloudflare Proxy URL
+                const proxyBaseUrl = getWorkerUrl() + '/proxy'; // user's OWN worker relays to Telegram
                 const proxyUrl = `${proxyBaseUrl}?url=${encodeURIComponent(telegramUrl)}`;
 
                 const fileRes = await fetch(proxyUrl, { signal: abortSignal });
@@ -359,7 +352,8 @@ async function downloadFile(fileInfo, botToken, onProgress, abortSignal, decrypt
 async function deleteTelegramMessages(botToken, channelId, messages) {
     for (const message of messages) {
         try {
-            await fetch(`https://api.telegram.org/bot${botToken}/deleteMessage`, {
+            const delUrl = `https://api.telegram.org/bot${botToken}/deleteMessage`;
+            await fetch(`${getWorkerUrl()}/proxy?url=${encodeURIComponent(delUrl)}`, {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ chat_id: channelId, message_id: message.message_id })
             });
@@ -456,9 +450,12 @@ const AuthView = () => {
         if (!email || !password) { setError("Please enter email and password."); return; }
         setIsLoading(true); setError('');
         try {
-            await auth.signInWithEmailAndPassword(email, password);
+            // Central worker validates against Firebase Auth and returns the
+            // session token + the user's own workerUrl. App's onAuthChange
+            // listener reacts and routes to the dashboard.
+            await apiLogin(email, password);
         } catch (err) {
-            setError(err.code && err.code.includes('auth/') ? "Invalid credentials or account state." : "An unexpected error occurred.");
+            setError(err.message || "Invalid credentials.");
         } finally { setIsLoading(false); }
     };
 
@@ -724,21 +721,21 @@ const DashboardView = () => {
 
     // --- EFFECT: FETCH CONFIG AND FILES (Uses currentFolderId) ---
     useEffect(() => {
-        const currentAuthUser = auth.currentUser;
-        if (!currentAuthUser) {
+        const session = getSession();
+        if (!session) {
             setIsLoadingConfig(false); setIsLoadingFiles(false); setConfig(null); setItems([]);
             return;
         }
 
-        const currentUserID = currentAuthUser.uid;
+        const currentUserID = session.uid;
 
-        // 1. Fetch Config
-        const configDocRef = db.collection(`artifacts/${appIdentifier}/users/${currentUserID}/config`).doc('telegram');
-        configDocRef.get().then(configSnap => {
-            if (configSnap.exists && configSnap.data().botToken) {
-                setConfig(configSnap.data());
+        // 1. Fetch the user's Telegram bot config from their OWN worker. Used for
+        //    the client's direct upload/download to Telegram.
+        getDriveConfig().then(cfg => {
+            if (cfg && cfg.botToken && cfg.channelId) {
+                setConfig({ botToken: cfg.botToken, channelId: cfg.channelId, proxyUrl: cfg.proxyUrl });
             } else {
-                setConfigError("Configuration not found. Please complete the one-time setup.");
+                setConfigError("Your storage isn't set up yet. Finish setup at accounts.daemonclient.uz.");
                 setConfig(null);
             }
         }).catch(error => {
@@ -748,26 +745,30 @@ const DashboardView = () => {
             setIsLoadingConfig(false);
         });
 
-        // 2. Fetch ZKE Config (auto-load password + derive key)
-        const zkeDocRef = db.collection(`artifacts/${appIdentifier}/users/${currentUserID}/config`).doc('zke');
-        zkeDocRef.get().then(async (zkeSnap) => {
-            if (zkeSnap.exists) {
-                const zkeData = zkeSnap.data();
-                if (zkeData.enabled && zkeData.password && zkeData.salt) {
-                    try {
-                        const salt = base64ToBytes(zkeData.salt);
-                        const key = await deriveKey(zkeData.password, salt);
-                        setEncryptionKey(key);
-                        setZkeEnabled(true);
-                        setZkeMode(zkeData.mode || 'auto');
-                    } catch (err) {
-                        console.error('Failed to derive ZKE key:', err);
-                    }
-                } else if (!zkeData.enabled) {
-                    setZkeEnabled(false);
+        // 2. Load client-side encryption config from the user's OWN worker (not
+        //    Firestore): syncs across the user's devices while the password never
+        //    touches shared infra. Auto-initialise for a brand-new user.
+        driveApi('/api/drive/zke').then(async (zke) => {
+            if (zke && zke.enabled && zke.mode === 'custom' && zke.salt) {
+                // Custom password is never stored — mark enabled, leave the key
+                // unset; the user re-enters their password in Settings to unlock.
+                setZkeEnabled(true);
+                setZkeMode('custom');
+            } else if (zke && zke.enabled && zke.password && zke.salt) {
+                try {
+                    const salt = base64ToBytes(zke.salt);
+                    const key = await deriveKey(zke.password, salt);
+                    setEncryptionKey(key);
+                    setZkeEnabled(true);
+                    setZkeMode(zke.mode || 'auto');
+                } catch (err) {
+                    console.error('Failed to derive ZKE key:', err);
                 }
+            } else if (zke && zke.updatedAt) {
+                // Config exists and encryption is disabled
+                setZkeEnabled(false);
             } else {
-                // New user — auto-initialize ZKE with generated password
+                // New user — auto-initialise client-side encryption
                 try {
                     const password = generatePassword();
                     const salt = generateSalt();
@@ -776,13 +777,9 @@ const DashboardView = () => {
                     setEncryptionKey(key);
                     setZkeEnabled(true);
                     setZkeMode('auto');
-                    // Save to Firestore
-                    await zkeDocRef.set({
-                        enabled: true,
-                        mode: 'auto',
-                        password: password,
-                        salt: saltBase64,
-                        updatedAt: firebase.firestore.Timestamp.now()
+                    await driveApi('/api/drive/zke', {
+                        method: 'POST',
+                        body: JSON.stringify({ enabled: true, mode: 'auto', password, salt: saltBase64 }),
                     });
                 } catch (err) {
                     console.error('Failed to auto-initialize ZKE:', err);
@@ -863,9 +860,9 @@ const DashboardView = () => {
                     resumeSession   // Pass existing session for resume
                 );
 
-                // Save via sync engine (IndexedDB immediately + Firestore batched)
-                const newId = db.collection(`artifacts/${appIdentifier}/users/${auth.currentUser.uid}/files`).doc().id;
-                const syncEngine = getSyncEngine(auth.currentUser.uid);
+                // Save via sync engine (IndexedDB immediately + immediate write to the per-user worker)
+                const newId = crypto.randomUUID();
+                const syncEngine = getSyncEngine(getUid());
                 const savedItem = await syncEngine.addItem({ id: newId, ...newFileData });
                 // Update local items list immediately (optimistic)
                 setItems(prev => [...prev, savedItem].sort((a, b) => {
@@ -964,8 +961,8 @@ const DashboardView = () => {
                 await deleteTelegramMessages(config.botToken, config.channelId, itemToDelete.messages);
             }
 
-            // Delete via sync engine (IndexedDB immediately + Firestore batched)
-            const syncEngine = getSyncEngine(auth.currentUser.uid);
+            // Delete via sync engine (IndexedDB immediately + immediate worker delete)
+            const syncEngine = getSyncEngine(getUid());
             await syncEngine.removeItem(itemToDelete.id);
             // Update local state immediately (optimistic)
             setItems(prev => prev.filter(i => i.id !== itemToDelete.id));
@@ -987,8 +984,8 @@ const DashboardView = () => {
         const originalItem = items.find(f => f.id === fileId);
         if (originalItem.fileName === trimmedName) { handleCancelRename(); return; }
         try {
-            // Rename via sync engine (IndexedDB immediately + Firestore batched)
-            const syncEngine = getSyncEngine(auth.currentUser.uid);
+            // Rename via sync engine (IndexedDB immediately + immediate worker update)
+            const syncEngine = getSyncEngine(getUid());
             await syncEngine.updateItem(fileId, { fileName: trimmedName });
             // Update local state immediately (optimistic)
             setItems(prev => prev.map(i => i.id === fileId ? { ...i, fileName: trimmedName } : i));
@@ -998,19 +995,22 @@ const DashboardView = () => {
         } finally { handleCancelRename(); clearFeedback(); }
     };
     const handleLogout = async () => {
-        // Flush pending Firestore writes before logout
         try { await destroySyncEngine(); } catch { }
-        // Destroy encryption key from memory
+        // Destroy encryption key from memory, then clear the session (onAuthChange
+        // routes back to the login screen).
         setEncryptionKey(null);
         setZkeEnabled(false);
-        try { await auth.signOut(); } catch (err) { setFeedbackMessage({ type: 'error', text: "Logout failed." }); clearFeedback(); }
+        apiLogout();
     };
     const handleSaveSettings = async (newConfig) => {
         setIsSavingSettings(true);
-        const configDocRef = db.collection(`artifacts/${appIdentifier}/users/${auth.currentUser.uid}/config`).doc('telegram');
         try {
-            await configDocRef.update({ botToken: newConfig.botToken, channelId: newConfig.channelId });
-            setConfig(prev => ({ ...prev, ...newConfig }));
+            const saved = await driveApi('/api/drive/config', {
+                method: 'POST',
+                body: JSON.stringify({ botToken: newConfig.botToken, channelId: newConfig.channelId }),
+            });
+            setConfig(prev => ({ ...prev, botToken: saved.botToken, channelId: saved.channelId }));
+            await getDriveConfig(true); // refresh the cached config
             setIsSettingsOpen(false);
             setFeedbackMessage({ type: 'success', text: 'Settings updated successfully!' });
             clearFeedback();
@@ -1019,11 +1019,8 @@ const DashboardView = () => {
         } finally { setIsSavingSettings(false); }
     };
 
-    // ZKE Enable/Disable Handler
+    // ZKE Enable/Disable Handler — config stored on the user's OWN worker.
     const handleZkeToggle = async (enabled, mode = 'auto', customPassword = null) => {
-        const currentUserID = auth.currentUser.uid;
-        const zkeDocRef = db.collection(`artifacts/${appIdentifier}/users/${currentUserID}/config`).doc('zke');
-
         if (enabled) {
             const password = mode === 'custom' ? customPassword : generatePassword();
             const salt = generateSalt();
@@ -1034,27 +1031,16 @@ const DashboardView = () => {
             setZkeEnabled(true);
             setZkeMode(mode);
 
-            // Save to Firestore
-            const zkeData = {
-                enabled: true,
-                mode: mode,
-                salt: saltBase64,
-                updatedAt: firebase.firestore.Timestamp.now()
-            };
-
-            // Only store password if auto mode
-            if (mode === 'auto') {
-                zkeData.password = password;
-            } else {
-                zkeData.password = null; // Don't store custom passwords
-            }
-
-            await zkeDocRef.set(zkeData, { merge: true });
+            // Persist salt always; persist the password ONLY in auto mode. Custom
+            // passwords are never sent — true zero-knowledge (re-entered per session).
+            await driveApi('/api/drive/zke', {
+                method: 'POST',
+                body: JSON.stringify({ enabled: true, mode, salt: saltBase64, password: mode === 'auto' ? password : '' }),
+            });
         } else {
-            // Disable ZKE
             setEncryptionKey(null);
             setZkeEnabled(false);
-            await zkeDocRef.set({ enabled: false, password: null, updatedAt: firebase.firestore.Timestamp.now() }, { merge: true });
+            await driveApi('/api/drive/zke', { method: 'POST', body: JSON.stringify({ enabled: false }) });
         }
     };
 
@@ -1072,14 +1058,14 @@ const DashboardView = () => {
 
     // --- Reusable folder creation helper (via sync engine) ---
     const createFolderInFirestore = async (name, parentId) => {
-        const folderId = db.collection(`artifacts/${appIdentifier}/users/${auth.currentUser.uid}/files`).doc().id;
-        const syncEngine = getSyncEngine(auth.currentUser.uid);
+        const folderId = crypto.randomUUID();
+        const syncEngine = getSyncEngine(getUid());
         const folderItem = {
             id: folderId,
             fileName: name,
             type: 'folder',
             parentId: parentId,
-            uploadedAt: Date.now(),
+            uploadedAt: new Date().toISOString(),
         };
         await syncEngine.addItem(folderItem);
         // Update local UI if the folder is in the current view
@@ -1470,6 +1456,7 @@ const DashboardView = () => {
                 fileId: item.id,
                 messages: item.messages,
                 botToken: config.botToken,
+                workerUrl: getWorkerUrl(),
                 rawKeyBytes: rawKeyBytes,
                 isEncrypted: item.encrypted === true,
                 fileSize: item.fileSize,
@@ -1774,403 +1761,6 @@ const DashboardView = () => {
     );
 };
 
-// --- SETUP VIEW ---
-const SetupView = ({ onSetupComplete }) => {
-    const [showManualForm, setShowManualForm] = useState(false);
-    const [statusMessage, setStatusMessage] = useState('');
-    const [botToken, setBotToken] = useState('');
-    const [channelId, setChannelId] = useState('');
-    const [error, setError] = useState('');
-    const [isLoading, setIsLoading] = useState(false);
-
-    const handleStartAutomatedSetup = async () => {
-        setStatusMessage('Initiating secure setup... This may take a minute.');
-        setError('');
-        setIsLoading(true);
-        try {
-            const response = await fetch('https://daemonclient-elnj.onrender.com/startSetup', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ data: { uid: auth.currentUser.uid, email: auth.currentUser.email, } })
-            });
-            const result = await response.json();
-            if (!response.ok) { throw new Error(result.error?.message || 'The setup service returned an unspecified error.'); }
-            setStatusMessage("Finalizing configuration...");
-            const configDocRef = db.collection(`artifacts/${appIdentifier}/users/${auth.currentUser.uid}/config`).doc('telegram');
-            let attempts = 0;
-            const maxAttempts = 5;
-            while (attempts < maxAttempts) {
-                const docSnap = await configDocRef.get();
-                if (docSnap.exists && docSnap.data().botToken) {
-                    setStatusMessage('Configuration saved! Proceeding to final step...');
-                    onSetupComplete();
-                    return;
-                }
-                await new Promise(resolve => setTimeout(resolve, 1000));
-                attempts++;
-            }
-            throw new Error("Could not verify configuration after setup. Please try again.");
-        } catch (err) {
-            console.error("Error during setup process:", err);
-            setStatusMessage('');
-            if (err.message.includes('Failed to fetch')) {
-                setError(`Could not connect to the setup service. Please try again later.`);
-            } else {
-                setError(`An unexpected error occurred. Please try again or contact support.`);
-            }
-        } finally {
-            setIsLoading(false);
-        }
-    };
-
-    const handleSaveManualSetup = async () => {
-        if (!botToken.trim() || !channelId.trim()) { setError("Bot Token and Channel ID are required."); return; }
-        setIsLoading(true); setError('');
-        try {
-            const configDocRef = db.collection(`artifacts/${appIdentifier}/users/${auth.currentUser.uid}/config`).doc('telegram');
-            await configDocRef.set({ botToken: botToken.trim(), channelId: channelId.trim(), setupTimestamp: firebase.firestore.FieldValue.serverTimestamp() });
-            onSetupComplete();
-        } catch (err) { setError(`Save failed: ${err.message}`); }
-        finally { setIsLoading(false); }
-    };
-    const handleLogout = async () => { try { await auth.signOut(); } catch (err) { /* silent fail */ } };
-    useEffect(() => {
-        const uid = auth.currentUser?.uid;
-        if (!uid) return;
-        const unsubscribe = db.collection(`artifacts/${appIdentifier}/users/${uid}/config`).doc('telegram')
-            .onSnapshot((doc) => {
-                if (doc.exists && doc.data().botToken) {
-                    setStatusMessage('Setup complete! Redirecting to your dashboard...');
-                    setTimeout(() => onSetupComplete(), 1500);
-                }
-            });
-        return () => unsubscribe();
-    }, [onSetupComplete]);
-    const AutomatedSetupPanel = () => (
-        <div className="bg-gray-900 border-2 border-indigo-500 rounded-lg p-6 relative">
-            <span className="absolute top-0 right-4 -mt-3 bg-indigo-500 text-white text-xs font-bold px-3 py-1 rounded-full">Recommended</span>
-            <h2 className="text-xl font-semibold text-white">Automated Setup</h2>
-            <p className="text-gray-400 mt-2 text-sm">The easiest way to get started. We'll automatically create and configure a private bot and channel for you.</p>
-            <button onClick={handleStartAutomatedSetup} disabled={isLoading || !!statusMessage} className="mt-6 w-full bg-indigo-500 hover:bg-indigo-600 text-white font-bold py-3 px-4 rounded-lg flex items-center justify-center text-lg disabled:bg-gray-600 disabled:cursor-not-allowed">
-                {isLoading ? <LoaderComponent /> : 'Create My Secure Storage'}
-            </button>
-        </div>
-    );
-    const ManualSetupPanel = () => (
-        <div className="bg-gray-700 rounded-lg p-6">
-            <h2 className="text-xl font-semibold text-white">Manual Setup</h2>
-            <p className="text-gray-400 mt-2 text-sm">For advanced users who want to use their own existing bot and channel.</p>
-            <button onClick={() => setShowManualForm(true)} className="mt-4 w-full bg-gray-600 hover:bg-gray-500 text-white font-bold py-2 px-4 rounded-lg flex items-center justify-center">Enter Credentials Manually</button>
-        </div>
-    );
-    const ManualSetupForm = () => (
-        <div className="mt-8 animate-fade-in">
-            <h2 className="text-xl font-semibold text-center text-white mb-4">Enter Your Credentials</h2>
-            <div className="space-y-6">
-                <div>
-                    <label htmlFor="botToken-setup" className="block text-sm font-medium text-gray-300 mb-1">Telegram Bot Token</label>
-                    <input id="botToken-setup" type="password" value={botToken} onChange={(e) => setBotToken(e.target.value)} className="w-full p-3 bg-gray-600 border border-gray-500 rounded-lg text-white" placeholder="From @BotFather" />
-                </div>
-                <div>
-                    <label htmlFor="channelId-setup" className="block text-sm font-medium text-gray-300 mb-1">Private Channel ID</label>
-                    <input id="channelId-setup" type="text" value={channelId} onChange={(e) => setChannelId(e.target.value)} className="w-full p-3 bg-gray-600 border border-gray-500 rounded-lg text-white" placeholder="From @userinfobot" />
-                </div>
-                {error && <p className="text-red-400 text-sm text-center py-2">{error}</p>}
-                <button onClick={handleSaveManualSetup} disabled={isLoading} className="w-full bg-indigo-500 hover:bg-indigo-600 disabled:bg-indigo-800 text-white font-bold py-3 px-4 rounded-lg flex items-center justify-center text-lg">
-                    {isLoading ? <LoaderComponent small={true} /> : 'Save & Continue'}
-                </button>
-                <button onClick={() => setShowManualForm(false)} className="w-full text-center text-gray-400 hover:text-white text-sm mt-4">Back to setup options</button>
-            </div>
-        </div>
-    );
-    const StatusBar = ({ message }) => (
-        <div className="mt-8 p-4 bg-gray-900 rounded-lg flex items-center justify-center animate-fade-in">
-            <LoaderComponent small={true} />
-            <p className="ml-4 text-indigo-300">{message}</p>
-        </div>
-    );
-    return (
-        <div className="min-h-screen bg-gray-900 text-white flex flex-col items-center justify-center p-4 font-sans">
-            <div className="w-full max-w-2xl">
-                <div className="bg-gray-800 rounded-xl shadow-2xl p-6 md:p-8 relative overflow-hidden">
-                    <div className="text-center mb-8">
-                        <h1 className="text-3xl font-bold text-indigo-400">One-Time Setup</h1>
-                        <p className="text-gray-400 mt-2">Let's create your private, secure storage.</p>
-                    </div>
-                    {showManualForm ? <ManualSetupForm /> : (<div className="space-y-8"><AutomatedSetupPanel /><ManualSetupPanel /></div>)}
-                    {statusMessage && <StatusBar message={statusMessage} />}
-                    {error && !statusMessage && <p className="text-red-400 text-center mt-4">{error}</p>}
-                </div>
-                <div className="text-center mt-6">
-                    <button onClick={handleLogout} className="text-sm text-gray-500 hover:text-gray-300">Logout</button>
-                </div>
-            </div>
-        </div>
-    );
-};
-
-// --- OWNERSHIP VIEW ---
-const OwnershipView = ({ onOwnershipConfirmed }) => {
-    const [config, setConfig] = useState(null);
-    const [step, setStep] = useState(1);
-    const [isLoading, setIsLoading] = useState(true);
-    const [error, setError] = useState('');
-    const [countdown, setCountdown] = useState(10);
-    const [isButtonDisabled, setIsButtonDisabled] = useState(true);
-    const [hasClickedLink, setHasClickedLink] = useState(false);
-    const [isProcessing, setIsProcessing] = useState(false);
-    const [transferStatus, setTransferStatus] = useState(null);
-
-    useEffect(() => {
-        const fetchConfig = async () => {
-            try {
-                const configDocRef = db.collection(`artifacts/${appIdentifier}/users/${auth.currentUser.uid}/config`).doc('telegram');
-                const docSnap = await configDocRef.get();
-                if (docSnap.exists) {
-                    setConfig(docSnap.data());
-                } else {
-                    setError("Could not find your configuration. Please try the setup again.");
-                }
-            } catch (err) {
-                setError("Error fetching configuration: " + err.message);
-            } finally {
-                setIsLoading(false);
-            }
-        };
-        fetchConfig();
-    }, []);
-    useEffect(() => {
-        if (isLoading) return;
-        setIsButtonDisabled(true);
-        setCountdown(10);
-        if (hasClickedLink) {
-            const interval = setInterval(() => {
-                setCountdown(prev => {
-                    if (prev <= 1) {
-                        clearInterval(interval);
-                        setIsButtonDisabled(false);
-                        return 0;
-                    }
-                    return prev - 1;
-                });
-            }, 1000);
-            return () => clearInterval(interval);
-        }
-    }, [step, hasClickedLink, isLoading]);
-    const handleLinkClicked = () => { if (!hasClickedLink) { setHasClickedLink(true); } };
-    const handleNextStep = () => { setStep(2); setHasClickedLink(false); };
-    const handleFinalize = async () => {
-        setIsProcessing(true);
-        setStep(3);
-        setError('');
-        setTransferStatus({
-            bot: { status: 'pending', message: 'Verifying user and transferring bot ownership...' },
-            channel: { status: 'pending', message: 'Attempting to transfer channel ownership...' }
-        });
-        try {
-            const response = await fetch('https://daemonclient-elnj.onrender.com/finalizeTransfer', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ data: { uid: auth.currentUser.uid } })
-            });
-            const result = await response.json();
-            if (!response.ok) {
-                throw new Error(result.error?.message || 'The server returned an unspecified error.');
-            }
-            setTransferStatus({
-                bot: { status: result.bot_transfer_status, message: result.bot_transfer_message },
-                channel: { status: result.channel_transfer_status, message: result.channel_transfer_message }
-            });
-            setTimeout(() => onOwnershipConfirmed(), 5000);
-        } catch (err) {
-            setError(`A critical error occurred: ${err.message}`);
-            setStep(2);
-            setIsProcessing(false);
-            setHasClickedLink(false);
-        }
-    };
-    const StatusItem = ({ status, message }) => {
-        const icon = status === 'pending' ? <LoaderComponent small={true} /> :
-            status === 'success' ? <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-green-400"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg> :
-                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-red-400"><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg>;
-        const textColor = status === 'success' ? 'text-green-300' : status === 'failed' ? 'text-red-300' : 'text-gray-300';
-        return <li className="flex items-start space-x-3 py-2"><div className="flex-shrink-0 mt-1">{icon}</div><p className={`${textColor} text-sm`}>{message}</p></li>;
-    };
-    if (isLoading) {
-        return <FullScreenLoader message="Loading your bot and channel details..." />;
-    }
-    const renderStepContent = () => {
-        switch (step) {
-            case 1:
-                return (
-                    <div className="space-y-6 text-center">
-                        <h1 className="text-3xl font-bold text-indigo-400">Final Step (1/2): Start Your Bot</h1>
-                        <p className="text-gray-400">This is required by Telegram to transfer ownership. Click the link, press START in Telegram, then come back here.</p>
-                        <a
-                            href={config ? `https://t.me/${config.botUsername}` : '#'}
-                            target="_blank"
-                            onClick={handleLinkClicked}
-                            className="inline-block bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-6 rounded-lg text-lg"
-                        >
-                            {config ? `Open Bot: @${config.botUsername}` : <LoaderComponent small={true} />}
-                        </a>
-                        <button onClick={handleNextStep} disabled={isButtonDisabled} className="w-full max-w-xs mx-auto bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-3 px-4 rounded-lg flex items-center justify-center text-lg">
-                            {isButtonDisabled ? `Next Step (${countdown}s)` : 'Next Step'}
-                        </button>
-                    </div>
-                );
-            case 2:
-                return (
-                    <div className="space-y-6 text-center">
-                        <h1 className="text-3xl font-bold text-indigo-400">Final Step (2/2): Join Your Channel</h1>
-                        <p className="text-gray-400">This allows us to securely identify you as the owner. Click the link to join, then come back and finalize.</p>
-                        <a
-                            href={config ? config.invite_link : '#'}
-                            target="_blank"
-                            onClick={handleLinkClicked}
-                            className="inline-block bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-6 rounded-lg text-lg"
-                        >
-                            {config ? 'Join Secure Channel' : <LoaderComponent small={true} />}
-                        </a>
-                        <button onClick={handleFinalize} disabled={isButtonDisabled} className="w-full max-w-xs mx-auto bg-green-600 hover:bg-green-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-3 px-4 rounded-lg flex items-center justify-center text-lg">
-                            {isButtonDisabled ? `Finalize (${countdown}s)` : 'Finalize Transfer'}
-                        </button>
-                    </div>
-                );
-            case 3:
-                return (
-                    <div>
-                        <h1 className="text-3xl font-bold text-indigo-400 text-center mb-4">Finalizing Setup...</h1>
-                        <ul className="space-y-2 bg-gray-900 p-4 rounded-lg">
-                            <StatusItem status={transferStatus.bot.status} message={transferStatus.bot.message} />
-                            <StatusItem status={transferStatus.channel.status} message={transferStatus.channel.message} />
-                        </ul>
-                    </div>
-                );
-            default:
-                return null;
-        }
-    };
-    return (
-        <div className="min-h-screen bg-gray-900 text-white flex flex-col items-center justify-center p-4 font-sans">
-            <div className="w-full max-w-xl bg-gray-800 rounded-xl shadow-2xl p-6 md:p-8">
-                {renderStepContent()}
-                {error && <p className="text-red-400 text-sm text-center mt-4">{error}</p>}
-            </div>
-        </div>
-    );
-};
-
-// ============================================================================
-// --- VISUAL COMPONENTS (Backgrounds, 3D Core, Animations) ---
-// ============================================================================
-
-const HeroBackground = () => {
-    const particles = [...Array(15)].map((_, i) => ({
-        id: i,
-        x: Math.random() * 100,
-        y: Math.random() * 100,
-        size: Math.random() * 3 + 1,
-        duration: Math.random() * 10 + 10,
-    }));
-
-    return (
-        <div className="absolute inset-0 overflow-hidden pointer-events-none -z-10">
-            <div className="absolute inset-0 bg-[#05080F]" />
-            <div className="absolute inset-0 bg-[linear-gradient(to_right,#80808012_1px,transparent_1px),linear-gradient(to_bottom,#80808012_1px,transparent_1px)] bg-[size:24px_24px] [mask-image:radial-gradient(ellipse_60%_50%_at_50%_0%,#000_70%,transparent_100%)]" />
-            {particles.map((p) => (
-                <motion.div
-                    key={p.id}
-                    className="absolute rounded-full bg-indigo-500/20 blur-[1px]"
-                    style={{ left: `${p.x}%`, top: `${p.y}%`, width: p.size, height: p.size }}
-                    animate={{ y: [0, -40, 0], opacity: [0.2, 0.5, 0.2] }}
-                    transition={{ duration: p.duration, repeat: Infinity, ease: "easeInOut" }}
-                />
-            ))}
-            <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-purple-600/10 rounded-full blur-[100px]" />
-            <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-indigo-600/10 rounded-full blur-[100px]" />
-        </div>
-    );
-};
-
-const SecureCloudCore = () => {
-    return (
-        <div className="relative w-full h-[500px] md:h-[700px] flex items-center justify-center perspective-1000">
-            <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,_rgba(99,102,241,0.15)_0%,_transparent_60%)] blur-3xl" />
-
-            {/* Outer Ring - Keeps slow rotation for atmosphere */}
-            <motion.div
-                animate={{ rotate: [0, 360] }}
-                transition={{ duration: 60, repeat: Infinity, ease: "linear" }}
-                className="absolute w-[450px] h-[450px] md:w-[650px] md:h-[650px] rounded-full border border-indigo-500/10 border-dashed"
-            >
-                <div className="absolute top-0 left-1/2 w-3 h-3 -ml-1.5 -mt-1.5 bg-indigo-500 rounded-full blur-[1px] shadow-[0_0_10px_#6366f1]" />
-            </motion.div>
-
-            {/* Inner Ring - Keeps slow counter-rotation */}
-            <motion.div
-                animate={{ rotate: [360, 0] }}
-                transition={{ duration: 40, repeat: Infinity, ease: "linear" }}
-                className="absolute w-[320px] h-[320px] md:w-[500px] md:h-[500px] rounded-full border border-cyan-500/20"
-                style={{ borderTopColor: "rgba(6,182,212,0.6)", borderRightColor: "transparent", borderBottomColor: "transparent", borderLeftColor: "transparent", borderWidth: "1px" }}
-            >
-                <div className="absolute bottom-[14%] right-[14%] w-2 h-2 bg-cyan-400 rounded-full shadow-[0_0_8px_#22d3ee]" />
-            </motion.div>
-
-            {/* Core Sphere */}
-            <motion.div
-                // KEEPING the Hover Animation
-                animate={{ y: [0, -20, 0] }}
-                transition={{ duration: 6, repeat: Infinity, ease: "easeInOut" }}
-                className="relative z-10"
-            >
-                <div className="relative w-48 h-48 md:w-64 md:h-64 bg-[#0F131F]/80 backdrop-blur-xl border border-indigo-500/30 rounded-full flex items-center justify-center shadow-[0_0_80px_rgba(99,102,241,0.25)] overflow-hidden">
-
-                    {/* CLEAN INTERIOR: No scanning lines, no rotating gradients. */}
-
-                    <div className="relative z-20">
-                        <img
-                            src="/logo.png"
-                            alt="Core"
-                            className="w-24 h-24 md:w-32 md:h-32 object-contain drop-shadow-[0_0_25px_rgba(99,102,241,0.5)]"
-                        />
-                    </div>
-
-                    {/* Subtle glass reflection */}
-                    <div className="absolute inset-0 rounded-full bg-gradient-to-b from-white/10 to-transparent pointer-events-none" />
-                </div>
-            </motion.div>
-        </div>
-    );
-};
-
-const TerminalDemo = () => {
-    const [text, setText] = useState('');
-    const fullText = "> daemon upload secret_plans.pdf\n[+] Encrypting file...\n[+] Chunking into 19MB parts...\n[+] Uploading to secure channel...\n[+] File 'secret_plans.pdf' registered.\n> ";
-    useEffect(() => {
-        let i = 0; let mounted = true;
-        const typeWriter = () => {
-            if (!mounted) return;
-            if (i <= fullText.length) { setText(fullText.slice(0, i)); i++; setTimeout(typeWriter, 30); }
-            else { setTimeout(() => { if (mounted) { i = 0; setText(''); typeWriter(); } }, 4000); }
-        };
-        typeWriter();
-        return () => { mounted = false; };
-    }, []);
-    return (
-        <div className="bg-[#0F131F] rounded-xl border border-gray-800 p-6 font-mono text-sm shadow-2xl w-full h-64 flex flex-col relative overflow-hidden group">
-            <div className="absolute inset-0 bg-[linear-gradient(rgba(18,16,16,0)_50%,rgba(0,0,0,0.25)_50%),linear-gradient(90deg,rgba(255,0,0,0.06),rgba(0,255,0,0.02),rgba(0,0,255,0.06))] z-10 pointer-events-none bg-[length:100%_4px,3px_100%]" />
-            <div className="flex gap-2 mb-4 border-b border-gray-800 pb-2 z-20">
-                <div className="w-3 h-3 rounded-full bg-red-500/50" />
-                <div className="w-3 h-3 rounded-full bg-yellow-500/50" />
-                <div className="w-3 h-3 rounded-full bg-green-500/50" />
-                <span className="ml-auto text-xs text-gray-600">bash</span>
-            </div>
-            <div className="text-gray-300 whitespace-pre-line z-20">{text}<span className="animate-pulse inline-block w-2 h-4 bg-indigo-500 align-middle ml-1" /></div>
-        </div>
-    );
-};
-
 // ============================================================================
 // --- LANDING PAGE COMPONENT ---
 // ============================================================================
@@ -2415,192 +2005,93 @@ const LandingPage = ({ onLaunchApp = () => console.log("Launch") }) => {
 };
 
 // ============================================================================
-// --- PHOTOS SETUP VIEW (Bot configuration for DaemonPhotos) ---
+// --- ONBOARDING GATE ---
 // ============================================================================
-const PhotosSetupView = ({ onSetupComplete }) => {
-    const [botToken, setBotToken] = useState('');
-    const [error, setError] = useState('');
-    const [isLoading, setIsLoading] = useState(false);
-    const [statusMessage, setStatusMessage] = useState('');
-    const [step, setStep] = useState(1);
-
-    const handleConnectBot = async () => {
-        if (!botToken.trim()) { setError('Please paste your bot token.'); return; }
-        if (!botToken.includes(':')) { setError('Invalid token format. It should look like: 123456:ABC-DEF...'); return; }
-        setIsLoading(true); setError(''); setStatusMessage('Connecting your bot...');
-        try {
-            const response = await fetch('https://daemonclient-elnj.onrender.com/addPhotosBot', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ data: { uid: auth.currentUser.uid, bot_token: botToken.trim() } })
-            });
-            const result = await response.json();
-            if (!response.ok) throw new Error(result.error?.message || 'Failed to connect bot.');
-            setStatusMessage(`✅ Bot @${result.bot_username} connected! Loading your photo gallery...`);
-            setTimeout(() => onSetupComplete(), 1500);
-        } catch (err) {
-            setStatusMessage('');
-            setError(err.message || 'An unexpected error occurred.');
-        } finally { setIsLoading(false); }
-    };
-
-    return (
-        <div className="min-h-screen bg-gray-900 text-white flex flex-col items-center justify-center p-4 font-sans">
-            <div className="w-full max-w-2xl">
-                <div className="bg-gray-800 rounded-xl shadow-2xl p-6 md:p-8">
-                    <div className="text-center mb-6">
-                        <h1 className="text-3xl font-bold text-indigo-400">📷 DaemonPhotos Setup</h1>
-                        <p className="text-gray-400 mt-2">One more step — create a dedicated bot for your photo gallery.</p>
-                    </div>
-
-                    {/* Step-by-step guide */}
-                    <div className="space-y-4 mb-6">
-                        <div className={`p-4 rounded-lg border ${step >= 1 ? 'bg-gray-900 border-indigo-500' : 'bg-gray-700 border-gray-600'}`}>
-                            <h3 className="font-semibold text-white flex items-center">
-                                <span className="bg-indigo-600 text-white text-xs font-bold w-6 h-6 rounded-full flex items-center justify-center mr-3">1</span>
-                                Open @BotFather on Telegram
-                            </h3>
-                            <p className="text-gray-400 text-sm mt-2 ml-9">
-                                Open <a href="https://t.me/BotFather" target="_blank" rel="noopener noreferrer" className="text-indigo-400 hover:text-indigo-300 underline">@BotFather</a> in Telegram and send <code className="bg-gray-700 px-1.5 py-0.5 rounded text-sm">/newbot</code>
-                            </p>
-                        </div>
-
-                        <div className={`p-4 rounded-lg border ${step >= 2 ? 'bg-gray-900 border-indigo-500' : 'bg-gray-700 border-gray-600'}`}>
-                            <h3 className="font-semibold text-white flex items-center">
-                                <span className="bg-indigo-600 text-white text-xs font-bold w-6 h-6 rounded-full flex items-center justify-center mr-3">2</span>
-                                Name your bot
-                            </h3>
-                            <p className="text-gray-400 text-sm mt-2 ml-9">
-                                Give it any name (e.g., "My Photos Bot") and username (e.g., <code className="bg-gray-700 px-1.5 py-0.5 rounded text-sm">my_photos_12345_bot</code>).
-                            </p>
-                        </div>
-
-                        <div className={`p-4 rounded-lg border ${step >= 3 ? 'bg-gray-900 border-indigo-500' : 'bg-gray-700 border-gray-600'}`}>
-                            <h3 className="font-semibold text-white flex items-center">
-                                <span className="bg-indigo-600 text-white text-xs font-bold w-6 h-6 rounded-full flex items-center justify-center mr-3">3</span>
-                                Copy and paste the bot token below
-                            </h3>
-                            <p className="text-gray-400 text-sm mt-2 ml-9">
-                                BotFather will give you a token that looks like <code className="bg-gray-700 px-1.5 py-0.5 rounded text-sm">123456789:ABCdef...</code>
-                            </p>
-                        </div>
-                    </div>
-
-                    {/* Token input */}
-                    <div className="space-y-4">
-                        <div>
-                            <label htmlFor="photos-bot-token" className="block text-sm font-medium text-gray-300 mb-1">Bot Token</label>
-                            <input
-                                id="photos-bot-token"
-                                type="password"
-                                value={botToken}
-                                onChange={(e) => { setBotToken(e.target.value); setStep(3); setError(''); }}
-                                onFocus={() => setStep(3)}
-                                className="w-full p-3 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-500"
-                                placeholder="Paste your bot token from @BotFather"
-                            />
-                        </div>
-                        {error && <p className="text-red-400 text-sm text-center">{error}</p>}
-                        {statusMessage && (
-                            <div className="p-3 bg-gray-900 rounded-lg flex items-center justify-center">
-                                {isLoading && <LoaderComponent small={true} />}
-                                <p className={`${isLoading ? 'ml-3' : ''} text-indigo-300 text-sm`}>{statusMessage}</p>
-                            </div>
-                        )}
-                        <button
-                            onClick={handleConnectBot}
-                            disabled={isLoading || !botToken.trim()}
-                            className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-700 disabled:cursor-not-allowed text-white font-bold py-3 px-4 rounded-lg text-lg transition-colors"
-                        >
-                            {isLoading ? <LoaderComponent small={true} /> : 'Connect Bot & Continue'}
-                        </button>
-                    </div>
-                </div>
-                <div className="text-center mt-6">
-                    <button onClick={() => auth.signOut()} className="text-sm text-gray-500 hover:text-gray-300">Logout</button>
-                </div>
-            </div>
+// Account creation + the Telegram/Cloudflare provisioning all live on
+// accounts.daemonclient.uz. A logged-in user whose storage isn't provisioned
+// (no workerUrl) or whose bot isn't configured lands here.
+const NeedsOnboardingView = () => (
+    <div className="flex flex-col items-center justify-center w-full min-h-screen p-4 text-white font-sans">
+        <div className="w-full max-w-md bg-gray-800 rounded-xl p-8 shadow-2xl text-center">
+            <div className="flex justify-center mb-4"><LogoComponent /></div>
+            <h1 className="text-2xl font-bold mb-2">Finish setting up your storage</h1>
+            <p className="text-gray-400 mb-6 text-sm leading-relaxed">
+                Your private vault (your own Telegram channel + your own Cloudflare worker
+                and database) isn't ready yet. Setup takes about 3 minutes on the accounts
+                portal — then come straight back here.
+            </p>
+            <a href={ACCOUNTS_ONBOARDING_URL} className="block w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-4 rounded-lg text-lg transition-colors">
+                Complete setup →
+            </a>
+            <button onClick={() => apiLogout()} className="mt-5 text-sm text-gray-500 hover:text-gray-300">Sign out</button>
         </div>
-    );
-};
+    </div>
+);
 
 // ============================================================================
 // --- MAIN APP COMPONENT (The Router) ---
 // ============================================================================
 function App() {
     const hostname = window.location.hostname;
-    // drive.* (and the new drive folder, served on its own hosting site) is an
-    // APP domain: the marketing landing is the static index.html served at `/`,
-    // so the SPA (app.html at /login, /dashboard) goes straight to auth/dashboard
-    // and never renders the old in-app LandingPage.
+    // drive.* is an APP domain: the marketing landing is the static index.html
+    // served at `/`, so the SPA (app.html at /login, /dashboard) goes straight to
+    // auth/dashboard and never renders the in-app LandingPage.
     const isAppDomain = hostname.startsWith('app.') || hostname.startsWith('drive.')
         || hostname === 'daemonclient-app.web.app' || hostname === 'daemonclient-drive.web.app';
-    const isPhotosDomain = hostname.startsWith('photos.') || hostname === 'daemonclient-photos.web.app';
-    const [user, setUser] = useState(null);
     const [appState, setAppState] = useState('loading');
 
     useEffect(() => {
-        const unsubscribe = auth.onAuthStateChanged(async (currentUser) => {
-            if (!currentUser) {
-                // On app subdomain, go straight to auth. On main domain, show landing.
-                setAppState(prevState => {
-                    if (isAppDomain || isPhotosDomain) return 'auth';
-                    return prevState === 'auth' ? 'auth' : 'landing';
-                });
-                return;
-            }
-            setUser(currentUser);
+        let active = true;
+        // Resolve where an authenticated user belongs: dashboard if their own
+        // worker is provisioned + bot configured, else the onboarding gate.
+        const resolveAuthed = async () => {
+            if (!getWorkerUrl()) return 'onboard';
             try {
-                const configDocRef = db.collection(`artifacts/${appIdentifier}/users/${currentUser.uid}/config`).doc('telegram');
-                const docSnap = await configDocRef.get();
-                if (!docSnap.exists) {
-                    setAppState('setup');
-                } else {
-                    const configData = docSnap.data();
-                    if (configData.ownership_transferred) {
-                        setAppState(isPhotosDomain ? 'photos' : 'dashboard');
-                    } else {
-                        setAppState('transfer');
-                    }
-                }
-            } catch (error) {
-                console.error("[App] Error checking setup status:", error);
-                setAppState('setup');
+                const cfg = await getDriveConfig(true);
+                return cfg && cfg.configured ? 'dashboard' : 'onboard';
+            } catch (e) {
+                if (e && e.code === 'NO_WORKER') return 'onboard';
+                return 'dashboard'; // transient error — dashboard surfaces its own config error
             }
-        });
-        return () => unsubscribe();
+        };
+        const apply = async (session) => {
+            if (!session) { if (active) setAppState(isAppDomain ? 'auth' : 'landing'); return; }
+            if (active) setAppState('loading');
+            const next = await resolveAuthed();
+            if (active) setAppState(next);
+        };
+        apply(getSession());
+        const unsub = onAuthChange((s) => apply(s));
+        return () => { active = false; unsub(); };
     }, []);
 
-    // HANDLERS PASSED TO CHILDREN
-    const handleLaunchApp = () => {
-        // If we're on the main domain, redirect to the app subdomain
-        if (!isAppDomain) {
-            window.location.href = 'https://app.daemonclient.uz';
-        } else {
-            setAppState('auth');
-        }
-    };
-    const handleSetupComplete = () => { setAppState('transfer'); };
-    const handleOwnershipConfirmed = () => { setAppState('dashboard'); };
-
-    // Expose setAppState for child components (Photos navigation)
+    // Keep the URL in sync with the auth state so /login and /dashboard are real,
+    // shareable, SEO-distinct routes — and a logged-in user is moved off /login
+    // onto /dashboard instead of lingering there.
     useEffect(() => {
-        window.__setAppState = setAppState;
-        return () => { delete window.__setAppState; };
-    }, [setAppState]);
+        if (!isAppDomain) return;
+        const desired = appState === 'dashboard' ? '/dashboard'
+            : (appState === 'auth' || appState === 'onboard') ? '/login'
+            : null;
+        if (desired && window.location.pathname !== desired) {
+            window.history.replaceState({}, '', desired);
+        }
+    }, [appState]);
 
-    if (appState === 'loading') return <FullScreenLoader message="Initializing App..." />;
+    const handleLaunchApp = () => {
+        if (!isAppDomain) window.location.href = 'https://drive.daemonclient.uz';
+        else setAppState('auth');
+    };
 
-    // THE ROUTING LOGIC
+    if (appState === 'loading') return <FullScreenLoader message="Loading your vault…" />;
+
     switch (appState) {
         case 'landing':
             return <LandingPage onLaunchApp={handleLaunchApp} />;
         case 'auth':
             return <AuthView />;
-        case 'setup':
-            return <SetupView onSetupComplete={handleSetupComplete} />;
-        case 'transfer':
-            return <OwnershipView onOwnershipConfirmed={handleOwnershipConfirmed} />;
+        case 'onboard':
+            return <NeedsOnboardingView />;
         case 'dashboard':
             return <DashboardView />;
         default:
