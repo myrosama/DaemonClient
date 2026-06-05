@@ -1,9 +1,15 @@
-# Allow social media access og Tags
 User-agent: *
+# Landing page and key public pages
+Allow: /$
+Allow: /sitemap.xml
+Allow: /photos/
+
+# Block private app routes and build assets
+Disallow: /api/
+Disallow: /_app/
+
+# Allow social sharing pages
 Allow: /share/
 Allow: /s/
-Allow: /api/assets/
 
-# https://www.robotstxt.org/robotstxt.html
-User-agent: *
-Disallow: /
+Sitemap: https://photos.daemonclient.uz/sitemap.xml

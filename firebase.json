@@ -110,10 +110,22 @@
         "**/.*",
         "**/node_modules/**"
       ],
+      "redirects": [
+        {
+          "source": "/signup",
+          "destination": "https://accounts.daemonclient.uz/signup?continue=https://photos.daemonclient.uz",
+          "type": 302
+        },
+        {
+          "source": "/dashboard",
+          "destination": "/photos",
+          "type": 302
+        }
+      ],
       "rewrites": [
         {
           "source": "**",
-          "destination": "/index.html"
+          "destination": "/app.html"
         }
       ],
       "cleanUrls": true,

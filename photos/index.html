@@ -4,7 +4,153 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>DaemonClient Photos — Unlimited Private Photo Backup</title>
-  <meta name="description" content="Unlimited, post-quantum encrypted photo and video backup for free. Your memories, on storage you own." />
+  <meta name="description" content="Unlimited, end-to-end encrypted photo and video backup. Free forever — your memories on storage you own, powered by Telegram + Cloudflare." />
+
+  <!-- Canonical + SEO -->
+  <link rel="canonical" href="https://photos.daemonclient.uz/" />
+  <meta name="robots" content="index, follow" />
+
+  <!-- Open Graph -->
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://photos.daemonclient.uz/" />
+  <meta property="og:site_name" content="DaemonClient Photos" />
+  <meta property="og:title" content="DaemonClient Photos — Unlimited Private Photo Backup" />
+  <meta property="og:description" content="Unlimited, end-to-end encrypted photo and video backup. Free forever — your memories on storage you own." />
+  <meta property="og:image" content="https://photos.daemonclient.uz/photos/immich-screenshot.webp" />
+  <meta property="og:image:width" content="1280" />
+  <meta property="og:image:height" content="800" />
+
+  <!-- Twitter Card -->
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="DaemonClient Photos — Unlimited Private Photo Backup" />
+  <meta name="twitter:description" content="Unlimited, end-to-end encrypted photo and video backup. Free forever." />
+  <meta name="twitter:image" content="https://photos.daemonclient.uz/photos/immich-screenshot.webp" />
+
+  <!-- Favicons -->
+  <link rel="icon" type="image/x-icon" href="/favicon.ico" />
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+  <link rel="apple-touch-icon" sizes="180x180" href="/apple-icon-180.png" />
+  <link rel="manifest" href="/manifest.json" />
+  <link rel="sitemap" type="application/xml" href="/sitemap.xml" />
+
+  <!-- Structured data -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "Organization",
+        "@id": "https://daemonclient.uz/#organization",
+        "name": "DaemonClient",
+        "url": "https://daemonclient.uz",
+        "logo": {
+          "@type": "ImageObject",
+          "url": "https://photos.daemonclient.uz/photos/logo.png"
+        },
+        "sameAs": [
+          "https://github.com/myrosama/DaemonClient",
+          "https://t.me/daemonclient"
+        ]
+      },
+      {
+        "@type": "WebSite",
+        "@id": "https://photos.daemonclient.uz/#website",
+        "name": "DaemonClient Photos",
+        "url": "https://photos.daemonclient.uz",
+        "description": "Unlimited, end-to-end encrypted photo and video backup. Free forever — your memories on storage you own.",
+        "publisher": {"@id": "https://daemonclient.uz/#organization"},
+        "potentialAction": {
+          "@type": "SearchAction",
+          "target": {
+            "@type": "EntryPoint",
+            "urlTemplate": "https://photos.daemonclient.uz/photos?query={search_term_string}"
+          },
+          "query-input": "required name=search_term_string"
+        }
+      },
+      {
+        "@type": "SoftwareApplication",
+        "@id": "https://photos.daemonclient.uz/#app",
+        "name": "DaemonClient Photos",
+        "applicationCategory": "UtilitiesApplication",
+        "operatingSystem": "Web, iOS, Android",
+        "description": "Zero-knowledge encrypted unlimited photo backup using Telegram and Cloudflare — free forever.",
+        "url": "https://photos.daemonclient.uz",
+        "offers": {
+          "@type": "Offer",
+          "price": "0",
+          "priceCurrency": "USD"
+        },
+        "publisher": {"@id": "https://daemonclient.uz/#organization"},
+        "screenshot": "https://photos.daemonclient.uz/photos/immich-screenshot.webp"
+      },
+      {
+        "@type": "WebPage",
+        "@id": "https://photos.daemonclient.uz/#webpage",
+        "name": "DaemonClient Photos — Unlimited Private Photo Backup",
+        "url": "https://photos.daemonclient.uz/",
+        "isPartOf": {"@id": "https://photos.daemonclient.uz/#website"},
+        "about": {"@id": "https://photos.daemonclient.uz/#app"},
+        "breadcrumb": {
+          "@type": "BreadcrumbList",
+          "itemListElement": [
+            {"@type": "ListItem", "position": 1, "name": "DaemonClient Photos", "item": "https://photos.daemonclient.uz/"}
+          ]
+        }
+      },
+      {
+        "@type": "ItemList",
+        "@id": "https://photos.daemonclient.uz/#nav",
+        "name": "Site Navigation",
+        "itemListElement": [
+          {"@type": "SiteNavigationElement", "position": 1, "name": "Open gallery", "url": "https://photos.daemonclient.uz/photos"},
+          {"@type": "SiteNavigationElement", "position": 2, "name": "Sign in", "url": "https://photos.daemonclient.uz/login"},
+          {"@type": "SiteNavigationElement", "position": 3, "name": "Create free account", "url": "https://photos.daemonclient.uz/signup"},
+          {"@type": "SiteNavigationElement", "position": 4, "name": "How it works", "url": "https://photos.daemonclient.uz/#how-it-works"},
+          {"@type": "SiteNavigationElement", "position": 5, "name": "Download", "url": "https://photos.daemonclient.uz/#download"},
+          {"@type": "SiteNavigationElement", "position": 6, "name": "FAQ", "url": "https://photos.daemonclient.uz/#faq"}
+        ]
+      },
+      {
+        "@type": "FAQPage",
+        "@id": "https://photos.daemonclient.uz/#faq",
+        "mainEntity": [
+          {
+            "@type": "Question",
+            "name": "How secure is my data?",
+            "acceptedAnswer": {"@type": "Answer", "text": "All data is encrypted with zero-knowledge AES-GCM encryption — not even our developers can access your photos. Your encryption key never leaves your device. Only you can decrypt your library."}
+          },
+          {
+            "@type": "Question",
+            "name": "How does DaemonClient Photos provide free storage?",
+            "acceptedAnswer": {"@type": "Answer", "text": "DaemonClient Photos uses Telegram's infrastructure and Cloudflare's free tier. You set up a private Telegram channel, a Telegram bot, and a Cloudflare Worker with a D1 database. Your media lives in your own Telegram channel with virtually unlimited storage, and Cloudflare handles the API layer — both completely free, no credit card required."}
+          },
+          {
+            "@type": "Question",
+            "name": "Is DaemonClient Photos open source?",
+            "acceptedAnswer": {"@type": "Answer", "text": "Yes. Every line of code that handles your photos is publicly available on GitHub. You can audit it, fork it, or self-host it entirely without any involvement from us."}
+          },
+          {
+            "@type": "Question",
+            "name": "Is there really no storage limit?",
+            "acceptedAnswer": {"@type": "Answer", "text": "No limit. Telegram provides virtually unlimited media storage per channel, and Cloudflare's free tier covers the database and API with generous allowances. We've had users store tens of thousands of photos with no issues."}
+          },
+          {
+            "@type": "Question",
+            "name": "What happens to my photos if DaemonClient shuts down?",
+            "acceptedAnswer": {"@type": "Answer", "text": "Your photos live in your own Telegram channel and Cloudflare account — DaemonClient never holds them. Even if we disappeared tomorrow, your library stays fully intact and accessible through Telegram directly."}
+          },
+          {
+            "@type": "Question",
+            "name": "Which devices are supported?",
+            "acceptedAnswer": {"@type": "Answer", "text": "You can access your full library from any browser on Windows, Mac, or Linux. The mobile app (powered by Immich) supports iOS and Android with automatic background backup."}
+          }
+        ]
+      }
+    ]
+  }
+  </script>
+
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&display=swap" rel="stylesheet" />
@@ -187,7 +333,6 @@
     .vis-field{background:rgba(255,255,255,.06);border:1px solid var(--bs);
       border-radius:8px;padding:10px 14px;font-size:12px;color:var(--mu)}
     .vis-field.active{border-color:var(--br);color:var(--tx)}
-    .vis-field.active::after{content:''}
     .vis-btn-mock{margin-top:auto;background:var(--em);color:#fff;
       border-radius:8px;padding:10px 14px;font-size:12px;font-weight:500;
       text-align:center}
@@ -341,121 +486,114 @@
 <body>
 
 <!-- ═══════════════════════════════ NAV -->
-<nav class="nav" id="mainNav">
-  <a href="#" class="nav-brand">
-    <img src="photos/logo.png" alt="DaemonClient" />
+<nav class="nav" id="mainNav" aria-label="Main navigation">
+  <a href="/" class="nav-brand">
+    <img src="/photos/logo.png" alt="DaemonClient" width="26" height="26" />
     <span class="nav-brand-name">DaemonClient&nbsp;<b>Photos</b></span>
   </a>
   <ul class="nav-links">
     <li><a href="#how-it-works">How it works</a></li>
     <li><a href="#download">Download</a></li>
     <li><a href="#faq">FAQ</a></li>
+    <li><a href="/photos">Open gallery</a></li>
   </ul>
   <div class="nav-end">
-    <a href="https://accounts.daemonclient.uz/login" class="btn-ghost">Sign in</a>
-    <a href="https://accounts.daemonclient.uz/signup" class="btn-green">Create free account</a>
-    <button class="nav-toggle" id="navToggle" aria-label="Menu">
+    <a href="/login" class="btn-ghost">Sign in</a>
+    <a href="/signup" class="btn-green">Create free account</a>
+    <button class="nav-toggle" id="navToggle" aria-label="Menu" aria-expanded="false">
       <span></span><span></span><span></span>
     </button>
   </div>
 </nav>
 
-<div class="nav-mobile" id="navMobile">
+<div class="nav-mobile" id="navMobile" aria-hidden="true">
   <a href="#how-it-works" class="nav-mobile-link">How it works</a>
   <a href="#download" class="nav-mobile-link">Download</a>
   <a href="#faq" class="nav-mobile-link">FAQ</a>
+  <a href="/photos" class="nav-mobile-link">Open gallery</a>
   <div class="nav-mobile-btns">
-    <a href="https://accounts.daemonclient.uz/login">Sign in</a>
-    <a href="https://accounts.daemonclient.uz/signup">Create free account</a>
+    <a href="/login">Sign in</a>
+    <a href="/signup">Create free account</a>
   </div>
 </div>
 
 <!-- ═══════════════════════════════ HERO -->
-<section>
+<section aria-labelledby="hero-heading">
   <div class="hero">
 
     <!-- Left: content -->
     <div class="hero-content">
-      <h1><em>Unlimited.</em>Photo &amp; Video Storage for Free</h1>
+      <h1 id="hero-heading"><em>Unlimited.</em>Photo &amp; Video Storage for Free</h1>
       <p class="hero-sub">
         DaemonClient Photos gives you unlimited,&nbsp;<span class="pq">post-quantum&nbsp;encrypted</span>&nbsp;photo and video backup for free. No subscriptions, no limits — your memories stay yours, forever.
       </p>
       <div class="hero-ctas">
-        <a href="#download" class="btn-hero primary">
-          Download
-          <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M7.5 2v8M4 7l3.5 4L11 7"/><path d="M2 13h11"/></svg>
+        <a href="/signup" class="btn-hero primary">
+          Get started free
+          <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 7.5h11M8 3.5l4 4-4 4"/></svg>
         </a>
-        <a href="#how-it-works" class="btn-hero outline">
-          <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M7.5 2v11M3 9l4.5 4.5L12 9"/></svg>
-          See how it works
+        <a href="/photos" class="btn-hero outline">
+          <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="11" height="9" rx="1.5"/><path d="M2 9l3-3 3 3 2-2 3 3"/></svg>
+          Open gallery
         </a>
       </div>
     </div>
 
     <!-- Right: living photo grid -->
     <div class="pgrid-wrap">
-      <div class="pgrid-glow"></div>
+      <div class="pgrid-glow" aria-hidden="true"></div>
       <p class="pgrid-label">Your timeline &middot; encrypted</p>
 
-      <div class="pgrid">
-        <!-- 1: tall — Milan night -->
+      <div class="pgrid" aria-label="Sample encrypted photo timeline">
         <div class="pt" style="animation-delay:.04s">
-          <img src="photos/milan-night.jpg" alt="City at night" loading="eager" />
+          <img src="/photos/milan-night.jpg" alt="City at night" loading="eager" />
         </div>
-        <!-- 2: dove -->
         <div class="pt" style="animation-delay:.12s">
-          <img src="photos/white-dove.jpg" alt="White dove" loading="eager" />
+          <img src="/photos/white-dove.jpg" alt="White dove" loading="eager" />
         </div>
-        <!-- 3: encrypted — calico cat -->
         <div class="pt enc" style="animation-delay:.20s">
-          <img src="photos/cat-sleeping.jpg" alt="Cat sleeping" loading="eager" />
-          <div class="enc-lock">
-            <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="5.5" width="8" height="5.5" rx="1.2"/><path d="M4 5.5V4a2 2 0 0 1 4 0v1.5"/></svg>
+          <img src="/photos/cat-sleeping.jpg" alt="Cat sleeping" loading="eager" />
+          <div class="enc-lock" aria-label="End-to-end encrypted">
+            <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><rect x="2" y="5.5" width="8" height="5.5" rx="1.2"/><path d="M4 5.5V4a2 2 0 0 1 4 0v1.5"/></svg>
             <span>E2E</span>
           </div>
-          <div class="enc-shimmer"></div>
+          <div class="enc-shimmer" aria-hidden="true"></div>
         </div>
-        <!-- 4: retriever -->
         <div class="pt" style="animation-delay:.16s">
-          <img src="photos/golden-retriever.jpg" alt="Golden retriever" loading="eager" />
+          <img src="/photos/golden-retriever.jpg" alt="Golden retriever" loading="eager" />
         </div>
-        <!-- 5: two cats -->
         <div class="pt" style="animation-delay:.24s">
-          <img src="photos/two-cats.jpg" alt="Two cats" loading="eager" />
+          <img src="/photos/two-cats.jpg" alt="Two cats" loading="eager" />
         </div>
-        <!-- 6: fireplace cat -->
         <div class="pt" style="animation-delay:.10s">
-          <img src="photos/cat-fireplace.jpg" alt="Cat by fireplace" loading="eager" />
+          <img src="/photos/cat-fireplace.jpg" alt="Cat by fireplace" loading="eager" />
         </div>
-        <!-- 7: wide encrypted — sunset -->
         <div class="pt enc" style="animation-delay:.28s">
-          <img src="photos/sunset.jpg" alt="Sunset sky" loading="eager" />
-          <div class="enc-lock">
+          <img src="/photos/sunset.jpg" alt="Sunset sky" loading="eager" />
+          <div class="enc-lock" aria-hidden="true">
             <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="5.5" width="8" height="5.5" rx="1.2"/><path d="M4 5.5V4a2 2 0 0 1 4 0v1.5"/></svg>
           </div>
-          <div class="enc-shimmer" style="animation-delay:2s"></div>
+          <div class="enc-shimmer" style="animation-delay:2s" aria-hidden="true"></div>
         </div>
-        <!-- 8: wide — Heidelberg bridge -->
         <div class="pt" style="animation-delay:.18s">
-          <img src="photos/heidelberg-bridge.jpg" alt="Stone bridge" loading="eager" />
+          <img src="/photos/heidelberg-bridge.jpg" alt="Stone bridge" loading="eager" />
         </div>
-        <!-- 9: cat on sofa -->
         <div class="pt" style="animation-delay:.34s">
-          <img src="photos/cat-sofa.jpg" alt="Cat on sofa" loading="eager" />
+          <img src="/photos/cat-sofa.jpg" alt="Cat on sofa" loading="eager" />
         </div>
       </div>
 
-      <div class="pgrid-stats">
+      <div class="pgrid-stats" aria-label="Storage statistics">
         <div class="pgrid-stat">
-          <div class="pstat-dot"></div>
+          <div class="pstat-dot" aria-hidden="true"></div>
           <strong>12,847</strong>&nbsp;photos
         </div>
         <div class="pgrid-stat">
-          <div class="pstat-dot" style="background:rgba(52,211,153,.5)"></div>
+          <div class="pstat-dot" style="background:rgba(52,211,153,.5)" aria-hidden="true"></div>
           <strong>2.1 TB</strong>&nbsp;backed up
         </div>
         <div class="pgrid-stat">
-          <div class="pstat-dot" style="background:rgba(16,185,129,.45)"></div>
+          <div class="pstat-dot" style="background:rgba(16,185,129,.45)" aria-hidden="true"></div>
           All&nbsp;<strong>encrypted</strong>
         </div>
       </div>
@@ -465,11 +603,11 @@
 </section>
 
 <!-- ═══════════════════════════════ HOW IT WORKS -->
-<section id="how-it-works">
+<section id="how-it-works" aria-labelledby="hiw-heading">
   <div class="hiw-wrap">
     <div class="rv">
       <p class="s-label">How it works</p>
-      <h2 class="s-title">Up and running<br />in three steps.</h2>
+      <h2 class="s-title" id="hiw-heading">Up and running<br />in three steps.</h2>
       <p class="s-sub">Get your private photo library running in minutes — no technical expertise required.</p>
     </div>
 
@@ -477,28 +615,28 @@
 
       <!-- Step 1 -->
       <div class="hiw-card rv d1">
-        <div class="hiw-visual">
+        <div class="hiw-visual" aria-hidden="true">
           <div class="vis-form">
             <div class="vis-field">Your name</div>
-            <div class="vis-field active"><a href="/cdn-cgi/l/email-protection" class="__cf_email__" data-cfemail="2851475d5a684d45494144064b4745">[email&#160;protected]</a><span style="display:inline-block;width:6px;height:12px;background:var(--ac);opacity:.8;animation:blink 1.1s step-end infinite;vertical-align:text-bottom;margin-left:2px"></span></div>
+            <div class="vis-field active">you@example.com<span style="display:inline-block;width:6px;height:12px;background:var(--ac);opacity:.8;animation:blink 1.1s step-end infinite;vertical-align:text-bottom;margin-left:2px"></span></div>
             <div class="vis-field" style="letter-spacing:.1em;color:rgba(138,147,166,.5)">••••••••</div>
             <div class="vis-btn-mock">Create free account</div>
           </div>
         </div>
         <div class="hiw-body">
-          <div class="hiw-num">1</div>
+          <div class="hiw-num" aria-hidden="true">1</div>
           <h3>Create your DaemonClient account</h3>
           <p>Sign up in seconds — your account is the key to everything. Free, always.</p>
-          <a href="https://accounts.daemonclient.uz/signup" class="hiw-cta">
+          <a href="/signup" class="hiw-cta">
             Create free account
-            <svg viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 6.5h9M7 2.5l4 4-4 4"/></svg>
+            <svg viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 6.5h9M7 2.5l4 4-4 4"/></svg>
           </a>
         </div>
       </div>
 
       <!-- Step 2 -->
       <div class="hiw-card rv d2">
-        <div class="hiw-visual">
+        <div class="hiw-visual" aria-hidden="true">
           <div class="vis-terminal">
             <div class="vis-term-bar">
               <div class="vis-dot r"></div>
@@ -520,7 +658,7 @@
           </div>
         </div>
         <div class="hiw-body">
-          <div class="hiw-num">2</div>
+          <div class="hiw-num" aria-hidden="true">2</div>
           <h3>Set up your free backend</h3>
           <p>Deploy DaemonClient Photos on your own server with one command. Your storage, your rules.</p>
         </div>
@@ -528,14 +666,14 @@
 
       <!-- Step 3 -->
       <div class="hiw-card rv d3">
-        <div class="hiw-visual" style="position:relative">
+        <div class="hiw-visual" style="position:relative" aria-hidden="true">
           <div class="vis-grid">
-            <div class="vis-tile tall"><img src="photos/milan-night.jpg" alt="" /></div>
-            <div class="vis-tile"><img src="photos/white-dove.jpg" alt="" /></div>
-            <div class="vis-tile"><img src="photos/sunset.jpg" alt="" /></div>
-            <div class="vis-tile"><img src="photos/golden-retriever.jpg" alt="" /></div>
-            <div class="vis-tile"><img src="photos/two-cats.jpg" alt="" /></div>
-            <div class="vis-tile"><img src="photos/cat-sofa.jpg" alt="" /></div>
+            <div class="vis-tile tall"><img src="/photos/milan-night.jpg" alt="" /></div>
+            <div class="vis-tile"><img src="/photos/white-dove.jpg" alt="" /></div>
+            <div class="vis-tile"><img src="/photos/sunset.jpg" alt="" /></div>
+            <div class="vis-tile"><img src="/photos/golden-retriever.jpg" alt="" /></div>
+            <div class="vis-tile"><img src="/photos/two-cats.jpg" alt="" /></div>
+            <div class="vis-tile"><img src="/photos/cat-sofa.jpg" alt="" /></div>
           </div>
           <div class="vis-done">
             <svg viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M2 6.5l3 3 6-6"/></svg>
@@ -543,7 +681,7 @@
           </div>
         </div>
         <div class="hiw-body">
-          <div class="hiw-num">3</div>
+          <div class="hiw-num" aria-hidden="true">3</div>
           <h3>Done — photos back up automatically</h3>
           <p>Sign in from any device and every new photo backs up instantly, encrypted before it leaves your phone.</p>
         </div>
@@ -554,17 +692,17 @@
 </section>
 
 <!-- ═══════════════════════════════ DOWNLOAD -->
-<section id="download">
+<section id="download" aria-labelledby="dl-heading">
   <div class="dl-wrap">
     <div class="rv">
       <p class="s-label">Download</p>
-      <h2 class="s-title">Access your gallery from everywhere.</h2>
+      <h2 class="s-title" id="dl-heading">Access your gallery from everywhere.</h2>
       <p class="s-sub">Browser, iPhone, Android — your entire library, always with you.</p>
     </div>
 
     <div class="rv d1">
       <div class="immich-frame">
-        <img src="photos/immich-screenshot.webp" alt="DaemonClient Photos — web and mobile interface" />
+        <img src="/photos/immich-screenshot.webp" alt="DaemonClient Photos — web and mobile interface showing a photo timeline" />
       </div>
       <p class="dl-note">
         DaemonClient Photos uses the&nbsp;<a href="https://immich.app" target="_blank" rel="noopener">Immich</a>&nbsp;mobile app.
@@ -575,7 +713,7 @@
     <div class="dl-btns rv d2">
       <!-- App Store -->
       <a href="https://apps.apple.com/us/app/immich/id1613945652" target="_blank" rel="noopener" class="store-btn dark">
-        <svg width="22" height="22" viewBox="0 0 22 22" fill="currentColor"><path d="M17.05 14.73c-.33.73-.49 1.06-.92 1.7-.6.89-1.44 2-2.48 2.01-.93.01-1.17-.6-2.43-.59-1.26.01-1.53.61-2.46.6-1.04-.01-1.83-1-2.43-1.89C4.62 14.6 4.1 11.77 5.14 10.2c.73-1.12 1.88-1.78 2.97-1.78 1.1 0 1.8.6 2.71.6.89 0 1.43-.6 2.71-.6 1 0 2.02.54 2.74 1.49-.24.14-1.74.98-1.72 2.93.02 1.85 1.6 2.57 1.5 2.89zM13.19 4.18c.47-.58.82-1.4.69-2.18-.7.05-1.52.49-2.01 1.07-.44.53-.83 1.35-.68 2.15.76.02 1.54-.44 2-.04z"/></svg>
+        <svg width="22" height="22" viewBox="0 0 22 22" fill="currentColor" aria-hidden="true"><path d="M17.05 14.73c-.33.73-.49 1.06-.92 1.7-.6.89-1.44 2-2.48 2.01-.93.01-1.17-.6-2.43-.59-1.26.01-1.53.61-2.46.6-1.04-.01-1.83-1-2.43-1.89C4.62 14.6 4.1 11.77 5.14 10.2c.73-1.12 1.88-1.78 2.97-1.78 1.1 0 1.8.6 2.71.6.89 0 1.43-.6 2.71-.6 1 0 2.02.54 2.74 1.49-.24.14-1.74.98-1.72 2.93.02 1.85 1.6 2.57 1.5 2.89zM13.19 4.18c.47-.58.82-1.4.69-2.18-.7.05-1.52.49-2.01 1.07-.44.53-.83 1.35-.68 2.15.76.02 1.54-.44 2-.04z"/></svg>
         <div class="store-btn-label">
           <span class="store-btn-sub">Download on the</span>
           <span class="store-btn-name">App Store</span>
@@ -584,7 +722,7 @@
 
       <!-- Google Play -->
       <a href="https://play.google.com/store/apps/details?id=app.alextran.immich&pli=1" target="_blank" rel="noopener" class="store-btn dark">
-        <svg width="22" height="22" viewBox="0 0 22 22"><path d="M3.18 2.1a1 1 0 0 0-.68.93v15.94a1 1 0 0 0 .68.93l.08.04 8.93-8.93v-.03L3.26 2.06l-.08.04z" fill="#4285F4"/><path d="M15.16 14.04l-2.97-2.98v-.03l2.97-2.97.07.04 3.52 2a1 1 0 0 1 0 1.9l-3.52 2-.07.04z" fill="#FBBC04"/><path d="M15.23 14l-2.04 2.04-8.93 8.93c.32.22.74.25 1.1.06L15.23 14z" fill="#EA4335"/><path d="M15.23 8l-9.87-5.83a.96.96 0 0 0-1.1.06l8.93 8.93L15.23 8z" fill="#34A853"/></svg>
+        <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><path d="M3.18 2.1a1 1 0 0 0-.68.93v15.94a1 1 0 0 0 .68.93l.08.04 8.93-8.93v-.03L3.26 2.06l-.08.04z" fill="#4285F4"/><path d="M15.16 14.04l-2.97-2.98v-.03l2.97-2.97.07.04 3.52 2a1 1 0 0 1 0 1.9l-3.52 2-.07.04z" fill="#FBBC04"/><path d="M15.23 14l-2.04 2.04-8.93 8.93c.32.22.74.25 1.1.06L15.23 14z" fill="#EA4335"/><path d="M15.23 8l-9.87-5.83a.96.96 0 0 0-1.1.06l8.93 8.93L15.23 8z" fill="#34A853"/></svg>
         <div class="store-btn-label">
           <span class="store-btn-sub">Get it on</span>
           <span class="store-btn-name">Google Play</span>
@@ -592,8 +730,8 @@
       </a>
 
       <!-- Web App -->
-      <a href="https://photos.daemonclient.uz" target="_blank" rel="noopener" class="store-btn green">
-        <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="10" r="8"/><path d="M10 2c-2.5 2.5-4 5.1-4 8s1.5 5.5 4 8M10 2c2.5 2.5 4 5.1 4 8s-1.5 5.5-4 8M2 10h16"/></svg>
+      <a href="/photos" class="store-btn green">
+        <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="10" cy="10" r="8"/><path d="M10 2c-2.5 2.5-4 5.1-4 8s1.5 5.5 4 8M10 2c2.5 2.5 4 5.1 4 8s-1.5 5.5-4 8M2 10h16"/></svg>
         <div class="store-btn-label">
           <span class="store-btn-sub">Open in browser</span>
           <span class="store-btn-name">Web App</span>
@@ -604,66 +742,66 @@
 </section>
 
 <!-- ═══════════════════════════════ FAQ -->
-<section id="faq">
+<section id="faq" aria-labelledby="faq-heading">
   <div class="faq-wrap">
     <div class="rv">
       <p class="s-label">FAQ</p>
-      <h2 class="s-title">Common questions.</h2>
+      <h2 class="s-title" id="faq-heading">Common questions.</h2>
     </div>
     <div class="faq-list rv d1">
 
       <div class="faq-item">
-        <div class="faq-q">
+        <div class="faq-q" role="button" tabindex="0" aria-expanded="false">
           <span class="faq-q-text">How secure is my data?</span>
-          <div class="faq-icon"><svg width="11" height="11" viewBox="0 0 11 11" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5.5 1v9M1 5.5h9"/></svg></div>
+          <div class="faq-icon" aria-hidden="true"><svg width="11" height="11" viewBox="0 0 11 11" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5.5 1v9M1 5.5h9"/></svg></div>
         </div>
         <div class="faq-a">All data is encrypted with zero-knowledge <strong>AES-GCM encryption</strong> — not even our developers can access your photos. Your encryption key never leaves your device. Only you can decrypt your library.</div>
       </div>
 
       <div class="faq-item">
-        <div class="faq-q">
+        <div class="faq-q" role="button" tabindex="0" aria-expanded="false">
           <span class="faq-q-text">How does the app provide free storage?</span>
-          <div class="faq-icon"><svg width="11" height="11" viewBox="0 0 11 11" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5.5 1v9M1 5.5h9"/></svg></div>
+          <div class="faq-icon" aria-hidden="true"><svg width="11" height="11" viewBox="0 0 11 11" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5.5 1v9M1 5.5h9"/></svg></div>
         </div>
         <div class="faq-a">DaemonClient Photos uses <a href="https://en.wikipedia.org/wiki/Telegram_(software)" target="_blank" rel="noopener">Telegram's</a> infrastructure and Cloudflare's free tier as the backend. You set up a private Telegram channel, a Telegram bot, and a Cloudflare Worker with a D1 database. Your media lives in Telegram's servers (virtually unlimited storage per channel), and Cloudflare handles the API layer — both completely free, no credit card required.</div>
       </div>
 
       <div class="faq-item">
-        <div class="faq-q">
+        <div class="faq-q" role="button" tabindex="0" aria-expanded="false">
           <span class="faq-q-text">Is DaemonClient Photos open source?</span>
-          <div class="faq-icon"><svg width="11" height="11" viewBox="0 0 11 11" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5.5 1v9M1 5.5h9"/></svg></div>
+          <div class="faq-icon" aria-hidden="true"><svg width="11" height="11" viewBox="0 0 11 11" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5.5 1v9M1 5.5h9"/></svg></div>
         </div>
-        <div class="faq-a">Yes. Every line of code that handles your photos is publicly available on GitHub. You can audit it, fork it, or self-host it entirely without any involvement from us.</div>
+        <div class="faq-a">Yes. Every line of code that handles your photos is publicly available on <a href="https://github.com/myrosama/DaemonClient" target="_blank" rel="noopener">GitHub</a>. You can audit it, fork it, or self-host it entirely without any involvement from us.</div>
       </div>
 
       <div class="faq-item">
-        <div class="faq-q">
+        <div class="faq-q" role="button" tabindex="0" aria-expanded="false">
           <span class="faq-q-text">Do I need technical skills to set it up?</span>
-          <div class="faq-icon"><svg width="11" height="11" viewBox="0 0 11 11" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5.5 1v9M1 5.5h9"/></svg></div>
+          <div class="faq-icon" aria-hidden="true"><svg width="11" height="11" viewBox="0 0 11 11" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5.5 1v9M1 5.5h9"/></svg></div>
         </div>
         <div class="faq-a">Not much. Our step-by-step setup guide uses copy-paste commands and a browser-based dashboard for the Cloudflare and Telegram configuration. Most users are fully set up in under 15 minutes.</div>
       </div>
 
       <div class="faq-item">
-        <div class="faq-q">
+        <div class="faq-q" role="button" tabindex="0" aria-expanded="false">
           <span class="faq-q-text">What happens to my photos if DaemonClient shuts down?</span>
-          <div class="faq-icon"><svg width="11" height="11" viewBox="0 0 11 11" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5.5 1v9M1 5.5h9"/></svg></div>
+          <div class="faq-icon" aria-hidden="true"><svg width="11" height="11" viewBox="0 0 11 11" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5.5 1v9M1 5.5h9"/></svg></div>
         </div>
         <div class="faq-a">Your photos live in your own Telegram channel and Cloudflare account — DaemonClient never holds them. Even if we disappeared tomorrow, your library stays fully intact and accessible through Telegram directly.</div>
       </div>
 
       <div class="faq-item">
-        <div class="faq-q">
+        <div class="faq-q" role="button" tabindex="0" aria-expanded="false">
           <span class="faq-q-text">Which devices are supported?</span>
-          <div class="faq-icon"><svg width="11" height="11" viewBox="0 0 11 11" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5.5 1v9M1 5.5h9"/></svg></div>
+          <div class="faq-icon" aria-hidden="true"><svg width="11" height="11" viewBox="0 0 11 11" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5.5 1v9M1 5.5h9"/></svg></div>
         </div>
         <div class="faq-a">You can access your full library from any browser on Windows, Mac, or Linux. The mobile app (powered by Immich) supports iOS and Android with automatic background backup.</div>
       </div>
 
       <div class="faq-item">
-        <div class="faq-q">
+        <div class="faq-q" role="button" tabindex="0" aria-expanded="false">
           <span class="faq-q-text">Is there really no storage limit?</span>
-          <div class="faq-icon"><svg width="11" height="11" viewBox="0 0 11 11" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5.5 1v9M1 5.5h9"/></svg></div>
+          <div class="faq-icon" aria-hidden="true"><svg width="11" height="11" viewBox="0 0 11 11" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5.5 1v9M1 5.5h9"/></svg></div>
         </div>
         <div class="faq-a">No limit. <a href="https://en.wikipedia.org/wiki/Telegram_(software)" target="_blank" rel="noopener">Telegram</a> provides virtually unlimited media storage per channel, and Cloudflare's free tier covers the database and API with generous allowances. We've had users store tens of thousands of photos with no issues.</div>
       </div>
@@ -675,41 +813,57 @@
 <!-- ═══════════════════════════════ FOOTER -->
 <footer>
   <div class="footer-row">
-    <a href="https://daemonclient.uz" class="footer-brand">
-      <img src="photos/logo.png" alt="DaemonClient" />
+    <a href="/" class="footer-brand">
+      <img src="/photos/logo.png" alt="DaemonClient" width="19" height="19" />
       <span>DaemonClient</span>
     </a>
     <ul class="footer-links">
       <li><a href="https://daemonclient.uz">DaemonClient.uz</a></li>
-      <li><a href="#">Drive</a></li>
-      <li><a href="#">Photos</a></li>
-      <li><a href="#">Privacy policy</a></li>
+      <li><a href="https://drive.daemonclient.uz">Drive</a></li>
+      <li><a href="/">Photos</a></li>
+      <li><a href="https://github.com/myrosama/DaemonClient" target="_blank" rel="noopener">GitHub</a></li>
     </ul>
     <span class="footer-copy">&copy; 2025 DaemonClient</span>
   </div>
 </footer>
 
-<script data-cfasync="false" src="/cdn-cgi/scripts/5c5dd728/cloudflare-static/email-decode.min.js"></script><script>
-  // Nav scroll
+<script>
+  // Nav scroll effect
   const nav = document.getElementById('mainNav');
   window.addEventListener('scroll', () => {
     nav.classList.toggle('scrolled', window.scrollY > 20);
   }, { passive: true });
 
-  // Mobile nav
+  // Mobile nav toggle
   const toggle = document.getElementById('navToggle');
   const mobile = document.getElementById('navMobile');
-  toggle.addEventListener('click', () => mobile.classList.toggle('open'));
-  mobile.querySelectorAll('a').forEach(a => a.addEventListener('click', () => mobile.classList.remove('open')));
+  toggle.addEventListener('click', () => {
+    const open = mobile.classList.toggle('open');
+    toggle.setAttribute('aria-expanded', open);
+    mobile.setAttribute('aria-hidden', !open);
+  });
+  mobile.querySelectorAll('a').forEach(a => a.addEventListener('click', () => {
+    mobile.classList.remove('open');
+    toggle.setAttribute('aria-expanded', 'false');
+    mobile.setAttribute('aria-hidden', 'true');
+  }));
 
   // FAQ accordion
   document.querySelectorAll('.faq-q').forEach(q => {
-    q.addEventListener('click', () => {
+    const activate = () => {
       const item = q.closest('.faq-item');
       const wasOpen = item.classList.contains('open');
-      document.querySelectorAll('.faq-item.open').forEach(i => i.classList.remove('open'));
-      if (!wasOpen) item.classList.add('open');
-    });
+      document.querySelectorAll('.faq-item.open').forEach(i => {
+        i.classList.remove('open');
+        i.querySelector('.faq-q').setAttribute('aria-expanded', 'false');
+      });
+      if (!wasOpen) {
+        item.classList.add('open');
+        q.setAttribute('aria-expanded', 'true');
+      }
+    };
+    q.addEventListener('click', activate);
+    q.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); activate(); } });
   });
 
   // Scroll reveal
