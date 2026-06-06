@@ -281,19 +281,30 @@
           />
         </div>
       {:else if asset.isImage && asset.livePhotoVideoId}
-        <!-- Live Photo: Show static image thumbnail, not video -->
+        <!-- Live Photo: play companion video on hover, static image otherwise -->
         <div class="absolute h-full w-full pointer-events-none">
-          <ImageThumbnail
-            class={imageClass}
-            {brokenAssetClass}
-            url={getAssetMediaUrl({ id: asset.id, size: AssetMediaSize.Thumbnail, cacheKey: asset.thumbhash })}
-            altText={$getAltText(asset)}
-            widthStyle="{width}px"
-            heightStyle="{height}px"
-            curve={selected}
-            asset={asset}
-            preload={false}
-          />
+          {#if mouseOver && !usingMobileDevice}
+            <VideoThumbnail
+              class="group-focus-visible:rounded-lg"
+              url={getAssetPlaybackUrl({ id: asset.livePhotoVideoId!, cacheKey: undefined })}
+              enablePlayback={true}
+              curve={selected}
+              durationInSeconds={0}
+              playbackOnIconHover={false}
+            />
+          {:else}
+            <ImageThumbnail
+              class={imageClass}
+              {brokenAssetClass}
+              url={getAssetMediaUrl({ id: asset.id, size: AssetMediaSize.Thumbnail, cacheKey: asset.thumbhash })}
+              altText={$getAltText(asset)}
+              widthStyle="{width}px"
+              heightStyle="{height}px"
+              curve={selected}
+              asset={asset}
+              preload={false}
+            />
+          {/if}
         </div>
       {:else if asset.isImage && asset.duration && mouseOver}
         <!-- GIF -->
@@ -381,7 +392,13 @@
           </div>
         {/if}
 
-        <!-- Live Photo Badge - REMOVED, treat as normal photos in gallery -->
+        {#if asset.isImage && asset.livePhotoVideoId}
+          <div class="z-2 absolute inset-e-0 top-0 flex place-items-center gap-1 text-xs font-medium text-white">
+            <span class="pe-2 pt-2">
+              <Icon icon={mdiMotionPlayOutline} size="24" />
+            </span>
+          </div>
+        {/if}
 
         <!-- Stacked asset -->
         {#if asset.stack && showStackedIcon}
@@ -403,7 +420,7 @@
       {#if !usingMobileDevice && mouseOver && !disableLinkMouseOver}
         <a
           class="z-2 absolute w-full top-0 bottom-0"
-          style:cursor="unset"
+          style:cursor={asset.isImage && asset.livePhotoVideoId ? 'pointer' : 'unset'}
           href={currentUrlReplaceAssetId(asset.id)}
           onclick={(evt) => evt.preventDefault()}
           tabindex={-1}

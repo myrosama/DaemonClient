@@ -383,6 +383,24 @@ export class D1Adapter {
   // Deduplication lookup
   // ────────────────────────────────────────────────────────────
 
+  // Batch checksum lookup for bulk-upload-check. D1 bound-variable limit is 100,
+  // so we chunk to stay safely under it. Returns only non-trashed rows.
+  async getPhotosByChecksums(ownerId: string, checksums: string[]): Promise<Photo[]> {
+    if (checksums.length === 0) return [];
+    const BATCH = 90;
+    const results: Photo[] = [];
+    for (let i = 0; i < checksums.length; i += BATCH) {
+      const batch = checksums.slice(i, i + BATCH);
+      const placeholders = batch.map(() => '?').join(',');
+      const rows = await this.db
+        .prepare(`SELECT id, checksum FROM photos WHERE ownerId = ? AND checksum IN (${placeholders}) AND isTrashed = 0`)
+        .bind(ownerId, ...batch)
+        .all<Photo>();
+      results.push(...(rows.results || []));
+    }
+    return results;
+  }
+
   // Look up an existing photo by the device-local identity pair that the Immich
   // mobile app sends on every upload. `isVideo` discriminates live-photo stills
   // (JPEG) from their companion MOV — both carry the SAME deviceAssetId — so we

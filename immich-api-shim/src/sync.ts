@@ -2,8 +2,27 @@ import type { Env } from './index';
 import { requireAuth, firestoreQuery } from './helpers';
 import { D1Adapter } from './d1-adapter';
 
+// Fire at most once per Worker isolate lifetime (typically 30 min – a few hours).
+// Sync is called every few minutes by the mobile app, so this ensures long-lived
+// sessions still get worker updates even when the user never re-logs in.
+let lastAutoUpdateAttempt = 0;
+
 export async function handleSyncStream(request: Request, env: Env): Promise<Response> {
   const session = await requireAuth(request, env);
+
+  // Piggy-back the auto-update on sync rather than only on login.
+  // Rate-limit to once per isolate to avoid hammering the deployment service.
+  const now = Date.now();
+  if (env.DEPLOYMENT_SERVICE_URL && env.waitUntil && now - lastAutoUpdateAttempt > 60 * 60 * 1000) {
+    lastAutoUpdateAttempt = now;
+    env.waitUntil(
+      fetch(env.DEPLOYMENT_SERVICE_URL.replace(/\/$/, '') + '/auto-update', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${session.idToken}`, 'Content-Type': 'application/json' },
+        body: '{}',
+      }).catch(err => console.error('[auto-update/sync] dispatch failed:', err))
+    );
+  }
 
   let reqBody: any = {};
   if (request.method === 'POST' && request.headers.get('content-type')?.includes('json')) {
@@ -14,9 +33,22 @@ export async function handleSyncStream(request: Request, env: Env): Promise<Resp
   // Firestore. Without this branch, sync was always doing a full Firestore
   // collection scan on every page load — adding ~150-300ms to boot even when
   // the user had zero photos.
+  // Exclude live-photo companion videos at SQL level so they never appear as
+  // separate timeline items regardless of whether livePhotoVideoId is set.
   const photos = env.DB
-    ? (await new D1Adapter(env.DB).queryPhotos({ ownerId: session.uid, isTrashed: 0, orderBy: 'fileCreatedAt DESC' })).map(D1Adapter.normalizeRow)
+    ? (await env.DB.prepare(
+        `SELECT * FROM photos
+         WHERE ownerId = ? AND (isTrashed = 0 OR isTrashed IS NULL)
+           AND id NOT IN (SELECT livePhotoVideoId FROM photos WHERE livePhotoVideoId IS NOT NULL AND ownerId = ?)
+         ORDER BY fileCreatedAt DESC`
+      ).bind(session.uid, session.uid).all()).results.map(D1Adapter.normalizeRow)
     : await firestoreQuery(env, session.uid, 'photos', session.idToken, 'fileCreatedAt', 'DESCENDING');
+
+  // Tombstones: soft-deleted rows (Telegram data gone, D1 row kept with isTrashed=1).
+  // Emit AssetDeleteV1 for each so mobile removes them from its local DB on sync.
+  const deletedPhotos = env.DB
+    ? (await new D1Adapter(env.DB).queryPhotos({ ownerId: session.uid, isTrashed: 1 })).map(D1Adapter.normalizeRow)
+    : [];
 
   const stream = new ReadableStream({
     async start(controller) {
@@ -67,6 +99,8 @@ export async function handleSyncStream(request: Request, env: Env): Promise<Resp
         const dateStr = photo.fileCreatedAt || photo.uploadedAt || new Date().toISOString();
         const assetData = {
           id: photo._id,
+          deviceAssetId: photo.deviceAssetId || photo._id,
+          deviceId: photo.deviceId || '',
           type: isVideo ? 'VIDEO' : 'IMAGE',
           checksum: csum,
           fileCreatedAt: dateStr,
@@ -84,7 +118,7 @@ export async function handleSyncStream(request: Request, env: Env): Promise<Resp
           libraryId: null,
           livePhotoVideoId: photo.livePhotoVideoId || null,
           localDateTime: dateStr,
-          originalFileName: photo.deviceAssetId || photo._id,
+          originalFileName: photo.originalFileName || photo.fileName || photo._id,
           ownerId: session.uid,
           stackId: null,
           thumbhash: photo.thumbhash || null,
@@ -97,6 +131,18 @@ export async function handleSyncStream(request: Request, env: Env): Promise<Resp
           data: assetData,
           ack: `AssetV1|${photo._id}`,
           ids: [photo._id]
+        });
+      }
+
+      // Emit delete events for tombstoned assets (isTrashed=1 in D1).
+      // Mobile's deleteAssetsV1 handler removes these from its local DB.
+      for (const photo of deletedPhotos) {
+        if (!photo?._id) continue;
+        send({
+          type: 'AssetDeleteV1',
+          data: { assetId: photo._id },
+          ack: `AssetDeleteV1|${photo._id}`,
+          ids: [photo._id],
         });
       }
 

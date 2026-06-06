@@ -270,7 +270,22 @@ export async function handleAssets(request: Request, env: Env, path: string, url
   }
   if (path === '/api/assets/bulk-upload-check' && request.method === 'POST') {
     const body = await request.json() as any;
-    return json({ results: (body.assets || []).map((a: any) => ({ id: a.id, action: 'accept', assetId: null, isTrashed: false })) });
+    const assets: Array<{ id: string; checksum: string }> = body.assets || [];
+    if (!env.DB || assets.length === 0) {
+      return json({ results: assets.map(a => ({ id: a.id, action: 'accept', assetId: null, isTrashed: false })) });
+    }
+    await ensureDeduplicationSchema(env.DB);
+    const checksums = assets.map(a => a.checksum).filter(Boolean);
+    const existing = await new D1Adapter(env.DB).getPhotosByChecksums(uid, checksums);
+    const checksumMap = new Map(existing.map(p => [p.checksum, p.id]));
+    return json({
+      results: assets.map(a => {
+        const serverId = a.checksum ? checksumMap.get(a.checksum) : undefined;
+        return serverId
+          ? { id: a.id, action: 'reject', assetId: serverId, isTrashed: false }
+          : { id: a.id, action: 'accept', assetId: null, isTrashed: false };
+      }),
+    });
   }
   if ((path === '/api/assets' || path === '/api/asset/upload') && request.method === 'POST') {
     return handleUpload(request, env, uid, idToken);
@@ -488,9 +503,20 @@ async function handleAssetInfo(env: Env, uid: string, assetId: string, idToken: 
 
 async function handleUpdateAsset(request: Request, env: Env, uid: string, assetId: string, idToken: string): Promise<Response> {
   const body = await request.json() as any;
-  const updates: Record<string, any> = {};
   // Immich web wraps fields in updateAssetDto; native app sends them directly
   const dto = body.updateAssetDto || body;
+
+  // isTrashed=true → delete from Telegram + soft-delete D1 row as sync tombstone
+  if (dto.isTrashed === true) {
+    const syntheticReq = new Request('http://x/api/assets', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: [assetId] }),
+    });
+    return handleDeleteAssets(syntheticReq, env, uid, idToken);
+  }
+
+  const updates: Record<string, any> = {};
   if (dto.isFavorite !== undefined) updates.isFavorite = dto.isFavorite ? 1 : 0;
   if (dto.isArchived !== undefined) updates.visibility = dto.isArchived ? 'archive' : 'timeline';
   if (dto.isTrashed !== undefined) updates.isTrashed = dto.isTrashed ? 1 : 0;
@@ -526,7 +552,18 @@ async function handleDeleteAssets(request: Request, env: Env, uid: string, idTok
   const botToken = config?.botToken || config?.bot_token;
   const channelId = config?.channelId || config?.channel_id;
 
-  for (const id of ids) {
+  // Expand the delete set to include live-photo companions. When a still is
+  // deleted its paired MOV must go too (and vice versa), otherwise the orphaned
+  // video shows up as a standalone clip after the next sync.
+  const expandedIds = new Set<string>(ids);
+  if (env.DB) {
+    for (const id of ids) {
+      const photo = await new D1Adapter(env.DB).getPhoto(id);
+      if (photo?.livePhotoVideoId) expandedIds.add(photo.livePhotoVideoId);
+    }
+  }
+
+  for (const id of expandedIds) {
     let photo: any;
     if (env.DB) {
       photo = await new D1Adapter(env.DB).getPhoto(id);
@@ -549,7 +586,10 @@ async function handleDeleteAssets(request: Request, env: Env, uid: string, idTok
     }
 
     if (env.DB) {
-      await new D1Adapter(env.DB).deletePhoto(id);
+      // Soft-delete: keep the D1 row as a sync tombstone. The Telegram data is
+      // already gone above. Sync stream will emit AssetDeleteV1 for isTrashed=1
+      // rows so the mobile removes them from its local DB on the next sync.
+      await new D1Adapter(env.DB).updatePhoto(id, { isTrashed: 1, telegramChunks: '[]' });
     } else {
       await firestoreDelete(env, uid, `photos/${id}`, idToken);
     }
@@ -572,7 +612,7 @@ async function handleBulkUpdate(request: Request, env: Env, uid: string, idToken
   }
 
   const updates: Record<string, any> = {};
-  if (body.isFavorite !== undefined) updates.isFavorite = body.isFavorite;
+  if (body.isFavorite !== undefined) updates.isFavorite = body.isFavorite ? 1 : 0;
   if (body.visibility !== undefined) updates.visibility = body.visibility;
 
   if (Object.keys(updates).length > 0) {
@@ -695,6 +735,11 @@ async function ensureDeduplicationSchema(db: any): Promise<void> {
   try {
     await db.prepare(
       'CREATE INDEX IF NOT EXISTS idx_photos_dedup ON photos(ownerId, deviceAssetId, deviceId)'
+    ).run();
+  } catch { /* index already exists */ }
+  try {
+    await db.prepare(
+      'CREATE INDEX IF NOT EXISTS idx_photos_checksum ON photos(ownerId, checksum)'
     ).run();
   } catch { /* index already exists */ }
   dedupSchemaReady = true;
@@ -905,6 +950,7 @@ async function handleUpload(request: Request, env: Env, uid: string, idToken: st
       const queue = getTgQueue(botToken);
       await queue.acquire(undefined, 1); // Priority 1 for uploads (low)
       let tgData: any;
+      let tgStatus = 200;
       try {
         // Retry on 429 with backoff (tgFetchWithRetry honours Telegram's
         // retry_after). A big batch upload fires many sends per photo (blob +
@@ -914,6 +960,7 @@ async function handleUpload(request: Request, env: Env, uid: string, idToken: st
         const tgRes = await tgFetchWithRetry(`https://api.telegram.org/bot${botToken}/sendDocument`, {
           method: 'POST', body: tgFormData,
         });
+        tgStatus = tgRes.status;
         tgData = await tgRes.json() as any;
       } catch (err: any) {
         queue.release();
@@ -952,6 +999,15 @@ async function handleUpload(request: Request, env: Env, uid: string, idToken: st
               body: JSON.stringify({ chat_id: channelId, message_id: chunk.message_id }),
             });
           } catch { /* best effort cleanup */ }
+        }
+
+        // Propagate rate limit so Immich app's own backoff coordinates cross-isolate retries
+        if (tgStatus === 429 || tgData.error_code === 429) {
+          const retryAfter = tgData.parameters?.retry_after || 5;
+          return new Response(JSON.stringify({ message: 'Rate limited by Telegram, retry later' }), {
+            status: 429,
+            headers: { 'Content-Type': 'application/json', 'Retry-After': String(retryAfter) },
+          });
         }
 
         return json({
@@ -1741,6 +1797,8 @@ function toAssetResponseDto(photo: any, ownerId: string): any {
 
   return {
     id,
+    deviceAssetId: photo.deviceAssetId || photo.id || '',
+    deviceId: photo.deviceId || '',
     type: isVideo ? 'VIDEO' : 'IMAGE',
     originalFileName: photo.originalFileName || photo.fileName || 'unknown',
     originalMimeType: reportedMime,
