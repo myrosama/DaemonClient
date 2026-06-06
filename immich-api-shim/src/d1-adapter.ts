@@ -135,8 +135,13 @@ export class D1Adapter {
     }
 
     if (filters.isTrashed !== undefined) {
-      query += ' AND isTrashed = ?';
-      bindings.push(filters.isTrashed);
+      // isTrashed=0 → exclude trashed (NULL counts as not-trashed); isTrashed=1 → only trashed
+      if (filters.isTrashed === 0) {
+        query += ' AND (isTrashed = 0 OR isTrashed IS NULL)';
+      } else {
+        query += ' AND isTrashed = ?';
+        bindings.push(filters.isTrashed);
+      }
     }
 
     if (filters.visibility !== undefined) {

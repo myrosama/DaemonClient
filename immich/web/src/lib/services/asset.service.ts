@@ -45,7 +45,6 @@ import { getAssetMediaUrl, getSharedLink, sleep } from '$lib/utils';
 import { downloadBlob, downloadUrl } from '$lib/utils/asset-utils';
 import { handleError } from '$lib/utils/handle-error';
 import { getFormatter } from '$lib/utils/i18n';
-import { daemonDrive } from '$lib/utils/daemonclient-drive';
 
 export const getAssetBulkActions = ($t: MessageFormatter) => {
   const ownedAssets = assetMultiSelectManager.ownedAssets;
@@ -328,30 +327,12 @@ export const handleDownloadAsset = async (asset: AssetResponseDto, { edited }: {
     try {
       toastManager.primary($t('downloading_asset_filename', { values: { filename } }));
 
-      // Get full asset info to check if it's stored in Telegram
-      const fullAsset = i === 0 ? asset : await getAssetInfo({ ...authManager.params, id });
-
-      // Check if asset has Telegram storage info
-      const hasTelegramStorage = fullAsset.telegramFileId || fullAsset.telegramOriginalId || fullAsset.telegramThumbId;
-
-      if (hasTelegramStorage) {
-        // Download directly from Telegram via daemonclient-drive
-        console.log(`[Download] Fetching from Telegram: ${filename}`);
-        const objectUrl = await daemonDrive.downloadMedia(fullAsset, 'original');
-
-        // Fetch the blob from the object URL
-        const response = await fetch(objectUrl);
-        const blob = await response.blob();
-
-        // Download the blob
-        downloadBlob(blob, filename);
-
-        // Clean up object URL
-        URL.revokeObjectURL(objectUrl);
-      } else {
-        // Fallback to standard download (if asset not in Telegram)
-        downloadUrl(getAssetMediaUrl({ id, size: AssetMediaSize.Original, edited, cacheKey }), filename);
-      }
+      // Always download through the worker — it handles decryption + multi-chunk stitching.
+      const url = getAssetMediaUrl({ id, size: AssetMediaSize.Original, edited, cacheKey });
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const blob = await response.blob();
+      downloadBlob(blob, filename);
     } catch (error) {
       handleError(error, $t('errors.error_downloading', { values: { filename } }));
     }

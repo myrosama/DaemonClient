@@ -112,6 +112,11 @@
       ],
       "redirects": [
         {
+          "source": "/login",
+          "destination": "/auth/login",
+          "type": 302
+        },
+        {
           "source": "/signup",
           "destination": "https://accounts.daemonclient.uz/signup?continue=https://photos.daemonclient.uz",
           "type": 302

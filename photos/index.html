@@ -3,6 +3,19 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <script>
+    // If the user already has an active Immich session, skip the landing page.
+    try {
+      var isAuth = document.cookie.split('; ').some(function(c){ return c.startsWith('immich_is_authenticated='); });
+      if (!isAuth) {
+        // Firebase persists auth in localStorage — any key signals a saved session.
+        for (var k in localStorage) {
+          if (k.startsWith('firebase:authUser:')) { isAuth = true; break; }
+        }
+      }
+      if (isAuth) window.location.replace('/photos');
+    } catch(e) {}
+  </script>
   <title>DaemonClient Photos — Unlimited Private Photo Backup</title>
   <meta name="description" content="Unlimited, end-to-end encrypted photo and video backup. Free forever — your memories on storage you own, powered by Telegram + Cloudflare." />
 
@@ -104,7 +117,7 @@
         "name": "Site Navigation",
         "itemListElement": [
           {"@type": "SiteNavigationElement", "position": 1, "name": "Open gallery", "url": "https://photos.daemonclient.uz/photos"},
-          {"@type": "SiteNavigationElement", "position": 2, "name": "Sign in", "url": "https://photos.daemonclient.uz/login"},
+          {"@type": "SiteNavigationElement", "position": 2, "name": "Sign in", "url": "https://photos.daemonclient.uz/auth/login"},
           {"@type": "SiteNavigationElement", "position": 3, "name": "Create free account", "url": "https://photos.daemonclient.uz/signup"},
           {"@type": "SiteNavigationElement", "position": 4, "name": "How it works", "url": "https://photos.daemonclient.uz/#how-it-works"},
           {"@type": "SiteNavigationElement", "position": 5, "name": "Download", "url": "https://photos.daemonclient.uz/#download"},
@@ -524,7 +537,7 @@
     <li><a href="/photos">Open gallery</a></li>
   </ul>
   <div class="nav-end">
-    <a href="/login" class="btn-ghost">Sign in</a>
+    <a href="/auth/login" class="btn-ghost">Sign in</a>
     <a href="/signup" class="btn-green">Create free account</a>
     <button class="nav-toggle" id="navToggle" aria-label="Menu" aria-expanded="false">
       <span></span><span></span><span></span>
@@ -538,7 +551,7 @@
   <a href="#faq" class="nav-mobile-link">FAQ</a>
   <a href="/photos" class="nav-mobile-link">Open gallery</a>
   <div class="nav-mobile-btns">
-    <a href="/login">Sign in</a>
+    <a href="/auth/login">Sign in</a>
     <a href="/signup">Create free account</a>
   </div>
 </div>

@@ -15,7 +15,7 @@ export async function handleSyncStream(request: Request, env: Env): Promise<Resp
   // collection scan on every page load — adding ~150-300ms to boot even when
   // the user had zero photos.
   const photos = env.DB
-    ? (await new D1Adapter(env.DB).queryPhotos({ ownerId: session.uid, orderBy: 'fileCreatedAt DESC' })).map(D1Adapter.normalizeRow)
+    ? (await new D1Adapter(env.DB).queryPhotos({ ownerId: session.uid, isTrashed: 0, orderBy: 'fileCreatedAt DESC' })).map(D1Adapter.normalizeRow)
     : await firestoreQuery(env, session.uid, 'photos', session.idToken, 'fileCreatedAt', 'DESCENDING');
 
   const stream = new ReadableStream({

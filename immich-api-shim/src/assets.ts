@@ -520,21 +520,8 @@ async function handleUpdateAsset(request: Request, env: Env, uid: string, assetI
 async function handleDeleteAssets(request: Request, env: Env, uid: string, idToken: string): Promise<Response> {
   const body = await request.json() as any;
   const ids: string[] = body.ids || [];
-  // force=true means permanent delete (used by "Empty trash"). Default is soft-delete → trash.
-  const force = body.force === true;
 
-  if (!force) {
-    // Soft-delete: move to trash, nothing deleted from Telegram
-    if (env.DB) {
-      const adapter = new D1Adapter(env.DB);
-      for (const id of ids) await adapter.updatePhoto(id, { isTrashed: 1 });
-    } else {
-      for (const id of ids) await firestoreSet(env, uid, `photos/${id}`, { isTrashed: true }, idToken);
-    }
-    return json({});
-  }
-
-  // Hard-delete: remove Telegram files then D1/Firestore row
+  // Always permanently delete — no trash needed.
   const config = await getCachedConfig<any>(env, uid, idToken, 'telegram');
   const botToken = config?.botToken || config?.bot_token;
   const channelId = config?.channelId || config?.channel_id;
@@ -573,10 +560,20 @@ async function handleDeleteAssets(request: Request, env: Env, uid: string, idTok
 async function handleBulkUpdate(request: Request, env: Env, uid: string, idToken: string): Promise<Response> {
   const body = await request.json() as any;
   const ids: string[] = body.ids || [];
+
+  // isTrashed=true → permanent delete (no trash, same as DELETE /api/assets)
+  if (body.isTrashed === true) {
+    const syntheticReq = new Request('http://x/api/assets', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids }),
+    });
+    return handleDeleteAssets(syntheticReq, env, uid, idToken);
+  }
+
   const updates: Record<string, any> = {};
   if (body.isFavorite !== undefined) updates.isFavorite = body.isFavorite;
   if (body.visibility !== undefined) updates.visibility = body.visibility;
-  if (body.isTrashed !== undefined) updates.isTrashed = body.isTrashed;
 
   if (Object.keys(updates).length > 0) {
     if (env.DB) {

@@ -22,7 +22,7 @@ const config = {
       relative: false,
     },
     adapter: adapter({
-      fallback: 'index.html',
+      fallback: 'app.html',
       precompress: true,
     }),
     alias: {
