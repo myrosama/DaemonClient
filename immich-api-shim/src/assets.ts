@@ -678,6 +678,31 @@ async function convertHeicThumbViaBackend(heicBytes: ArrayBuffer, idToken: strin
   }
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+// Self-healing deduplication schema
+// Adding columns to the photos table for per-user workers deployed BEFORE this
+// code existed. The migration system (migrations.ts) is never run during
+// auto-update (code-only), so we replicate the drive.ts pattern: a module-level
+// bool guard ensures the ALTER runs at most once per isolate lifecycle.
+// SQLite has no "ALTER TABLE … ADD COLUMN IF NOT EXISTS", so we try/catch each
+// ALTER and swallow the "duplicate column name" error silently.
+// ────────────────────────────────────────────────────────────────────────────
+let dedupSchemaReady = false;
+async function ensureDeduplicationSchema(db: any): Promise<void> {
+  if (dedupSchemaReady) return;
+  const addColumn = async (sql: string) => {
+    try { await db.prepare(sql).run(); } catch { /* column already exists */ }
+  };
+  await addColumn('ALTER TABLE photos ADD COLUMN deviceAssetId TEXT');
+  await addColumn('ALTER TABLE photos ADD COLUMN deviceId TEXT');
+  try {
+    await db.prepare(
+      'CREATE INDEX IF NOT EXISTS idx_photos_dedup ON photos(ownerId, deviceAssetId, deviceId)'
+    ).run();
+  } catch { /* index already exists */ }
+  dedupSchemaReady = true;
+}
+
 async function handleUpload(request: Request, env: Env, uid: string, idToken: string): Promise<Response> {
   const flags = await getFlagsForUser(env, uid, idToken);
   if (!flags.directBytePath) {
@@ -715,6 +740,11 @@ async function handleUpload(request: Request, env: Env, uid: string, idToken: st
   const clientUpload = formData.get('clientUpload') === 'true';
   const formKeys = Array.from(formData.keys());
   console.log(`[Upload] UID: ${uid}, ClientUpload: ${clientUpload}, Name: ${formData.get('fileName') || formData.get('filename')}, Keys: ${formKeys.join(',')}`);
+
+  // Device-local identity for deduplication (Immich mobile sends these fields).
+  const deviceAssetId = (formData.get('deviceAssetId') as string) || '';
+  const deviceId = (formData.get('deviceId') as string) || '';
+
   const file = formData.get('assetData') as File | null;
   
   if (!file && !clientUpload) {
@@ -770,6 +800,26 @@ async function handleUpload(request: Request, env: Env, uid: string, idToken: st
     }
 
     const isHeic = /\.(heic|heif)$/i.test(fileName) || mimeType === 'image/heic' || mimeType === 'image/heif';
+
+    // ── Deduplication check ──────────────────────────────────────────────────
+    // Run BEFORE any Telegram work. When the Immich mobile app reopens it
+    // retries every asset whose status it doesn't know — `deviceAssetId +
+    // deviceId` is the stable phone-local identity it sends on every upload.
+    // Live-photo pairs share the SAME deviceAssetId (both the MOV and the
+    // still use asset.localId); we discriminate by media kind (video vs not)
+    // so we never return the wrong half of a live pair as a duplicate.
+    if (env.DB && deviceAssetId && deviceId) {
+      await ensureDeduplicationSchema(env.DB);
+      const adapter = new D1Adapter(env.DB);
+      const isVideoMime = mimeType.startsWith('video/');
+      const existing = await adapter.getPhotoByDeviceAsset(uid, deviceAssetId, deviceId, isVideoMime);
+      if (existing) {
+        console.log(`[Upload] Dedup hit for deviceAssetId=${deviceAssetId} uid=${uid} — returning existing ${existing.id}`);
+        return json(toAssetResponseDto(D1Adapter.normalizeRow(existing), uid));
+      }
+    }
+    // ── End deduplication check ──────────────────────────────────────────────
+
     const thumbBase64 = formData.get('thumbData_base64') as string | null;
     // ThumbHash (base64) → instant blur placeholder in the grid. The web client
     // sends one directly; for mobile/server uploads we derive it below from the
@@ -1106,6 +1156,10 @@ async function handleUpload(request: Request, env: Env, uid: string, idToken: st
       duration: duration || undefined,
       latitude: gpsLat ?? undefined,
       longitude: gpsLon ?? undefined,
+      // Dedup fields — stored so future uploads from the same device can be
+      // identified as duplicates without re-uploading to Telegram.
+      deviceAssetId: deviceAssetId || undefined,
+      deviceId: deviceId || undefined,
     };
 
     if (env.DB) {

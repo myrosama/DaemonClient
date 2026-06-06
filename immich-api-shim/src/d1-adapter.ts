@@ -27,6 +27,10 @@ export interface Photo {
   country?: string;
   latitude?: number | null;
   longitude?: number | null;
+  // Dedup fields — populated by mobile uploads (Immich app sends these in multipart form).
+  // Added via self-healing ALTER in ensureDeduplicationSchema(); NULL for legacy rows.
+  deviceAssetId?: string | null;
+  deviceId?: string | null;
 }
 
 export interface Album {
@@ -368,6 +372,33 @@ export class D1Adapter {
 
   async deleteFile(id: string): Promise<void> {
     await this.db.prepare('DELETE FROM files WHERE id = ?').bind(id).run();
+  }
+
+  // ────────────────────────────────────────────────────────────
+  // Deduplication lookup
+  // ────────────────────────────────────────────────────────────
+
+  // Look up an existing photo by the device-local identity pair that the Immich
+  // mobile app sends on every upload. `isVideo` discriminates live-photo stills
+  // (JPEG) from their companion MOV — both carry the SAME deviceAssetId — so we
+  // match on mimeType kind (video/* vs everything else) to avoid returning the
+  // wrong half of a live pair as a duplicate.
+  async getPhotoByDeviceAsset(
+    ownerId: string,
+    deviceAssetId: string,
+    deviceId: string,
+    isVideo: boolean,
+  ): Promise<Photo | null> {
+    const mimeClause = isVideo
+      ? "AND mimeType LIKE 'video/%'"
+      : "AND mimeType NOT LIKE 'video/%'";
+    const result = await this.db
+      .prepare(
+        `SELECT * FROM photos WHERE ownerId = ? AND deviceAssetId = ? AND deviceId = ? ${mimeClause} LIMIT 1`,
+      )
+      .bind(ownerId, deviceAssetId, deviceId)
+      .first<Photo>();
+    return result || null;
   }
 
   // Total bytes a user has stored in Drive (folders count as 0). Feeds the
