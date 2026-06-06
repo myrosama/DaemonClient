@@ -465,7 +465,9 @@
       .nav{padding:0 24px}
       .nav-links,.nav-end .btn-ghost{display:none}
       .nav-toggle{display:flex}
-      .hero{grid-template-columns:1fr;padding:88px 24px 60px;min-height:auto;gap:40px}
+      .hero{grid-template-columns:1fr;padding:88px 24px 60px;min-height:auto;gap:48px}
+      .hero-sub{max-width:100%;font-size:16px}
+      .pgrid-wrap{padding-top:30px} /* room for absolute pgrid-label */
       .pgrid{height:360px}
       .hiw-grid{grid-template-columns:1fr;gap:14px}
       .hiw-wrap,.dl-wrap{padding:60px 24px}
@@ -473,13 +475,37 @@
       .footer-row{flex-direction:column;align-items:flex-start;gap:14px}
     }
     @media(max-width:560px){
-      .pgrid{grid-template-columns:repeat(2,1fr);grid-template-rows:repeat(5,1fr);height:340px}
+      /* 2-column grid: reassign ALL tiles to avoid col-3 overflow */
+      .pgrid{grid-template-columns:repeat(2,1fr);grid-template-rows:repeat(5,1fr);height:320px}
       .pt:nth-child(1){grid-column:1;grid-row:1/3}
-      .pt:nth-child(7){grid-column:2/3;grid-row:3}
+      .pt:nth-child(2){grid-column:2;grid-row:1}
+      .pt:nth-child(3){grid-column:2;grid-row:2}
+      .pt:nth-child(4){grid-column:1;grid-row:3}
+      .pt:nth-child(5){grid-column:2;grid-row:3}
+      .pt:nth-child(6){grid-column:1;grid-row:4}
+      .pt:nth-child(7){grid-column:2;grid-row:4}
       .pt:nth-child(8){grid-column:1/3;grid-row:5}
-      .hero h1{font-size:34px}
+      .pt:nth-child(9){display:none}
+      .pgrid-stats{flex-wrap:wrap}
+      .pgrid-stat{flex:0 0 calc(50% - 1px);border-right:1px solid var(--bs)}
+      .pgrid-stat:nth-child(2){border-right:none}
+      .pgrid-stat:last-child{flex:0 0 100%;border-top:1px solid var(--bs);border-right:none}
+      .hero h1{font-size:32px}
+      .hero-ctas{flex-direction:column;align-items:stretch}
+      .btn-hero{justify-content:center}
       .dl-btns{flex-direction:column;align-items:stretch}
       .store-btn{justify-content:center}
+    }
+    @media(max-width:430px){
+      /* Very small phones — hide nav green button (it's in the mobile menu) */
+      .nav-end .btn-green{display:none}
+      .nav{padding:0 16px}
+      .hero{padding:80px 16px 48px}
+      .hiw-wrap,.dl-wrap,.faq-wrap{padding:48px 16px}
+      footer{padding:24px 16px}
+      .pgrid{height:280px}
+      .pgrid-stats{font-size:11px}
+      .pgrid-stat{padding:8px 10px}
     }
   </style>
 </head>
