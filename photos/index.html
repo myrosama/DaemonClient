@@ -4,15 +4,14 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <script>
-    // If the user already has an active Immich session, skip the landing page.
+    // If the user already has an active session, skip the landing → go to /photos.
+    // Use ONLY the immich_is_authenticated cookie: login sets it, logout clears it
+    // (server returns Set-Cookie Max-Age=0). The old firebase:authUser localStorage
+    // fallback was unreliable — Firebase keeps that key after logout, so a logged-out
+    // user got redirected to /photos and bounced to the login screen instead of
+    // seeing this landing.
     try {
       var isAuth = document.cookie.split('; ').some(function(c){ return c.startsWith('immich_is_authenticated='); });
-      if (!isAuth) {
-        // Firebase persists auth in localStorage — any key signals a saved session.
-        for (var k in localStorage) {
-          if (k.startsWith('firebase:authUser:')) { isAuth = true; break; }
-        }
-      }
       if (isAuth) window.location.replace('/photos');
     } catch(e) {}
   </script>
