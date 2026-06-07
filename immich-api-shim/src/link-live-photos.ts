@@ -53,8 +53,11 @@ export async function linkExistingLivePhotos(request: Request, env: Env, uid: st
         linkedVideoIds.add(matchingVideo._id);
 
         if (adapter) {
-          await adapter.savePhoto({ id: heicImage._id, livePhotoVideoId: matchingVideo._id });
-          await adapter.savePhoto({ id: matchingVideo._id, livePhotoVideoId: heicImage._id });
+          // updatePhoto (partial UPDATE): savePhoto's upsert throws NOT NULL
+          // (ownerId/fileName) on these partial objects before the conflict-update
+          // runs, which would silently fail the live-photo link.
+          await adapter.updatePhoto(heicImage._id, { livePhotoVideoId: matchingVideo._id });
+          await adapter.updatePhoto(matchingVideo._id, { livePhotoVideoId: heicImage._id });
         } else {
           await firestoreSet(env, uid, `photos/${heicImage._id}`, {
             livePhotoVideoId: matchingVideo._id

@@ -619,8 +619,12 @@ async function handleBulkUpdate(request: Request, env: Env, uid: string, idToken
   if (Object.keys(updates).length > 0) {
     if (env.DB) {
       const adapter = new D1Adapter(env.DB);
+      // updatePhoto (partial UPDATE), NOT savePhoto: these rows already exist and
+      // the patch omits NOT NULL columns (ownerId, fileName). savePhoto's
+      // INSERT…ON CONFLICT attempts the INSERT first and throws NOT NULL before
+      // the conflict-update runs → bulk favourite/archive 500s. See updatePhoto.
       for (const id of ids) {
-        await adapter.savePhoto({ id, ...updates });
+        await adapter.updatePhoto(id, updates);
       }
     } else {
       for (const id of ids) {
@@ -2100,9 +2104,11 @@ async function linkLivePhoto(env: Env, uid: string, assetId: string, photo: any,
       });
 
       if (matchingImage) {
-        // Update the image to point to this video
+        // Update the image to point to this video. updatePhoto (partial UPDATE):
+        // savePhoto's upsert would throw NOT NULL (ownerId/fileName) on this
+        // partial object before the conflict-update runs, silently failing the link.
         if (env.DB) {
-          await new D1Adapter(env.DB).savePhoto({ id: matchingImage._id, livePhotoVideoId: assetId });
+          await new D1Adapter(env.DB).updatePhoto(matchingImage._id, { livePhotoVideoId: assetId });
         } else {
           await firestoreSet(env, uid, `photos/${matchingImage._id}`, {
             livePhotoVideoId: assetId
@@ -2137,9 +2143,11 @@ async function linkLivePhoto(env: Env, uid: string, assetId: string, photo: any,
       });
 
       if (matchingVideo) {
-        // Update this image to point to the video
+        // Update this image to point to the video. updatePhoto (partial UPDATE):
+        // savePhoto's upsert would throw NOT NULL (ownerId/fileName) on this
+        // partial object before the conflict-update runs, silently failing the link.
         if (env.DB) {
-          await new D1Adapter(env.DB).savePhoto({ id: assetId, livePhotoVideoId: matchingVideo._id });
+          await new D1Adapter(env.DB).updatePhoto(assetId, { livePhotoVideoId: matchingVideo._id });
         } else {
           await firestoreSet(env, uid, `photos/${assetId}`, {
             livePhotoVideoId: matchingVideo._id
