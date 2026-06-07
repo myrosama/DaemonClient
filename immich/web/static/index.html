@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+
+<!-- Logged-in users skip the marketing landing and go straight to the app.
+     The login flow sets a readable `immich_is_authenticated=true` cookie. -->
+<script>
+  try {
+    if (document.cookie.split('; ').some(function (c) { return c.indexOf('immich_is_authenticated=true') === 0; })) {
+      location.replace('/photos');
+    }
+  } catch (e) {}
+</script>
+
+<title>DaemonClient Photos — Private, unlimited, encrypted photo backup</title>
+<meta name="description" content="DaemonClient Photos is a private, unlimited, end-to-end encrypted photo & video library on infrastructure you own. A self-hosted Google Photos alternative.">
+<link rel="canonical" href="https://photos.daemonclient.uz/">
+<meta name="author" content="DaemonClient">
+<meta name="theme-color" content="#10B981">
+<link rel="icon" type="image/png" href="/favicon.png">
+<link rel="apple-touch-icon" href="/apple-icon-180.png">
+
+<!-- Open Graph -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="DaemonClient">
+<meta property="og:title" content="DaemonClient Photos — Private, unlimited, encrypted photo backup">
+<meta property="og:description" content="A private, unlimited, end-to-end encrypted photo & video library you own. Self-hosted Google Photos alternative.">
+<meta property="og:url" content="https://photos.daemonclient.uz/">
+<meta property="og:image" content="https://daemonclient.uz/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+
+<!-- Twitter -->
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="DaemonClient Photos — Private, unlimited, encrypted photo backup">
+<meta name="twitter:description" content="A private, unlimited, end-to-end encrypted photo & video library you own.">
+<meta name="twitter:image" content="https://daemonclient.uz/og-image.png">
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "SoftwareApplication",
+      "@id": "https://photos.daemonclient.uz/#app",
+      "name": "DaemonClient Photos",
+      "applicationCategory": "MultimediaApplication",
+      "operatingSystem": "Web, Android, iOS",
+      "url": "https://photos.daemonclient.uz/",
+      "description": "A private, unlimited, end-to-end encrypted photo and video library on infrastructure you own — a self-hosted Google Photos alternative.",
+      "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+      "isPartOf": { "@id": "https://daemonclient.uz/#website" },
+      "publisher": { "@id": "https://daemonclient.uz/#organization" }
+    }
+  ]
+}
+</script>
+
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  :root{
+    --bg:#0B0E14; --bg2:#10141d; --card:#141a24; --line:#1e2632;
+    --text:#E6EAF2; --muted:#8b97a8; --green:#34d399; --green-hi:#10B981; --blue:#6ea8fe;
+  }
+  html{scroll-behavior:smooth}
+  body{
+    background:var(--bg); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    line-height:1.6; -webkit-font-smoothing:antialiased; overflow-x:hidden;
+  }
+  a{color:inherit;text-decoration:none}
+  .wrap{max-width:1120px;margin:0 auto;padding:0 24px}
+  /* nav */
+  nav{position:sticky;top:0;z-index:50;backdrop-filter:blur(12px);
+    background:rgba(11,14,20,.72);border-bottom:1px solid var(--line)}
+  .nav-in{display:flex;align-items:center;justify-content:space-between;height:64px}
+  .brand{display:flex;align-items:center;gap:10px;font-weight:700;letter-spacing:-.01em}
+  .brand img{height:26px;width:auto;display:block}
+  .brand span b{color:var(--green)}
+  .nav-cta{display:flex;align-items:center;gap:14px}
+  .ghost{color:var(--muted);font-size:.95rem}
+  .ghost:hover{color:var(--text)}
+  .btn{display:inline-flex;align-items:center;gap:8px;border-radius:10px;font-weight:600;
+    padding:.6rem 1.15rem;font-size:.95rem;transition:.18s;border:1px solid transparent;cursor:pointer}
+  .btn-primary{background:var(--green-hi);color:#03110b}
+  .btn-primary:hover{background:var(--green);transform:translateY(-1px)}
+  .btn-line{border-color:var(--line);color:var(--text)}
+  .btn-line:hover{border-color:#33415a;background:#11161f}
+  /* hero */
+  .hero{padding:96px 0 56px;text-align:center;position:relative}
+  .eyebrow{display:inline-block;font-size:.8rem;letter-spacing:.08em;text-transform:uppercase;
+    color:var(--green);border:1px solid var(--line);border-radius:999px;padding:.35rem .9rem;margin-bottom:26px}
+  .hero h1{font-size:clamp(2.4rem,6vw,4.2rem);line-height:1.05;letter-spacing:-.03em;font-weight:800}
+  .hero h1 .g{color:var(--green)} .hero h1 .b{color:var(--blue)}
+  .hero p{max-width:620px;margin:22px auto 0;color:var(--muted);font-size:1.12rem}
+  .hero-cta{display:flex;gap:14px;justify-content:center;margin-top:34px;flex-wrap:wrap}
+  .btn-lg{padding:.85rem 1.6rem;font-size:1rem}
+  /* gallery */
+  .gallery{margin:64px 0 8px;display:grid;grid-template-columns:repeat(6,1fr);gap:12px}
+  .gallery img{width:100%;height:100%;object-fit:cover;border-radius:12px;display:block;
+    aspect-ratio:1;border:1px solid var(--line);background:var(--card)}
+  .gallery .tall{grid-row:span 2;aspect-ratio:1/2}
+  .gallery .wide{grid-column:span 2;aspect-ratio:2/1}
+  /* features */
+  .features{padding:84px 0}
+  .features h2{font-size:clamp(1.8rem,4vw,2.6rem);letter-spacing:-.02em;text-align:center;font-weight:800}
+  .features .sub{text-align:center;color:var(--muted);margin-top:12px;max-width:560px;margin-left:auto;margin-right:auto}
+  .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin-top:48px}
+  .feat{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:28px}
+  .feat .ic{width:42px;height:42px;border-radius:10px;display:grid;place-items:center;
+    background:rgba(16,185,129,.12);color:var(--green);font-size:1.3rem;margin-bottom:16px}
+  .feat h3{font-size:1.12rem;letter-spacing:-.01em}
+  .feat p{color:var(--muted);font-size:.96rem;margin-top:8px}
+  /* cta band */
+  .band{padding:72px 0;text-align:center;border-top:1px solid var(--line);border-bottom:1px solid var(--line);
+    background:radial-gradient(120% 100% at 50% 0%,rgba(16,185,129,.07),transparent 60%)}
+  .band h2{font-size:clamp(1.8rem,4vw,2.6rem);letter-spacing:-.02em;font-weight:800}
+  .band p{color:var(--muted);margin-top:12px}
+  /* footer */
+  footer{padding:56px 0 40px}
+  .foot-top{display:flex;justify-content:space-between;gap:40px;flex-wrap:wrap;padding-bottom:32px;border-bottom:1px solid var(--line)}
+  .foot-brand p{color:var(--muted);font-size:.86rem;max-width:240px;margin-top:10px}
+  .foot-cols{display:flex;gap:56px;flex-wrap:wrap}
+  .foot-col h5{font-size:.72rem;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-bottom:14px}
+  .foot-col a{display:block;color:var(--text);font-size:.92rem;margin-bottom:10px;opacity:.85}
+  .foot-col a:hover{opacity:1;color:var(--green)}
+  .foot-bottom{display:flex;justify-content:space-between;align-items:center;gap:16px;margin-top:28px;flex-wrap:wrap}
+  .foot-bottom span{color:var(--muted);font-size:.82rem}
+  .dot{color:var(--green-hi)}
+  @media(max-width:760px){
+    .gallery{grid-template-columns:repeat(3,1fr)}
+    .grid{grid-template-columns:1fr}
+    .nav-cta .ghost{display:none}
+  }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="wrap nav-in">
+    <a class="brand" href="/">
+      <img src="/daemonclient-logo.png" alt="DaemonClient logo" onerror="this.style.display='none'">
+      <span>DaemonClient <b>Photos</b></span>
+    </a>
+    <div class="nav-cta">
+      <a class="ghost" href="/auth/login">Sign in</a>
+      <a class="btn btn-primary" href="https://accounts.daemonclient.uz/signup?continue=https://photos.daemonclient.uz/photos">Create account</a>
+    </div>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="wrap">
+    <span class="eyebrow">Self-hosted Google Photos alternative</span>
+    <h1>Your photos.<br><span class="g">Unlimited.</span> <span class="b">Encrypted.</span> Actually yours.</h1>
+    <p>DaemonClient Photos backs up every photo and video to infrastructure <em>you</em> own — end-to-end encrypted, unlimited, no monthly fees. Browse them from any device, just like Google Photos, but private.</p>
+    <div class="hero-cta">
+      <a class="btn btn-primary btn-lg" href="https://accounts.daemonclient.uz/signup?continue=https://photos.daemonclient.uz/photos">Get started free</a>
+      <a class="btn btn-line btn-lg" href="/auth/login">Sign in</a>
+    </div>
+
+    <div class="gallery" aria-label="Example photo library">
+      <img class="wide" src="/photos/milan-night.webp" alt="Milan skyline at night — encrypted photo backup example" loading="lazy">
+      <img src="/photos/cat-fireplace.webp" alt="Cat resting by a fireplace" loading="lazy">
+      <img src="/photos/sunset.webp" alt="Golden sunset over the horizon" loading="lazy">
+      <img class="tall" src="/photos/heidelberg-bridge.webp" alt="Heidelberg old bridge over the river" loading="lazy">
+      <img src="/photos/two-cats.webp" alt="Two cats together" loading="lazy">
+      <img src="/photos/golden-retriever.webp" alt="Golden retriever portrait" loading="lazy">
+      <img src="/photos/cat-sofa.webp" alt="Cat lounging on a sofa" loading="lazy">
+      <img src="/photos/white-dove.webp" alt="White dove in flight" loading="lazy">
+      <img src="/photos/cat-sleeping.webp" alt="Cat sleeping peacefully" loading="lazy">
+    </div>
+  </div>
+</header>
+
+<section class="features">
+  <div class="wrap">
+    <h2>Google Photos, without giving up your photos</h2>
+    <p class="sub">Every image is sealed on your device before it leaves. The server only ever stores encrypted data.</p>
+    <div class="grid">
+      <div class="feat">
+        <div class="ic">∞</div>
+        <h3>Truly unlimited</h3>
+        <p>Storage is your own Telegram-backed infrastructure — back up your entire library with no quotas and no monthly bill.</p>
+      </div>
+      <div class="feat">
+        <div class="ic">🔒</div>
+        <h3>End-to-end encrypted</h3>
+        <p>Photos and videos are encrypted with AES-256-GCM before upload. Only you hold the key — not us, not anyone.</p>
+      </div>
+      <div class="feat">
+        <div class="ic">📱</div>
+        <h3>Mobile &amp; web</h3>
+        <p>Automatic background backup on Android &amp; iOS, plus a full web library to browse, search, and share from anywhere.</p>
+      </div>
+      <div class="feat">
+        <div class="ic">🗂️</div>
+        <h3>Live photos &amp; videos</h3>
+        <p>HEIC, live photos, and videos all supported — with real thumbnails, albums, favourites, and timeline browsing.</p>
+      </div>
+      <div class="feat">
+        <div class="ic">🌍</div>
+        <h3>Your infrastructure</h3>
+        <p>Connect your own Cloudflare account and Telegram bot. Your data residency, your accounts, your rules.</p>
+      </div>
+      <div class="feat">
+        <div class="ic">⚡</div>
+        <h3>Open source</h3>
+        <p>Built on Immich, fully open source. Audit the code, self-host it, and own your photo library for good.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="band">
+  <div class="wrap">
+    <h2>Back up your first photo in minutes.</h2>
+    <p>One free account works across DaemonClient Photos and Drive.</p>
+    <div class="hero-cta">
+      <a class="btn btn-primary btn-lg" href="https://accounts.daemonclient.uz/signup?continue=https://photos.daemonclient.uz/photos">Create free account</a>
+      <a class="btn btn-line btn-lg" href="/auth/login">Sign in</a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div class="foot-top">
+      <div class="foot-brand">
+        <a class="brand" href="https://daemonclient.uz/">
+          <img src="/daemonclient-logo.png" alt="DaemonClient logo" onerror="this.style.display='none'">
+          <span>DaemonClient <b>Photos</b></span>
+        </a>
+        <p>Free, unlimited, end-to-end encrypted cloud you actually own.</p>
+      </div>
+      <div class="foot-cols">
+        <div class="foot-col">
+          <h5>Products</h5>
+          <a href="https://daemonclient.uz/">DaemonClient</a>
+          <a href="https://drive.daemonclient.uz/">Encrypted Drive</a>
+          <a href="https://photos.daemonclient.uz/">Photos</a>
+        </div>
+        <div class="foot-col">
+          <h5>Account</h5>
+          <a href="https://accounts.daemonclient.uz/signup?continue=https://photos.daemonclient.uz/photos">Create account</a>
+          <a href="/auth/login">Sign in</a>
+        </div>
+        <div class="foot-col">
+          <h5>Project</h5>
+          <a href="https://github.com/myrosama/DaemonClient" target="_blank" rel="noopener">GitHub</a>
+          <a href="https://t.me/daemonclient" target="_blank" rel="noopener">Telegram</a>
+        </div>
+      </div>
+    </div>
+    <div class="foot-bottom">
+      <span>© 2026 DaemonClient — open source</span>
+      <span><span class="dot">●</span> All systems operational</span>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>
