@@ -750,7 +750,34 @@ async function ensureDeduplicationSchema(db: any): Promise<void> {
   dedupSchemaReady = true;
 }
 
+// Per-isolate concurrent-upload cap. `request.formData()` buffers the ENTIRE upload
+// body into memory before the handler can touch it. Several concurrent multi-MB
+// (HEIC) or video bodies in ONE isolate cross Cloudflare's 128 MB limit → the
+// isolate is killed and EVERY in-flight request sharing it dies with "exceeded
+// resource limits" — even tiny PNGs — and the app retries them all, burning the
+// user's mobile data. So cap concurrency per isolate and shed excess with a clean
+// 503 + Retry-After BEFORE buffering, so the app backs off instead of OOM-cascading.
+// (Module-level state is per-isolate; the check+increment are synchronous so they
+// can't interleave; the finally makes the counter leak-proof.)
+let inFlightUploads = 0;
+const MAX_INFLIGHT_UPLOADS = 2;
+
 async function handleUpload(request: Request, env: Env, uid: string, idToken: string): Promise<Response> {
+  if (inFlightUploads >= MAX_INFLIGHT_UPLOADS) {
+    return new Response(
+      JSON.stringify({ message: 'Worker busy — too many concurrent uploads, retry shortly' }),
+      { status: 503, headers: { 'Content-Type': 'application/json', 'Retry-After': '3' } },
+    );
+  }
+  inFlightUploads++;
+  try {
+    return await handleUploadImpl(request, env, uid, idToken);
+  } finally {
+    inFlightUploads--;
+  }
+}
+
+async function handleUploadImpl(request: Request, env: Env, uid: string, idToken: string): Promise<Response> {
   const flags = await getFlagsForUser(env, uid, idToken);
   if (!flags.directBytePath) {
     return json({ message: 'Direct upload path is disabled by feature flag' }, 503);
