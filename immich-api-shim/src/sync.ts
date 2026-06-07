@@ -84,13 +84,18 @@ export async function handleSyncStream(request: Request, env: Env): Promise<Resp
         if (p?.livePhotoVideoId) livePhotoVideoIds.add(p.livePhotoVideoId);
       }
 
-      const seenChecksums = new Set();
+      const seenChecksums = new Set<string>();
       // Send all assets
       for (const photo of photos) {
         if (!photo) continue;
         // Hide live photo companion videos from sync
         if (livePhotoVideoIds.has(photo._id)) continue;
 
+        // Emit the real checksum so the app can merge the phone's local copy with
+        // this remote one (matching base64(SHA-1)). Falling back to _id when it's
+        // missing is only to keep the in-sync de-dup key stable for legacy rows
+        // that haven't been backfilled yet — those still show twice until the next
+        // upload backfills their checksum (see handleUpload).
         const csum = photo.checksum || photo._id;
         if (seenChecksums.has(csum)) continue;
         seenChecksums.add(csum);

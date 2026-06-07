@@ -6,6 +6,7 @@ import { getFlagsForUser } from './feature-flags';
 import { D1Adapter } from './d1-adapter';
 import { getCachedConfig } from './cached-config';
 import { computeThumbHashFromJpeg } from './thumbhash-util';
+import { sha1Base64OfFile } from './sha1';
 
 // --- ZKE Crypto Implementation ---
 const SALT_LENGTH = 16;
@@ -809,8 +810,23 @@ async function handleUpload(request: Request, env: Env, uid: string, idToken: st
     const isEncryptedByServer = key !== null;
     
     const checksumFromHeader = request.headers.get('x-immich-checksum');
-    const checksum = (formData.get('checksum') as string) || (formData.get('xImmichChecksum') as string) || checksumFromHeader || '';
-    
+    let checksum = (formData.get('checksum') as string) || (formData.get('xImmichChecksum') as string) || checksumFromHeader || '';
+
+    // The Immich mobile app NEVER sends a checksum at upload time — its server is
+    // expected to compute base64(SHA-1(fileBytes)) itself. Without it: (a)
+    // /api/assets/bulk-upload-check can never match → the app re-uploads the
+    // whole library on every restart (the "upload storm"), and (b) sync emits a
+    // non-matching checksum → the app shows the phone-local copy AND the server
+    // copy side by side ("every photo twice"). Compute it from the plaintext we
+    // hold here. Streamed in slices so a large video never blows the memory cap.
+    if (!checksum && file) {
+      try {
+        checksum = await sha1Base64OfFile(file);
+      } catch (e: any) {
+        console.warn(`[Upload] checksum compute failed for ${file?.name}: ${e?.message}`);
+      }
+    }
+
     // Parse dimensions
     let width = parseInt(formData.get('width') as string) || 0;
     let height = parseInt(formData.get('height') as string) || 0;
@@ -850,14 +866,47 @@ async function handleUpload(request: Request, env: Env, uid: string, idToken: st
     // Live-photo pairs share the SAME deviceAssetId (both the MOV and the
     // still use asset.localId); we discriminate by media kind (video vs not)
     // so we never return the wrong half of a live pair as a duplicate.
-    if (env.DB && deviceAssetId && deviceId) {
+    if (env.DB) {
       await ensureDeduplicationSchema(env.DB);
       const adapter = new D1Adapter(env.DB);
       const isVideoMime = mimeType.startsWith('video/');
-      const existing = await adapter.getPhotoByDeviceAsset(uid, deviceAssetId, deviceId, isVideoMime);
-      if (existing) {
-        console.log(`[Upload] Dedup hit for deviceAssetId=${deviceAssetId} uid=${uid} — returning existing ${existing.id}`);
-        return json(toAssetResponseDto(D1Adapter.normalizeRow(existing), uid));
+
+      // Primary: deviceAssetId+deviceId (set on every mobile upload)
+      if (deviceAssetId && deviceId) {
+        const existing = await adapter.getPhotoByDeviceAsset(uid, deviceAssetId, deviceId, isVideoMime);
+        if (existing) {
+          // Self-healing backfill: rows uploaded before checksum-on-upload existed
+          // have an empty checksum, which keeps the storm alive (bulk-upload-check
+          // can't match) and keeps the photo showing twice (sync can't merge). The
+          // storm re-sends the bytes here, so seize the moment to populate it.
+          if (!existing.checksum && checksum) {
+            try {
+              await adapter.updatePhoto(existing.id, { checksum });
+              existing.checksum = checksum;
+              console.log(`[Upload] Backfilled checksum for ${existing.id} uid=${uid}`);
+            } catch (e: any) {
+              console.warn(`[Upload] checksum backfill failed for ${existing.id}: ${e?.message}`);
+            }
+          }
+          console.log(`[Upload] Dedup hit (deviceAsset) for ${deviceAssetId} uid=${uid} — returning ${existing.id}`);
+          return json(toAssetResponseDto(D1Adapter.normalizeRow(existing), uid));
+        }
+      }
+
+      // Fallback: checksum (catches legacy rows that predate the dedup schema
+      // and photos where deviceAssetId was not stored). Without this, bulk-upload-check
+      // returns 'accept' for those photos → the app re-sends the full file →
+      // the worker deduplicates at the upload level instead of wasting the
+      // round-trip bandwidth.
+      if (checksum) {
+        const [match] = await adapter.getPhotosByChecksums(uid, [checksum]);
+        if (match) {
+          // getPhotosByChecksums returns only id+checksum; load the full row so
+          // the response DTO is complete (web reads more than just the id).
+          const existing2 = (await adapter.getPhoto(match.id)) || match;
+          console.log(`[Upload] Dedup hit (checksum) for ${checksum} uid=${uid} — returning ${match.id}`);
+          return json(toAssetResponseDto(D1Adapter.normalizeRow(existing2), uid));
+        }
       }
     }
     // ── End deduplication check ──────────────────────────────────────────────
@@ -1826,7 +1875,7 @@ function toAssetResponseDto(photo: any, ownerId: string): any {
       projectionType: null, rating: null,
     },
     people: [], tags: [], stack: null, livePhotoVideoId: photo.livePhotoVideoId || null,
-    unassignedFaces: [], duplicateId: null, checksum: '', libraryId: null, profileImagePath: '',
+    unassignedFaces: [], duplicateId: null, checksum: photo.checksum || '', libraryId: null, profileImagePath: '',
     // --- DaemonClient Drive Metadata ---
     telegramFileId: photo.telegramThumbId || photo.telegramOriginalId,
     telegramOriginalId: photo.telegramOriginalId,

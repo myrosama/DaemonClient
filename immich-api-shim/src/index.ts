@@ -14,9 +14,12 @@ import { linkExistingLivePhotos } from './link-live-photos';
 import { requireAuth } from './helpers';
 import type { D1Database } from '@cloudflare/workers-types';
 
+// 1.2.0 — server-side Immich checksum (base64 SHA-1 of the upload bytes) so
+// bulk-upload-check matches (no re-upload storm) and the app can merge the
+// phone-local copy with the synced server copy (no "every photo twice").
 // 1.1.0 — adds Drive (/api/drive metadata routes + files table). Additive over
 // Photos; bumped so /api/health confirms a test worker actually got this bundle.
-export const WORKER_VERSION = '1.1.0';
+export const WORKER_VERSION = '1.2.0';
 
 export interface Env {
   FIREBASE_API_KEY: string;
