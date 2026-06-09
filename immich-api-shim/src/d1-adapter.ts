@@ -31,6 +31,20 @@ export interface Photo {
   // Added via self-healing ALTER in ensureDeduplicationSchema(); NULL for legacy rows.
   deviceAssetId?: string | null;
   deviceId?: string | null;
+  // EXIF camera metadata — extracted server-side at upload (exif.ts) and
+  // backfilled lazily for older rows. Added via self-healing ALTER.
+  // orientation is TEXT: the mobile sync contract types it as String.
+  make?: string | null;
+  model?: string | null;
+  lensModel?: string | null;
+  fNumber?: number | null;
+  focalLength?: number | null;
+  iso?: number | null;
+  exposureTime?: string | null;
+  orientation?: string | null;
+  dateTimeOriginal?: string | null;
+  // 1 = bytes already inspected for EXIF (at upload or by the lazy backfill).
+  exifChecked?: number;
 }
 
 export interface Album {

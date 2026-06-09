@@ -7,6 +7,7 @@ import { D1Adapter } from './d1-adapter';
 import { getCachedConfig } from './cached-config';
 import { computeThumbHashFromJpeg } from './thumbhash-util';
 import { sha1Base64OfFile } from './sha1';
+import { extractExif, type PhotoExif } from './exif';
 
 // --- ZKE Crypto Implementation ---
 const SALT_LENGTH = 16;
@@ -737,6 +738,27 @@ async function ensureDeduplicationSchema(db: any): Promise<void> {
   };
   await addColumn('ALTER TABLE photos ADD COLUMN deviceAssetId TEXT');
   await addColumn('ALTER TABLE photos ADD COLUMN deviceId TEXT');
+  // GPS columns: migration 1.1.0 added these, but the deployment-service's
+  // fresh-provision MIGRATION_SQL predates them — a worker provisioned from
+  // that schema would fail EVERY INSERT that carries latitude/longitude and
+  // 500 on /api/map/markers. Heal here so both old and new workers converge.
+  await addColumn('ALTER TABLE photos ADD COLUMN latitude REAL');
+  await addColumn('ALTER TABLE photos ADD COLUMN longitude REAL');
+  // EXIF metadata columns (camera, lens, exposure). orientation is TEXT because
+  // the Immich mobile contract (SyncAssetExifV1 / ExifResponseDto) types it as
+  // String — Dart's strict parse drops/throws on a number.
+  await addColumn('ALTER TABLE photos ADD COLUMN make TEXT');
+  await addColumn('ALTER TABLE photos ADD COLUMN model TEXT');
+  await addColumn('ALTER TABLE photos ADD COLUMN lensModel TEXT');
+  await addColumn('ALTER TABLE photos ADD COLUMN fNumber REAL');
+  await addColumn('ALTER TABLE photos ADD COLUMN focalLength REAL');
+  await addColumn('ALTER TABLE photos ADD COLUMN iso INTEGER');
+  await addColumn('ALTER TABLE photos ADD COLUMN exposureTime TEXT');
+  await addColumn('ALTER TABLE photos ADD COLUMN orientation TEXT');
+  await addColumn('ALTER TABLE photos ADD COLUMN dateTimeOriginal TEXT');
+  // 1 = this row's bytes were already inspected for EXIF (at upload or by the
+  // lazy backfill); stops backfillExifBatch re-downloading EXIF-less photos.
+  await addColumn('ALTER TABLE photos ADD COLUMN exifChecked INTEGER DEFAULT 0');
   try {
     await db.prepare(
       'CREATE INDEX IF NOT EXISTS idx_photos_dedup ON photos(ownerId, deviceAssetId, deviceId)'
@@ -865,6 +887,8 @@ async function handleUploadImpl(request: Request, env: Env, uid: string, idToken
     const parseCoord = (s: string | null) => { const n = parseFloat(s || ''); return isNaN(n) ? null : n; };
     let gpsLat: number | null = parseCoord(formData.get('latitude') as string | null);
     let gpsLon: number | null = parseCoord(formData.get('longitude') as string | null);
+    // Camera/lens/exposure metadata parsed from the file's EXIF in chunk 0 below.
+    let exif: PhotoExif = {};
     const fileCreatedAt = (formData.get('fileCreatedAt') as string) || new Date().toISOString();
     const fileModifiedAt = (formData.get('fileModifiedAt') as string) || new Date().toISOString();
     const durationRaw = formData.get('duration') ? (formData.get('duration') as string) : null;
@@ -1005,10 +1029,26 @@ async function handleUploadImpl(request: Request, env: Env, uid: string, idToken
             console.log('Failed to extract dimensions:', e);
           }
         }
-        // Extract GPS from JPEG EXIF (best-effort, never overwrites client-supplied coords)
-        if (gpsLat === null && gpsLon === null && !isHeic && !isVideo) {
-          const gps = extractJpegGps(buffer);
-          if (gps) { gpsLat = gps.latitude; gpsLon = gps.longitude; }
+        // Extract EXIF (camera, lens, exposure, GPS) — exifr reads only the
+        // metadata segments of JPEG AND HEIC, no pixel decode, so it stays
+        // within the Worker CPU budget. Best-effort: a parse failure must never
+        // break an upload. Client-supplied GPS coords always win.
+        if (!isVideo) {
+          try {
+            exif = await extractExif(buffer);
+          } catch (e: any) {
+            console.log(`[Upload] EXIF parse failed for ${fileName} (non-fatal): ${e?.message}`);
+          }
+          if (gpsLat === null && gpsLon === null) {
+            if (typeof exif.latitude === 'number' && typeof exif.longitude === 'number') {
+              gpsLat = exif.latitude;
+              gpsLon = exif.longitude;
+            } else if (!isHeic) {
+              // Legacy minimal scanner as fallback if exifr found nothing
+              const gps = extractJpegGps(buffer);
+              if (gps) { gpsLat = gps.latitude; gpsLon = gps.longitude; }
+            }
+          }
         }
       }
 
@@ -1289,6 +1329,22 @@ async function handleUploadImpl(request: Request, env: Env, uid: string, idToken
       duration: duration || undefined,
       latitude: gpsLat ?? undefined,
       longitude: gpsLon ?? undefined,
+      // EXIF camera metadata (undefined fields are dropped by savePhoto).
+      // orientation is stored as TEXT — the Immich mobile contract types it as
+      // String and Dart's strict parse rejects a number.
+      make: exif.make,
+      model: exif.model,
+      lensModel: exif.lensModel,
+      fNumber: exif.fNumber,
+      focalLength: exif.focalLength,
+      iso: exif.iso,
+      exposureTime: exif.exposureTime,
+      orientation: exif.orientation !== undefined ? String(exif.orientation) : undefined,
+      dateTimeOriginal: exif.dateTimeOriginal,
+      // Legacy/server path parsed EXIF above → mark inspected. Client uploads
+      // (web) skip parsing here, so leave 0 and let the lazy backfill handle
+      // them when they're not client-encrypted.
+      exifChecked: clientUpload ? undefined : 1,
       // Dedup fields — stored so future uploads from the same device can be
       // identified as duplicates without re-uploading to Telegram.
       deviceAssetId: deviceAssetId || undefined,
@@ -1898,10 +1954,19 @@ function toAssetResponseDto(photo: any, ownerId: string): any {
     thumbhash: photo.thumbhash || null,
     visibility: photo.visibility || 'timeline',
     exifInfo: {
-      make: null, model: null, exifImageWidth: photo.width || 0, exifImageHeight: photo.height || 0,
-      fileSizeInByte: photo.fileSize || 0, orientation: null, dateTimeOriginal: photo.fileCreatedAt || null,
-      modifyDate: null, timeZone: null, lensModel: null, fNumber: null, focalLength: null,
-      iso: null, exposureTime: null, latitude: photo.latitude ?? null, longitude: photo.longitude ?? null, city: photo.city || null,
+      make: photo.make || null, model: photo.model || null,
+      exifImageWidth: photo.width || 0, exifImageHeight: photo.height || 0,
+      fileSizeInByte: photo.fileSize || 0,
+      // orientation MUST be a string (or null): the mobile ExifResponseDto types
+      // it String? and Dart's strict parse rejects a number.
+      orientation: photo.orientation != null ? String(photo.orientation) : null,
+      dateTimeOriginal: photo.dateTimeOriginal || photo.fileCreatedAt || null,
+      modifyDate: null, timeZone: null, lensModel: photo.lensModel || null,
+      fNumber: typeof photo.fNumber === 'number' ? photo.fNumber : null,
+      focalLength: typeof photo.focalLength === 'number' ? photo.focalLength : null,
+      iso: typeof photo.iso === 'number' ? photo.iso : null,
+      exposureTime: photo.exposureTime || null,
+      latitude: photo.latitude ?? null, longitude: photo.longitude ?? null, city: photo.city || null,
       state: null, country: photo.country || null, description: photo.description || null,
       projectionType: null, rating: null,
     },
@@ -1912,6 +1977,93 @@ function toAssetResponseDto(photo: any, ownerId: string): any {
     telegramOriginalId: photo.telegramOriginalId,
     encryptionMode: photo.encryptionMode || 'off'
   };
+}
+
+// ── Lazy EXIF backfill ──────────────────────────────────────────────────────
+// Photos uploaded before server-side EXIF extraction existed have no camera
+// metadata and often no GPS. Instead of requiring a re-upload, sync.ts calls
+// this via waitUntil after each sync response: take a few unchecked rows,
+// download each photo's FIRST chunk from Telegram, decrypt it when the worker
+// holds the key (server-ZKE), parse EXIF and patch the row. Every attempted
+// row gets exifChecked=1 so EXIF-less photos (screenshots, client-encrypted
+// blobs we can't read) are never downloaded twice. Batches are small and
+// sequential so memory stays a single chunk at a time.
+let exifBackfillComplete = false;
+export async function backfillExifBatch(env: Env, uid: string, idToken: string, batchSize = 6): Promise<void> {
+  if (exifBackfillComplete || !env.DB) return;
+  try {
+    await ensureDeduplicationSchema(env.DB);
+    const rows = (await env.DB.prepare(
+      `SELECT * FROM photos
+       WHERE ownerId = ? AND mimeType LIKE 'image/%'
+         AND (exifChecked IS NULL OR exifChecked = 0)
+         AND make IS NULL AND dateTimeOriginal IS NULL
+         AND (isTrashed = 0 OR isTrashed IS NULL)
+       LIMIT ?`
+    ).bind(uid, batchSize).all()).results as any[];
+    if (!rows || rows.length === 0) {
+      exifBackfillComplete = true;
+      return;
+    }
+
+    const config = await getCachedConfig<any>(env, uid, idToken, 'telegram');
+    const botToken = config?.botToken || config?.bot_token;
+    if (!botToken) return;
+    const adapter = new D1Adapter(env.DB);
+
+    for (const photo of rows) {
+      const patch: Record<string, any> = { exifChecked: 1 };
+      try {
+        let chunks: any[] = [];
+        if (typeof photo.telegramChunks === 'string') {
+          try { chunks = JSON.parse(photo.telegramChunks); } catch { /* legacy */ }
+        } else if (Array.isArray(photo.telegramChunks)) {
+          chunks = photo.telegramChunks;
+        }
+        const firstChunk = chunks.slice().sort((a, b) => a.index - b.index)[0];
+        const fileId = firstChunk?.file_id || photo.telegramOriginalId;
+        const isServerZke = photo.encryptionMode === 'server';
+        const isClientZke = photo.encryptionMode === 'client';
+        // Client-encrypted bytes are unreadable here — just mark checked.
+        if (fileId && !isClientZke) {
+          const key = isServerZke ? await getEncryptionKey(env, uid, idToken) : null;
+          if (!isServerZke || key) {
+            const queue = getTgQueue(botToken);
+            await queue.acquire(undefined, 1); // low priority — never starve user requests
+            let result;
+            try { result = await tgDownloadFile(botToken, fileId); }
+            finally { queue.release(); }
+            if (result.ok && result.data) {
+              let data = result.data;
+              if (isServerZke && key) data = await decryptChunk(data, key);
+              const ex = await extractExif(new Uint8Array(data));
+              if (ex.make) patch.make = ex.make;
+              if (ex.model) patch.model = ex.model;
+              if (ex.lensModel) patch.lensModel = ex.lensModel;
+              if (typeof ex.fNumber === 'number') patch.fNumber = ex.fNumber;
+              if (typeof ex.focalLength === 'number') patch.focalLength = ex.focalLength;
+              if (typeof ex.iso === 'number') patch.iso = ex.iso;
+              if (ex.exposureTime) patch.exposureTime = ex.exposureTime;
+              if (ex.orientation !== undefined) patch.orientation = String(ex.orientation);
+              if (ex.dateTimeOriginal) patch.dateTimeOriginal = ex.dateTimeOriginal;
+              if (photo.latitude == null && typeof ex.latitude === 'number' && typeof ex.longitude === 'number') {
+                patch.latitude = ex.latitude;
+                patch.longitude = ex.longitude;
+              }
+            }
+          }
+        }
+      } catch (e: any) {
+        console.log(`[ExifBackfill] ${photo.id} parse failed (marking checked): ${e?.message}`);
+      }
+      try { await adapter.updatePhoto(photo.id, patch); } catch (e: any) {
+        console.log(`[ExifBackfill] ${photo.id} update failed: ${e?.message}`);
+      }
+    }
+    console.log(`[ExifBackfill] processed ${rows.length} photos for uid=${uid}`);
+  } catch (e: any) {
+    console.log('[ExifBackfill] batch failed (non-fatal):', e?.message);
+  }
 }
 
 // --- Telegram Fetch with Retry ---

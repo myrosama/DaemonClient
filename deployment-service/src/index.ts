@@ -84,7 +84,12 @@ CREATE TABLE photos (
   checksum TEXT, isHeic INTEGER DEFAULT 0, livePhotoVideoId TEXT,
   isFavorite INTEGER DEFAULT 0, isTrashed INTEGER DEFAULT 0,
   visibility TEXT DEFAULT 'timeline', description TEXT, city TEXT, country TEXT,
-  thumbhash TEXT, telegramPreviewId TEXT, previewEncrypted INTEGER DEFAULT 0
+  thumbhash TEXT, telegramPreviewId TEXT, previewEncrypted INTEGER DEFAULT 0,
+  latitude REAL, longitude REAL,
+  deviceAssetId TEXT, deviceId TEXT,
+  make TEXT, model TEXT, lensModel TEXT, fNumber REAL, focalLength REAL,
+  iso INTEGER, exposureTime TEXT, orientation TEXT, dateTimeOriginal TEXT,
+  exifChecked INTEGER DEFAULT 0
 );
 CREATE INDEX idx_photos_uploadedAt ON photos(uploadedAt DESC);
 CREATE INDEX idx_photos_fileCreatedAt ON photos(fileCreatedAt DESC);

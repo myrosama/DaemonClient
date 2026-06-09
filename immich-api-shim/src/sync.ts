@@ -1,11 +1,17 @@
 import type { Env } from './index';
 import { requireAuth, firestoreQuery } from './helpers';
 import { D1Adapter } from './d1-adapter';
+import { backfillExifBatch } from './assets';
 
 // Fire at most once per Worker isolate lifetime (typically 30 min – a few hours).
 // Sync is called every few minutes by the mobile app, so this ensures long-lived
 // sessions still get worker updates even when the user never re-logs in.
 let lastAutoUpdateAttempt = 0;
+
+// Lazy EXIF backfill pacing: one small batch per sync, but never more often
+// than this, so a burst of syncs doesn't stack Telegram downloads.
+let lastExifBackfill = 0;
+const EXIF_BACKFILL_INTERVAL_MS = 3 * 60 * 1000;
 
 export async function handleSyncStream(request: Request, env: Env): Promise<Response> {
   const session = await requireAuth(request, env);
@@ -137,6 +143,45 @@ export async function handleSyncStream(request: Request, env: Env): Promise<Resp
           ack: `AssetV1|${photo._id}`,
           ids: [photo._id]
         });
+
+        // EXIF companion event — populates the mobile detail panel and the
+        // mobile MAP (the app's map reads lat/lon from its local exif table,
+        // which only this event fills). Field types follow SyncAssetExifV1
+        // exactly: orientation is String?, iso/width/height/fileSize are int,
+        // fNumber/focalLength/latitude/longitude are double — Dart's strict
+        // parse silently nulls (or throws on) anything mistyped.
+        send({
+          type: 'AssetExifV1',
+          data: {
+            assetId: photo._id,
+            city: photo.city || null,
+            country: photo.country || null,
+            dateTimeOriginal: photo.dateTimeOriginal || dateStr,
+            description: photo.description || null,
+            exifImageHeight: Math.round(photo.height || 0) || null,
+            exifImageWidth: Math.round(photo.width || 0) || null,
+            exposureTime: photo.exposureTime || null,
+            fNumber: typeof photo.fNumber === 'number' ? photo.fNumber : null,
+            fileSizeInByte: Math.round(photo.fileSize || 0) || null,
+            focalLength: typeof photo.focalLength === 'number' ? photo.focalLength : null,
+            fps: null,
+            iso: typeof photo.iso === 'number' ? Math.round(photo.iso) : null,
+            latitude: typeof photo.latitude === 'number' ? photo.latitude : null,
+            lensModel: photo.lensModel || null,
+            longitude: typeof photo.longitude === 'number' ? photo.longitude : null,
+            make: photo.make || null,
+            model: photo.model || null,
+            modifyDate: null,
+            orientation: photo.orientation != null ? String(photo.orientation) : null,
+            profileDescription: null,
+            projectionType: null,
+            rating: null,
+            state: null,
+            timeZone: null,
+          },
+          ack: `AssetExifV1|${photo._id}`,
+          ids: [photo._id]
+        });
       }
 
       // Emit delete events for tombstoned assets (isTrashed=1 in D1).
@@ -158,6 +203,18 @@ export async function handleSyncStream(request: Request, env: Env): Promise<Resp
       controller.close();
     }
   });
+
+  // Kick a small lazy EXIF-backfill batch for rows uploaded before server-side
+  // EXIF extraction existed (needs the user's idToken for the server-ZKE key,
+  // which is why it rides on sync rather than a cron).
+  if (env.DB && env.waitUntil && now - lastExifBackfill > EXIF_BACKFILL_INTERVAL_MS) {
+    lastExifBackfill = now;
+    env.waitUntil(
+      backfillExifBatch(env, session.uid, session.idToken).catch(err =>
+        console.log('[ExifBackfill] dispatch failed:', err?.message)
+      )
+    );
+  }
 
   return new Response(stream, {
     headers: {

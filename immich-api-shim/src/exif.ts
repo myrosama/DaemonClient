@@ -39,12 +39,14 @@ function toIso(v: unknown): string | undefined {
 export async function extractExif(bytes: Uint8Array): Promise<PhotoExif> {
   const out: PhotoExif = {};
   // tiff/ifd0/exif → camera + lens + exposure tags; gps → decimal latitude/longitude.
+  // translateValues MUST stay false: with it on, Orientation comes back as a
+  // human string ("Horizontal (normal)") instead of the numeric 1-8 code that
+  // Immich's rotation logic expects. reviveValues turns EXIF dates into Date.
   const data: any = await exifr.parse(bytes, {
     tiff: true,
-    ifd0: true,
     exif: true,
     gps: true,
-    translateValues: true,
+    translateValues: false,
     reviveValues: true,
   });
   if (!data) return out;
