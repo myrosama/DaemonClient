@@ -63,14 +63,33 @@ worker traffic (separate fix: central relay, someday).
 
 ## Testing & money timeline (nothing for us to buy, ever)
 
-- Android: CI APK installs on any Android device from Phase 1 day one. $0.
-- iPhone: friend's account enters at FIRST DEVICE TEST (not at publish):
-  they create the app record (bundle id) + invite our Apple ID to App Store
-  Connect → **internal TestFlight**: builds land on the phone ~15-30 min
-  after CI upload, NO review. External tester link (friends) needs one short
-  Beta App Review for the first build only. Publishing later = same account.
-- Free-Apple-ID sideloading from Linux (SideStore/AltServer-Linux) exists as
-  a fallback but expires every 7 days — TestFlight is strictly better.
+Bundle id clarification: `uz.daemonclient.photos` is NOT a domain — it's just
+Apple/Google's unique app ID string, written as our real domain
+(daemonclient.uz) reversed by convention. Nothing to register or buy.
+
+Friend involvement = ONE favor, ~2 minutes, ONCE, deferrable to publish prep:
+appstoreconnect.apple.com → Users and Access → "+" → our Apple ID email →
+role **App Manager** + tick "Access to Certificates, Identifiers & Profiles"
+→ send invite. From that seat WE do everything ourselves: create the app
+record, generate an individual App Store Connect API key for CI, signing
+certs (fastlane/Codemagic automate it), TestFlight, App Store submission.
+The friend never touches it again. (Trust note: the app is published under
+their seller name, so they're vouching for it.)
+
+Day-to-day testing WITHOUT the friend and WITHOUT money:
+- **Android APK** from CI → any Android device, instant. $0.
+- **iOS Simulator builds need NO Apple account at all** (`flutter build ios
+  --simulator --no-codesign` on a GitHub Actions macOS runner):
+  - **Appetize.io free tier** (~30-100 min/month, demo-grade): upload the
+    simulator .app → interact with the iPhone in the BROWSER. Perfect for
+    onboarding/design review sessions.
+  - GitHub Actions can also run the simulator headlessly: Claude runs the
+    integration tests + records simulator screen videos and sends them for
+    review on every build.
+- Real-iPhone-before-publish (optional): SideStore/AltServer-Linux free
+  sideloading — works, but 7-day re-sign, fiddly. Usually not worth it; the
+  first on-device moment can simply be internal TestFlight at publish prep
+  (builds appear ~20 min after upload, no review).
 
 ## Design & onboarding (we own all of it; onboarding is make-or-break)
 
