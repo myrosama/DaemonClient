@@ -8,6 +8,7 @@ import { getCachedConfig } from './cached-config';
 import { computeThumbHashFromJpeg } from './thumbhash-util';
 import { sha1Base64OfFile } from './sha1';
 import { extractExif, type PhotoExif } from './exif';
+import { StoreZipWriter } from './zip';
 
 // --- ZKE Crypto Implementation ---
 const SALT_LENGTH = 16;
@@ -1977,6 +1978,144 @@ function toAssetResponseDto(photo: any, ownerId: string): any {
     telegramOriginalId: photo.telegramOriginalId,
     encryptionMode: photo.encryptionMode || 'off'
   };
+}
+
+// ── Downloads (/api/download/*) ─────────────────────────────────────────────
+// Real implementation of the Immich download contract (was an empty stub, so
+// the web "Download" button silently did nothing: /info returned zero archives
+// and the loop had nothing to iterate). /info plans the archives; /archive
+// streams a STORE-mode ZIP straight from Telegram chunks with backpressure, so
+// memory stays one chunk regardless of archive size.
+const MAX_ARCHIVE_BYTES = 3.5 * 1024 * 1024 * 1024; // stay under ZIP32's 4 GiB
+
+async function loadOwnedPhotos(env: Env, uid: string, ids: string[]): Promise<any[]> {
+  const out: any[] = [];
+  // D1 caps bound parameters per statement — query in slices.
+  for (let i = 0; i < ids.length; i += 80) {
+    const slice = ids.slice(i, i + 80);
+    const placeholders = slice.map(() => '?').join(',');
+    const rows = await env.DB!.prepare(
+      `SELECT * FROM photos WHERE ownerId = ? AND id IN (${placeholders})`
+    ).bind(uid, ...slice).all();
+    out.push(...(rows.results || []));
+  }
+  // Preserve the requested order (zip entries should match the selection).
+  const byId = new Map(out.map(r => [r.id, r]));
+  return ids.map(id => byId.get(id)).filter(Boolean);
+}
+
+export async function handleDownload(request: Request, env: Env, path: string): Promise<Response> {
+  const session = await requireAuth(request, env);
+  const uid = session.uid;
+  const idToken = session.idToken;
+  if (!env.DB) return json({ message: 'Downloads need D1' }, 501);
+
+  if (path === '/api/download/info' && request.method === 'POST') {
+    const body = await request.json().catch(() => ({})) as any;
+    let ids: string[] = Array.isArray(body.assetIds) ? body.assetIds : [];
+    if (!ids.length && body.albumId) {
+      const rows = await env.DB.prepare(
+        'SELECT assetId FROM album_assets WHERE albumId = ?'
+      ).bind(body.albumId).all<{ assetId: string }>();
+      ids = (rows.results || []).map(r => r.assetId);
+    }
+    const photos = await loadOwnedPhotos(env, uid, ids);
+    const target = Math.min(Number(body.archiveSize) || MAX_ARCHIVE_BYTES, MAX_ARCHIVE_BYTES);
+    const archives: Array<{ size: number; assetIds: string[] }> = [];
+    let cur = { size: 0, assetIds: [] as string[] };
+    let totalSize = 0;
+    for (const p of photos) {
+      const sz = p.fileSize || 0;
+      if (cur.assetIds.length > 0 && cur.size + sz > target) {
+        archives.push(cur);
+        cur = { size: 0, assetIds: [] };
+      }
+      cur.size += sz;
+      cur.assetIds.push(p.id);
+      totalSize += sz;
+    }
+    if (cur.assetIds.length > 0) archives.push(cur);
+    return json({ totalSize, archives });
+  }
+
+  if (path === '/api/download/archive' && request.method === 'POST') {
+    const body = await request.json().catch(() => ({})) as any;
+    const ids: string[] = Array.isArray(body.assetIds) ? body.assetIds : [];
+    const photos = await loadOwnedPhotos(env, uid, ids);
+    if (!photos.length) return json({ message: 'No assets found' }, 404);
+
+    const config = await getCachedConfig<any>(env, uid, idToken, 'telegram');
+    const botToken = config?.botToken || config?.bot_token;
+    if (!botToken) return json({ message: 'No Telegram config' }, 500);
+    // One key fetch for the whole archive (covers server-ZKE photos).
+    const anyServerZke = photos.some(p => p.encryptionMode === 'server');
+    const key = anyServerZke ? await getEncryptionKey(env, uid, idToken) : null;
+
+    const { readable, writable } = new TransformStream();
+    const writer = writable.getWriter();
+    const pump = async () => {
+      const zip = new StoreZipWriter((b) => writer.write(b));
+      const usedNames = new Set<string>();
+      try {
+        for (const photo of photos) {
+          // Client-encrypted bytes would zip as unreadable blobs — skip them.
+          if (photo.encryptionMode === 'client') continue;
+          let chunks: any[] = [];
+          if (typeof photo.telegramChunks === 'string') {
+            try { chunks = JSON.parse(photo.telegramChunks); } catch { /* legacy */ }
+          } else if (Array.isArray(photo.telegramChunks)) {
+            chunks = photo.telegramChunks;
+          }
+          chunks.sort((a, b) => a.index - b.index);
+          const fileIds: string[] = chunks.length
+            ? chunks.map(c => c.file_id)
+            : (photo.telegramOriginalId ? [photo.telegramOriginalId] : []);
+          if (!fileIds.length) continue;
+
+          let name = photo.fileName || `${photo.id}.bin`;
+          if (usedNames.has(name)) {
+            const dot = name.lastIndexOf('.');
+            const stem = dot > 0 ? name.slice(0, dot) : name;
+            const ext = dot > 0 ? name.slice(dot) : '';
+            let n = 2;
+            while (usedNames.has(`${stem} (${n})${ext}`)) n++;
+            name = `${stem} (${n})${ext}`;
+          }
+          usedNames.add(name);
+
+          await zip.beginFile(name, new Date(photo.fileCreatedAt || Date.now()));
+          for (const fileId of fileIds) {
+            const queue = getTgQueue(botToken);
+            await queue.acquire(undefined, 10); // downloads: high priority, not paced
+            let result;
+            try { result = await tgDownloadFile(botToken, fileId); }
+            finally { queue.release(); }
+            if (!result.ok || !result.data) throw new Error(`chunk download failed: ${result.error}`);
+            let data = result.data;
+            if (photo.encryptionMode === 'server' && key) data = await decryptChunk(data, key);
+            await zip.writeData(new Uint8Array(data));
+          }
+          await zip.endFile();
+        }
+        await zip.finish();
+        await writer.close();
+      } catch (e: any) {
+        console.error('[Download] archive stream failed:', e?.message);
+        await writer.abort(e).catch(() => {});
+      }
+    };
+    if (env.waitUntil) env.waitUntil(pump()); else pump().catch(() => {});
+
+    return new Response(readable, {
+      headers: {
+        'Content-Type': 'application/zip',
+        'Content-Disposition': 'attachment; filename="daemonclient-photos.zip"',
+        'Cache-Control': 'no-store',
+      },
+    });
+  }
+
+  return json({ message: 'Download endpoint not found' }, 404);
 }
 
 // ── Lazy EXIF backfill ──────────────────────────────────────────────────────

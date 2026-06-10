@@ -1,7 +1,7 @@
 import { handleAuth } from './auth';
 import { handleServer } from './server';
 import { handleTimeline } from './timeline';
-import { handleAssets } from './assets';
+import { handleAssets, handleDownload } from './assets';
 import { handleUser } from './user';
 import { handleAlbums } from './albums';
 import { handleStubs } from './stubs';
@@ -131,6 +131,8 @@ export default {
         response = await handleSearch(request, env, path);
       } else if (path.startsWith('/api/drive')) {
         response = await handleDrive(request, env, path, url);
+      } else if (path.startsWith('/api/download')) {
+        response = await handleDownload(request, env, path);
       } else if (path === '/api/admin/link-live-photos' && request.method === 'POST') {
         const session = await requireAuth(request, env);
         response = await linkExistingLivePhotos(request, env, session.uid, session.idToken);

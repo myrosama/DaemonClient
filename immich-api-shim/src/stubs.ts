@@ -78,9 +78,6 @@ export async function handleStubs(_request: Request, _env: Env, path: string): P
   // Database
   if (path === '/api/database-backups') return json([]);
 
-  // Download
-  if (path === '/api/download/info') return json({ totalSize: 0, archives: [] });
-
   // Onboarding
   if (path === '/api/server/onboarding') return json({});
 

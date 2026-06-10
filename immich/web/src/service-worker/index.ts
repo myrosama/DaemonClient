@@ -5,11 +5,15 @@
 import { installMessageListener } from './messaging';
 import { handleCancel } from './request';
 
-// Fallback for /api/auth/login only — that's the one endpoint the SW must hit
-// before it knows the user's per-user worker URL. Login response includes
-// `workerUrl`, which we persist and route everything else to directly so the
-// user's own worker handles all their data.
-const DEFAULT_WORKER_URL = 'https://immich-api.sadrikov49.workers.dev';
+// Fallback for pre-login traffic (server config, auth) — the endpoints the SW
+// must reach before it knows the user's per-user worker URL. Login response
+// includes `workerUrl`, which we persist and route everything else to directly
+// so the user's own worker handles all their data.
+// Custom domain, NOT immich-api.sadrikov49.workers.dev: several mobile
+// carriers block or degrade *.workers.dev, which made first-visit boot die
+// with a 503 while photos.daemonclient.uz itself loaded fine. Same worker,
+// same zero-cost plan — just reached through the daemonclient.uz zone.
+const DEFAULT_WORKER_URL = 'https://api.daemonclient.uz';
 const ASSET_BINARY_REGEX = /^\/api\/assets\/[a-f0-9-]+\/(original|thumbnail)/;
 const API_REGEX = /^\/api\//;
 const TOKEN_CACHE_KEY = 'https://dc-internal/auth-token';
@@ -253,7 +257,14 @@ async function directWorkerFetch(request: Request, cacheable: boolean, pathname:
     }
   } else {
     try {
-      response = await fetch(workerUrl, { method: request.method, headers, body });
+      // GET/HEAD are idempotent → retry transient 429/503/network drops with
+      // backoff. Without this, ONE flaky-4G packet loss during the app's boot
+      // call (/api/server/config) used to surface as a hard "Error 503" page.
+      // Mutations (POST/PUT/DELETE) keep single-shot semantics.
+      const idempotent = request.method === 'GET' || request.method === 'HEAD';
+      response = idempotent
+        ? await fetchWithBackoff(workerUrl, { method: request.method, headers, body })
+        : await fetch(workerUrl, { method: request.method, headers, body });
     } catch (err) {
       if (cacheable) {
         const cache = await caches.open('dc-assets-v4');
