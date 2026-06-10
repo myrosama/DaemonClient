@@ -915,6 +915,13 @@ async function handleUploadImpl(request: Request, env: Env, uid: string, idToken
 
     const isHeic = /\.(heic|heif)$/i.test(fileName) || mimeType === 'image/heic' || mimeType === 'image/heif';
 
+    // Authoritative live-photo link from the (mobile) client: the app uploads
+    // the MOV first, then the still with livePhotoVideoId = the video's asset
+    // id. Read BEFORE the dedup check so a retried still can backfill the link
+    // onto its existing row (otherwise the link is lost and the motion video
+    // shows up as a separate timeline item).
+    const livePhotoVideoId = (formData.get('livePhotoVideoId') as string) || null;
+
     // ── Deduplication check ──────────────────────────────────────────────────
     // Run BEFORE any Telegram work. When the Immich mobile app reopens it
     // retries every asset whose status it doesn't know — `deviceAssetId +
@@ -942,6 +949,19 @@ async function handleUploadImpl(request: Request, env: Env, uid: string, idToken
               console.log(`[Upload] Backfilled checksum for ${existing.id} uid=${uid}`);
             } catch (e: any) {
               console.warn(`[Upload] checksum backfill failed for ${existing.id}: ${e?.message}`);
+            }
+          }
+          // Link backfill: the app retries a still whose first upload happened
+          // before its motion video existed (or whose response was lost). The
+          // retry carries the authoritative livePhotoVideoId — store it, or the
+          // motion video stays unhidden as a duplicate timeline item.
+          if (livePhotoVideoId && !existing.livePhotoVideoId && !isVideoMime) {
+            try {
+              await adapter.updatePhoto(existing.id, { livePhotoVideoId });
+              existing.livePhotoVideoId = livePhotoVideoId;
+              console.log(`[Upload] Backfilled livePhotoVideoId for ${existing.id} uid=${uid}`);
+            } catch (e: any) {
+              console.warn(`[Upload] livePhotoVideoId backfill failed for ${existing.id}: ${e?.message}`);
             }
           }
           console.log(`[Upload] Dedup hit (deviceAsset) for ${deviceAssetId} uid=${uid} — returning ${existing.id}`);
@@ -972,12 +992,6 @@ async function handleUploadImpl(request: Request, env: Env, uid: string, idToken
     // sends one directly; for mobile/server uploads we derive it below from the
     // Telegram-generated thumbnail. Serving + web-render paths already exist.
     let thumbhash = (formData.get('thumbhash') as string) || null;
-    // Authoritative live-photo link from the (mobile) client: the app uploads
-    // the MOV first, then the still with livePhotoVideoId = the video's asset id.
-    // Honour it directly — the flaky timestamp/duration heuristic in
-    // linkLivePhoto is only a fallback. Once the still carries livePhotoVideoId
-    // the timeline auto-hides the paired video (timeline.ts filters those out).
-    const livePhotoVideoId = (formData.get('livePhotoVideoId') as string) || null;
 
     // CRITICAL DEBUG: Check if mobile sends thumbnail
     if (thumbBase64) {
@@ -1359,7 +1373,12 @@ async function handleUploadImpl(request: Request, env: Env, uid: string, idToken
       await firestoreSet(env, uid, `photos/${assetId}`, photo, idToken);
     }
 
-    if (mimeType.startsWith('video/') || isHeic) {
+    // Heuristic pairing is a FALLBACK only. When the app already sent the
+    // authoritative livePhotoVideoId (stored above), running the heuristic
+    // anyway let a neighbouring still taken within 2s get re-linked to this
+    // video, orphaning that still's own motion video — which then showed up
+    // in the timeline as a standalone extra video.
+    if ((mimeType.startsWith('video/') || isHeic) && !livePhotoVideoId) {
       env.waitUntil?.(linkLivePhoto(env, uid, assetId, photo, idToken));
     }
 
@@ -2412,6 +2431,15 @@ async function linkLivePhoto(env: Env, uid: string, assetId: string, photo: any,
       const matchingImage = candidatesForLinking.find((p: any) => {
         const isHeicCandidate = p.isHeic || p.mimeType === 'image/heic';
         if (!isHeicCandidate) return false;
+        // NEVER overwrite an existing link — re-linking an already-paired
+        // still orphans its real motion video (shows as a duplicate video).
+        if (p.livePhotoVideoId) return false;
+        // Live-pair halves share the phone-local deviceAssetId — when both
+        // sides carry one, only an exact match qualifies (timestamps alone
+        // mis-pair bursts taken within the same 2 seconds).
+        if (p.deviceAssetId && photo.deviceAssetId) {
+          return p.deviceAssetId === photo.deviceAssetId && p.deviceId === photo.deviceId;
+        }
         // Check if timestamps are within 2 seconds
         const timeDiff = Math.abs(
           new Date(p.fileCreatedAt).getTime() - new Date(photo.fileCreatedAt).getTime()
@@ -2437,11 +2465,24 @@ async function linkLivePhoto(env: Env, uid: string, assetId: string, photo: any,
         console.log(`[LivePhoto] ❌ No matching HEIC found for video ${assetId}`);
       }
     } else if (isHeic) {
+      // This still already has its authoritative link — nothing to do.
+      if (photo.livePhotoVideoId) return;
       // Look for matching MOV video
       console.log(`[LivePhoto] Looking for MOV pair for HEIC ${assetId}`);
+      // Videos already claimed by another recent still are off-limits —
+      // stealing them orphans that still's motion (duplicate-video bug).
+      const claimedVideoIds = new Set(
+        recentUploads.map((p: any) => p.livePhotoVideoId).filter(Boolean)
+      );
       const matchingVideo = candidatesForLinking.find((p: any) => {
         const isVideoCandidate = p.mimeType?.startsWith('video/');
         if (!isVideoCandidate) return false;
+        if (claimedVideoIds.has(p._id)) return false;
+        // deviceAssetId is the app's ground-truth pairing key (both halves
+        // share it) — when both sides carry one, require the exact match.
+        if (p.deviceAssetId && photo.deviceAssetId) {
+          return p.deviceAssetId === photo.deviceAssetId && p.deviceId === photo.deviceId;
+        }
 
         // Live photos are typically 1-3 seconds, must have duration
         const durationSecs = p.duration ? parseFloat(p.duration) : 0;

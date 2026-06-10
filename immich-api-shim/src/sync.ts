@@ -2,6 +2,7 @@ import type { Env } from './index';
 import { requireAuth, firestoreQuery } from './helpers';
 import { D1Adapter } from './d1-adapter';
 import { backfillExifBatch } from './assets';
+import { repairLivePhotoLinks } from './link-live-photos';
 
 // Fire at most once per Worker isolate lifetime (typically 30 min – a few hours).
 // Sync is called every few minutes by the mobile app, so this ensures long-lived
@@ -212,6 +213,16 @@ export async function handleSyncStream(request: Request, env: Env): Promise<Resp
     env.waitUntil(
       backfillExifBatch(env, session.uid, session.idToken).catch(err =>
         console.log('[ExifBackfill] dispatch failed:', err?.message)
+      )
+    );
+  }
+
+  // One-shot (per isolate) live-photo link repair: clears poisoned video-row
+  // links and re-pairs stills with their motion videos via deviceAssetId.
+  if (env.DB && env.waitUntil) {
+    env.waitUntil(
+      repairLivePhotoLinks(env, session.uid).catch(err =>
+        console.log('[LivePhotoRepair] dispatch failed:', err?.message)
       )
     );
   }
