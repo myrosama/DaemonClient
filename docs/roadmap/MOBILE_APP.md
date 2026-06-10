@@ -40,6 +40,54 @@ the default. Drive-as-iOS-Files-source comes much later (Phase 4).
 - Exit criteria: TestFlight build on the iPhone, APK on the Samsung,
   login → existing library loads.
 
+## What the fork ELIMINATES (researched 2026-06-10, grounded in this repo)
+
+The phone has hardware codecs and the original file in hand — so every job the
+Worker struggles with moves client-side. For app uploads the worker becomes a
+metadata + read server:
+
+| Constraint today | After fork |
+|---|---|
+| HEIC thumbnails need browser Fix-tool / Render pillow-heif backend | DEAD — `entity.thumbnailDataWithSize(256,256)` (photo_manager) returns a JPEG for HEIC/RAW/video poster frames; the fork's background path ALREADY posts `thumbData_base64` to `/assets/:id/thumbnail` (background_upload.service.dart:282-295). Make it universal (foreground too, attach at upload). Render backend retires. |
+| >19MB videos get no thumbnail (Telegram auto-thumb limit) | DEAD — same poster-frame path. |
+| >100MB uploads impossible (CF 100MB body cap) | DEAD — app slices ≤19MB parts (Phase 2). Stretch: direct-to-Telegram via proxy like web's file-uploader.ts + finalize-client-upload → worker never touches media bytes → upload OOM/503/concurrency-cap class disappears + true client-side encryption. |
+| Worker computes SHA-1 (DigestStream) | Redundant for app uploads — the app already hashes locally for bulk-upload-check. |
+| Worker parses EXIF (exifr) | App sends metadata from PhotoKit/MediaStore at upload (worker parse stays for web/legacy). |
+| Users type ugly workers.dev URL at login | DEAD — `api.daemonclient.uz` baked in; users see only email+password. Kills the "prettier worker URLs" backlog item. |
+
+What does NOT go away: Telegram bot 20MB download cap (19MB chunks + range
+streaming stay forever — read path unchanged); iOS background-time limits
+(full-library backup still wants the app foregrounded sometimes; Android can
+run a real foreground service); workers.dev carrier-blocking for per-user
+worker traffic (separate fix: central relay, someday).
+
+## Testing & money timeline (nothing for us to buy, ever)
+
+- Android: CI APK installs on any Android device from Phase 1 day one. $0.
+- iPhone: friend's account enters at FIRST DEVICE TEST (not at publish):
+  they create the app record (bundle id) + invite our Apple ID to App Store
+  Connect → **internal TestFlight**: builds land on the phone ~15-30 min
+  after CI upload, NO review. External tester link (friends) needs one short
+  Beta App Review for the first build only. Publishing later = same account.
+- Free-Apple-ID sideloading from Linux (SideStore/AltServer-Linux) exists as
+  a fallback but expires every 7 days — TestFlight is strictly better.
+
+## Design & onboarding (we own all of it; onboarding is make-or-break)
+
+Brand: match the landing aesthetic (dark, gradient accents). Reskin Immich's
+internal screens (colors/icon/typography); fully custom: welcome, auth,
+onboarding, mode switcher.
+
+Onboarding flow v1:
+1. Welcome carousel (Free. Unlimited. Encrypted. Yours.)
+2. Create account / Sign in — email+password only, no URLs anywhere.
+3. Guided private-cloud setup (the hard UX): step-by-step Cloudflare account
+   + API token + Telegram bot/channel with in-app instructions and live
+   validation, then "Building your private cloud…" progress (reuses
+   deployment-service provisioning: account → database → worker).
+4. Default mode question: Photos or Drive.
+5. (Photos) backup album selection → done.
+
 ### Phase 2 — chunked upload (>100 MB videos) ← the feature that forced the fork
 Worker (immich-api-shim):
 - `POST /api/assets/chunked/begin` → uploadId (D1 upload_sessions reuse)
