@@ -1733,7 +1733,8 @@ async function handleMediaHead(env: Env, uid: string, assetId: string, idToken: 
   return new Response(null, { status: 200, headers });
 }
 
-async function handleOriginal(request: Request, env: Env, uid: string, assetId: string, idToken: string): Promise<Response> {
+// Exported for range-stitching tests (multi-chunk video playback math).
+export async function handleOriginal(request: Request, env: Env, uid: string, assetId: string, idToken: string): Promise<Response> {
   console.log(`[handleOriginal] AssetID: ${assetId}, Path: ${new URL(request.url).pathname}`);
   const photo = await loadPhotoById(env, uid, assetId, idToken);
   if (!photo) return json({ message: 'Not found' }, 404);
@@ -1813,6 +1814,18 @@ async function handleOriginal(request: Request, env: Env, uid: string, assetId: 
       // Browsers tolerate it too, so this fixes mobile without regressing web.
       const MAX_RANGE_BYTES = 8 * 1024 * 1024; // 8 MB per response
       if (end - start + 1 > MAX_RANGE_BYTES) end = start + MAX_RANGE_BYTES - 1;
+
+      // Chunk-align large windows: a window that straddles two 19MB chunks
+      // costs TWO Telegram downloads before the first byte goes out, which is
+      // exactly when mobile players time out (single-chunk videos played fine,
+      // multi-chunk ones didn't). Trimming to the current chunk's end keeps
+      // every large 206 behind ONE chunk download — and that chunk is cached,
+      // so the player's next sequential window is nearly free. Small explicit
+      // ranges (≤2MB, e.g. moov probes) still get exactly what they asked for.
+      const lastByteOfStartChunk = (Math.floor(start / chunkSize) + 1) * chunkSize - 1;
+      if (end > lastByteOfStartChunk && end - start + 1 > 2 * 1024 * 1024) {
+        end = lastByteOfStartChunk;
+      }
 
       // Calculate which chunks we need for this byte range
       const firstChunkIdx = Math.floor(start / chunkSize);
