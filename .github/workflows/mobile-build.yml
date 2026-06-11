@@ -1,0 +1,64 @@
+# DaemonClient mobile (fork of immich/mobile) — CI builds without owning a Mac.
+# Android: installable debug APK artifact.
+# iOS: UNSIGNED simulator .app (no Apple account needed) — runs on Appetize.io
+#      in the browser and in CI simulators.
+# Triggers only on mobile changes (or manually) so worker/web pushes never
+# burn minutes.
+name: mobile-build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'immich/mobile/**'
+      - '.github/workflows/mobile-build.yml'
+
+defaults:
+  run:
+    working-directory: immich/mobile
+
+jobs:
+  android-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.41.7'
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: flutter build apk --debug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: daemonclient-android-apk
+          path: immich/mobile/build/app/outputs/flutter-apk/app-debug.apk
+          retention-days: 14
+
+  ios-simulator:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.41.7'
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: flutter build ios --simulator
+      - name: Zip simulator app (Appetize-ready)
+        run: |
+          cd build/ios/iphonesimulator
+          zip -qr daemonclient-ios-simulator.zip *.app
+      - uses: actions/upload-artifact@v4
+        with:
+          name: daemonclient-ios-simulator
+          path: immich/mobile/build/ios/iphonesimulator/daemonclient-ios-simulator.zip
+          retention-days: 14
