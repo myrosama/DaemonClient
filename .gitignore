@@ -58,6 +58,12 @@ lib-es6/
 # components, utils), making them untrackable.
 !immich/web/src/lib/
 !immich/web/src/lib/**
+# ...and the Flutter fork's lib/ trees are source too: the app itself, the
+# generated openapi client it imports, and the workspace UI packages. Without
+# these negations the ENTIRE Dart codebase was untracked -- CI checked out a
+# skeleton and a fresh clone could not build the mobile app at all.
+!immich/mobile/**/lib/
+!immich/mobile/**/lib/**
 
 
 # =========================================
@@ -92,7 +98,7 @@ deployment-service/scripts/
 backend-server/myenv/
 
 # AI History, scratch, and temporary logs
-memory/
+/memory/
 scratch/
 docs/photos/
 docs/superpowers/

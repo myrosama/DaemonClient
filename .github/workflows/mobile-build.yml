@@ -34,6 +34,13 @@ jobs:
           channel: stable
           cache: true
       - run: flutter pub get
+      # lib/generated/* (translations) is gitignored codegen output — main.dart
+      # imports it, so generate before building (mirrors `make translation`,
+      # minus the pnpm format step).
+      - name: Generate translations
+        run: |
+          dart run easy_localization:generate -S ../i18n
+          dart run bin/generate_keys.dart
       - run: flutter build apk --debug
       - uses: actions/upload-artifact@v4
         with:
@@ -52,6 +59,13 @@ jobs:
           channel: stable
           cache: true
       - run: flutter pub get
+      # lib/generated/* (translations) is gitignored codegen output — main.dart
+      # imports it, so generate before building (mirrors `make translation`,
+      # minus the pnpm format step).
+      - name: Generate translations
+        run: |
+          dart run easy_localization:generate -S ../i18n
+          dart run bin/generate_keys.dart
       - run: flutter build ios --simulator
       - name: Zip simulator app (Appetize-ready)
         run: |

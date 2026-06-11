@@ -1,0 +1,211 @@
+part of 'base_asset.model.dart';
+
+enum AssetVisibility { timeline, hidden, archive, locked }
+
+// Model for an asset stored in the server
+class RemoteAsset extends BaseAsset {
+  final String id;
+  final String? localAssetId;
+  final String? thumbHash;
+  final AssetVisibility visibility;
+  final String ownerId;
+  final String? stackId;
+
+  const RemoteAsset({
+    required this.id,
+    String? localId,
+    required super.name,
+    required this.ownerId,
+    required super.checksum,
+    required super.type,
+    required super.createdAt,
+    required super.updatedAt,
+    super.width,
+    super.height,
+    super.durationMs,
+    super.isFavorite = false,
+    this.thumbHash,
+    this.visibility = AssetVisibility.timeline,
+    super.livePhotoVideoId,
+    this.stackId,
+    required super.isEdited,
+  }) : localAssetId = localId;
+
+  @override
+  String? get localId => localAssetId;
+
+  @override
+  String? get remoteId => id;
+
+  @override
+  AssetState get storage => localId == null ? AssetState.remote : AssetState.merged;
+
+  @override
+  String get heroTag => '${localId ?? checksum}_$id';
+
+  @override
+  bool get isEditable => isImage && !isMotionPhoto && !isAnimatedImage;
+
+  @override
+  String toString() {
+    return '''Asset {
+    id: $id,
+    name: $name,
+    ownerId: $ownerId,
+    type: $type,
+    createdAt: $createdAt,
+    updatedAt: $updatedAt,
+    width: ${width ?? "<NA>"},
+    height: ${height ?? "<NA>"},
+    durationMs: ${durationMs ?? "<NA>"},
+    localId: ${localId ?? "<NA>"},
+    isFavorite: $isFavorite,
+    thumbHash: ${thumbHash ?? "<NA>"},
+    visibility: $visibility,
+    stackId: ${stackId ?? "<NA>"},
+    checksum: $checksum,
+    livePhotoVideoId: ${livePhotoVideoId ?? "<NA>"},
+ }''';
+  }
+
+  // Not checking for localId here
+  @override
+  bool operator ==(Object other) {
+    if (other is! RemoteAsset) return false;
+    if (identical(this, other)) return true;
+    return super == other &&
+        id == other.id &&
+        ownerId == other.ownerId &&
+        thumbHash == other.thumbHash &&
+        visibility == other.visibility &&
+        stackId == other.stackId;
+  }
+
+  @override
+  int get hashCode =>
+      super.hashCode ^
+      id.hashCode ^
+      ownerId.hashCode ^
+      localId.hashCode ^
+      thumbHash.hashCode ^
+      visibility.hashCode ^
+      stackId.hashCode;
+
+  RemoteAsset copyWith({
+    String? id,
+    String? localId,
+    String? name,
+    String? ownerId,
+    String? checksum,
+    AssetType? type,
+    DateTime? createdAt,
+    DateTime? updatedAt,
+    int? width,
+    int? height,
+    int? durationMs,
+    bool? isFavorite,
+    String? thumbHash,
+    AssetVisibility? visibility,
+    String? livePhotoVideoId,
+    String? stackId,
+    bool? isEdited,
+  }) {
+    return RemoteAsset(
+      id: id ?? this.id,
+      localId: localId ?? this.localId,
+      name: name ?? this.name,
+      ownerId: ownerId ?? this.ownerId,
+      checksum: checksum ?? this.checksum,
+      type: type ?? this.type,
+      createdAt: createdAt ?? this.createdAt,
+      updatedAt: updatedAt ?? this.updatedAt,
+      width: width ?? this.width,
+      height: height ?? this.height,
+      durationMs: durationMs ?? this.durationMs,
+      isFavorite: isFavorite ?? this.isFavorite,
+      thumbHash: thumbHash ?? this.thumbHash,
+      visibility: visibility ?? this.visibility,
+      livePhotoVideoId: livePhotoVideoId ?? this.livePhotoVideoId,
+      stackId: stackId ?? this.stackId,
+      isEdited: isEdited ?? this.isEdited,
+    );
+  }
+}
+
+class RemoteAssetExif extends RemoteAsset {
+  final ExifInfo exifInfo;
+
+  const RemoteAssetExif({
+    required super.id,
+    super.localId,
+    required super.name,
+    required super.ownerId,
+    required super.checksum,
+    required super.type,
+    required super.createdAt,
+    required super.updatedAt,
+    super.width,
+    super.height,
+    super.durationMs,
+    super.isFavorite = false,
+    super.thumbHash,
+    super.visibility = AssetVisibility.timeline,
+    super.livePhotoVideoId,
+    super.stackId,
+    super.isEdited = false,
+    this.exifInfo = const ExifInfo(),
+  });
+
+  @override
+  bool operator ==(Object other) {
+    if (other is! RemoteAssetExif) return false;
+    if (identical(this, other)) return true;
+    return super == other && exifInfo == other.exifInfo;
+  }
+
+  @override
+  int get hashCode => super.hashCode ^ exifInfo.hashCode;
+
+  @override
+  RemoteAssetExif copyWith({
+    String? id,
+    String? localId,
+    String? name,
+    String? ownerId,
+    String? checksum,
+    AssetType? type,
+    DateTime? createdAt,
+    DateTime? updatedAt,
+    int? width,
+    int? height,
+    int? durationMs,
+    bool? isFavorite,
+    String? thumbHash,
+    AssetVisibility? visibility,
+    String? livePhotoVideoId,
+    String? stackId,
+    bool? isEdited,
+    ExifInfo? exifInfo,
+  }) {
+    return RemoteAssetExif(
+      id: id ?? this.id,
+      localId: localId ?? this.localId,
+      name: name ?? this.name,
+      ownerId: ownerId ?? this.ownerId,
+      checksum: checksum ?? this.checksum,
+      type: type ?? this.type,
+      createdAt: createdAt ?? this.createdAt,
+      updatedAt: updatedAt ?? this.updatedAt,
+      width: width ?? this.width,
+      height: height ?? this.height,
+      durationMs: durationMs ?? this.durationMs,
+      isFavorite: isFavorite ?? this.isFavorite,
+      thumbHash: thumbHash ?? this.thumbHash,
+      visibility: visibility ?? this.visibility,
+      livePhotoVideoId: livePhotoVideoId ?? this.livePhotoVideoId,
+      stackId: stackId ?? this.stackId,
+      isEdited: isEdited ?? this.isEdited,
+      exifInfo: exifInfo ?? this.exifInfo, // Use the new parameter
+    );
+  }
+}
