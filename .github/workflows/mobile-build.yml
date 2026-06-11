@@ -53,6 +53,11 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+      # Default runner Xcode SDK is too old for device_info_plus
+      # (NSProcessInfo.isiOSAppOnVision) — pick the newest stable.
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
       - uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.41.7'
