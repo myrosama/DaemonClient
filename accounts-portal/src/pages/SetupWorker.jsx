@@ -49,7 +49,9 @@ export function SetupWorker() {
   }
 
   const openTokenCreator = () => {
-    window.open(CF_TOKEN_TEMPLATE_URL, '_blank', 'noopener,noreferrer')
+    // Named window: every (re-)open reuses ONE Cloudflare tab instead of
+    // stacking a new tab per click.
+    window.open(CF_TOKEN_TEMPLATE_URL, 'dc-cloudflare', 'noopener,noreferrer')
     setTokenCreatorOpened(true)
   }
 
@@ -135,7 +137,7 @@ export function SetupWorker() {
                   </p>
                   <a
                     href="https://dash.cloudflare.com/sign-up"
-                    target="_blank"
+                    target="dc-cloudflare"
                     rel="noopener noreferrer"
                     className="inline-flex items-center gap-1.5 text-[12px] text-linear-text-secondary hover:text-linear-text border border-white/[0.08] hover:border-white/[0.18] rounded-md px-3 py-1.5 transition-all duration-150"
                   >
@@ -257,13 +259,18 @@ export function SetupWorker() {
         </div>
       </div>
 
-      {isDeploying && (
+      {/* Keep the modal mounted on FAILURE too: the hook sets isDeploying
+          false in its catch, so gating on isDeploying alone unmounted the
+          modal the instant an error happened -- deploy failures were totally
+          invisible and the page just "reset". Retry re-runs the deployment
+          in place with the validated token intact (no reload). */}
+      {(isDeploying || error) && (
         <DeploymentProgress
-          isOpen={isDeploying}
+          isOpen={isDeploying || !!error}
           steps={deploymentSteps}
           currentStep={deploymentSteps.findIndex(s => s.name === currentStep)}
           error={error ? { title: 'Deployment failed', message: error } : null}
-          onRetry={() => window.location.reload()}
+          onRetry={handleDeploy}
         />
       )}
     </>

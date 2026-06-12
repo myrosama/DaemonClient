@@ -442,7 +442,39 @@ def start_setup_endpoint():
     user_id, user_email = data.get("uid"), data.get("email")
     if not user_id or not user_email:
         return jsonify({"error": "Missing uid or email in request body."}), 400
-    
+
+    # ── Idempotency guard ────────────────────────────────────────────────────
+    # Creating a bot+channel takes 30-90s (BotFather conversation) and Render's
+    # free tier cold-starts for up to a minute on top. Users WILL click again.
+    # Without this guard every extra click created another bot+channel and the
+    # last writer won (orphaning the rest). Rules:
+    #   - config already complete  -> report success, create nothing
+    #   - setup started <4 min ago -> 202 "in progress", create nothing
+    #   - otherwise                -> take the lock and proceed
+    user_config_ref = db.collection(
+        f"artifacts/default-daemon-client/users/{user_id}/config"
+    ).document("telegram")
+    try:
+        existing_doc = user_config_ref.get()
+        existing = existing_doc.to_dict() if existing_doc.exists else None
+    except Exception as e:
+        print(f"[startSetup] config pre-read failed for {user_id}: {e}")
+        existing = None
+    if existing:
+        if existing.get("botToken") and existing.get("botUsername") and existing.get("channelId"):
+            return jsonify({"status": "already_configured"})
+        started_at = existing.get("setup_started_at")
+        if started_at is not None:
+            try:
+                age = time.time() - started_at.timestamp()
+            except Exception:
+                age = 0
+            if age < 240:
+                return jsonify({"status": "in_progress"}), 202
+    # Take (or refresh a stale) lock BEFORE the slow work begins, so a parallel
+    # request sees it immediately.
+    user_config_ref.set({"setup_started_at": firestore.SERVER_TIMESTAMP}, merge=True)
+
     available_bots = get_available_bots()
     if not available_bots:
         query_err = get_last_bot_query_error()
@@ -488,6 +520,12 @@ def start_setup_endpoint():
             finally:
                 if client.is_connected(): await client.disconnect()
 
+        # Release the idempotency lock — nothing was created, so the user's
+        # retry must be allowed immediately instead of waiting out the 4 min.
+        try:
+            user_config_ref.update({"setup_started_at": firestore.DELETE_FIELD})
+        except Exception:
+            pass
         return jsonify({
             "error": {"message": "All available worker bots failed.", "failures": failures, "bot_count": len(available_bots)}
         }), 500
@@ -505,6 +543,18 @@ def finalize_transfer_endpoint():
         config_doc = config_ref.get()
         if not config_doc.exists: return jsonify({"error": {"message": "Configuration not found."}}), 404
         config_data = config_doc.to_dict()
+
+        # Idempotent: a double-click / retry after the transfer already
+        # succeeded must not run a second transfer against Telegram (which
+        # fails confusingly once ownership has moved).
+        if config_data.get("ownership_transferred"):
+            prev = config_data.get("finalization_status") or {}
+            return jsonify({
+                "bot_transfer_status": prev.get("bot_transfer_status", "success"),
+                "bot_transfer_message": prev.get("bot_transfer_message", "Bot ownership already transferred."),
+                "channel_transfer_status": prev.get("channel_transfer_status", "success"),
+                "channel_transfer_message": prev.get("channel_transfer_message", "Channel ownership already transferred."),
+            })
         
         worker_bot_id = config_data.get("createdBy")
         worker_bot_ref = db.collection("userbots").document(worker_bot_id).get()

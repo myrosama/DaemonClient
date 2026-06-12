@@ -517,6 +517,13 @@ function LoginPage() {
 // ============================================================================
 
 function SignupPage() {
+  // Warm the setup service while the user types: Render's free tier naps and
+  // takes up to a minute to wake — by the time the account exists and they
+  // click "Create My Secure Storage", the service is already hot.
+  useEffect(() => {
+    fetch(`${RENDER_BACKEND}/`).catch(() => {})
+  }, [])
+
   const [displayName, setDisplayName] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -728,23 +735,43 @@ function SetupPage() {
   // already in flight or completed. Don't run it again.
   const [docExists, setDocExists] = useState(false)
 
+  // Wake the setup service the moment the page renders. Render's free tier
+  // naps after inactivity and takes up to a minute to cold-start — warming it
+  // while the user is still reading means their click lands on a hot service.
+  useEffect(() => {
+    fetch(`${RENDER_BACKEND}/`).catch(() => {})
+  }, [])
+
   const handleStartAutomatedSetup = async () => {
-    // Guard: if telegram config exists in any state (partial or complete), do
-    // NOT call /startSetup again — that creates a duplicate bot+channel.
     if (alreadyConfigured) {
       navigate('/setup/ownership')
       return
     }
-    if (docExists) {
-      // Partial state — backend is still writing. Just wait for the snapshot
-      // to flip alreadyConfigured.
-      setStatusMessage('Setup is finalizing… waiting for backend.')
-      return
-    }
-    setStatusMessage('Initiating secure setup... This may take a minute.')
     setError('')
     setIsLoading(true)
+    setStatusMessage('Contacting the setup service…')
+
+    // Bot+channel creation is genuinely slow (a BotFather conversation takes
+    // 30-90s, plus a possible cold start) — narrate the wait instead of timing
+    // out at 12s and inviting a retry, which is how users ended up with two
+    // bots before the server became idempotent.
+    const t0 = Date.now()
+    const stages = [
+      [8, 'Waking the setup service… free hosting naps, this can take a minute.'],
+      [40, 'Creating your private bot and storage channel… (30–90 seconds)'],
+      [110, 'Still working — Telegram rate-limits bot creation. Almost there…'],
+    ]
+    const ticker = setInterval(() => {
+      const s = Math.round((Date.now() - t0) / 1000)
+      for (let i = stages.length - 1; i >= 0; i--) {
+        if (s >= stages[i][0]) { setStatusMessage(stages[i][1]); break }
+      }
+    }, 3000)
+
     try {
+      // The backend is idempotent: complete → "already_configured", another
+      // request in flight → 202 "in_progress", otherwise it creates. So
+      // calling it again is always safe — the server decides, not the client.
       const response = await fetch(`${RENDER_BACKEND}/startSetup`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -752,41 +779,40 @@ function SetupPage() {
           data: { uid: auth.currentUser.uid, email: auth.currentUser.email },
         }),
       })
-      const result = await response.json()
-      if (!response.ok) {
-        throw new Error(
-          result.error?.message || 'The setup service returned an error.'
-        )
+      const result = await response.json().catch(() => ({}))
+      if (!response.ok && response.status !== 202) {
+        throw new Error(result.error?.message || 'The setup service returned an error.')
       }
-      setStatusMessage('Finalizing configuration...')
 
+      // Wait (patiently — up to 3 min) for the config to land in Firestore.
       const configDocRef = db
         .collection(configPath(auth.currentUser.uid))
         .doc('telegram')
-      let attempts = 0
-      const maxAttempts = 8
-      while (attempts < maxAttempts) {
-        const docSnap = await configDocRef.get()
-        if (docSnap.exists && docSnap.data().botToken) {
-          setStatusMessage('Configuration saved! Proceeding...')
+      const deadline = Date.now() + 180000
+      while (Date.now() < deadline) {
+        const docSnap = await configDocRef.get({ source: 'server' }).catch(() => null)
+        const d = docSnap && docSnap.exists ? docSnap.data() : null
+        if (d && d.botToken && d.botUsername && d.channelId) {
+          clearInterval(ticker)
+          setStatusMessage('Your private storage is ready! Continuing…')
           navigate('/setup/ownership')
           return
         }
-        await new Promise((resolve) => setTimeout(resolve, 1500))
-        attempts++
+        await new Promise((resolve) => setTimeout(resolve, 2500))
       }
       throw new Error(
-        'Could not verify configuration after setup. Please try again.'
+        "This is taking longer than usual — but nothing is lost. Click the button again: it's safe, duplicates are impossible now."
       )
     } catch (err) {
       console.error('Setup error:', err)
       setStatusMessage('')
       if (err.message.includes('Failed to fetch')) {
-        setError('Could not connect to the setup service. Please try again later.')
+        setError('Could not reach the setup service. Check your connection and click again — retrying is safe.')
       } else {
         setError(err.message || 'An unexpected error occurred.')
       }
     } finally {
+      clearInterval(ticker)
       setIsLoading(false)
     }
   }
@@ -1120,26 +1146,12 @@ function OwnershipPage() {
 
       toast.success('Ownership transferred! Setting up your backend...')
 
-      // CRITICAL: don't navigate to /setup/worker until the client can actually
-      // READ ownership_transferred=true from Firestore. The backend already
-      // wrote it, but client cache/replication can lag a few seconds — and
-      // useSetupStage on /setup/worker would otherwise read stale data and
-      // bounce the user right back here, looping forever.
-      const configDocRef = db
-        .collection(configPath(auth.currentUser.uid))
-        .doc('telegram')
-      let attempts = 0
-      const maxAttempts = 12 // ~18s total
-      while (attempts < maxAttempts) {
-        try {
-          const snap = await configDocRef.get({ source: 'server' })
-          const data = snap.data() || {}
-          if (data.ownership_transferred || data.ownershipTransferred) break
-        } catch {}
-        await new Promise((r) => setTimeout(r, 1500))
-        attempts++
-      }
-      navigate('/setup/worker')
+      // Deliberately NO navigate() here. The backend wrote
+      // ownership_transferred=true; AuthOnly's live useSetupStage snapshot
+      // flips the stage to 'worker' the moment the SERVER confirms it and
+      // redirects automatically — the step-3 status panel stays visible until
+      // then. Manually navigating raced that read and bounced users back to
+      // step 1 of this page ("it just goes back").
     } catch (err) {
       setError(`Error: ${err.message}`)
       setStep(2)
@@ -1236,7 +1248,7 @@ function OwnershipPage() {
 
                   <a
                     href={config ? `https://t.me/${config.botUsername}` : '#'}
-                    target="_blank"
+                    target="dc-telegram"
                     rel="noopener noreferrer"
                     onClick={handleLinkClicked}
                     className="inline-flex items-center gap-2 bg-[#2AABEE] hover:bg-[#229ED9] text-white text-[13px] font-semibold px-6 py-2.5 rounded-lg transition-colors"
@@ -1279,7 +1291,7 @@ function OwnershipPage() {
 
                   <a
                     href={config ? config.invite_link : '#'}
-                    target="_blank"
+                    target="dc-telegram"
                     rel="noopener noreferrer"
                     onClick={handleLinkClicked}
                     className="inline-flex items-center gap-2 bg-[#2AABEE] hover:bg-[#229ED9] text-white text-[13px] font-semibold px-6 py-2.5 rounded-lg transition-colors"
@@ -2237,8 +2249,17 @@ function useSetupStage(user) {
       setLoading(false)
     }
 
+    // Routing decisions must come from SERVER truth. Firestore's first
+    // snapshot is frequently served from the local cache; deciding the stage
+    // on that stale read is exactly what bounced users BACKWARDS mid-funnel
+    // (deploy finished → /dashboard → bounced to /setup/worker; finalize done
+    // → bounced to /setup/ownership step 1). Hold 'loading' until each doc has
+    // produced at least one server-confirmed snapshot; after that, accept
+    // everything (local writes are forward progress).
     const tgUnsub = db.collection(basePath).doc('telegram').onSnapshot(
+      { includeMetadataChanges: true },
       (doc) => {
+        if (doc.metadata.fromCache && !tgReady) return
         tg = doc.exists ? doc.data() : null
         tgReady = true
         if (cfReady) recompute()
@@ -2253,7 +2274,9 @@ function useSetupStage(user) {
       }
     )
     const cfUnsub = db.collection(basePath).doc('cloudflare').onSnapshot(
+      { includeMetadataChanges: true },
       (doc) => {
+        if (doc.metadata.fromCache && !cfReady) return
         cf = doc.exists ? doc.data() : null
         cfReady = true
         if (tgReady) recompute()
