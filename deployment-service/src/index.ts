@@ -219,11 +219,21 @@ async function writeAnnouncement(env: Env, fields: Record<string, any>): Promise
   }
 }
 
+// ── Cloudflare OAuth (one-button provisioning) ──────────────────────────────
+// Public PKCE client registered on the owner's CF account (client_id is public,
+// no secret). Users click "Authorize", approve on Cloudflare's own consent
+// screen, and we exchange the code here — server-side — so the refresh token
+// never touches the browser.
+const CF_OAUTH_CLIENT_ID = 'ffa260b791c9a72c5020dacaa5c1035f';
+const CF_OAUTH_REDIRECT_URI = 'https://accounts.daemonclient.uz/setup/cloudflare/callback';
+const CF_OAUTH_TOKEN_URL = 'https://dash.cloudflare.com/oauth2/token';
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     if (request.method === 'OPTIONS') return corsResponse(null, { status: 204 });
     const url = new URL(request.url);
     if (url.pathname === '/deploy-worker' && request.method === 'POST') return handleDeployWorker(request, env);
+    if (url.pathname === '/oauth/cloudflare/exchange' && request.method === 'POST') return handleOAuthExchange(request, env);
     if (url.pathname === '/validate-cf-token' && request.method === 'POST') return handleValidateToken(request, env);
     if (url.pathname === '/auto-update' && request.method === 'POST') return handleAutoUpdate(request, env);
     if (url.pathname === '/admin/force-update' && request.method === 'POST') return handleForceUpdate(request, env);
@@ -240,105 +250,207 @@ async function handleDeployWorker(request: Request, env: Env): Promise<Response>
     if (!auth) return corsResponse(JSON.stringify({ error: 'Unauthorized' }), { status: 401 });
     const { uid, idToken } = auth;
 
-    // Sanitize UID for Cloudflare naming (lowercase alphanumeric + dashes only)
-    const shortId = uid.substring(0, 8).toLowerCase().replace(/[^a-z0-9]/g, '');
-    const cfApi = new CloudflareAPI();
+    const prov = await provisionWorker(env, uid, accountId, apiToken);
+    if (!prov.success) return corsResponse(JSON.stringify({ error: prov.error }), { status: 500 });
 
-    // Step 1: Create D1 database in USER's account (handle if already exists)
-    const dbName = `dc-photos-${shortId}`;
-    let databaseId: string;
-    let isNewDatabase = false;
-    const dbResult = await cfApi.createD1Database({ accountId, apiToken, databaseName: dbName });
-    if (dbResult.success) {
-      databaseId = dbResult.databaseId!;
-      isNewDatabase = true;
-    } else {
-      // Database might already exist — try to find it
-      const listRes = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/d1/database`, {
-        headers: { 'Authorization': `Bearer ${apiToken}` }
-      });
-      const listData = await listRes.json() as any;
-      const existing = listData.result?.find((d: any) => d.name === dbName);
-      if (existing) {
-        databaseId = existing.uuid;
-      } else {
-        return corsResponse(JSON.stringify({ error: dbResult.error }), { status: 500 });
-      }
-    }
-
-    // Step 2: Run migration + generate ZKE keys only on a fresh DB. Re-running
-    // these on an existing DB silently rotates the AES password/salt, which
-    // makes every previously-uploaded photo permanently undecryptable.
-    if (isNewDatabase) {
-      await cfApi.executeD1Query(accountId, databaseId, apiToken, MIGRATION_SQL);
-
-      const salt = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(16))));
-      const password = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))));
-      await cfApi.executeD1Query(accountId, databaseId, apiToken,
-        `UPDATE config SET value = '${password}' WHERE key = 'zke_password'; UPDATE config SET value = '${salt}' WHERE key = 'zke_salt';`
-      );
-    }
-
-    // Step 4: Deploy the real immich-api-shim to USER's account, bound to USER's D1
-    const workerName = `dc-${shortId}`;
-    const deployResult = await cfApi.deployWorker({
-      accountId, workerName, apiToken, workerCode: SHIM_BUNDLE,
-      bindings: buildShimBindings(env, databaseId)
-    });
-    if (!deployResult.success) return corsResponse(JSON.stringify({ error: deployResult.error }), { status: 500 });
-
-    // Step 4b: Ensure the account has a workers.dev subdomain.
-    // First-time CF Workers users don't have one until they visit the Workers
-    // & Pages page in the dashboard. In that case GET /workers/subdomain
-    // returns 404 / code 10007. We provision one programmatically so the user
-    // doesn't have to bounce out of the flow. This MUST happen before
-    // enableWorkersDev — enabling workers.dev for a script is meaningless
-    // without an account-level subdomain.
-    let subdomainResult = await cfApi.getWorkersSubdomain(accountId, apiToken);
-    if (!subdomainResult.subdomain && subdomainResult.notProvisioned) {
-      // workers.dev subdomains are globally unique — try a few candidates.
-      const accountSlug = accountId.substring(0, 8).toLowerCase();
-      const candidates = [
-        `dc-${accountSlug}`,
-        `dc-${accountSlug}-${Math.random().toString(36).substring(2, 6)}`,
-        `dc-${accountSlug}-${Math.random().toString(36).substring(2, 8)}`,
-      ];
-      let claimed = false;
-      let lastErr: string | undefined;
-      for (const candidate of candidates) {
-        const r = await cfApi.setWorkersSubdomain(accountId, apiToken, candidate);
-        if (r.success) { claimed = true; break; }
-        lastErr = r.error;
-        if (!r.conflict) break;
-      }
-      if (!claimed) {
-        return corsResponse(JSON.stringify({ error: `Could not provision workers.dev subdomain: ${lastErr}` }), { status: 500 });
-      }
-      subdomainResult = await cfApi.getWorkersSubdomain(accountId, apiToken);
-    }
-    if (!subdomainResult.subdomain) {
-      return corsResponse(JSON.stringify({ error: subdomainResult.error || 'Could not fetch workers subdomain' }), { status: 500 });
-    }
-
-    // Step 4c: Make sure workers.dev is enabled for THIS script (newly
-    // deployed module workers default to disabled on some accounts).
-    await cfApi.enableWorkersDev(accountId, workerName, apiToken);
-
-    // Step 5: Save config to Firestore
-    const workerUrl = `https://${workerName}.${subdomainResult.subdomain}.workers.dev`;
+    // Paste flow: persist the long-lived API token (encrypted) for auto-update.
     const encryptedToken = await encryptToken(apiToken, env.ENCRYPTION_MASTER_KEY);
     await saveWorkerConfig(uid, idToken, {
-      apiToken: encryptedToken, accountId, workerName, workerUrl,
-      databaseName: dbName, databaseId,
+      apiToken: encryptedToken, accountId, workerName: prov.workerName, workerUrl: prov.workerUrl,
+      databaseName: prov.dbName, databaseId: prov.databaseId,
       setupTimestamp: new Date().toISOString(),
       lastDeployedVersion: SHIM_VERSION, autoUpdateEnabled: true
     }, env);
 
-    return corsResponse(JSON.stringify({ success: true, workerUrl, deploymentId: crypto.randomUUID() }));
+    return corsResponse(JSON.stringify({ success: true, workerUrl: prov.workerUrl, deploymentId: crypto.randomUUID() }));
   } catch (error: any) {
     console.error('Deployment error:', error);
     return corsResponse(JSON.stringify({ error: error.message }), { status: 500 });
   }
+}
+
+// Provision (or idempotently re-provision) a user's per-user worker into the
+// given Cloudflare account using `apiToken` — which may be a pasted API token
+// OR a fresh OAuth access token; both are just Bearer credentials to the user's
+// account. Returns the worker identity. The CALLER persists the right
+// credential afterwards (encrypted API token for paste, encrypted refresh
+// token for OAuth).
+interface ProvisionResult { success: boolean; error?: string; workerName?: string; workerUrl?: string; dbName?: string; databaseId?: string }
+async function provisionWorker(env: Env, uid: string, accountId: string, apiToken: string): Promise<ProvisionResult> {
+  // Sanitize UID for Cloudflare naming (lowercase alphanumeric + dashes only)
+  const shortId = uid.substring(0, 8).toLowerCase().replace(/[^a-z0-9]/g, '');
+  const cfApi = new CloudflareAPI();
+
+  // Step 1: Create D1 database in USER's account (handle if already exists)
+  const dbName = `dc-photos-${shortId}`;
+  let databaseId: string;
+  let isNewDatabase = false;
+  const dbResult = await cfApi.createD1Database({ accountId, apiToken, databaseName: dbName });
+  if (dbResult.success) {
+    databaseId = dbResult.databaseId!;
+    isNewDatabase = true;
+  } else {
+    // Database might already exist — try to find it
+    const listRes = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/d1/database`, {
+      headers: { 'Authorization': `Bearer ${apiToken}` }
+    });
+    const listData = await listRes.json() as any;
+    const existing = listData.result?.find((d: any) => d.name === dbName);
+    if (existing) {
+      databaseId = existing.uuid;
+    } else {
+      return { success: false, error: dbResult.error };
+    }
+  }
+
+  // Step 2: Run migration + generate ZKE keys only on a fresh DB. Re-running
+  // these on an existing DB silently rotates the AES password/salt, which
+  // makes every previously-uploaded photo permanently undecryptable.
+  if (isNewDatabase) {
+    await cfApi.executeD1Query(accountId, databaseId, apiToken, MIGRATION_SQL);
+
+    const salt = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(16))));
+    const password = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))));
+    await cfApi.executeD1Query(accountId, databaseId, apiToken,
+      `UPDATE config SET value = '${password}' WHERE key = 'zke_password'; UPDATE config SET value = '${salt}' WHERE key = 'zke_salt';`
+    );
+  }
+
+  // Step 4: Deploy the real immich-api-shim to USER's account, bound to USER's D1
+  const workerName = `dc-${shortId}`;
+  const deployResult = await cfApi.deployWorker({
+    accountId, workerName, apiToken, workerCode: SHIM_BUNDLE,
+    bindings: buildShimBindings(env, databaseId)
+  });
+  if (!deployResult.success) return { success: false, error: deployResult.error };
+
+  // Step 4b: Ensure the account has a workers.dev subdomain.
+  // First-time CF Workers users don't have one until they visit the Workers
+  // & Pages page in the dashboard. In that case GET /workers/subdomain
+  // returns 404 / code 10007. We provision one programmatically so the user
+  // doesn't have to bounce out of the flow. This MUST happen before
+  // enableWorkersDev — enabling workers.dev for a script is meaningless
+  // without an account-level subdomain.
+  let subdomainResult = await cfApi.getWorkersSubdomain(accountId, apiToken);
+  if (!subdomainResult.subdomain && subdomainResult.notProvisioned) {
+    // workers.dev subdomains are globally unique — try a few candidates.
+    const accountSlug = accountId.substring(0, 8).toLowerCase();
+    const candidates = [
+      `dc-${accountSlug}`,
+      `dc-${accountSlug}-${Math.random().toString(36).substring(2, 6)}`,
+      `dc-${accountSlug}-${Math.random().toString(36).substring(2, 8)}`,
+    ];
+    let claimed = false;
+    let lastErr: string | undefined;
+    for (const candidate of candidates) {
+      const r = await cfApi.setWorkersSubdomain(accountId, apiToken, candidate);
+      if (r.success) { claimed = true; break; }
+      lastErr = r.error;
+      if (!r.conflict) break;
+    }
+    if (!claimed) return { success: false, error: `Could not provision workers.dev subdomain: ${lastErr}` };
+    subdomainResult = await cfApi.getWorkersSubdomain(accountId, apiToken);
+  }
+  if (!subdomainResult.subdomain) {
+    return { success: false, error: subdomainResult.error || 'Could not fetch workers subdomain' };
+  }
+
+  // Step 4c: Make sure workers.dev is enabled for THIS script (newly
+  // deployed module workers default to disabled on some accounts).
+  await cfApi.enableWorkersDev(accountId, workerName, apiToken);
+
+  const workerUrl = `https://${workerName}.${subdomainResult.subdomain}.workers.dev`;
+  return { success: true, workerName, workerUrl, dbName, databaseId };
+}
+
+// One-button flow: exchange the PKCE authorization code for tokens, provision
+// the worker with the access token, and persist the ENCRYPTED refresh token so
+// auto-update keeps working long after the access token expires. The refresh
+// token never touches the browser — the exchange happens here.
+async function handleOAuthExchange(request: Request, env: Env): Promise<Response> {
+  try {
+    const auth = await validateFirebaseToken(request, env);
+    if (!auth) return corsResponse(JSON.stringify({ error: 'Unauthorized' }), { status: 401 });
+    const { uid, idToken } = auth;
+    const { code, codeVerifier, redirectUri } = await request.json() as any;
+    if (!code || !codeVerifier) {
+      return corsResponse(JSON.stringify({ error: 'Missing code or codeVerifier' }), { status: 400 });
+    }
+
+    // 1) authorization code → { access_token, refresh_token }
+    const tokenRes = await fetch(CF_OAUTH_TOKEN_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'authorization_code',
+        client_id: CF_OAUTH_CLIENT_ID,
+        code,
+        code_verifier: codeVerifier,
+        redirect_uri: redirectUri || CF_OAUTH_REDIRECT_URI,
+      }).toString(),
+    });
+    const tokenData = await tokenRes.json() as any;
+    if (!tokenRes.ok || !tokenData.access_token) {
+      return corsResponse(JSON.stringify({ error: tokenData.error_description || tokenData.error || 'Token exchange failed' }), { status: 502 });
+    }
+    const accessToken: string = tokenData.access_token;
+    const refreshToken: string | undefined = tokenData.refresh_token;
+
+    // 2) which account did the user grant access to?
+    const accountId = await getCloudflareAccountId(accessToken);
+    if (!accountId) {
+      return corsResponse(JSON.stringify({ error: 'Could not read your Cloudflare account — make sure you approved account access.' }), { status: 502 });
+    }
+
+    // 3) provision (reuses the exact paste-flow provisioning)
+    const prov = await provisionWorker(env, uid, accountId, accessToken);
+    if (!prov.success) return corsResponse(JSON.stringify({ error: prov.error }), { status: 500 });
+
+    // 4) persist the encrypted REFRESH token (the access token expires in minutes)
+    const config: any = {
+      authMethod: 'oauth',
+      accountId, workerName: prov.workerName, workerUrl: prov.workerUrl,
+      databaseName: prov.dbName, databaseId: prov.databaseId,
+      setupTimestamp: new Date().toISOString(),
+      lastDeployedVersion: SHIM_VERSION, autoUpdateEnabled: true,
+    };
+    if (refreshToken) config.refreshToken = await encryptToken(refreshToken, env.ENCRYPTION_MASTER_KEY);
+    await saveWorkerConfig(uid, idToken, config, env);
+
+    return corsResponse(JSON.stringify({ success: true, workerUrl: prov.workerUrl }));
+  } catch (error: any) {
+    console.error('OAuth exchange error:', error);
+    return corsResponse(JSON.stringify({ error: error.message }), { status: 500 });
+  }
+}
+
+// The OAuth access token is scoped to the single account the user picked on the
+// consent screen, so /accounts returns exactly that one.
+async function getCloudflareAccountId(accessToken: string): Promise<string | null> {
+  const res = await fetch('https://api.cloudflare.com/client/v4/accounts', {
+    headers: { 'Authorization': `Bearer ${accessToken}` },
+  });
+  if (!res.ok) return null;
+  const data = await res.json() as any;
+  return data.result?.[0]?.id || null;
+}
+
+// Refresh an OAuth access token (public client → no secret). Cloudflare may
+// rotate the refresh token, so we return the new one when present.
+async function refreshCloudflareToken(refreshToken: string): Promise<{ accessToken: string; refreshToken?: string } | null> {
+  const res = await fetch(CF_OAUTH_TOKEN_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'refresh_token',
+      client_id: CF_OAUTH_CLIENT_ID,
+      refresh_token: refreshToken,
+    }).toString(),
+  });
+  if (!res.ok) return null;
+  const data = await res.json() as any;
+  if (!data.access_token) return null;
+  return { accessToken: data.access_token, refreshToken: data.refresh_token };
 }
 
 // Silently re-deploy the user's per-user worker if its embedded shim version
@@ -351,7 +463,7 @@ async function handleAutoUpdate(request: Request, env: Env): Promise<Response> {
     const { uid, idToken } = auth;
 
     const cfg = await fetchWorkerConfig(uid, idToken, env);
-    if (!cfg || !cfg.apiToken || !cfg.accountId || !cfg.workerName) {
+    if (!cfg || !cfg.accountId || !cfg.workerName || (!cfg.apiToken && !cfg.refreshToken)) {
       return corsResponse(JSON.stringify({ updated: false, reason: 'no-config' }));
     }
     if (cfg.autoUpdateEnabled === 'false') {
@@ -361,7 +473,25 @@ async function handleAutoUpdate(request: Request, env: Env): Promise<Response> {
       return corsResponse(JSON.stringify({ updated: false, reason: 'current', version: SHIM_VERSION }));
     }
 
-    const apiToken = await decryptToken(cfg.apiToken, env.ENCRYPTION_MASTER_KEY);
+    // Obtain a usable Bearer credential. Legacy paste users have a stored API
+    // token; OAuth users have a refresh token we exchange for a short-lived
+    // access token (re-persisting a rotated refresh token if Cloudflare returns
+    // one). A failed refresh is non-fatal: skip this silent update.
+    let apiToken: string;
+    let rotatedRefresh: string | undefined;
+    if (cfg.apiToken) {
+      apiToken = await decryptToken(cfg.apiToken, env.ENCRYPTION_MASTER_KEY);
+    } else {
+      const refresh = await decryptToken(cfg.refreshToken, env.ENCRYPTION_MASTER_KEY);
+      const refreshed = await refreshCloudflareToken(refresh);
+      if (!refreshed) {
+        return corsResponse(JSON.stringify({ updated: false, reason: 'refresh-failed' }));
+      }
+      apiToken = refreshed.accessToken;
+      if (refreshed.refreshToken && refreshed.refreshToken !== refresh) {
+        rotatedRefresh = await encryptToken(refreshed.refreshToken, env.ENCRYPTION_MASTER_KEY);
+      }
+    }
     const cfApi = new CloudflareAPI();
     const deployResult = await cfApi.deployWorker({
       accountId: cfg.accountId,
@@ -376,6 +506,7 @@ async function handleAutoUpdate(request: Request, env: Env): Promise<Response> {
 
     await saveWorkerConfig(uid, idToken, {
       ...cfg,
+      ...(rotatedRefresh ? { refreshToken: rotatedRefresh } : {}),
       lastDeployedVersion: SHIM_VERSION,
       lastUpdatedAt: new Date().toISOString(),
     }, env);

@@ -8,6 +8,7 @@ import { Input } from './components/ui/Input'
 import { Card } from './components/ui/Card'
 import { toast } from './components/ui/Toast'
 import { SetupWorker } from './pages/SetupWorker'
+import { consumeOAuthState, CF_OAUTH_REDIRECT_URI, DEPLOYMENT_WORKER } from './config/cloudflareOauth'
 import {
   LayoutDashboard,
   User,
@@ -2423,6 +2424,97 @@ function stageToRoute(stage) {
 }
 
 // ============================================================================
+// CLOUDFLARE OAUTH CALLBACK — finishes the one-click provisioning
+// ============================================================================
+// Deliberately NOT wrapped in AuthOnly: that guard stage-routes the user back
+// to /setup/worker. This component does its own (lightweight) auth check, then
+// verifies state, exchanges the code server-side, and lets the stage guard
+// route to /dashboard once the cloudflare config lands.
+
+function CloudflareCallback() {
+  const navigate = useNavigate()
+  const [status, setStatus] = useState('Finishing authorization…')
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    let cancelled = false
+    const run = async () => {
+      const params = new URLSearchParams(window.location.search)
+      const code = params.get('code')
+      const returnedState = params.get('state')
+      const oauthErr = params.get('error')
+      if (oauthErr) {
+        const desc = params.get('error_description')
+        setError(`Cloudflare authorization was cancelled${desc ? `: ${desc}` : ''}.`)
+        return
+      }
+      // Single-use PKCE verifier + state, set before the redirect.
+      const { verifier, state } = consumeOAuthState()
+      if (!code || !returnedState || !state || returnedState !== state || !verifier) {
+        setError('We could not verify the authorization. Please start setup again.')
+        return
+      }
+      // Firebase restores the session after the full-page round-trip.
+      const user = await new Promise((resolve) => {
+        const unsub = auth.onAuthStateChanged((u) => { unsub(); resolve(u) })
+      })
+      if (cancelled) return
+      if (!user) { navigate('/login', { replace: true }); return }
+      try {
+        const idToken = await user.getIdToken()
+        setStatus('Building your private cloud…')
+        const res = await fetch(`${DEPLOYMENT_WORKER}/oauth/cloudflare/exchange`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
+          body: JSON.stringify({ code, codeVerifier: verifier, redirectUri: CF_OAUTH_REDIRECT_URI }),
+        })
+        const data = await res.json().catch(() => ({}))
+        if (!res.ok || !data.success) throw new Error(data.error || 'Setup failed. Please try again.')
+        if (cancelled) return
+        setStatus('Your private cloud is ready! Redirecting…')
+        setTimeout(() => navigate('/dashboard', { replace: true }), 900)
+      } catch (e) {
+        if (!cancelled) setError(e.message || 'Something went wrong finishing setup.')
+      }
+    }
+    run()
+    return () => { cancelled = true }
+  }, [navigate])
+
+  return (
+    <DotGridPage>
+      <TerminalBar />
+      <div className="flex-1 flex items-center justify-center px-4 py-8">
+        <motion.div
+          initial={{ opacity: 0, y: 14 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.35 }}
+          className="w-full max-w-[420px] text-center"
+        >
+          {!error ? (
+            <div className="flex flex-col items-center gap-4">
+              <Spinner size={24} />
+              <h1 className="text-[18px] font-semibold text-linear-text">{status}</h1>
+              <p className="text-[13px] text-linear-text-secondary">
+                Hang tight — creating your database and worker usually takes under a minute.
+              </p>
+            </div>
+          ) : (
+            <div className="flex flex-col items-center gap-4">
+              <h1 className="text-[18px] font-semibold text-linear-text">Setup couldn’t finish</h1>
+              <p className="text-[13px] text-linear-error">{error}</p>
+              <Button onClick={() => navigate('/setup/worker', { replace: true })} className="h-9 px-5 text-[13px]">
+                Back to setup
+              </Button>
+            </div>
+          )}
+        </motion.div>
+      </div>
+    </DotGridPage>
+  )
+}
+
+// ============================================================================
 // PROTECTED ROUTE — Dashboard/Profile/Security (requires ALL setup done)
 // ============================================================================
 
@@ -2578,6 +2670,8 @@ function App() {
             </AuthOnly>
           }
         />
+        {/* OAuth return URL — not AuthOnly (it would stage-bounce); guards itself */}
+        <Route path="/setup/cloudflare/callback" element={<CloudflareCallback />} />
 
         {/* Protected routes (auth + setup required, with sidebar) */}
         <Route

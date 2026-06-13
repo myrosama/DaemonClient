@@ -5,6 +5,7 @@ import { Button } from '../components/ui/Button'
 import { TokenInput } from '../components/TokenInput'
 import { DeploymentProgress } from '../components/DeploymentProgress'
 import { useWorkerSetup } from '../hooks/useWorkerSetup'
+import { startCloudflareOAuth } from '../config/cloudflareOauth'
 import { ExternalLink, Check, Loader2, ArrowRight, Zap, Database, Shield, RefreshCw } from 'lucide-react'
 
 // Pre-filled Cloudflare token creator — permissions already set, user just clicks Create
@@ -38,6 +39,19 @@ export function SetupWorker() {
 
   const [tokenCreatorOpened, setTokenCreatorOpened] = useState(false)
   const [storeToken, setStoreToken] = useState(true)
+  const [authorizing, setAuthorizing] = useState(false)
+
+  // One-click path: redirect to Cloudflare's consent screen. On return, the
+  // /setup/cloudflare/callback route exchanges the code and provisions.
+  const handleAuthorize = async () => {
+    setAuthorizing(true)
+    try {
+      await startCloudflareOAuth() // navigates away
+    } catch (e) {
+      console.error('Could not start Cloudflare authorization:', e)
+      setAuthorizing(false)
+    }
+  }
 
   const handleDeploy = async () => {
     try {
@@ -122,6 +136,30 @@ export function SetupWorker() {
                   </div>
                 ))}
               </div>
+            </div>
+
+            {/* ── Primary: one-click authorize ── */}
+            <button
+              onClick={handleAuthorize}
+              disabled={authorizing || isDeploying}
+              className="w-full flex items-center justify-center gap-2.5 bg-daemon-green hover:bg-daemon-green-hover text-white rounded-xl px-4 py-3.5 text-[14px] font-semibold transition-all duration-150 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {authorizing ? (
+                <><Loader2 size={16} className="animate-spin" /> Redirecting to Cloudflare…</>
+              ) : (
+                <><Shield size={16} /> Authorize with Cloudflare — 1 click</>
+              )}
+            </button>
+            <p className="text-center text-[11px] text-linear-text-secondary mt-2.5 mb-5">
+              Sign in to Cloudflare and approve — we build everything automatically.
+              No tokens to copy or paste.
+            </p>
+
+            {/* divider → manual fallback */}
+            <div className="flex items-center gap-3 mb-5">
+              <div className="flex-1 h-px bg-white/[0.08]" />
+              <span className="text-[11px] text-linear-text-secondary whitespace-nowrap">or set up manually</span>
+              <div className="flex-1 h-px bg-white/[0.08]" />
             </div>
 
             {/* step 1 — cloudflare account */}
