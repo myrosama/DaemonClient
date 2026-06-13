@@ -1045,6 +1045,85 @@ function SetupPage() {
 // OWNERSHIP PAGE — Transfer bot/channel ownership
 // ============================================================================
 
+// ── Browser-driven bot responder ────────────────────────────────────────────
+// A freshly-created per-user bot has NO update consumer, so when the user taps
+// START it sits silent and they think it's broken ("the bot doesn't respond, I
+// get stuck"). Fix it with ZERO server cost: while the user is on this page,
+// THEIR OWN browser long-polls getUpdates for the bot (api.telegram.org sends
+// Access-Control-Allow-Origin:*, so the cross-origin call is allowed), replies
+// to /start with a friendly message, and watches for the channel-join via
+// chat_member updates. Every signal is REAL — the wizard advances the instant
+// the user actually does each step, instead of guessing with a blind countdown.
+function useBotResponder(config, active) {
+  const [botStarted, setBotStarted] = useState(false)
+  const [channelJoined, setChannelJoined] = useState(false)
+  const detectedUserRef = useRef(null)
+
+  useEffect(() => {
+    if (!active || !config?.botToken) return
+    const token = config.botToken
+    const channelId = config.channelId != null ? String(config.channelId) : null
+    const ac = new AbortController()
+    let stopped = false
+    let offset = 0
+
+    const api = (method, params) => {
+      const qs = params ? '?' + new URLSearchParams(params).toString() : ''
+      return fetch(`https://api.telegram.org/bot${token}/${method}${qs}`, { signal: ac.signal })
+        .then((r) => r.json())
+        .catch(() => null)
+    }
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms))
+    const WELCOME =
+      "✅ You're connected to DaemonClient!\n\n" +
+      'This bot quietly stores your end-to-end encrypted photos in your own ' +
+      'private channel — nobody else can read them. Head back to your browser ' +
+      'to finish setup; just a few seconds left.'
+
+    const loop = async () => {
+      // A leftover webhook would block getUpdates with 409. Clearing it is a
+      // no-op on a fresh bot and makes the poller robust either way.
+      await api('deleteWebhook')
+      while (!stopped) {
+        const res = await api('getUpdates', {
+          offset: String(offset),
+          timeout: '25',
+          allowed_updates: JSON.stringify(['message', 'chat_member', 'my_chat_member']),
+        })
+        if (stopped) break
+        if (!res || !res.ok) { await wait(2000); continue } // 409/transient → back off
+        for (const u of res.result || []) {
+          offset = u.update_id + 1
+          // Any first message from a human (the /start) → reply once + mark started.
+          const msg = u.message
+          if (msg && msg.from && !msg.from.is_bot) {
+            if (!detectedUserRef.current) {
+              detectedUserRef.current = { id: msg.from.id, username: msg.from.username || null }
+            }
+            if (typeof msg.text === 'string' && msg.text.trim().toLowerCase().startsWith('/start')) {
+              await api('sendMessage', { chat_id: String(msg.chat.id), text: WELCOME })
+            }
+            setBotStarted(true)
+          }
+          // Channel join (best-effort: only delivered if the bot is a channel
+          // admin; if it never arrives the UI falls back to the manual timer).
+          const cm = u.chat_member || u.my_chat_member
+          const m = cm?.new_chat_member
+          if (cm && channelId && String(cm.chat?.id) === channelId && m && !m.user?.is_bot) {
+            if (['member', 'administrator', 'creator', 'restricted'].includes(m.status)) {
+              setChannelJoined(true)
+            }
+          }
+        }
+      }
+    }
+    loop()
+    return () => { stopped = true; ac.abort() }
+  }, [active, config?.botToken, config?.channelId])
+
+  return { botStarted, channelJoined, detectedUser: detectedUserRef.current }
+}
+
 function OwnershipPage() {
   const navigate = useNavigate()
   const [config, setConfig] = useState(null)
@@ -1056,6 +1135,18 @@ function OwnershipPage() {
   const [hasClickedLink, setHasClickedLink] = useState(false)
   const [isProcessing, setIsProcessing] = useState(false)
   const [transferStatus, setTransferStatus] = useState(null)
+
+  // Live detection from the user's browser (zero server cost). Runs through
+  // steps 1–2; stops on the finalizing screen.
+  const { botStarted, channelJoined } = useBotResponder(config, !isLoading && !!config && step < 3)
+
+  // Auto-advance the instant the bot actually responds — no more dead countdown.
+  useEffect(() => {
+    if (botStarted && step === 1) {
+      const t = setTimeout(() => { setStep(2); setHasClickedLink(false) }, 1100)
+      return () => clearTimeout(t)
+    }
+  }, [botStarted, step])
 
   // Fetch config. If telegram doc is missing or incomplete (half-written by a
   // failed /startSetup), bounce the user back to /setup so they can re-trigger
@@ -1263,8 +1354,18 @@ function OwnershipPage() {
                     )}
                   </a>
 
-                  <Button onClick={handleNextStep} disabled={isButtonDisabled} className="w-full h-9 text-[14px] font-medium">
-                    {isButtonDisabled ? `Next Step (${countdown}s)` : 'Next Step →'}
+                  {botStarted ? (
+                    <div className="flex items-center justify-center gap-2 text-[13px] text-daemon-green font-medium">
+                      <Check size={15} /> Bot connected — continuing…
+                    </div>
+                  ) : hasClickedLink ? (
+                    <div className="flex items-center justify-center gap-2 text-[12px] text-linear-text-secondary">
+                      <Spinner size={13} /> Waiting for the bot to start…
+                    </div>
+                  ) : null}
+
+                  <Button onClick={handleNextStep} disabled={!botStarted && isButtonDisabled} className="w-full h-9 text-[14px] font-medium">
+                    {botStarted ? 'Continue →' : isButtonDisabled && hasClickedLink ? `Skip ahead (${countdown}s)` : 'Next Step →'}
                   </Button>
                 </motion.div>
               )}
@@ -1300,8 +1401,18 @@ function OwnershipPage() {
                     <ExternalLink size={13} />
                   </a>
 
-                  <Button onClick={handleFinalize} disabled={isButtonDisabled} className="w-full h-9 text-[14px] font-medium">
-                    {isButtonDisabled ? `Finalize (${countdown}s)` : 'Finalize Transfer'}
+                  {channelJoined ? (
+                    <div className="flex items-center justify-center gap-2 text-[13px] text-daemon-green font-medium">
+                      <Check size={15} /> Channel joined — ready to finalize!
+                    </div>
+                  ) : hasClickedLink ? (
+                    <div className="flex items-center justify-center gap-2 text-[12px] text-linear-text-secondary">
+                      <Spinner size={13} /> Waiting for you to join the channel…
+                    </div>
+                  ) : null}
+
+                  <Button onClick={handleFinalize} disabled={!channelJoined && isButtonDisabled} className="w-full h-9 text-[14px] font-medium">
+                    {!channelJoined && isButtonDisabled && hasClickedLink ? `Finalize (${countdown}s)` : 'Finalize Transfer'}
                   </Button>
                 </motion.div>
               )}
