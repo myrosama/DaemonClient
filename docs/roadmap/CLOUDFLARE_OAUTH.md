@@ -24,15 +24,17 @@ hand me the three values below, I build + test the flow against the real thing
    - Account Settings **Read**
    (If an "API Tokens / create token" scope is offered, tick it too — it lets us
    keep the simple auto-update model; see "Token continuity" below.)
-5. Client type: **Confidential** (we exchange the code server-side in the
-   deployment-service, which already holds secrets).
-6. To make the button work for everyone (not just your account): complete
-   **domain verification** for `daemonclient.uz` — Cloudflare apps start
-   "private" and go public after verifying a domain we own. We own it, so this
-   is a TXT-record checkbox.
-7. Send me: **client_id**, **client_secret**, and confirm the redirect URI.
-   Put the secret in deployment-service as `CF_OAUTH_CLIENT_SECRET` (wrangler
-   secret) — never in the repo.
+5. Form values: Response Type **Code**, Grant type **Authorization Code**,
+   Token Authentication Method **None (PKCE)** → this is a **public client, NO
+   client_secret**. PKCE (mandatory) + the locked redirect URI secure it; the
+   token still gets exchanged server-side in deployment-service (browser hands
+   it {code, verifier}), so the access token never lives in the browser.
+6. Client URL `https://daemonclient.uz` + any Privacy/Terms URL the form
+   requires to go **public** (apps start private; public = any user can
+   authorize, not just the owner).
+7. Send me: **client_id** only (no secret with PKCE) + confirm the redirect URI.
+   Store `CF_OAUTH_CLIENT_ID` in the accounts-portal env; the exchange in
+   deployment-service needs only client_id + code + code_verifier.
 
 ## The flow I'll build once I have those
 
@@ -46,9 +48,9 @@ dash.cloudflare.com/oauth2/auth?client_id=…&redirect_uri=…
   │  user approves on Cloudflare's OWN consent screen, picks the account
   ▼
 /setup/cloudflare/callback?code=…&state=…   (verify state)
-  │  POST code → deployment-service /oauth/cloudflare/exchange
+  │  POST {code, code_verifier} → deployment-service /oauth/cloudflare/exchange
   ▼
-deployment-service: code + client_secret + code_verifier
+deployment-service: client_id + code + code_verifier   (public client, no secret)
      → POST dash.cloudflare.com/oauth2/token  → { access_token, refresh_token }
   │
   ▼
@@ -91,7 +93,7 @@ async function pkce() {
 ```
 
 ## Status
-- [ ] You register the OAuth app + domain-verify + send client_id/secret
+- [ ] You register the OAuth app (public/PKCE) + send client_id (no secret)
 - [ ] I wire authorize redirect + /setup/cloudflare/callback + exchange endpoint
 - [ ] Token continuity (A or B) per available scope
 - [ ] Keep paste flow as fallback; ship behind CF_OAUTH_CLIENT_ID
