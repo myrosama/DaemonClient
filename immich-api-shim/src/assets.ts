@@ -2012,6 +2012,63 @@ function toAssetResponseDto(photo: any, ownerId: string): any {
   };
 }
 
+// ── Dashboard summary (/api/dashboard/summary) ──────────────────────────────
+// One cheap round-trip for the accounts-portal launcher: real counts + a few
+// recent items for both services. Photo previews ride on thumbhash (a tiny
+// base64 blur string already stored per photo) so the dashboard renders REAL
+// previews with no authenticated image fetch. All best-effort: a missing files
+// table (older worker) or any query error degrades to empty, never 500.
+export async function handleDashboardSummary(request: Request, env: Env): Promise<Response> {
+  const session = await requireAuth(request, env);
+  const uid = session.uid;
+  const out: any = { photos: { count: 0, recent: [] }, drive: { count: 0, recent: [] } };
+  if (!env.DB) return json(out);
+
+  // Photos — exclude trashed + live-photo companion videos (same rule as sync).
+  try {
+    const countRow = await env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM photos
+       WHERE ownerId = ? AND (isTrashed = 0 OR isTrashed IS NULL)
+         AND id NOT IN (SELECT livePhotoVideoId FROM photos WHERE livePhotoVideoId IS NOT NULL AND ownerId = ?)`
+    ).bind(uid, uid).first<{ n: number }>();
+    out.photos.count = countRow?.n || 0;
+
+    const recent = await env.DB.prepare(
+      `SELECT id, thumbhash, mimeType FROM photos
+       WHERE ownerId = ? AND (isTrashed = 0 OR isTrashed IS NULL)
+         AND id NOT IN (SELECT livePhotoVideoId FROM photos WHERE livePhotoVideoId IS NOT NULL AND ownerId = ?)
+       ORDER BY fileCreatedAt DESC LIMIT 4`
+    ).bind(uid, uid).all<{ id: string; thumbhash: string | null; mimeType: string | null }>();
+    out.photos.recent = (recent.results || []).map(r => ({
+      id: r.id, thumbhash: r.thumbhash || null, isVideo: !!r.mimeType && r.mimeType.startsWith('video/'),
+    }));
+  } catch (e: any) {
+    console.log('[Dashboard] photos summary failed:', e?.message);
+  }
+
+  // Drive — files only (folders excluded). Files table may not exist on workers
+  // provisioned before Drive shipped.
+  try {
+    const countRow = await env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM files WHERE ownerId = ? AND type = 'file'`
+    ).bind(uid).first<{ n: number }>();
+    out.drive.count = countRow?.n || 0;
+
+    const recent = await env.DB.prepare(
+      `SELECT fileName, fileType FROM files WHERE ownerId = ? AND type = 'file'
+       ORDER BY uploadedAt DESC LIMIT 6`
+    ).bind(uid).all<{ fileName: string; fileType: string | null }>();
+    out.drive.recent = (recent.results || []).map(r => ({
+      fileName: r.fileName,
+      ext: (r.fileName.split('.').pop() || '').toUpperCase().slice(0, 4),
+    }));
+  } catch (e: any) {
+    console.log('[Dashboard] drive summary failed (files table may not exist):', e?.message);
+  }
+
+  return json(out);
+}
+
 // ── Downloads (/api/download/*) ─────────────────────────────────────────────
 // Real implementation of the Immich download contract (was an empty stub, so
 // the web "Download" button silently did nothing: /info returned zero archives

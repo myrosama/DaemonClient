@@ -9,6 +9,21 @@ import { Card } from './components/ui/Card'
 import { toast } from './components/ui/Toast'
 import { SetupWorker } from './pages/SetupWorker'
 import { consumeOAuthState, CF_OAUTH_REDIRECT_URI, DEPLOYMENT_WORKER } from './config/cloudflareOauth'
+import { thumbHashToDataURL } from 'thumbhash'
+
+// Render a stored thumbhash (base64) into a tiny blurred data-URL preview —
+// real photo content, no authenticated image fetch needed.
+function thumbhashToUrl(b64) {
+  if (!b64) return null
+  try {
+    const bin = atob(b64)
+    const bytes = new Uint8Array(bin.length)
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+    return thumbHashToDataURL(bytes)
+  } catch {
+    return null
+  }
+}
 import {
   LayoutDashboard,
   User,
@@ -1595,15 +1610,7 @@ function FileBadge({ type }) {
   )
 }
 
-// ── placeholder data ──────────────────────────────────────────────────────────
-const DRIVE_FILES = [
-  { name: 'vacation_photos_2026.zip',    type: 'ZIP'  },
-  { name: 'project_presentation.pdf',   type: 'PDF'  },
-  { name: 'intro_reel.mp4',             type: 'MP4'  },
-  { name: 'design_mockups.fig',         type: 'FIG'  },
-  { name: 'budget_2026.xlsx',           type: 'XLSX' },
-  { name: 'Aesthetic_Wallpaper.jpeg',   type: 'JPEG' },
-]
+// Subtle fallback tints for empty photo slots (real previews use thumbhash).
 const PHOTO_GRADIENTS = [
   'linear-gradient(140deg,#1A2B4A,#263866)',
   'linear-gradient(140deg,#1B3020,#263D28)',
@@ -1614,6 +1621,7 @@ const PHOTO_GRADIENTS = [
 function DashboardPage() {
   const [services, setServices] = useState({ photos: null, drive: null })
   const [backend, setBackend] = useState(null)
+  const [summary, setSummary] = useState(null) // real { photos:{count,recent}, drive:{count,recent} }
   const [loading, setLoading] = useState(true)
   const [bgPreset, setBgPreset] = useState(
     () => localStorage.getItem('dc-bg-preset') || 'ocean'
@@ -1638,6 +1646,51 @@ function DashboardPage() {
     const t = setTimeout(() => setLoading(false), 3000)
     return () => { unsubs.forEach(u => u()); clearTimeout(t) }
   }, [])
+
+  // Pull REAL counts + recent items from the user's own worker once we know its
+  // URL. Fires a fire-and-forget auto-update first so workers provisioned before
+  // /api/dashboard/summary (and the accounts CORS origin) self-heal; then polls
+  // a few times to catch the redeploy. Stays silent on failure — the cards just
+  // show an honest empty state, never mock data.
+  useEffect(() => {
+    const workerUrl = backend?.workerUrl
+    if (!workerUrl) return
+    let cancelled = false
+    ;(async () => {
+      const user = auth.currentUser
+      if (!user) return
+      const idToken = await user.getIdToken().catch(() => null)
+      if (!idToken) return
+      fetch(`${DEPLOYMENT_WORKER}/auto-update`, {
+        method: 'POST', headers: { Authorization: `Bearer ${idToken}` },
+      }).catch(() => {})
+      for (let attempt = 0; attempt < 6 && !cancelled; attempt++) {
+        try {
+          const res = await fetch(`${workerUrl.replace(/\/$/, '')}/api/dashboard/summary`, {
+            headers: { Authorization: `Bearer ${idToken}` },
+          })
+          if (res.ok) {
+            const data = await res.json().catch(() => null)
+            // Require the real shape: an older worker (pre-update) routes unknown
+            // paths to a catch-all that returns {} with 200 — keep polling past
+            // that until auto-update brings the real endpoint online.
+            if (data && data.photos && data.drive) {
+              if (!cancelled) setSummary(data)
+              return
+            }
+          }
+        } catch { /* worker may still be redeploying / cold */ }
+        await new Promise((r) => setTimeout(r, 2500))
+      }
+    })()
+    return () => { cancelled = true }
+  }, [backend?.workerUrl])
+
+  // Real data with safe fallbacks. driveFiles/photoTiles drive the cards below.
+  const driveCount = summary?.drive?.count ?? services.drive?.totalFiles ?? 0
+  const photoCount = summary?.photos?.count ?? services.photos?.totalAssets ?? 0
+  const driveFiles = (summary?.drive?.recent || []).slice(0, 6).map(f => ({ name: f.fileName, type: f.ext || 'FILE' }))
+  const photoTiles = (summary?.photos?.recent || []).slice(0, 4)
 
   const handleBgPreset = id => { setBgPreset(id); localStorage.setItem('dc-bg-preset', id) }
   const copyToClipboard = (text, label) =>
@@ -1737,31 +1790,39 @@ function DashboardPage() {
                         <p className="text-[17px] font-bold text-white">Drive</p>
                         <p className="text-[11px] text-blue-300/70 flex items-center gap-1.5">
                           <span className="w-1.5 h-1.5 rounded-full bg-blue-400 inline-block"/>
-                          Recents · {services.drive?.totalFiles || 0} files
+                          Recents · {driveCount} {driveCount === 1 ? 'file' : 'files'}
                         </p>
                       </div>
                     </div>
 
-                    {/* file list — 2 cols, each row clickable */}
-                    <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 divide-y sm:divide-y-0 sm:divide-x divide-white/[0.06] bg-black/20">
-                      {[DRIVE_FILES.slice(0,3), DRIVE_FILES.slice(3,6)].map((col, ci) => (
-                        <div key={ci} className="divide-y divide-white/[0.05]">
-                          {col.map(f => (
-                            <a
-                              key={f.name}
-                              href="https://app.daemonclient.uz"
-                              className="flex items-center gap-3 px-4 py-3 hover:bg-white/[0.05] transition-colors group"
-                            >
-                              <FileBadge type={f.type}/>
-                              <div className="min-w-0">
-                                <p className="text-[13px] text-white font-medium truncate group-hover:text-white">{f.name}</p>
-                                <p className="text-[11px] text-white/35">{f.type}</p>
-                              </div>
-                            </a>
-                          ))}
-                        </div>
-                      ))}
-                    </div>
+                    {/* file list — real recents, 2 cols; honest empty state */}
+                    {driveFiles.length === 0 ? (
+                      <div className="flex-1 flex flex-col items-center justify-center gap-2 py-10 bg-black/20 min-h-[150px]">
+                        <FolderOpen size={26} className="text-white/15" strokeWidth={1.5}/>
+                        <p className="text-[12px] text-white/30">No files yet</p>
+                        <a href="https://drive.daemonclient.uz" className="text-[11px] text-blue-300/70 hover:text-blue-300">Upload to Drive →</a>
+                      </div>
+                    ) : (
+                      <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 divide-y sm:divide-y-0 sm:divide-x divide-white/[0.06] bg-black/20">
+                        {[driveFiles.slice(0, 3), driveFiles.slice(3, 6)].map((col, ci) => (
+                          <div key={ci} className="divide-y divide-white/[0.05]">
+                            {col.map((f, fi) => (
+                              <a
+                                key={`${f.name}-${fi}`}
+                                href="https://drive.daemonclient.uz"
+                                className="flex items-center gap-3 px-4 py-3 hover:bg-white/[0.05] transition-colors group"
+                              >
+                                <FileBadge type={f.type}/>
+                                <div className="min-w-0">
+                                  <p className="text-[13px] text-white font-medium truncate group-hover:text-white">{f.name}</p>
+                                  <p className="text-[11px] text-white/35">{f.type}</p>
+                                </div>
+                              </a>
+                            ))}
+                          </div>
+                        ))}
+                      </div>
+                    )}
 
                     {/* footer */}
                     <div className="px-4 py-2.5 border-t border-white/[0.06] flex items-center justify-between">
@@ -1783,27 +1844,35 @@ function DashboardPage() {
                         <p className="text-[17px] font-bold text-white">Photos</p>
                         <p className="text-[11px] text-green-400/70 flex items-center gap-1.5">
                           <span className="w-1.5 h-1.5 rounded-full bg-green-400 inline-block"/>
-                          Library · {services.photos?.totalAssets || 0} Photos
+                          Library · {photoCount} {photoCount === 1 ? 'Photo' : 'Photos'}
                         </p>
                       </div>
                     </div>
 
-                    {/* 2×2 thumbnail grid */}
+                    {/* 2×2 grid — real recent photos via thumbhash previews */}
                     <a href="https://photos.daemonclient.uz" className="flex-1 grid grid-cols-2 grid-rows-2 gap-px bg-white/[0.04] min-h-[160px]">
-                      {PHOTO_GRADIENTS.map((grad, i) => (
-                        <div
-                          key={i}
-                          className="relative flex items-center justify-center hover:brightness-110 transition-all duration-200"
-                          style={{ background: grad }}
-                        >
-                          <Image size={22} className="text-white/10"/>
-                          {i === 0 && (
-                            <div className="absolute inset-0 flex items-center justify-center opacity-0 hover:opacity-100 bg-black/30 transition-opacity duration-150">
-                              <span className="text-white text-[10px] font-medium">Open</span>
-                            </div>
-                          )}
-                        </div>
-                      ))}
+                      {[0, 1, 2, 3].map((i) => {
+                        const tile = photoTiles[i]
+                        const url = tile ? thumbhashToUrl(tile.thumbhash) : null
+                        return (
+                          <div
+                            key={i}
+                            className="relative flex items-center justify-center overflow-hidden hover:brightness-110 transition-all duration-200"
+                            style={{ background: url ? undefined : PHOTO_GRADIENTS[i] }}
+                          >
+                            {url ? (
+                              <img src={url} alt="" className="absolute inset-0 w-full h-full object-cover" />
+                            ) : (
+                              <Image size={22} className="text-white/10"/>
+                            )}
+                            {tile?.isVideo && (
+                              <div className="absolute bottom-1.5 right-1.5 w-5 h-5 rounded-full bg-black/50 flex items-center justify-center">
+                                <Monitor size={11} className="text-white/80"/>
+                              </div>
+                            )}
+                          </div>
+                        )
+                      })}
                     </a>
 
                     {/* footer */}
