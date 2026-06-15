@@ -1656,32 +1656,45 @@ function DashboardPage() {
     const workerUrl = backend?.workerUrl
     if (!workerUrl) return
     let cancelled = false
+    const base = workerUrl.replace(/\/$/, '')
     ;(async () => {
       const user = auth.currentUser
       if (!user) return
       const idToken = await user.getIdToken().catch(() => null)
       if (!idToken) return
-      fetch(`${DEPLOYMENT_WORKER}/auto-update`, {
-        method: 'POST', headers: { Authorization: `Bearer ${idToken}` },
-      }).catch(() => {})
-      for (let attempt = 0; attempt < 6 && !cancelled; attempt++) {
+
+      // One GET to the user's own worker. Returns the real shape ({photos,drive})
+      // when the worker has the endpoint; an older worker routes unknown paths to
+      // a catch-all that returns {} (200) — treated as "not ready".
+      const fetchSummary = async () => {
         try {
-          const res = await fetch(`${workerUrl.replace(/\/$/, '')}/api/dashboard/summary`, {
+          const res = await fetch(`${base}/api/dashboard/summary`, {
             headers: { Authorization: `Bearer ${idToken}` },
           })
           if (res.ok) {
-            const data = await res.json().catch(() => null)
-            // Require the real shape: an older worker (pre-update) routes unknown
-            // paths to a catch-all that returns {} with 200 — keep polling past
-            // that until auto-update brings the real endpoint online.
-            if (data && data.photos && data.drive) {
-              if (!cancelled) setSummary(data)
-              return
-            }
+            const d = await res.json().catch(() => null)
+            if (d && d.photos && d.drive) return d
           }
-        } catch { /* worker may still be redeploying / cold */ }
-        await new Promise((r) => setTimeout(r, 2500))
+        } catch { /* offline / cold start */ }
+        return null
       }
+
+      // STEADY STATE: worker already current → exactly one fetch, no update call.
+      let data = await fetchSummary()
+
+      // Only a stale worker (missing the endpoint) reaches here → self-heal it
+      // ONCE by nudging auto-update, then briefly poll. Happens at most once per
+      // worker, never on subsequent dashboard opens.
+      if (!data && !cancelled) {
+        fetch(`${DEPLOYMENT_WORKER}/auto-update`, {
+          method: 'POST', headers: { Authorization: `Bearer ${idToken}` },
+        }).catch(() => {})
+        for (let i = 0; i < 5 && !data && !cancelled; i++) {
+          await new Promise((r) => setTimeout(r, 2500))
+          data = await fetchSummary()
+        }
+      }
+      if (data && !cancelled) setSummary(data)
     })()
     return () => { cancelled = true }
   }, [backend?.workerUrl])
