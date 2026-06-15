@@ -748,72 +748,93 @@ function SetupPage() {
       navigate('/setup/ownership')
       return
     }
+
+    const uid = auth.currentUser.uid
+    // Survives a page reload during the slow (30-90s) creation window, when the
+    // Firestore doc doesn't exist yet so `docExists` can't protect us.
+    const inflightKey = `dc_setup_inflight_${uid}`
+    const startedTs = parseInt(localStorage.getItem(inflightKey) || '0', 10)
+    const recentlyStarted = startedTs && Date.now() - startedTs < 240000
+
+    // HARD RULE: never POST /startSetup when a bot/channel already exists (even
+    // a partial doc) OR a create is already in flight. A second create spawns a
+    // duplicate bot+channel; the new channelId overwrites the doc, so the user
+    // joins one channel while finalize searches the other → "could not find you
+    // in the channel." This guard makes the client safe on its own, without
+    // depending on the server-side idempotency (which needs a Render redeploy).
+    const alreadyInFlight = docExists || recentlyStarted
+
     setError('')
     setIsLoading(true)
-    setStatusMessage('Contacting the setup service…')
 
-    // Bot+channel creation is genuinely slow (a BotFather conversation takes
-    // 30-90s, plus a possible cold start) — narrate the wait instead of timing
-    // out at 12s and inviting a retry, which is how users ended up with two
-    // bots before the server became idempotent.
     const t0 = Date.now()
     const stages = [
       [8, 'Waking the setup service… free hosting naps, this can take a minute.'],
       [40, 'Creating your private bot and storage channel… (30–90 seconds)'],
       [110, 'Still working — Telegram rate-limits bot creation. Almost there…'],
     ]
-    const ticker = setInterval(() => {
-      const s = Math.round((Date.now() - t0) / 1000)
-      for (let i = stages.length - 1; i >= 0; i--) {
-        if (s >= stages[i][0]) { setStatusMessage(stages[i][1]); break }
-      }
-    }, 3000)
+    let ticker = null
+    const startTicker = () => {
+      ticker = setInterval(() => {
+        const s = Math.round((Date.now() - t0) / 1000)
+        for (let i = stages.length - 1; i >= 0; i--) {
+          if (s >= stages[i][0]) { setStatusMessage(stages[i][1]); break }
+        }
+      }, 3000)
+    }
 
     try {
-      // The backend is idempotent: complete → "already_configured", another
-      // request in flight → 202 "in_progress", otherwise it creates. So
-      // calling it again is always safe — the server decides, not the client.
-      const response = await fetch(`${RENDER_BACKEND}/startSetup`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          data: { uid: auth.currentUser.uid, email: auth.currentUser.email },
-        }),
-      })
-      const result = await response.json().catch(() => ({}))
-      if (!response.ok && response.status !== 202) {
-        throw new Error(result.error?.message || 'The setup service returned an error.')
+      if (!alreadyInFlight) {
+        setStatusMessage('Contacting the setup service…')
+        // Mark in-flight BEFORE the call so a reload mid-creation can't re-trigger.
+        localStorage.setItem(inflightKey, String(Date.now()))
+        startTicker()
+        const response = await fetch(`${RENDER_BACKEND}/startSetup`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ data: { uid, email: auth.currentUser.email } }),
+        })
+        const result = await response.json().catch(() => ({}))
+        if (!response.ok && response.status !== 202) {
+          // Hard failure → nothing was created; release the lock so a retry works.
+          localStorage.removeItem(inflightKey)
+          throw new Error(result.error?.message || 'The setup service returned an error.')
+        }
+      } else {
+        setStatusMessage('Your private storage is already being created — finishing up…')
+        startTicker()
       }
 
-      // Wait (patiently — up to 3 min) for the config to land in Firestore.
-      const configDocRef = db
-        .collection(configPath(auth.currentUser.uid))
-        .doc('telegram')
+      // Poll (up to 3 min) for the COMPLETE config to land in Firestore.
+      const configDocRef = db.collection(configPath(uid)).doc('telegram')
       const deadline = Date.now() + 180000
       while (Date.now() < deadline) {
         const docSnap = await configDocRef.get({ source: 'server' }).catch(() => null)
         const d = docSnap && docSnap.exists ? docSnap.data() : null
         if (d && d.botToken && d.botUsername && d.channelId) {
-          clearInterval(ticker)
+          localStorage.removeItem(inflightKey)
+          if (ticker) clearInterval(ticker)
           setStatusMessage('Your private storage is ready! Continuing…')
           navigate('/setup/ownership')
           return
         }
         await new Promise((resolve) => setTimeout(resolve, 2500))
       }
+      // Don't tell them to click again — that's what created duplicates. The
+      // in-flight lock holds; refreshing will resume the wait.
       throw new Error(
-        "This is taking longer than usual — but nothing is lost. Click the button again: it's safe, duplicates are impossible now."
+        'This is taking longer than usual. Your setup is still finishing — please wait a moment, then refresh. Do NOT start over; that would create a duplicate.'
       )
     } catch (err) {
       console.error('Setup error:', err)
       setStatusMessage('')
       if (err.message.includes('Failed to fetch')) {
-        setError('Could not reach the setup service. Check your connection and click again — retrying is safe.')
+        setError('Could not reach the setup service. Check your connection and try again.')
       } else {
         setError(err.message || 'An unexpected error occurred.')
       }
     } finally {
-      clearInterval(ticker)
+      if (ticker) clearInterval(ticker)
       setIsLoading(false)
     }
   }
@@ -1258,6 +1279,22 @@ function OwnershipPage() {
     navigate('/login')
   }
 
+  // Recovery for a corrupted setup (e.g. a duplicate bot/channel left the doc
+  // pointing at a channel the user never joined → "could not find you").
+  // Wipes the telegram config + in-flight lock so /setup can rebuild cleanly.
+  const handleStartOver = async () => {
+    try {
+      const uid = auth.currentUser?.uid
+      if (uid) {
+        localStorage.removeItem(`dc_setup_inflight_${uid}`)
+        await db.collection(configPath(uid)).doc('telegram').delete()
+      }
+    } catch (e) {
+      console.warn('Start-over cleanup failed (continuing):', e)
+    }
+    navigate('/setup', { replace: true })
+  }
+
   if (isLoading) {
     return <FullScreenSpinner message="Loading your bot and channel details..." />
   }
@@ -1442,9 +1479,18 @@ function OwnershipPage() {
             </AnimatePresence>
 
             {error && (
-              <p className="text-[13px] text-linear-error text-center px-6 pb-5">
-                {error}
-              </p>
+              <div className="px-6 pb-5 text-center">
+                <p className="text-[13px] text-linear-error mb-3">{error}</p>
+                {/* Recovery: if the bot/channel got into a bad state (e.g. a
+                    duplicate left the config pointing at a channel you never
+                    joined), wipe it and rebuild cleanly. */}
+                <button
+                  onClick={handleStartOver}
+                  className="text-[12px] text-linear-text-secondary hover:text-linear-text underline underline-offset-2 transition-colors"
+                >
+                  Still stuck? Start setup over
+                </button>
+              </div>
             )}
           </div>
 
