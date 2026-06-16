@@ -145,44 +145,16 @@ export async function handleSyncStream(request: Request, env: Env): Promise<Resp
           ids: [photo._id]
         });
 
-        // EXIF companion event — populates the mobile detail panel and the
-        // mobile MAP (the app's map reads lat/lon from its local exif table,
-        // which only this event fills). Field types follow SyncAssetExifV1
-        // exactly: orientation is String?, iso/width/height/fileSize are int,
-        // fNumber/focalLength/latitude/longitude are double — Dart's strict
-        // parse silently nulls (or throws on) anything mistyped.
-        send({
-          type: 'AssetExifV1',
-          data: {
-            assetId: photo._id,
-            city: photo.city || null,
-            country: photo.country || null,
-            dateTimeOriginal: photo.dateTimeOriginal || dateStr,
-            description: photo.description || null,
-            exifImageHeight: Math.round(photo.height || 0) || null,
-            exifImageWidth: Math.round(photo.width || 0) || null,
-            exposureTime: photo.exposureTime || null,
-            fNumber: typeof photo.fNumber === 'number' ? photo.fNumber : null,
-            fileSizeInByte: Math.round(photo.fileSize || 0) || null,
-            focalLength: typeof photo.focalLength === 'number' ? photo.focalLength : null,
-            fps: null,
-            iso: typeof photo.iso === 'number' ? Math.round(photo.iso) : null,
-            latitude: typeof photo.latitude === 'number' ? photo.latitude : null,
-            lensModel: photo.lensModel || null,
-            longitude: typeof photo.longitude === 'number' ? photo.longitude : null,
-            make: photo.make || null,
-            model: photo.model || null,
-            modifyDate: null,
-            orientation: photo.orientation != null ? String(photo.orientation) : null,
-            profileDescription: null,
-            projectionType: null,
-            rating: null,
-            state: null,
-            timeZone: null,
-          },
-          ack: `AssetExifV1|${photo._id}`,
-          ids: [photo._id]
-        });
+        // NOTE: AssetExifV1 is intentionally NOT emitted here. Streaming it
+        // interleaved with AssetV1 broke the mobile sync entirely — the native
+        // app parses every event in a strict Dart isolate and a single bad
+        // event (or unexpected interleaving with the exif checkpoint) aborts
+        // ALL remote sync, so NO photos/videos load and backup appears dead.
+        // EXIF still reaches the apps the safe ways: the web map + the asset
+        // detail DTO (toAssetResponseDto.exifInfo), and the native app pulls
+        // per-asset EXIF from /api/assets/:id when a photo is opened. Re-adding
+        // EXIF to the sync stream must be verified against on-device sync logs
+        // first (see docs/roadmap notes) — do NOT reintroduce blindly.
       }
 
       // Emit delete events for tombstoned assets (isTrashed=1 in D1).
