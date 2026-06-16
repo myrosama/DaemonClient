@@ -773,30 +773,43 @@ async function ensureDeduplicationSchema(db: any): Promise<void> {
   dedupSchemaReady = true;
 }
 
-// Per-isolate concurrent-upload cap. `request.formData()` buffers the ENTIRE upload
-// body into memory before the handler can touch it. Several concurrent multi-MB
-// (HEIC) or video bodies in ONE isolate cross Cloudflare's 128 MB limit → the
-// isolate is killed and EVERY in-flight request sharing it dies with "exceeded
-// resource limits" — even tiny PNGs — and the app retries them all, burning the
-// user's mobile data. So cap concurrency per isolate and shed excess with a clean
-// 503 + Retry-After BEFORE buffering, so the app backs off instead of OOM-cascading.
-// (Module-level state is per-isolate; the check+increment are synchronous so they
-// can't interleave; the finally makes the counter leak-proof.)
-let inFlightUploads = 0;
-const MAX_INFLIGHT_UPLOADS = 2;
+// Upload concurrency control. `request.formData()` buffers the ENTIRE body into
+// memory before the handler can touch it, so several big bodies at once can
+// cross Cloudflare's 128 MB isolate cap and kill EVERY in-flight request. The
+// old design shed the excess with a 503 — but the mobile app backs up dozens of
+// photos at once and treats 503 as a hard failure, so the WHOLE backup failed.
+//
+// Instead we QUEUE by BYTES: gate on the total in-flight upload size (from
+// Content-Length) and WAIT for budget rather than rejecting. Small HEICs
+// (~3 MB) run ~13-at-a-time; big videos serialize; a file larger than the whole
+// budget runs alone when the worker is otherwise idle (so it's never stuck).
+// Nothing fails under normal load. Module-level state is per-isolate; the
+// budget check + increment have no await between them, so they're atomic; the
+// finally always releases (no leak). Shedding only happens after a long wait
+// under sustained overload — rare — and the app simply retries next cycle.
+let inFlightUploadBytes = 0;
+const UPLOAD_BYTE_BUDGET = 40 * 1024 * 1024; // ~40 MB of concurrent bodies
+const UPLOAD_MAX_WAIT_MS = 55_000;           // wait up to ~55s for a slot, then shed
 
 async function handleUpload(request: Request, env: Env, uid: string, idToken: string): Promise<Response> {
-  if (inFlightUploads >= MAX_INFLIGHT_UPLOADS) {
-    return new Response(
-      JSON.stringify({ message: 'Worker busy — too many concurrent uploads, retry shortly' }),
-      { status: 503, headers: { 'Content-Type': 'application/json', 'Retry-After': '3' } },
-    );
+  const size = parseInt(request.headers.get('Content-Length') || '0', 10) || 8 * 1024 * 1024;
+  const start = Date.now();
+  // Wait for budget. First clause lets an over-budget file through when nothing
+  // else is in flight, so huge files never wedge permanently.
+  while (inFlightUploadBytes > 0 && inFlightUploadBytes + size > UPLOAD_BYTE_BUDGET) {
+    if (Date.now() - start > UPLOAD_MAX_WAIT_MS) {
+      return new Response(
+        JSON.stringify({ message: 'Worker busy — retry shortly' }),
+        { status: 503, headers: { 'Content-Type': 'application/json', 'Retry-After': '5' } },
+      );
+    }
+    await new Promise((r) => setTimeout(r, 150));
   }
-  inFlightUploads++;
+  inFlightUploadBytes += size;
   try {
     return await handleUploadImpl(request, env, uid, idToken);
   } finally {
-    inFlightUploads--;
+    inFlightUploadBytes -= size;
   }
 }
 
