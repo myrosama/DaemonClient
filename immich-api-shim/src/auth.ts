@@ -1,6 +1,17 @@
 import type { Env } from './index';
 import { json, firestoreGet } from './helpers';
 
+// Session lifetime. Was 7 days, which silently logged users out after a week
+// of inactivity — every request then 401'd, so sync stalled and uploads
+// stopped, surfacing as a raw "authentication error". The embedded Firebase
+// refresh token keeps the idToken fresh indefinitely (requireAuth refreshes
+// it), so the session token itself never needs to age out. Effectively
+// non-expiring; a genuinely revoked refresh token still yields a clean 401 →
+// the app re-logs in. (Browsers clamp cookie Max-Age to ~400d for security;
+// that only affects the web cookie — the mobile app stores the token itself,
+// whose `exp` is what this controls.)
+const SESSION_TTL_SECONDS = 3650 * 24 * 60 * 60; // ~10 years
+
 async function hmacSign(payload: string, scope: string): Promise<string> {
   const key = await crypto.subtle.importKey(
     'raw',
@@ -67,7 +78,7 @@ async function handleLogin(request: Request, env: Env): Promise<Response> {
     idToken: data.idToken,
     refreshToken: data.refreshToken,
     workerUrl,
-    exp: Date.now() + 7 * 24 * 60 * 60 * 1000,
+    exp: Date.now() + SESSION_TTL_SECONDS * 1000,
   }, env.APP_IDENTIFIER || 'default');
 
   const userResponse = {
@@ -102,12 +113,12 @@ async function handleLogin(request: Request, env: Env): Promise<Response> {
   
   // Set cookies for subsequent requests
   const newHeaders = new Headers(response.headers);
-  newHeaders.append('Set-Cookie', `immich_access_token=${sessionToken}; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=${7 * 24 * 60 * 60}`);
+  newHeaders.append('Set-Cookie', `immich_access_token=${sessionToken}; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=${SESSION_TTL_SECONDS}`);
   newHeaders.append('Set-Cookie',
-    `__session=${sessionToken}; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=${7 * 24 * 60 * 60}`
+    `__session=${sessionToken}; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=${SESSION_TTL_SECONDS}`
   );
   newHeaders.append('Set-Cookie',
-    `immich_is_authenticated=true; Path=/; SameSite=Lax; Secure; Max-Age=${7 * 24 * 60 * 60}`
+    `immich_is_authenticated=true; Path=/; SameSite=Lax; Secure; Max-Age=${SESSION_TTL_SECONDS}`
   );
   return new Response(response.body, { status: 201, headers: newHeaders });
 }
