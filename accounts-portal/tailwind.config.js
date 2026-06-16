@@ -19,7 +19,9 @@ export default {
         'daemon-green-hover': '#16A34A',
       },
       fontFamily: {
-        sans: ['Space Grotesk', 'Inter', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'sans-serif'],
+        sans: ['Hanken Grotesk', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'sans-serif'],
+        display: ['Bricolage Grotesque', 'Hanken Grotesk', 'sans-serif'],
+        mono: ['JetBrains Mono', 'Fira Code', 'monospace'],
       },
       letterSpacing: {
         tighter: '-0.01em',

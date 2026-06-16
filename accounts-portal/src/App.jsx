@@ -1585,11 +1585,27 @@ const BG_PRESETS = [
 
 function DashboardBackground({ preset }) {
   const bg = BG_PRESETS.find(p => p.id === preset) || BG_PRESETS[0]
+  const [c1, c2] = bg.swatch
   return (
-    <div className="fixed inset-0 -z-10" style={{ background: bg.bg }}>
+    <div className="fixed inset-0 -z-10 overflow-hidden" style={{ background: bg.bg }}>
+      {/* Soft aurora blobs — the premium atmosphere (replaces flat clip shapes) */}
+      <div
+        className="absolute -top-[20%] -left-[12%] w-[62vw] h-[62vw] rounded-full blur-[130px] opacity-[0.55]"
+        style={{ background: `radial-gradient(circle, ${c2}, transparent 70%)` }}
+      />
+      <div
+        className="absolute top-[28%] -right-[8%] w-[48vw] h-[48vw] rounded-full blur-[130px] opacity-40"
+        style={{ background: `radial-gradient(circle, ${c1}, transparent 70%)` }}
+      />
+      {/* Faint geometric facets from the preset, dialed way back */}
       {bg.shapes.map((s, i) => (
-        <div key={i} className="absolute inset-0" style={{ background: s.color, clipPath: s.clip }} />
+        <div key={i} className="absolute inset-0 opacity-[0.35]" style={{ background: s.color, clipPath: s.clip }} />
       ))}
+      {/* Top sheen + bottom vignette → depth */}
+      <div className="absolute inset-0" style={{ background: 'radial-gradient(120% 80% at 50% -10%, rgba(255,255,255,0.07), transparent 58%)' }} />
+      <div className="absolute inset-0" style={{ background: 'radial-gradient(100% 100% at 50% 118%, rgba(0,0,0,0.55), transparent 52%)' }} />
+      {/* Fine film grain */}
+      <div className="absolute inset-0 grain-overlay opacity-[0.05] mix-blend-overlay" />
     </div>
   )
 }
@@ -1745,7 +1761,7 @@ function DashboardPage() {
                   {/* Profile card — clickable → /profile */}
                   <Link
                     to="/profile"
-                    className="md:w-[248px] shrink-0 bg-white/[0.09] hover:bg-white/[0.13] backdrop-blur-xl border border-white/[0.1] hover:border-white/[0.2] rounded-2xl p-6 transition-all duration-200 group"
+                    className="md:w-[248px] shrink-0 bg-white/[0.07] hover:bg-white/[0.11] backdrop-blur-2xl border border-white/[0.1] hover:border-white/[0.2] rounded-3xl p-6 transition-all duration-300 group shadow-[0_24px_60px_-20px_rgba(0,0,0,0.6)]"
                   >
                     <div
                       className="w-[70px] h-[70px] rounded-full flex items-center justify-center text-white text-2xl font-bold mb-5 shadow-lg ring-2 ring-white/10 group-hover:ring-white/25 transition-all duration-200"
@@ -1753,8 +1769,8 @@ function DashboardPage() {
                     >
                       {initials}
                     </div>
-                    <h2 className="text-[24px] font-bold text-white leading-tight mb-0.5">{displayName}</h2>
-                    <p className="text-[12px] text-white/50 mb-4 truncate">{user?.email}</p>
+                    <h2 className="font-display text-[22px] font-bold text-white leading-tight mb-0.5 truncate">{displayName}</h2>
+                    <p className="text-[12px] text-white/45 mb-4 truncate">{user?.email}</p>
                     <div className="flex items-center gap-2">
                       <img src="/logo.png" className="w-4 h-4 object-contain opacity-75" alt="" />
                       <span className="text-[12px] font-semibold text-white/60">DaemonClient</span>
@@ -1765,7 +1781,7 @@ function DashboardPage() {
                   </Link>
 
                   {/* App grid — clickable card header routes to /dashboard */}
-                  <div className="flex-1 bg-white/[0.09] backdrop-blur-xl border border-white/[0.1] rounded-2xl p-5 sm:p-6">
+                  <div className="flex-1 bg-white/[0.07] backdrop-blur-2xl border border-white/[0.1] rounded-3xl p-5 sm:p-6 shadow-[0_24px_60px_-20px_rgba(0,0,0,0.6)]">
                     <p className="text-[11px] text-white/30 font-medium uppercase tracking-widest mb-4">Services</p>
                     <div className="grid grid-cols-3 sm:grid-cols-6 gap-4 sm:gap-5">
                       {apps.map(app =>
@@ -1793,14 +1809,14 @@ function DashboardPage() {
                 <div className="grid grid-cols-1 md:grid-cols-[3fr_2fr] gap-4">
 
                   {/* ── Drive card ── */}
-                  <div className="bg-white/[0.08] backdrop-blur-xl border border-white/[0.1] rounded-2xl overflow-hidden flex flex-col">
+                  <div className="bg-white/[0.07] backdrop-blur-2xl border border-white/[0.1] rounded-3xl overflow-hidden flex flex-col shadow-[0_24px_60px_-20px_rgba(0,0,0,0.6)]">
                     {/* header */}
                     <div className="flex items-center gap-3 px-5 py-4 bg-white/[0.04]">
                       <div className="w-11 h-11 rounded-[12px] flex items-center justify-center shadow-lg" style={{ background: 'linear-gradient(145deg,#1A3B90,#2D5DC8)' }}>
                         <FolderOpen size={20} className="text-white" strokeWidth={1.5}/>
                       </div>
                       <div>
-                        <p className="text-[17px] font-bold text-white">Drive</p>
+                        <p className="font-display text-[18px] font-bold text-white">Drive</p>
                         <p className="text-[11px] text-blue-300/70 flex items-center gap-1.5">
                           <span className="w-1.5 h-1.5 rounded-full bg-blue-400 inline-block"/>
                           Recents · {driveCount} {driveCount === 1 ? 'file' : 'files'}
@@ -1847,14 +1863,14 @@ function DashboardPage() {
                   </div>
 
                   {/* ── Photos card ── */}
-                  <div className="bg-white/[0.08] backdrop-blur-xl border border-white/[0.1] rounded-2xl overflow-hidden flex flex-col">
+                  <div className="bg-white/[0.07] backdrop-blur-2xl border border-white/[0.1] rounded-3xl overflow-hidden flex flex-col shadow-[0_24px_60px_-20px_rgba(0,0,0,0.6)]">
                     {/* header */}
                     <div className="flex items-center gap-3 px-5 py-4 bg-white/[0.04]">
                       <div className="w-11 h-11 rounded-[12px] flex items-center justify-center shadow-lg" style={{ background: 'linear-gradient(145deg,#0A4520,#15803D)' }}>
                         <Image size={20} className="text-green-300" strokeWidth={1.5}/>
                       </div>
                       <div>
-                        <p className="text-[17px] font-bold text-white">Photos</p>
+                        <p className="font-display text-[18px] font-bold text-white">Photos</p>
                         <p className="text-[11px] text-green-400/70 flex items-center gap-1.5">
                           <span className="w-1.5 h-1.5 rounded-full bg-green-400 inline-block"/>
                           Library · {photoCount} {photoCount === 1 ? 'Photo' : 'Photos'}
@@ -1924,20 +1940,20 @@ function DashboardPage() {
               <div className="max-w-[1020px] mx-auto px-4 sm:px-8 lg:px-12 py-10 grid grid-cols-1 sm:grid-cols-3 gap-8">
                 {/* Plan */}
                 <div>
-                  <p className="text-[20px] font-bold text-white mb-3 flex items-center gap-1">
+                  <p className="font-display text-[19px] font-bold text-white mb-3 flex items-center gap-1">
                     Your Plan <ChevronRight size={16} className="text-white/30 mt-0.5" />
                   </p>
                   <div className="flex items-center gap-2 mb-2">
                     <img src="/logo.png" className="w-5 h-5 object-contain" alt="" />
                     <span className="text-[14px] font-semibold text-white">Unlimited</span>
                   </div>
-                  <p className="text-[20px] font-bold text-white mb-1">∞ Storage</p>
+                  <p className="font-display text-[28px] font-bold text-white mb-1 tracking-tight">∞ Storage</p>
                   <p className="text-[12px] text-white/35">Free, powered by Telegram</p>
                 </div>
 
                 {/* Backend */}
                 <div>
-                  <p className="text-[20px] font-bold text-white mb-3 flex items-center gap-1">
+                  <p className="font-display text-[19px] font-bold text-white mb-3 flex items-center gap-1">
                     Your Backend <ChevronRight size={16} className="text-white/30 mt-0.5" />
                   </p>
                   {backend?.workerUrl ? (
@@ -1966,7 +1982,7 @@ function DashboardPage() {
 
                 {/* Account links */}
                 <div>
-                  <p className="text-[20px] font-bold text-white mb-3 flex items-center gap-1">
+                  <p className="font-display text-[19px] font-bold text-white mb-3 flex items-center gap-1">
                     Account <ChevronRight size={16} className="text-white/30 mt-0.5" />
                   </p>
                   <div className="space-y-3">
