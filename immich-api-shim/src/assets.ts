@@ -787,8 +787,14 @@ async function ensureDeduplicationSchema(db: any): Promise<void> {
 // budget check + increment have no await between them, so they're atomic; the
 // finally always releases (no leak). Shedding only happens after a long wait
 // under sustained overload — rare — and the app simply retries next cycle.
+// Budget is deliberately small: each active upload doesn't just hold its body —
+// request.formData() parses a second copy, then chunk slicing + (server-ZKE)
+// encryption + the Telegram Blob each add more, so peak memory is ~4-5x the
+// body. A 40 MB budget let that balloon past the 128 MB isolate cap during a
+// big backup → Cloudflare killed the worker → 502 Bad Gateway killed a whole
+// batch of in-flight uploads at once. 16 MB keeps peak well under 128 MB.
 let inFlightUploadBytes = 0;
-const UPLOAD_BYTE_BUDGET = 40 * 1024 * 1024; // ~40 MB of concurrent bodies
+const UPLOAD_BYTE_BUDGET = 16 * 1024 * 1024; // ~16 MB of concurrent bodies
 const UPLOAD_MAX_WAIT_MS = 55_000;           // wait up to ~55s for a slot, then shed
 
 async function handleUpload(request: Request, env: Env, uid: string, idToken: string): Promise<Response> {
