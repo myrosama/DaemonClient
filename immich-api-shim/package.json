@@ -14,6 +14,7 @@
     "wrangler": "^3.0.0"
   },
   "dependencies": {
+    "@mjackson/multipart-parser": "^0.10.1",
     "exifr": "^7.1.3",
     "image-size": "^2.0.2",
     "jpeg-js": "^0.4.4",
