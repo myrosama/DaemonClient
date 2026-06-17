@@ -1658,6 +1658,19 @@ async function handleThumbnail(request: Request, env: Env, uid: string, assetId:
   if (isMultiChunk && !photo.telegramThumbId && !wantsHighQuality) {
     return json({ message: 'Thumbnail not available for multi-chunk asset' }, 404);
   }
+  // Grid thumbnail with NO real JPEG thumb/preview stored → fileId fell back to
+  // the ORIGINAL. If that original is HEIC or a video, the app's grid decoder
+  // can't read it and logs "Failed to decode image" for every tile — a flood
+  // that makes the app feel like it's crashing. Return 404 so the app keeps its
+  // thumbhash blur placeholder instead. (High-quality/full-view requests still
+  // fall through to the original, where the platform decoder handles HEIC.)
+  if (!wantsHighQuality && fileId === photo.telegramOriginalId &&
+      !photo.telegramThumbId && !photo.telegramPreviewId) {
+    const mt = (photo.mimeType || '').toLowerCase();
+    if (photo.isHeic || mt === 'image/heic' || mt === 'image/heif' || mt.startsWith('video/')) {
+      return json({ message: 'No decodable thumbnail yet' }, 404);
+    }
+  }
 
   const config = await getCachedConfig<any>(env, uid, idToken, 'telegram');
   if (!config) return json({ message: 'No config' }, 500);
