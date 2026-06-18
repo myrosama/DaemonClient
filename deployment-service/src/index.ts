@@ -89,7 +89,8 @@ CREATE TABLE photos (
   deviceAssetId TEXT, deviceId TEXT,
   make TEXT, model TEXT, lensModel TEXT, fNumber REAL, focalLength REAL,
   iso INTEGER, exposureTime TEXT, orientation TEXT, dateTimeOriginal TEXT,
-  exifChecked INTEGER DEFAULT 0
+  exifChecked INTEGER DEFAULT 0,
+  checksumChecked INTEGER DEFAULT 0
 );
 CREATE INDEX idx_photos_uploadedAt ON photos(uploadedAt DESC);
 CREATE INDEX idx_photos_fileCreatedAt ON photos(fileCreatedAt DESC);

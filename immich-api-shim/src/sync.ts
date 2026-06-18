@@ -1,7 +1,7 @@
 import type { Env } from './index';
 import { requireAuth, firestoreQuery } from './helpers';
 import { D1Adapter } from './d1-adapter';
-import { backfillExifBatch } from './assets';
+import { backfillExifBatch, backfillChecksumBatch } from './assets';
 import { repairLivePhotoLinks } from './link-live-photos';
 
 // Fire at most once per Worker isolate lifetime (typically 30 min – a few hours).
@@ -185,6 +185,18 @@ export async function handleSyncStream(request: Request, env: Env): Promise<Resp
     env.waitUntil(
       backfillExifBatch(env, session.uid, session.idToken).catch(err =>
         console.log('[ExifBackfill] dispatch failed:', err?.message)
+      )
+    );
+  }
+
+  // Checksum backfill: heals photos with empty checksums (the "every photo
+  // shows twice" bug) so the app can match local↔cloud. Runs every sync — the
+  // function self-guards against overlap + completion — so a library heals fast
+  // during active use.
+  if (env.DB && env.waitUntil) {
+    env.waitUntil(
+      backfillChecksumBatch(env, session.uid, session.idToken).catch(err =>
+        console.log('[ChecksumBackfill] dispatch failed:', err?.message)
       )
     );
   }

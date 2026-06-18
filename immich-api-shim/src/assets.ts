@@ -6,7 +6,7 @@ import { getFlagsForUser } from './feature-flags';
 import { D1Adapter } from './d1-adapter';
 import { getCachedConfig } from './cached-config';
 import { computeThumbHashFromJpeg } from './thumbhash-util';
-import { sha1Base64OfFile } from './sha1';
+import { sha1Base64OfFile, Sha1, bytesToBase64 } from './sha1';
 import { extractExif, type PhotoExif } from './exif';
 import { StoreZipWriter } from './zip';
 
@@ -760,6 +760,10 @@ async function ensureDeduplicationSchema(db: any): Promise<void> {
   // 1 = this row's bytes were already inspected for EXIF (at upload or by the
   // lazy backfill); stops backfillExifBatch re-downloading EXIF-less photos.
   await addColumn('ALTER TABLE photos ADD COLUMN exifChecked INTEGER DEFAULT 0');
+  // 1 = the checksum backfill already attempted this row (succeeded → checksum
+  // set and it leaves the empty-checksum set; failed → flagged so we don't loop
+  // forever on an unhealable file).
+  await addColumn('ALTER TABLE photos ADD COLUMN checksumChecked INTEGER DEFAULT 0');
   try {
     await db.prepare(
       'CREATE INDEX IF NOT EXISTS idx_photos_dedup ON photos(ownerId, deviceAssetId, deviceId)'
@@ -2323,6 +2327,97 @@ export async function backfillExifBatch(env: Env, uid: string, idToken: string, 
     console.log(`[ExifBackfill] processed ${rows.length} photos for uid=${uid}`);
   } catch (e: any) {
     console.log('[ExifBackfill] batch failed (non-fatal):', e?.message);
+  }
+}
+
+// ── Lazy checksum backfill ───────────────────────────────────────────────────
+// THE duplicate-photo fix. The mobile app merges a local photo with its cloud
+// copy by matching base64(SHA-1(bytes)). Photos whose stored checksum is empty
+// (e.g. uploaded while the worker was overloaded and couldn't hash) never match
+// → the app shows BOTH the local and the cloud copy ("every photo twice"), even
+// on a fresh reinstall. Heal it server-side: stream each such photo's bytes back
+// from Telegram, recompute the SHA-1 incrementally (one chunk in memory at a
+// time — safe), and store it. Next sync emits the real checksum → the app
+// merges → one photo. checksumChecked guards against looping on an unhealable
+// file. Client-encrypted photos are skipped (we can't read plaintext; their
+// checksum must come from the app). Runs from sync via waitUntil, paced.
+let checksumBackfillComplete = false;
+let checksumBackfillRunning = false;
+export async function backfillChecksumBatch(env: Env, uid: string, idToken: string, batchSize = 10): Promise<void> {
+  if (checksumBackfillComplete || checksumBackfillRunning || !env.DB) return;
+  checksumBackfillRunning = true;
+  try {
+    await ensureDeduplicationSchema(env.DB);
+    const rows = (await env.DB.prepare(
+      `SELECT * FROM photos
+       WHERE ownerId = ?
+         AND (checksum IS NULL OR checksum = '')
+         AND (checksumChecked IS NULL OR checksumChecked = 0)
+         AND (encryptionMode IS NULL OR encryptionMode != 'client')
+         AND (isTrashed = 0 OR isTrashed IS NULL)
+       LIMIT ?`
+    ).bind(uid, batchSize).all()).results as any[];
+    if (!rows || rows.length === 0) {
+      checksumBackfillComplete = true;
+      return;
+    }
+
+    const config = await getCachedConfig<any>(env, uid, idToken, 'telegram');
+    const botToken = config?.botToken || config?.bot_token;
+    if (!botToken) return;
+    const adapter = new D1Adapter(env.DB);
+    let healed = 0;
+
+    for (const photo of rows) {
+      try {
+        let chunks: any[] = [];
+        if (typeof photo.telegramChunks === 'string') {
+          try { chunks = JSON.parse(photo.telegramChunks); } catch { /* legacy */ }
+        } else if (Array.isArray(photo.telegramChunks)) {
+          chunks = photo.telegramChunks;
+        }
+        const fileIds: string[] = chunks.length
+          ? chunks.slice().sort((a, b) => a.index - b.index).map(c => c.file_id)
+          : (photo.telegramOriginalId ? [photo.telegramOriginalId] : []);
+        const serverZke = photo.encryptionMode === 'server';
+        const key = serverZke ? await getEncryptionKey(env, uid, idToken) : null;
+
+        let checksum: string | null = null;
+        if (fileIds.length && (!serverZke || key)) {
+          const hasher = new Sha1();
+          let ok = true;
+          for (const fileId of fileIds) {
+            const queue = getTgQueue(botToken);
+            await queue.acquire(undefined, 1); // low priority — never starve user requests
+            let result;
+            try { result = await tgDownloadFile(botToken, fileId); }
+            finally { queue.release(); }
+            if (!result.ok || !result.data) { ok = false; break; }
+            let data = result.data;
+            if (serverZke && key) data = await decryptChunk(data, key);
+            hasher.update(new Uint8Array(data));
+          }
+          if (ok) checksum = bytesToBase64(hasher.digest());
+        }
+
+        // On success: store the real checksum (also leaves the empty-checksum
+        // set). Either way mark checked so an unhealable row can't loop. A
+        // transient download failure (checksum null) just won't retry — the
+        // app's next successful re-upload backfills it via the deviceAssetId
+        // dedup path anyway.
+        const patch: Record<string, any> = { checksumChecked: 1 };
+        if (checksum) { patch.checksum = checksum; healed++; }
+        await adapter.updatePhoto(photo.id, patch);
+      } catch (e: any) {
+        console.log(`[ChecksumBackfill] ${photo.id} failed: ${e?.message}`);
+        try { await adapter.updatePhoto(photo.id, { checksumChecked: 1 }); } catch { /* ignore */ }
+      }
+    }
+    console.log(`[ChecksumBackfill] uid=${uid}: healed ${healed}/${rows.length} checksums`);
+  } catch (e: any) {
+    console.log('[ChecksumBackfill] batch failed (non-fatal):', e?.message);
+  } finally {
+    checksumBackfillRunning = false;
   }
 }
 

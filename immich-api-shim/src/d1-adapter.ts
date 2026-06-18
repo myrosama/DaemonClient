@@ -45,6 +45,8 @@ export interface Photo {
   dateTimeOriginal?: string | null;
   // 1 = bytes already inspected for EXIF (at upload or by the lazy backfill).
   exifChecked?: number;
+  // 1 = the checksum backfill already attempted this row (heals empty checksums).
+  checksumChecked?: number;
 }
 
 export interface Album {
