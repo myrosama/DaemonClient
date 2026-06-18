@@ -2343,77 +2343,118 @@ export async function backfillExifBatch(env: Env, uid: string, idToken: string, 
 // checksum must come from the app). Runs from sync via waitUntil, paced.
 let checksumBackfillComplete = false;
 let checksumBackfillRunning = false;
-export async function backfillChecksumBatch(env: Env, uid: string, idToken: string, batchSize = 10): Promise<void> {
+export async function backfillChecksumBatch(env: Env, uid: string, idToken: string): Promise<void> {
   if (checksumBackfillComplete || checksumBackfillRunning || !env.DB) return;
   checksumBackfillRunning = true;
+
+  // Throughput budget. Free-plan Workers cap each invocation at 50 subrequests
+  // (shared with the request that dispatched us), and waitUntil gets a generous
+  // wall-clock window after the response. Every chunk costs ~2 subrequests
+  // (Telegram getFile + the file download), so we cap subrequests well under 50
+  // and bound wall-clock so a run can never trip the limit or hang. Within that
+  // budget we loop as many photos as fit — so a library heals in a handful of
+  // sync cycles instead of crawling 10 photos at a time. A throw mid-run (e.g.
+  // budget exceeded) is caught: processed rows are already saved, the rest
+  // retry next cycle.
+  const startedAt = Date.now();
+  const SUBREQUEST_BUDGET = 40;
+  const TIME_BUDGET_MS = 20_000;
+  const MAX_PHOTOS = 120;
+  const PAGE = 25;
+
+  let subrequests = 0;
+  let healed = 0;
+  let attempted = 0;
+  let serverKey: CryptoKey | null | undefined; // undefined = not yet fetched this run
+
+  const overBudget = () =>
+    attempted >= MAX_PHOTOS ||
+    subrequests >= SUBREQUEST_BUDGET ||
+    Date.now() - startedAt >= TIME_BUDGET_MS;
+
   try {
     await ensureDeduplicationSchema(env.DB);
-    const rows = (await env.DB.prepare(
-      `SELECT * FROM photos
-       WHERE ownerId = ?
-         AND (checksum IS NULL OR checksum = '')
-         AND (checksumChecked IS NULL OR checksumChecked = 0)
-         AND (encryptionMode IS NULL OR encryptionMode != 'client')
-         AND (isTrashed = 0 OR isTrashed IS NULL)
-       LIMIT ?`
-    ).bind(uid, batchSize).all()).results as any[];
-    if (!rows || rows.length === 0) {
-      checksumBackfillComplete = true;
-      return;
-    }
 
     const config = await getCachedConfig<any>(env, uid, idToken, 'telegram');
+    subrequests++; // cached after the first call, but count conservatively
     const botToken = config?.botToken || config?.bot_token;
     if (!botToken) return;
     const adapter = new D1Adapter(env.DB);
-    let healed = 0;
 
-    for (const photo of rows) {
-      try {
-        let chunks: any[] = [];
-        if (typeof photo.telegramChunks === 'string') {
-          try { chunks = JSON.parse(photo.telegramChunks); } catch { /* legacy */ }
-        } else if (Array.isArray(photo.telegramChunks)) {
-          chunks = photo.telegramChunks;
-        }
-        const fileIds: string[] = chunks.length
-          ? chunks.slice().sort((a, b) => a.index - b.index).map(c => c.file_id)
-          : (photo.telegramOriginalId ? [photo.telegramOriginalId] : []);
-        const serverZke = photo.encryptionMode === 'server';
-        const key = serverZke ? await getEncryptionKey(env, uid, idToken) : null;
+    pages: while (!overBudget()) {
+      const rows = (await env.DB.prepare(
+        `SELECT * FROM photos
+         WHERE ownerId = ?
+           AND (checksum IS NULL OR checksum = '')
+           AND (checksumChecked IS NULL OR checksumChecked = 0)
+           AND (encryptionMode IS NULL OR encryptionMode != 'client')
+           AND (isTrashed = 0 OR isTrashed IS NULL)
+         LIMIT ?`
+      ).bind(uid, PAGE).all()).results as any[];
 
-        let checksum: string | null = null;
-        if (fileIds.length && (!serverZke || key)) {
-          const hasher = new Sha1();
-          let ok = true;
-          for (const fileId of fileIds) {
-            const queue = getTgQueue(botToken);
-            await queue.acquire(undefined, 1); // low priority — never starve user requests
-            let result;
-            try { result = await tgDownloadFile(botToken, fileId); }
-            finally { queue.release(); }
-            if (!result.ok || !result.data) { ok = false; break; }
-            let data = result.data;
-            if (serverZke && key) data = await decryptChunk(data, key);
-            hasher.update(new Uint8Array(data));
+      // Empty page = nothing left to heal for this user. Stop re-checking in
+      // this isolate; new isolates re-evaluate (cheap single query) and exit.
+      if (!rows || rows.length === 0) {
+        checksumBackfillComplete = true;
+        break;
+      }
+
+      for (const photo of rows) {
+        if (overBudget()) break pages;
+        attempted++;
+        try {
+          let chunks: any[] = [];
+          if (typeof photo.telegramChunks === 'string') {
+            try { chunks = JSON.parse(photo.telegramChunks); } catch { /* legacy */ }
+          } else if (Array.isArray(photo.telegramChunks)) {
+            chunks = photo.telegramChunks;
           }
-          if (ok) checksum = bytesToBase64(hasher.digest());
-        }
+          const fileIds: string[] = chunks.length
+            ? chunks.slice().sort((a, b) => a.index - b.index).map(c => c.file_id)
+            : (photo.telegramOriginalId ? [photo.telegramOriginalId] : []);
+          const serverZke = photo.encryptionMode === 'server';
+          // Fetch the user's server-ZKE key once per run, lazily (only if a
+          // server-encrypted photo actually needs it).
+          if (serverZke && serverKey === undefined) {
+            serverKey = await getEncryptionKey(env, uid, idToken);
+            subrequests++;
+          }
+          const key = serverZke ? serverKey : null;
 
-        // On success: store the real checksum (also leaves the empty-checksum
-        // set). Either way mark checked so an unhealable row can't loop. A
-        // transient download failure (checksum null) just won't retry — the
-        // app's next successful re-upload backfills it via the deviceAssetId
-        // dedup path anyway.
-        const patch: Record<string, any> = { checksumChecked: 1 };
-        if (checksum) { patch.checksum = checksum; healed++; }
-        await adapter.updatePhoto(photo.id, patch);
-      } catch (e: any) {
-        console.log(`[ChecksumBackfill] ${photo.id} failed: ${e?.message}`);
-        try { await adapter.updatePhoto(photo.id, { checksumChecked: 1 }); } catch { /* ignore */ }
+          let checksum: string | null = null;
+          if (fileIds.length && (!serverZke || key)) {
+            const hasher = new Sha1();
+            let ok = true;
+            for (const fileId of fileIds) {
+              const queue = getTgQueue(botToken);
+              await queue.acquire(undefined, 1); // low priority — never starve user requests
+              let result;
+              try { result = await tgDownloadFile(botToken, fileId); }
+              finally { queue.release(); }
+              subrequests += 2; // getFile + download
+              if (!result.ok || !result.data) { ok = false; break; }
+              let data = result.data;
+              if (serverZke && key) data = await decryptChunk(data, key);
+              hasher.update(new Uint8Array(data));
+            }
+            if (ok) checksum = bytesToBase64(hasher.digest());
+          }
+
+          // On success: store the real checksum. Either way mark checked so an
+          // unhealable row can't block the LIMIT-paged cursor (we always mark
+          // even on failure so a permanently-broken file never starves the
+          // healable ones — its checksum heals via the upload dedup path on the
+          // app's next re-upload).
+          const patch: Record<string, any> = { checksumChecked: 1 };
+          if (checksum) { patch.checksum = checksum; healed++; }
+          await adapter.updatePhoto(photo.id, patch);
+        } catch (e: any) {
+          console.log(`[ChecksumBackfill] ${photo.id} failed: ${e?.message}`);
+          try { await adapter.updatePhoto(photo.id, { checksumChecked: 1 }); } catch { /* ignore */ }
+        }
       }
     }
-    console.log(`[ChecksumBackfill] uid=${uid}: healed ${healed}/${rows.length} checksums`);
+    console.log(`[ChecksumBackfill] uid=${uid}: healed ${healed}/${attempted} this run (subreq~${subrequests})`);
   } catch (e: any) {
     console.log('[ChecksumBackfill] batch failed (non-fatal):', e?.message);
   } finally {

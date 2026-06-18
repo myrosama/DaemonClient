@@ -1,6 +1,7 @@
 import type { Env } from './index';
 import { requireAuth, firestoreQuery, json } from './helpers';
 import { D1Adapter } from './d1-adapter';
+import { backfillChecksumBatch } from './assets';
 
 // Per-user workers store photos in D1 (env.DB). The central worker (no D1
 // binding) still uses Firestore. Read from whichever is present and normalize
@@ -16,6 +17,18 @@ async function loadPhotos(env: Env, uid: string, idToken: string): Promise<any[]
 
 export async function handleTimeline(request: Request, env: Env, path: string, url: URL): Promise<Response> {
   const session = await requireAuth(request, env);
+
+  // Drive the checksum heal from the timeline too (not just sync). The web app
+  // and any browsing activity polls these constantly, and each invocation gets
+  // its own subrequest budget — so the "every photo shows twice" backfill makes
+  // progress whenever the library is in use, not only during a mobile sync.
+  if (env.DB && env.waitUntil) {
+    env.waitUntil(
+      backfillChecksumBatch(env, session.uid, session.idToken).catch(err =>
+        console.log('[ChecksumBackfill] timeline dispatch failed:', err?.message)
+      )
+    );
+  }
 
   if (path === '/api/timeline/buckets') {
     return getTimeBuckets(env, session.uid, session.idToken, url);
