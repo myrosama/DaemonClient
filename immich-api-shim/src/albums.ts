@@ -13,6 +13,12 @@ export async function handleAlbums(request: Request, env: Env, path: string): Pr
 
   try {
     if (path === '/api/albums' && request.method === 'GET') {
+      // The Sharing page calls /api/albums?shared=true. Real cross-user sharing
+      // isn't built yet, so no album is shared — honor the param and return []
+      // instead of leaking the whole album list onto the Sharing page.
+      const shared = new URL(request.url).searchParams.get('shared');
+      if (shared === 'true') return json([]);
+
       if (adapter) {
         const rows = await adapter.listAlbums();
         const out = await Promise.all(rows.map(async (a) => ({
@@ -171,6 +177,34 @@ export async function handleAlbums(request: Request, env: Env, path: string): Pr
       return json([{ id: albumId, album: toAlbumDto(updated), success: true }]);
     }
 
+    // Album sharing subpaths — cross-user sharing isn't built yet (see the
+    // design doc). Return SHAPED, non-crashing responses instead of 404 so
+    // AlbumOptionsModal / share-with-user flows degrade gracefully.
+    //   PUT /api/albums/{id}/users          → addUsersToAlbum  → AlbumResponseDto
+    //   PUT/DELETE /api/albums/{id}/user/{userId} → update/remove album user
+    const albumUsersMatch = path.match(/^\/api\/albums\/([^/]+)\/users$/);
+    if (albumUsersMatch && request.method === 'PUT') {
+      const albumId = albumUsersMatch[1];
+      // Return the album unchanged with no added users — sharing is a no-op here.
+      if (adapter) {
+        const a = await adapter.getAlbum(albumId);
+        if (a) {
+          const count = await adapter.countAlbumAssets(albumId);
+          return json(toAlbumDto({
+            ...a, assetCount: count, ownerId: uid,
+            owner: { id: uid, email: session.email, name: session.email.split('@')[0] },
+          }));
+        }
+      }
+      return json(toAlbumDto({ id: albumId, albumName: '', ownerId: uid }));
+    }
+
+    const albumUserMatch = path.match(/^\/api\/albums\/([^/]+)\/user\/([^/]+)$/);
+    if (albumUserMatch && (request.method === 'PUT' || request.method === 'DELETE')) {
+      // Updating/removing a shared album user — no-op, but answer 200 not 404.
+      return json({ success: true });
+    }
+
     return json({ message: 'Album endpoint not found' }, 404);
   } catch (err: any) {
     console.error('[handleAlbums] Error:', err.message);
@@ -178,22 +212,56 @@ export async function handleAlbums(request: Request, env: Env, path: string): Pr
   }
 }
 
-function toAlbumDto(album: any) {
+// A COMPLETE UserResponseDto. The Immich mobile app's strict Dart parse
+// null-checks required sub-fields (avatarColor, profileImagePath, …), so a
+// partial owner ({id,email,name}) crashes AlbumResponseDto.fromJson with
+// "Null check operator used on a null value" — which broke album creation.
+function completeOwner(owner: any, ownerId: string) {
+  const o = owner || {};
+  const now = new Date().toISOString();
+  const email = o.email || '';
+  return {
+    id: o.id || ownerId || '',
+    email,
+    name: o.name || (email ? email.split('@')[0] : 'User'),
+    avatarColor: o.avatarColor || 'primary',
+    profileImagePath: o.profileImagePath || '',
+    profileChangedAt: o.profileChangedAt || now,
+    isAdmin: o.isAdmin ?? true,
+    isOnboarded: true,
+    shouldChangePassword: false,
+    createdAt: o.createdAt || now,
+    updatedAt: now,
+    deletedAt: null,
+    oauthId: '',
+    quotaSizeInBytes: null,
+    quotaUsageInBytes: null,
+    status: 'active',
+    storageLabel: null,
+    license: null,
+  };
+}
+
+export function toAlbumDto(album: any) {
+  const ownerId = album.ownerId || (album.owner && album.owner.id) || '';
   return {
     id: album.id || album._id,
+    ownerId, // REQUIRED by AlbumResponseDto — its absence is null-checked → crash
     albumName: album.albumName,
     description: album.description || '',
     createdAt: album.createdAt,
     updatedAt: album.updatedAt,
-    albumThumbnailAssetId: album.albumThumbnailAssetId,
+    albumThumbnailAssetId: album.albumThumbnailAssetId ?? null,
     shared: !!album.shared,
     assetCount: album.assetCount || 0,
     assets: [],
-    owner: album.owner || { id: album.ownerId, email: '', name: '' },
+    owner: completeOwner(album.owner, ownerId),
     albumUsers: album.albumUsers || [],
     hasSharedLink: false,
     startDate: null,
     endDate: null,
+    lastModifiedAssetTimestamp: null,
+    order: 'desc',
     isActivityEnabled: true,
   };
 }

@@ -4,6 +4,7 @@ import { Terminal, Cloud, Lock, ChevronRight, Command, Server, Globe, Smartphone
 import { deriveKey, encryptChunk, decryptChunk, generateSalt, generatePassword, bytesToBase64, base64ToBytes } from './crypto.js';
 
 import { getSyncEngine, destroySyncEngine } from './manifest-sync.js';
+import ConnectDriveModal from './ConnectDriveModal.jsx';
 import {
     saveUploadSession, getUploadSession, getIncompleteUploads,
     deleteUploadSession, getAllUploadSessions
@@ -531,6 +532,7 @@ const DashboardView = () => {
     const [downloadProgress, setDownloadProgress] = useState({ active: false });
     const [feedbackMessage, setFeedbackMessage] = useState({ type: '', text: '' });
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+    const [isConnectOpen, setIsConnectOpen] = useState(false);
     const [isSavingSettings, setIsSavingSettings] = useState(false);
     const [searchTerm, setSearchTerm] = useState('');
     const [abortController, setAbortController] = useState(null);
@@ -1643,6 +1645,9 @@ const DashboardView = () => {
                             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2" /><circle cx="8.5" cy="8.5" r="1.5" /><polyline points="21 15 16 10 5 21" /></svg>
                             <span className="hidden sm:inline">Photos</span>
                         </button>
+                        <button onClick={() => setIsConnectOpen(true)} className="text-gray-400 hover:text-white p-1" title="Connect as a drive (mount in your file manager)">
+                            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect><line x1="6" y1="18" x2="6.01" y2="18"></line><line x1="10" y1="18" x2="10.01" y2="18"></line><path d="M6 14V6a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v8"></path></svg>
+                        </button>
                         <button onClick={() => setIsSettingsOpen(true)} className="text-gray-400 hover:text-white p-1" title="Settings"><SettingsIcon /></button>
                         <button onClick={handleLogout} className="bg-red-500 hover:bg-red-600 text-white py-2 px-3 sm:px-4 rounded-lg text-sm"><span className="hidden sm:inline">Logout</span><svg className="sm:hidden" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><polyline points="16 17 21 12 16 7" /><line x1="21" y1="12" x2="9" y2="12" /></svg></button>
                     </div>
@@ -1747,6 +1752,7 @@ const DashboardView = () => {
                 {feedbackMessage.text && <div className={`mt-4 p-3 rounded-lg text-sm text-center ${feedbackMessage.type === 'error' ? 'bg-red-900 text-red-200' : feedbackMessage.type === 'success' ? 'bg-green-900 text-green-200' : 'bg-blue-900 text-blue-200'}`}>{feedbackMessage.text}</div>}
                 {!isUploading && !isDownloading && !feedbackMessage.text && <div className="h-12 mt-4"></div>}
             </div>
+            {isConnectOpen && <ConnectDriveModal onClose={() => setIsConnectOpen(false)} />}
             {isSettingsOpen && config && <SettingsModal
                 initialConfig={config}
                 onSave={handleSaveSettings}

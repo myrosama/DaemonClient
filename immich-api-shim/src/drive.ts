@@ -3,6 +3,7 @@ import type { D1Database } from '@cloudflare/workers-types';
 import { json, requireAuth } from './helpers';
 import { D1Adapter } from './d1-adapter';
 import { getCachedConfig } from './cached-config';
+import { hashToken } from './webdav';
 
 // Self-healing schema: per-user workers provisioned before the `files` table
 // existed (1.2.0) would otherwise need an operator force-update to run the
@@ -163,6 +164,28 @@ export async function handleDrive(request: Request, env: Env, path: string, url:
       // token + the `messages` array). We only drop the metadata row here.
       await db.deleteFile(fid);
       return json({ success: true });
+    }
+  }
+
+  // /api/drive/dav — manage the WebDAV mount token (the "password" a user pastes
+  // into Finder/GNOME/iOS to mount their Drive). GET status, POST generate
+  // (token shown ONCE), DELETE revoke. The token is stored hashed under config
+  // key `dav`; webdav.ts authenticates Basic-auth requests against it.
+  if (path === '/api/drive/dav') {
+    const mountUrl = `${new URL(request.url).origin}/dav/`;
+    if (request.method === 'GET') {
+      const cfg = await db.getJsonConfig<any>('dav');
+      return json({ enabled: !!cfg?.tokenHash, url: mountUrl, username: uid });
+    }
+    if (request.method === 'POST') {
+      const raw = crypto.getRandomValues(new Uint8Array(24));
+      const token = btoa(String.fromCharCode(...raw)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+      await db.setJsonConfig('dav', { tokenHash: await hashToken(token), uid, createdAt: new Date().toISOString() });
+      return json({ token, username: uid, url: mountUrl });
+    }
+    if (request.method === 'DELETE') {
+      await db.setJsonConfig('dav', {}); // clears tokenHash → mount disabled
+      return json({ enabled: false });
     }
   }
 

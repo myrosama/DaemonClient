@@ -9,6 +9,9 @@ import { computeThumbHashFromJpeg } from './thumbhash-util';
 import { sha1Base64OfFile, Sha1, bytesToBase64 } from './sha1';
 import { extractExif, type PhotoExif } from './exif';
 import { StoreZipWriter } from './zip';
+import { toAssetManifest } from './asset-manifest';
+import { earlyDedupDecision } from './upload-dedup';
+import { parseUploadRequest, makeFormDataLike } from './upload-stream';
 
 // --- ZKE Crypto Implementation ---
 const SALT_LENGTH = 16;
@@ -16,6 +19,11 @@ const IV_LENGTH = 12;
 const KEY_LENGTH = 256;
 const PBKDF2_ITERATIONS = 100000;
 const CHUNK_SIZE = 19 * 1024 * 1024; // 19 MB
+// Bumped when the EXIF extraction logic improves so the lazy backfill re-checks
+// already-parsed photos. v2: re-check photos that got camera EXIF but no GPS
+// (the old backfill skipped any row with `make` set, so HEIC photos whose GPS
+// was missed never recovered a location).
+const EXIF_PARSE_VERSION = 2;
 
 // Module-level file_path cache. Telegram file paths are valid for ~1 hour;
 // caching them avoids the getFile round-trip on every thumbnail request.
@@ -247,6 +255,16 @@ export async function handleAssets(request: Request, env: Env, path: string, url
       (path.endsWith('/video/playback') || path.endsWith('/original') || path.includes('/file/') || path.endsWith('/thumbnail'))) {
     return handleMediaHead(env, uid, resourceId, idToken, path);
   }
+  // Tiny metadata endpoint for the Photos web service worker. Returns the
+  // Telegram file ids + encryption mode so the browser can read bytes straight
+  // from Telegram (via the user's streaming /proxy) and decrypt them itself —
+  // keeping this worker off the byte path entirely. No bytes, no Telegram
+  // round-trip here, so it can't hit the CPU/memory/subrequest limits.
+  if (resourceId && path.endsWith('/dc-manifest') && request.method === 'GET') {
+    const photo = await loadPhotoById(env, uid, resourceId, idToken);
+    if (!photo) return json({ message: 'Not found' }, 404);
+    return json(toAssetManifest(photo));
+  }
   if (resourceId && path.endsWith('/thumbnail') && request.method === 'GET') {
     return handleThumbnail(request, env, uid, resourceId, idToken);
   }
@@ -314,6 +332,14 @@ export async function handleAssets(request: Request, env: Env, path: string, url
   const replaceVideoMatch = path.match(/^\/api\/assets\/([^/]+)\/replace-video$/);
   if (replaceVideoMatch && request.method === 'POST') {
     return handleReplaceVideo(request, env, uid, replaceVideoMatch[1], idToken);
+  }
+
+  // Fix-Videos uploads an H.264/web-playable rendition of an HEVC video here.
+  // Stored ALONGSIDE the original (which stays for download); served for
+  // /video/playback so the browser can play it.
+  const playbackMatch = path.match(/^\/api\/assets\/([^/]+)\/playback-rendition$/);
+  if (playbackMatch && request.method === 'POST') {
+    return handlePlaybackRendition(request, env, uid, playbackMatch[1], idToken);
   }
 
   if (path === '/api/assets/worker-config' && request.method === 'GET') {
@@ -764,6 +790,11 @@ async function ensureDeduplicationSchema(db: any): Promise<void> {
   // set and it leaves the empty-checksum set; failed → flagged so we don't loop
   // forever on an unhealable file).
   await addColumn('ALTER TABLE photos ADD COLUMN checksumChecked INTEGER DEFAULT 0');
+  // JSON array of the H.264/web-playable rendition's Telegram chunks (the
+  // Fix-Videos transcode of an HEVC/incompatible video). Served for
+  // /video/playback so the browser can play it; the ORIGINAL is untouched and
+  // still served for download. Mirrors the HEIC→JPEG preview idea, for video.
+  await addColumn('ALTER TABLE photos ADD COLUMN telegramPlaybackChunks TEXT');
   try {
     await db.prepare(
       'CREATE INDEX IF NOT EXISTS idx_photos_dedup ON photos(ownerId, deviceAssetId, deviceId)'
@@ -840,7 +871,31 @@ async function handleUploadImpl(request: Request, env: Env, uid: string, idToken
     return json({ message: 'Missing bot/channel config' }, 400);
   }
 
-    const formData = await request.formData();
+    // Single-pass streaming parse (replaces request.formData()). The Immich
+    // uploader sends its metadata fields before the assetData file, so a
+    // storm-retry of an already-uploaded asset is recognised and returned here
+    // WITHOUT the worker ever buffering or hashing the file — which is what was
+    // pushing the free-tier worker over its memory/CPU limits in big backup
+    // sessions. New uploads fall through with a FileLike over the parsed chunks
+    // (no second full-size copy), and the rest of this handler is unchanged via
+    // the formData-shaped view. The precise dedup block further down still runs,
+    // so the early check is a pure fast-path, never the sole source of truth.
+    const parsed = await parseUploadRequest(request, async (deviceAssetId, deviceId) => {
+      if (!env.DB) return null;
+      try {
+        const rows = await new D1Adapter(env.DB).getPhotosByDeviceAsset(uid, deviceAssetId, deviceId);
+        const decision = earlyDedupDecision(rows);
+        if (decision.short) {
+          console.log(`[Upload] Early dedup (deviceAsset) ${deviceAssetId} uid=${uid} — skipped file, returning ${decision.photo.id}`);
+          return json(toAssetResponseDto(D1Adapter.normalizeRow(decision.photo), uid));
+        }
+      } catch (e: any) {
+        console.warn(`[Upload] early dedup query failed (non-fatal): ${e?.message}`);
+      }
+      return null;
+    });
+    if (parsed.kind === 'dedup') return parsed.response;
+    const formData = makeFormDataLike(parsed.fields, parsed.file);
     const uploadSessionId = (formData.get('uploadSessionId') as string) || '';
     if (uploadSessionId) {
       let sessionRecord: any = null;
@@ -1284,6 +1339,22 @@ async function handleUploadImpl(request: Request, env: Env, uid: string, idToken
               tmpMsgId = r.tmpMsgId;
             }
 
+            // Delete the temp plaintext NOW — the thumb bytes (if any) are
+            // already downloaded, so the message is no longer needed. Doing it
+            // BEFORE the heavier encrypt + thumb.bin re-upload guarantees the
+            // raw photo can't be left on Telegram if the free-tier worker hits
+            // its CPU/memory limit during that step — which is exactly what was
+            // happening under big-backup load (the "PNG raw copy not deleting"
+            // regression). HEIC has no temp (tmpMsgId stays null) → no-op.
+            if (tmpMsgId) {
+              await fetch(`https://api.telegram.org/bot${botToken}/deleteMessage`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ chat_id: channelId, message_id: tmpMsgId }),
+              }).catch(() => { /* best-effort cleanup */ });
+              tmpMsgId = null;
+            }
+
             if (thumbBytes) {
               // Derive a ThumbHash from the small plaintext thumb (cheap JPEG
               // decode) before encrypting — instant blur placeholder for mobile.
@@ -1307,15 +1378,7 @@ async function handleUploadImpl(request: Request, env: Env, uid: string, idToken
             } else {
               console.log(`[Upload] No Telegram thumbnail obtained for ${fileName} (mime=${mimeType})`);
             }
-
-            // Remove the temporary plaintext message regardless of outcome.
-            if (tmpMsgId) {
-              await fetch(`https://api.telegram.org/bot${botToken}/deleteMessage`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ chat_id: channelId, message_id: tmpMsgId }),
-              }).catch(() => { /* best-effort cleanup */ });
-            }
+            // (temp plaintext already deleted above, before the re-upload)
           } else if (isVideo) {
             thumbForm.append('video', new Blob([rawData], { type: mimeType }), fileName);
             const res = await fetch(`https://api.telegram.org/bot${botToken}/sendVideo`, { method: 'POST', body: thumbForm });
@@ -1379,10 +1442,10 @@ async function handleUploadImpl(request: Request, env: Env, uid: string, idToken
       exposureTime: exif.exposureTime,
       orientation: exif.orientation !== undefined ? String(exif.orientation) : undefined,
       dateTimeOriginal: exif.dateTimeOriginal,
-      // Legacy/server path parsed EXIF above → mark inspected. Client uploads
-      // (web) skip parsing here, so leave 0 and let the lazy backfill handle
-      // them when they're not client-encrypted.
-      exifChecked: clientUpload ? undefined : 1,
+      // Legacy/server path parsed EXIF above → mark inspected at the current
+      // version. Client uploads (web) skip parsing here, so leave 0 and let the
+      // lazy backfill handle them when they're not client-encrypted.
+      exifChecked: clientUpload ? undefined : EXIF_PARSE_VERSION,
       // Dedup fields — stored so future uploads from the same device can be
       // identified as duplicates without re-uploading to Telegram.
       deviceAssetId: deviceAssetId || undefined,
@@ -1526,6 +1589,62 @@ async function handleReplaceVideo(request: Request, env: Env, uid: string, asset
   }
 
   console.log(`[ReplaceVideo] ${assetId}: ${totalChunks} chunk(s), ${size} bytes (was originalId=${oldOriginalId})`);
+  return json({ success: true, chunks: totalChunks, fileSize: size });
+}
+
+// Store an H.264 playback rendition (from the client's ffmpeg.wasm transcode of
+// an HEVC video) WITHOUT touching the original. Encrypted exactly like the
+// original for server-ZKE so it's stored zero-knowledge. /video/playback then
+// serves it; /original (download) keeps serving the untouched original.
+async function handlePlaybackRendition(request: Request, env: Env, uid: string, assetId: string, idToken: string): Promise<Response> {
+  const photo = await loadPhotoById(env, uid, assetId, idToken);
+  if (!photo) return json({ message: 'Asset not found' }, 404);
+  if (!env.DB) return json({ message: 'Not supported without D1' }, 400);
+  await ensureDeduplicationSchema(env.DB); // guarantee telegramPlaybackChunks column exists
+
+  const config = await getCachedConfig<any>(env, uid, idToken, 'telegram');
+  if (!config) return json({ message: 'No config' }, 500);
+  const botToken = config.botToken || config.bot_token;
+  const channelId = config.channelId || config.channel_id;
+
+  const isServerZke = photo.encryptionMode === 'server' || (photo.encrypted === true && !photo.encryptionMode);
+  const isClientZke = photo.encryptionMode === 'client';
+  const key = isServerZke ? await getEncryptionKey(env, uid, idToken) : null;
+
+  const form = await request.formData();
+  const videoFile = form.get('video') as File | null;
+  if (!videoFile) return json({ message: 'No video provided' }, 400);
+  const size = videoFile.size;
+  const totalChunks = Math.max(1, Math.ceil(size / CHUNK_SIZE));
+
+  const newChunks: Array<{ index: number; message_id: number; file_id: string }> = [];
+  for (let i = 0; i < totalChunks; i++) {
+    const slice = videoFile.slice(i * CHUNK_SIZE, Math.min((i + 1) * CHUNK_SIZE, size));
+    let data: ArrayBuffer = await slice.arrayBuffer();
+    if (isServerZke && key) data = await encryptChunk(data, key);
+    const partName = (isServerZke || isClientZke)
+      ? (totalChunks === 1 ? 'play.bin' : `play.bin.part${String(i + 1).padStart(3, '0')}`)
+      : (totalChunks === 1 ? 'playback.mp4' : `playback.mp4.part${String(i + 1).padStart(3, '0')}`);
+    const f = new FormData();
+    f.append('chat_id', channelId);
+    f.append('document', new Blob([data], { type: 'application/octet-stream' }), partName);
+    const res = await tgFetchWithRetry(`https://api.telegram.org/bot${botToken}/sendDocument`, { method: 'POST', body: f });
+    const j = await res.json() as any;
+    if (!j.ok || !j.result?.document?.file_id) {
+      return json({ message: 'Telegram upload failed', chunk: i, details: j }, 502);
+    }
+    newChunks.push({ index: i, message_id: j.result.message_id, file_id: j.result.document.file_id });
+  }
+
+  // Store {size, chunks} as JSON. size is the PLAINTEXT rendition size, so the
+  // /video/playback range math is correct after decrypt. Replaces any prior
+  // rendition (we leak the old messages rather than risk deleting in-use ones;
+  // re-fixing a video is rare).
+  await new D1Adapter(env.DB).updatePhoto(assetId, {
+    telegramPlaybackChunks: JSON.stringify({ size, chunks: newChunks }),
+  });
+
+  console.log(`[PlaybackRendition] ${assetId}: ${totalChunks} chunk(s), ${size} bytes`);
   return json({ success: true, chunks: totalChunks, fileSize: size });
 }
 
@@ -1759,13 +1878,23 @@ async function handleMediaHead(env: Env, uid: string, assetId: string, idToken: 
   const isThumb = path.endsWith('/thumbnail');
   let mimeType = photo.mimeType || 'application/octet-stream';
   if (isThumb) mimeType = (photo.isHeic || !mimeType.startsWith('image/')) ? 'image/jpeg' : mimeType;
+  // Match what handleOriginal will actually serve for /video/playback when an
+  // H.264 rendition exists (different mime + size than the original).
+  let fileSize = photo.fileSize;
+  if (path.endsWith('/video/playback') && photo.telegramPlaybackChunks) {
+    try {
+      const pb = typeof photo.telegramPlaybackChunks === 'string'
+        ? JSON.parse(photo.telegramPlaybackChunks) : photo.telegramPlaybackChunks;
+      if (pb?.chunks?.length) { mimeType = 'video/mp4'; fileSize = pb.size || fileSize; }
+    } catch { /* fall through to original */ }
+  }
   const headers: Record<string, string> = {
     'Content-Type': mimeType,
     'Accept-Ranges': 'bytes',
     'Cache-Control': 'public, max-age=86400',
   };
   // Original/video have a known size; thumbnails are generated so size is unknown.
-  if (!isThumb && photo.fileSize) headers['Content-Length'] = String(photo.fileSize);
+  if (!isThumb && fileSize) headers['Content-Length'] = String(fileSize);
   return new Response(null, { status: 200, headers });
 }
 
@@ -1774,6 +1903,24 @@ export async function handleOriginal(request: Request, env: Env, uid: string, as
   console.log(`[handleOriginal] AssetID: ${assetId}, Path: ${new URL(request.url).pathname}`);
   const photo = await loadPhotoById(env, uid, assetId, idToken);
   if (!photo) return json({ message: 'Not found' }, 404);
+
+  // /video/playback: if an H.264 rendition exists (Fix Videos transcoded an
+  // HEVC original), serve THAT instead so the browser can play it. Point the
+  // existing serving logic at the rendition's chunks/size/mime; the original is
+  // untouched and still served for /original (download). encryptionMode is kept
+  // so the rendition (encrypted with the same key) decrypts correctly.
+  if (new URL(request.url).pathname.endsWith('/video/playback') && photo.telegramPlaybackChunks) {
+    try {
+      const pb = typeof photo.telegramPlaybackChunks === 'string'
+        ? JSON.parse(photo.telegramPlaybackChunks) : photo.telegramPlaybackChunks;
+      if (pb?.chunks?.length) {
+        photo.telegramChunks = pb.chunks;
+        photo.telegramOriginalId = pb.chunks.length === 1 ? pb.chunks[0].file_id : '';
+        photo.fileSize = pb.size || photo.fileSize;
+        photo.mimeType = 'video/mp4';
+      }
+    } catch { /* malformed rendition → fall through to the original */ }
+  }
 
   const config = await getCachedConfig<any>(env, uid, idToken, 'telegram');
   if (!config) return json({ message: 'No config' }, 500);
@@ -2257,14 +2404,22 @@ export async function backfillExifBatch(env: Env, uid: string, idToken: string, 
   if (exifBackfillComplete || !env.DB) return;
   try {
     await ensureDeduplicationSchema(env.DB);
+    // Candidates: anything still missing a location that hasn't been checked at
+    // the current EXIF version. The `make IS NOT NULL OR exifChecked<1` clause
+    // targets real photos (camera EXIF present → likely geotagged, the user's
+    // "camera shows but location missing" case) plus never-parsed rows, while
+    // skipping already-parsed screenshots/downloads (no make, no GPS) so we don't
+    // re-download the whole library for nothing. After each, exifChecked is
+    // stamped to the current version so a genuinely GPS-less photo isn't retried.
     const rows = (await env.DB.prepare(
       `SELECT * FROM photos
        WHERE ownerId = ? AND mimeType LIKE 'image/%'
-         AND (exifChecked IS NULL OR exifChecked = 0)
-         AND make IS NULL AND dateTimeOriginal IS NULL
+         AND latitude IS NULL
+         AND (exifChecked IS NULL OR exifChecked < ?)
+         AND (make IS NOT NULL OR exifChecked IS NULL OR exifChecked = 0)
          AND (isTrashed = 0 OR isTrashed IS NULL)
        LIMIT ?`
-    ).bind(uid, batchSize).all()).results as any[];
+    ).bind(uid, EXIF_PARSE_VERSION, batchSize).all()).results as any[];
     if (!rows || rows.length === 0) {
       exifBackfillComplete = true;
       return;
@@ -2276,7 +2431,7 @@ export async function backfillExifBatch(env: Env, uid: string, idToken: string, 
     const adapter = new D1Adapter(env.DB);
 
     for (const photo of rows) {
-      const patch: Record<string, any> = { exifChecked: 1 };
+      const patch: Record<string, any> = { exifChecked: EXIF_PARSE_VERSION };
       try {
         let chunks: any[] = [];
         if (typeof photo.telegramChunks === 'string') {
@@ -2313,6 +2468,7 @@ export async function backfillExifBatch(env: Env, uid: string, idToken: string, 
               if (photo.latitude == null && typeof ex.latitude === 'number' && typeof ex.longitude === 'number') {
                 patch.latitude = ex.latitude;
                 patch.longitude = ex.longitude;
+                console.log(`[ExifBackfill] recovered GPS for ${photo.id} (${photo.mimeType}): ${ex.latitude},${ex.longitude}`);
               }
             }
           }

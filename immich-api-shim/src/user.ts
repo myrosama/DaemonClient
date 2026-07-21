@@ -34,14 +34,35 @@ export async function handleUser(request: Request, env: Env, path: string): Prom
     ]);
     return new Response(pixel, { headers: { 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=86400' } });
   }
+
+  // GET /api/users — the whole user directory. In the isolated per-user model
+  // there is exactly one user (the caller), so return just them. This keeps
+  // AlbumAddUsersModal / PartnerSelection from throwing on an undefined list.
+  if (path === '/api/users' && request.method === 'GET') {
+    return json([await buildUserMe(env, session)]);
+  }
+
+  // GET /api/users/:id — return the current user if it's them, otherwise a
+  // shaped 404 (never a bare {}), so the partner viewer degrades gracefully.
+  const userIdMatch = path.match(/^\/api\/users\/([^/]+)$/);
+  if (userIdMatch && request.method === 'GET') {
+    const id = userIdMatch[1];
+    if (id === session.uid || id === 'me') return getUserMe(env, session);
+    return json({ message: 'User not found' }, 404);
+  }
+
   return json({ message: 'User endpoint not found' }, 404);
 }
 
 async function getUserMe(env: Env, session: { uid: string; email: string; idToken: string }): Promise<Response> {
+  return json(await buildUserMe(env, session));
+}
+
+async function buildUserMe(env: Env, session: { uid: string; email: string; idToken: string }): Promise<any> {
   const profile = await getCachedConfig<any>(env, session.uid, session.idToken, 'immich_profile');
   const name = profile?.name || session.email.split('@')[0];
 
-  return json({
+  return {
     id: session.uid,
     email: session.email,
     name,
@@ -60,7 +81,7 @@ async function getUserMe(env: Env, session: { uid: string; email: string; idToke
     status: 'active',
     storageLabel: null,
     license: null,
-  });
+  };
 }
 
 async function updateUserMe(request: Request, env: Env, session: { uid: string; idToken: string }): Promise<Response> {
@@ -101,7 +122,10 @@ function defaultPreferences() {
     people: { enabled: false, sidebarWeb: false },
     ratings: { enabled: false },
     sharedLinks: { enabled: false, sidebarWeb: false },
-    tags: { enabled: true, sidebarWeb: true },
+    // Tags can't work in the isolated per-user model (no tagging backend) — the
+    // tag UI would crash on undefined. Hide it. Sharing is left gracefully
+    // stubbed (not disabled) because cross-user sharing is on the roadmap.
+    tags: { enabled: false, sidebarWeb: false },
     emailNotifications: { enabled: false, albumInvite: false, albumUpdate: false },
     purchase: { showSupportBadge: false, hideBuyButtonUntil: new Date(2099, 0).toISOString() },
   };

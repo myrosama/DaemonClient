@@ -491,6 +491,15 @@ async function handleAutoUpdate(request: Request, env: Env): Promise<Response> {
       apiToken = refreshed.accessToken;
       if (refreshed.refreshToken && refreshed.refreshToken !== refresh) {
         rotatedRefresh = await encryptToken(refreshed.refreshToken, env.ENCRYPTION_MASTER_KEY);
+        // Persist the rotated refresh token IMMEDIATELY — before deploy. CF OAuth
+        // refresh tokens are single-use (rotated on every refresh), so the old one
+        // is already spent. If we defer saving until after a successful deploy and
+        // the deploy fails, the new token is lost and every future refresh returns
+        // invalid_grant → auto-update is permanently bricked. Save first, deploy
+        // second. (This was the root cause of workers stuck on old shim versions.)
+        await saveWorkerConfig(uid, idToken, {
+          ...cfg, refreshToken: rotatedRefresh, lastUpdatedAt: new Date().toISOString(),
+        }, env).catch((e) => console.error('Rotated-refresh persist failed:', e?.message));
       }
     }
     const cfApi = new CloudflareAPI();

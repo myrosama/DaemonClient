@@ -110,3 +110,12 @@ PRIORITY_QUEUE_DEPLOYED.md
 PROJECT_ROADMAP.md
 immich-api-shim/tail_logs*.json
 *.txt
+
+# Real secret-file names actually used in this repo (the old pattern only
+# covered serviceAccountsKey.json, which let service_account.json leak).
+service_account.json
+serviceAccount*.json
+*-service-account*.json
+
+# Claude Code local state (worktrees contain full repo copies)
+.claude/

@@ -14,6 +14,7 @@ export interface Photo {
   telegramOriginalId?: string | null;
   telegramThumbId?: string | null;
   telegramChunks?: string | null; // JSON string
+  telegramPlaybackChunks?: string | null; // JSON {size,chunks} — H.264 web-playable rendition
   encryptionMode?: string;
   thumbEncrypted?: number;
   checksum?: string;
@@ -438,6 +439,25 @@ export class D1Adapter {
       .bind(ownerId, deviceAssetId, deviceId)
       .first<Photo>();
     return result || null;
+  }
+
+  // All rows for a (deviceAssetId, deviceId), regardless of media kind. Used by
+  // the upload early-dedup short-circuit: exactly one row means there's no
+  // live-photo companion, so a storm retry can return without buffering the
+  // file. Two rows = a live pair → routed to the precise upload path. Capped at
+  // 3: we only need to distinguish 0 / 1 / many.
+  async getPhotosByDeviceAsset(
+    ownerId: string,
+    deviceAssetId: string,
+    deviceId: string,
+  ): Promise<Photo[]> {
+    const result = await this.db
+      .prepare(
+        `SELECT * FROM photos WHERE ownerId = ? AND deviceAssetId = ? AND deviceId = ? LIMIT 3`,
+      )
+      .bind(ownerId, deviceAssetId, deviceId)
+      .all<Photo>();
+    return result.results || [];
   }
 
   // Total bytes a user has stored in Drive (folders count as 0). Feeds the

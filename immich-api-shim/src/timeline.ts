@@ -1,5 +1,5 @@
 import type { Env } from './index';
-import { requireAuth, firestoreQuery, json } from './helpers';
+import { requireAuth, firestoreQuery, firestoreGet, json } from './helpers';
 import { D1Adapter } from './d1-adapter';
 import { backfillChecksumBatch } from './assets';
 
@@ -13,6 +13,38 @@ async function loadPhotos(env: Env, uid: string, idToken: string): Promise<any[]
     return rows.map(D1Adapter.normalizeRow);
   }
   return firestoreQuery(env, uid, 'photos', idToken, 'fileCreatedAt', 'DESCENDING');
+}
+
+// AlbumViewer (and the person/tag detail views) drive their contents through the
+// SAME timeline endpoints, narrowed by a query param: ?albumId / ?personId /
+// ?tagId. Without honoring these, an album page renders the whole library.
+//
+// Returns:
+//   null  → no facet param present; serve the full library (timeline view).
+//   Set   → the set of asset ids the bucket(s) must be intersected with. For an
+//           unsupported facet (personId/tagId — we have no people/tags data in
+//           the isolated per-user model) this is an EMPTY set, which yields an
+//           empty bucket rather than leaking the whole library.
+async function facetAssetIds(env: Env, uid: string, idToken: string, url: URL): Promise<Set<string> | null> {
+  const albumId = url.searchParams.get('albumId');
+  const personId = url.searchParams.get('personId');
+  const tagId = url.searchParams.get('tagId');
+
+  if (albumId) {
+    if (env.DB) {
+      const ids = await new D1Adapter(env.DB).getAlbumAssets(albumId);
+      return new Set(ids);
+    }
+    // Firestore fallback: album doc holds an `assets` array of ids.
+    const album = await firestoreGet(env, uid, `albums/${albumId}`, idToken);
+    return new Set<string>((album?.assets as string[]) || []);
+  }
+
+  // personId / tagId are unsupported facets in the isolated model — return an
+  // empty set so the bucket is empty (NOT the whole library).
+  if (personId || tagId) return new Set<string>();
+
+  return null;
 }
 
 export async function handleTimeline(request: Request, env: Env, path: string, url: URL): Promise<Response> {
@@ -46,6 +78,9 @@ async function getTimeBuckets(env: Env, uid: string, idToken: string, url: URL):
   const isTrashed = url.searchParams.get('isTrashed') === 'true';
   const visibility = url.searchParams.get('visibility');
 
+  // Narrow to an album (or empty for unsupported facets) when requested.
+  const facetIds = await facetAssetIds(env, uid, idToken, url);
+
   // Collect IDs of videos that are linked as live photo companions
   const livePhotoVideoIds = new Set<string>();
   for (const p of photos) {
@@ -53,6 +88,7 @@ async function getTimeBuckets(env: Env, uid: string, idToken: string, url: URL):
   }
 
   let filtered = photos.filter(p => p !== null);
+  if (facetIds) filtered = filtered.filter(p => facetIds.has(p._id));
   // Hide live photo companion videos from timeline
   filtered = filtered.filter(p => !livePhotoVideoIds.has(p._id));
   if (isFavorite) filtered = filtered.filter(p => p.isFavorite);
@@ -83,6 +119,9 @@ async function getTimeBucket(env: Env, uid: string, idToken: string, url: URL): 
 
   const photos = await loadPhotos(env, uid, idToken);
 
+  // Narrow to an album (or empty for unsupported facets) when requested.
+  const facetIds = await facetAssetIds(env, uid, idToken, url);
+
   const targetMonth = timeBucket.substring(0, 7); // "2024-03"
 
   // Collect IDs of videos that are linked as live photo companions
@@ -93,6 +132,7 @@ async function getTimeBucket(env: Env, uid: string, idToken: string, url: URL): 
 
   let filtered = photos.filter(p => {
     if (!p) return false;
+    if (facetIds && !facetIds.has(p._id)) return false;
     // Hide live photo companion videos
     if (livePhotoVideoIds.has(p._id)) return false;
     const date = p.fileCreatedAt || p.uploadedAt || '';

@@ -55,9 +55,9 @@
 <Modal title="Fix video thumbnails" size="small" onClose={close}>
   <ModalBody>
     <Text color="muted" size="small">
-      Extracts a poster frame from each video that has no thumbnail yet. Your browser does the work using
-      the native video player — no extra downloads or server processing needed. Keep this tab open until
-      it finishes. Videos your browser can't decode (e.g. HEVC on non-Safari) are skipped safely.
+      Extracts a poster frame from each video that has no thumbnail yet. Your browser does the work — the
+      native player when it can, otherwise ffmpeg in your browser for codecs it can't decode (e.g. HEVC),
+      which downloads the video once. Keep this tab open until it finishes; HEVC videos take a bit longer.
     </Text>
 
     {#if phase === 'idle'}

@@ -10,6 +10,7 @@ import { handlePolicy } from './policy';
 import { handleFeatureFlags } from './feature-flags';
 import { handleSearch } from './search';
 import { handleDrive } from './drive';
+import { handleWebDav } from './webdav';
 import { linkExistingLivePhotos } from './link-live-photos';
 import { requireAuth } from './helpers';
 import type { D1Database } from '@cloudflare/workers-types';
@@ -55,6 +56,18 @@ export default {
     if (ctx) {
       env.waitUntil = ctx.waitUntil.bind(ctx);
     }
+
+    // Drive WebDAV mount — handled before the generic OPTIONS/CORS + API dispatch
+    // because it uses HTTP Basic auth (not Firebase) and serves its own OPTIONS
+    // with DAV capability headers. `/dav` is a brand-new namespace; every other
+    // route below is unaffected.
+    {
+      const davUrl = new URL(request.url);
+      if (davUrl.pathname === '/dav' || davUrl.pathname.startsWith('/dav/')) {
+        return handleWebDav(request, env, davUrl);
+      }
+    }
+
     const cors = corsHeaders(request, env);
 
     if (request.method === 'OPTIONS') {

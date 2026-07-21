@@ -93,3 +93,16 @@ export async function getDriveConfig(force = false) {
   _configCache = await driveApi('/api/drive/config');
   return _configCache;
 }
+
+// WebDAV mount ("Connect as a drive"): status, generate the mount token (the
+// password is shown ONCE), or revoke. The worker serves the mount at its own
+// /dav, so `url` already points at the user's per-user worker.
+export async function getDavStatus() {
+  return driveApi('/api/drive/dav'); // { enabled, url, username }
+}
+export async function createDavMount() {
+  return driveApi('/api/drive/dav', { method: 'POST' }); // { token, username, url }
+}
+export async function revokeDavMount() {
+  return driveApi('/api/drive/dav', { method: 'DELETE' }); // { enabled: false }
+}

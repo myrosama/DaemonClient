@@ -14,6 +14,14 @@ let lastAutoUpdateAttempt = 0;
 let lastExifBackfill = 0;
 const EXIF_BACKFILL_INTERVAL_MS = 3 * 60 * 1000;
 
+// Bump this to force every per-user worker to emit ONE SyncResetV1 (a client
+// rebuild) on its next sync. Use after a data change that can leave the phone
+// holding "ghost" asset rows — e.g. a dedup/heal that removed a duplicate whose
+// checksum now belongs to a different surviving asset id, which violates the
+// app's UNIQUE(owner_id, checksum) and aborts ALL sync. The worker records the
+// epoch in its own D1 after firing, so it never loops and needs no external access.
+const SYNC_RESET_EPOCH = '1';
+
 export async function handleSyncStream(request: Request, env: Env): Promise<Response> {
   const session = await requireAuth(request, env);
 
@@ -40,21 +48,32 @@ export async function handleSyncStream(request: Request, env: Env): Promise<Resp
   // Firestore. Without this branch, sync was always doing a full Firestore
   // collection scan on every page load — adding ~150-300ms to boot even when
   // the user had zero photos.
-  // Exclude live-photo companion videos at SQL level so they never appear as
-  // separate timeline items regardless of whether livePhotoVideoId is set.
+  // Include live-photo companion videos (a still's livePhotoVideoId) — they MUST
+  // reach the phone's remote_asset_entity, or its backup-candidate query
+  // (notExists remote checksum) treats them as un-backed-up and re-uploads each
+  // motion as a standalone clip. We emit them with visibility:'hidden' below so
+  // the timeline grid (which filters visibility=0) excludes them — exactly how
+  // real Immich keeps motions tracked-but-hidden.
   const photos = env.DB
     ? (await env.DB.prepare(
         `SELECT * FROM photos
          WHERE ownerId = ? AND (isTrashed = 0 OR isTrashed IS NULL)
-           AND id NOT IN (SELECT livePhotoVideoId FROM photos WHERE livePhotoVideoId IS NOT NULL AND ownerId = ?)
-         ORDER BY fileCreatedAt DESC`
-      ).bind(session.uid, session.uid).all()).results.map(D1Adapter.normalizeRow)
+         ORDER BY fileCreatedAt DESC, id ASC`
+      ).bind(session.uid).all()).results.map(D1Adapter.normalizeRow)
     : await firestoreQuery(env, session.uid, 'photos', session.idToken, 'fileCreatedAt', 'DESCENDING');
+
+  const adapter = env.DB ? new D1Adapter(env.DB) : null;
+
+  // Has this worker already delivered the current reset epoch to the client? If
+  // the stored epoch differs from SYNC_RESET_EPOCH, we owe it one SyncResetV1.
+  const resetNeeded = adapter
+    ? (await adapter.getJsonConfig<string>('syncResetEpoch')) !== SYNC_RESET_EPOCH
+    : false;
 
   // Tombstones: soft-deleted rows (Telegram data gone, D1 row kept with isTrashed=1).
   // Emit AssetDeleteV1 for each so mobile removes them from its local DB on sync.
-  const deletedPhotos = env.DB
-    ? (await new D1Adapter(env.DB).queryPhotos({ ownerId: session.uid, isTrashed: 1 })).map(D1Adapter.normalizeRow)
+  const deletedPhotos = adapter
+    ? (await adapter.queryPhotos({ ownerId: session.uid, isTrashed: 1 })).map(D1Adapter.normalizeRow)
     : [];
 
   const stream = new ReadableStream({
@@ -65,6 +84,17 @@ export async function handleSyncStream(request: Request, env: Env): Promise<Resp
 
       if (reqBody.reset) {
         send({ type: 'SyncResetV1', data: {}, ack: 'SyncResetV1|reset' });
+        controller.close();
+        return;
+      }
+
+      // Server-initiated reset: emit SyncResetV1 so the app wipes its remote-entity
+      // tables (clearing stale/ghost rows), then re-pulls the clean full set on the
+      // follow-up sync it triggers. Record the epoch first so the re-sync doesn't loop.
+      if (resetNeeded && adapter) {
+        await adapter.setJsonConfig('syncResetEpoch', SYNC_RESET_EPOCH);
+        send({ type: 'SyncResetV1', data: {}, ack: 'SyncResetV1|reset' });
+        send({ type: 'SyncCompleteV1', data: {}, ack: `SyncCompleteV1|${new Date().toISOString()}` });
         controller.close();
         return;
       }
@@ -95,8 +125,10 @@ export async function handleSyncStream(request: Request, env: Env): Promise<Resp
       // Send all assets
       for (const photo of photos) {
         if (!photo) continue;
-        // Hide live photo companion videos from sync
-        if (livePhotoVideoIds.has(photo._id)) continue;
+        // A companion motion video (some still's livePhotoVideoId points at it) is
+        // emitted but marked hidden, so the phone tracks it (no re-upload) yet keeps
+        // it out of the timeline grid.
+        const isCompanionMotion = livePhotoVideoIds.has(photo._id);
 
         // Emit the real checksum so the app can merge the phone's local copy with
         // this remote one (matching base64(SHA-1)). Falling back to _id when it's
@@ -104,7 +136,15 @@ export async function handleSyncStream(request: Request, env: Env): Promise<Resp
         // that haven't been backfilled yet — those still show twice until the next
         // upload backfills their checksum (see handleUpload).
         const csum = photo.checksum || photo._id;
-        if (seenChecksums.has(csum)) continue;
+        if (seenChecksums.has(csum)) {
+          // A duplicate of an already-emitted asset (same checksum). Tell the app
+          // to drop THIS id so its UNIQUE(owner_id, checksum) table never keeps a
+          // ghost row that later collides and aborts sync. Real Immich dedups at
+          // upload; the per-user worker does it here. Stable ORDER BY (…, id ASC)
+          // keeps the same representative across syncs so this never flip-flops.
+          send({ type: 'AssetDeleteV1', data: { assetId: photo._id }, ack: `AssetDeleteV1|${photo._id}`, ids: [photo._id] });
+          continue;
+        }
         seenChecksums.add(csum);
 
         const isVideo = photo.mimeType?.startsWith('video/') || photo.type === 'VIDEO';
@@ -134,7 +174,7 @@ export async function handleSyncStream(request: Request, env: Env): Promise<Resp
           ownerId: session.uid,
           stackId: null,
           thumbhash: photo.thumbhash || null,
-          visibility: photo.visibility || 'timeline',
+          visibility: isCompanionMotion ? 'hidden' : (photo.visibility || 'timeline'),
           width: photo.width || 0,
         };
 

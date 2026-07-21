@@ -2,7 +2,8 @@ import type { Env } from './index';
 import { json } from './helpers';
 
 /** Stub handler for all non-critical endpoints. Returns empty/disabled responses. */
-export async function handleStubs(_request: Request, _env: Env, path: string): Promise<Response> {
+export async function handleStubs(request: Request, _env: Env, path: string): Promise<Response> {
+  const method = request.method;
   // Socket.io — Immich frontend tries WebSocket for real-time notifications.
   // We don't have a WS server, so return a valid socket.io handshake that won't retry aggressively.
   if (path.startsWith('/api/socket.io')) {
@@ -17,8 +18,18 @@ export async function handleStubs(_request: Request, _env: Env, path: string): P
   if (path === '/api/people') return json({ total: 0, visible: 0, people: [] });
   if (path.startsWith('/api/people/')) return json({ id: '', name: '', thumbnailPath: '' });
 
-  // Tags
-  if (path === '/api/tags') return json([]);
+  // Tags — feature disabled in the isolated model (preferences hide the UI),
+  // but the web SDK can still call these; return SHAPED responses so
+  // upsertTags()/tagAssets() don't crash on undefined.
+  if (path === '/api/tags') {
+    if (method === 'PUT') return json([]); // upsertTags → TagResponseDto[]
+    return json([]);                        // getAllTags → TagResponseDto[]
+  }
+  // PUT/DELETE /api/tags/{id}/assets → BulkIdResponseDto[]
+  if (path.match(/^\/api\/tags\/[^/]+\/assets$/)) {
+    return json([]);
+  }
+  if (path.startsWith('/api/tags/')) return json({ id: '', name: '', value: '' });
 
   // Search
   if (path === '/api/search/suggestions') return json([]);
@@ -33,8 +44,20 @@ export async function handleStubs(_request: Request, _env: Env, path: string): P
   // Partners
   if (path === '/api/partners') return json([]);
 
-  // Shared links
-  if (path === '/api/shared-links') return json([]);
+  // Shared links — cross-user sharing isn't built yet (see design doc), so
+  // these are gracefully stubbed with SHAPED responses, not bare {}.
+  // GET /api/shared-links/me drives the public share page, which reads
+  // sharedLink.assets.length — so `assets` MUST be an array, never undefined.
+  if (path === '/api/shared-links/me') {
+    return json(emptySharedLink());
+  }
+  if (path === '/api/shared-links') {
+    if (method === 'POST') return json(emptySharedLink(), 201); // createSharedLink → SharedLinkResponseDto
+    return json([]);                                            // getAllSharedLinks → SharedLinkResponseDto[]
+  }
+  if (path.startsWith('/api/shared-links/')) {
+    return json(emptySharedLink());
+  }
 
   // Sessions
   if (path === '/api/sessions') return json([]);
@@ -90,4 +113,26 @@ export async function handleStubs(_request: Request, _env: Env, path: string): P
   // Catch-all: return empty object to prevent frontend crashes
   console.log(`[STUB] Unhandled: ${path}`);
   return json({});
+}
+
+// A SharedLinkResponseDto-shaped object with an empty asset list. The public
+// share page and shared-links utils read sharedLink.assets.length and
+// sharedLink.assets[0]?.id, so `assets` must always be an array.
+function emptySharedLink() {
+  return {
+    id: '',
+    type: 'INDIVIDUAL',
+    key: '',
+    slug: null,
+    description: null,
+    password: null,
+    userId: '',
+    createdAt: new Date().toISOString(),
+    expiresAt: null,
+    allowUpload: false,
+    allowDownload: false,
+    showMetadata: false,
+    album: null,
+    assets: [] as any[],
+  };
 }

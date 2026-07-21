@@ -23,7 +23,31 @@ export async function backfillVideoById(assetId: string): Promise<boolean> {
     // Stream the video via the worker (service worker adds auth + decrypts).
     // We only need the first few seconds for a frame — the video element handles
     // Range requests internally, so we never download the whole file.
-    const result = await extractVideoPoster(`/api/assets/${assetId}/video/playback`);
+    let result = await extractVideoPoster(`/api/assets/${assetId}/video/playback`);
+    if (!result) {
+      // The browser couldn't decode this codec (e.g. HEVC on non-Safari) — which
+      // also means it can't PLAY it, so this video needs both a poster AND a
+      // web-playable H.264 rendition. ffmpeg.wasm (its own HEVC decoder + x264)
+      // does both from one download. It needs the whole decrypted original
+      // (moov atom can be at the end), so point it at /original. Lazy-imported so
+      // the ~30MB ffmpeg.wasm only loads when this path is actually hit.
+      const { processVideoFfmpeg } = await import('./video-poster-ffmpeg');
+      const ff = await processVideoFfmpeg(`/api/assets/${assetId}/original`, { transcode: true });
+      result = ff.poster;
+      // Store the H.264 rendition so /video/playback can play it everywhere.
+      // Best-effort + independent of the poster: a failed/oversized transcode
+      // just leaves the video download-only, exactly as before.
+      if (ff.playback) {
+        try {
+          const pf = new FormData();
+          pf.append('video', ff.playback, 'playback.mp4');
+          const r = await fetch(`/api/assets/${assetId}/playback-rendition`, { method: 'POST', body: pf });
+          if (!r.ok) console.warn('[video-backfill] rendition upload HTTP', r.status, assetId);
+        } catch (e) {
+          console.warn('[video-backfill] rendition upload failed', assetId, e);
+        }
+      }
+    }
     if (!result) return false;
 
     const { blob: poster, videoWidth, videoHeight } = result;
