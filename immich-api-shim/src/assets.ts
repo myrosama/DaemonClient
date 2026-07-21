@@ -790,6 +790,9 @@ async function ensureDeduplicationSchema(db: any): Promise<void> {
   // set and it leaves the empty-checksum set; failed → flagged so we don't loop
   // forever on an unhealable file).
   await addColumn('ALTER TABLE photos ADD COLUMN checksumChecked INTEGER DEFAULT 0');
+  // 1 = the HEIC thumbnail backfill settled this row (thumb stored, or the file
+  // is undecodable/multi-chunk) — stops backfillHeicThumbBatch from looping.
+  await addColumn('ALTER TABLE photos ADD COLUMN heicThumbChecked INTEGER DEFAULT 0');
   // JSON array of the H.264/web-playable rendition's Telegram chunks (the
   // Fix-Videos transcode of an HEVC/incompatible video). Served for
   // /video/playback so the browser can play it; the ORIGINAL is untouched and
@@ -2487,6 +2490,151 @@ export async function backfillExifBatch(env: Env, uid: string, idToken: string, 
     console.log(`[ExifBackfill] processed ${rows.length} photos for uid=${uid}`);
   } catch (e: any) {
     console.log('[ExifBackfill] batch failed (non-fatal):', e?.message);
+  }
+}
+
+// ── Lazy HEIC thumbnail backfill ─────────────────────────────────────────────
+// HEIC grid thumbnails come from the Render backend (pillow-heif) at upload
+// time. Render's free tier SLEEPS: the first HEICs of a backup session hit a
+// cold service, conversion fails, the row stays thumb-less → the grid 404s and
+// users had to run the manual "fix" flow after every backup. This heals those
+// rows in the background with zero new infrastructure. A failed convert is
+// itself the wake-up call — Render boots from the dead request — so the next
+// cycle (sync/timeline fire every few minutes during use) finds it warm and
+// converts. Undecodable files are stamped heicThumbChecked=1 so nothing loops.
+let heicThumbBackfillComplete = false;
+let heicThumbBackfillRunning = false;
+let lastHeicThumbBackfill = 0;
+export async function backfillHeicThumbBatch(env: Env, uid: string, idToken: string): Promise<void> {
+  if (heicThumbBackfillComplete || heicThumbBackfillRunning || !env.DB) return;
+  const nowTs = Date.now();
+  if (nowTs - lastHeicThumbBackfill < 2 * 60 * 1000) return;
+  lastHeicThumbBackfill = nowTs;
+  heicThumbBackfillRunning = true;
+
+  // Conversions are slow (network round-trip to Render), so the budget is
+  // deliberately small; the free-plan invocation cap is 50 subrequests shared
+  // with the dispatching request.
+  const SUBREQUEST_BUDGET = 24;
+  const TIME_BUDGET_MS = 20_000;
+  const MAX_PHOTOS = 8;
+  const started = Date.now();
+  let subrequests = 0;
+
+  try {
+    await ensureDeduplicationSchema(env.DB);
+    const rows = (await env.DB.prepare(
+      `SELECT * FROM photos
+       WHERE ownerId = ?
+         AND (mimeType = 'image/heic' OR mimeType = 'image/heif'
+              OR fileName LIKE '%.heic' OR fileName LIKE '%.heif')
+         AND (telegramThumbId IS NULL OR telegramThumbId = '')
+         AND (heicThumbChecked IS NULL OR heicThumbChecked = 0)
+         AND (encryptionMode IS NULL OR encryptionMode != 'client')
+         AND (isTrashed = 0 OR isTrashed IS NULL)
+       LIMIT ?`
+    ).bind(uid, MAX_PHOTOS).all()).results as any[];
+    if (!rows || rows.length === 0) {
+      heicThumbBackfillComplete = true;
+      return;
+    }
+
+    const config = await getCachedConfig<any>(env, uid, idToken, 'telegram');
+    subrequests++;
+    const botToken = config?.botToken || config?.bot_token;
+    const channelId = config?.channelId || config?.channel_id;
+    if (!botToken || !channelId) return;
+    const adapter = new D1Adapter(env.DB);
+    let serverKey: CryptoKey | null | undefined; // fetched lazily, once
+
+    for (const photo of rows) {
+      if (subrequests >= SUBREQUEST_BUDGET || Date.now() - started > TIME_BUDGET_MS) break;
+      try {
+        let chunks: any[] = [];
+        if (typeof photo.telegramChunks === 'string') {
+          try { chunks = JSON.parse(photo.telegramChunks); } catch { /* legacy */ }
+        } else if (Array.isArray(photo.telegramChunks)) {
+          chunks = photo.telegramChunks;
+        }
+        const sorted = chunks.slice().sort((a: any, b: any) => a.index - b.index);
+        const fileId = sorted[0]?.file_id || photo.telegramOriginalId;
+        if (!fileId || sorted.length > 1) {
+          // No source bytes, or a >19MB multi-chunk HEIC we won't buffer here.
+          await adapter.updatePhoto(photo.id, { heicThumbChecked: 1 });
+          continue;
+        }
+
+        const isServerZke = photo.encryptionMode === 'server' || (photo.encrypted === true && !photo.encryptionMode);
+        if (isServerZke && serverKey === undefined) {
+          serverKey = await getEncryptionKey(env, uid, idToken);
+          subrequests++;
+        }
+        if (isServerZke && !serverKey) return; // can't decrypt without the key
+
+        const queue = getTgQueue(botToken);
+        await queue.acquire(undefined, 1); // low priority — never starve user requests
+        let dl;
+        try { dl = await tgDownloadFile(botToken, fileId); }
+        finally { queue.release(); }
+        subrequests += 2;
+        if (!dl.ok || !dl.data) continue; // transient Telegram failure → retry next cycle
+
+        let data = dl.data;
+        if (isServerZke && serverKey) data = await decryptChunk(data, serverKey);
+
+        subrequests++;
+        const jpeg = await convertHeicThumbViaBackend(data, idToken);
+        if (!jpeg) {
+          // Cold/unreachable Render — that request just woke it. Leave the row
+          // unchecked and end this cycle; the next one converts against a warm
+          // service.
+          console.log('[HeicThumbBackfill] convert backend unavailable — woke it, retrying next cycle');
+          break;
+        }
+
+        // Store exactly like handleThumbnailUpload: encrypted .bin document for
+        // server-ZKE assets, else a plain Telegram photo.
+        const patch: any = { heicThumbChecked: 1 };
+        subrequests++;
+        if (isServerZke && serverKey) {
+          const enc = await encryptChunk(jpeg, serverKey);
+          const form = new FormData();
+          form.append('chat_id', channelId);
+          form.append('document', new Blob([enc], { type: 'application/octet-stream' }), 'thumb.bin');
+          const res = await tgFetchWithRetry(`https://api.telegram.org/bot${botToken}/sendDocument`, { method: 'POST', body: form });
+          const sent = await res.json() as any;
+          if (sent.ok && sent.result?.document?.file_id) {
+            patch.telegramThumbId = sent.result.document.file_id;
+            patch.thumbEncrypted = 1;
+          }
+        } else {
+          const form = new FormData();
+          form.append('chat_id', channelId);
+          form.append('photo', new Blob([jpeg], { type: 'image/jpeg' }), 'thumb.jpg');
+          const res = await tgFetchWithRetry(`https://api.telegram.org/bot${botToken}/sendPhoto`, { method: 'POST', body: form });
+          const sent = await res.json() as any;
+          if (sent.ok && sent.result?.photo?.length > 0) {
+            patch.telegramThumbId = sent.result.photo[0].file_id;
+            patch.thumbEncrypted = 0;
+          }
+        }
+        if (!patch.telegramThumbId) continue; // Telegram store failed → retry next cycle
+
+        const th = computeThumbHashFromJpeg(new Uint8Array(jpeg));
+        if (th) patch.thumbhash = th;
+        await adapter.updatePhoto(photo.id, patch);
+        console.log(`[HeicThumbBackfill] healed thumbnail for ${photo.id}`);
+      } catch (e: any) {
+        // A throw here is a permanent per-row failure (corrupt/undecryptable
+        // bytes) — stamp it so the backfill can never loop on it.
+        console.log(`[HeicThumbBackfill] ${photo.id} failed permanently (stamping checked): ${e?.message}`);
+        try { await adapter.updatePhoto(photo.id, { heicThumbChecked: 1 }); } catch { /* next cycle */ }
+      }
+    }
+  } catch (e: any) {
+    console.log('[HeicThumbBackfill] batch failed (non-fatal):', e?.message);
+  } finally {
+    heicThumbBackfillRunning = false;
   }
 }
 

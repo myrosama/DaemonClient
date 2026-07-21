@@ -57,7 +57,8 @@ import {
 
 const APP_ID = 'default-daemon-client'
 const RENDER_BACKEND = 'https://daemonclient-elnj.onrender.com'
-const AUTH_WORKER = 'https://daemonclient-auth.sadrikov49.workers.dev'
+// Custom domain — *.workers.dev is blocked on some mobile carriers.
+const AUTH_WORKER = 'https://auth.daemonclient.uz'
 
 const AVATAR_COLORS = [
   '#E11D48', '#DB2777', '#C026D3', '#9333EA', '#7C3AED',
@@ -2559,9 +2560,12 @@ function useSetupStage(user) {
         if (cfReady) recompute()
       },
       (err) => {
-        // On permission-denied for a brand-new uninitialized user, treat as
-        // 'telegram' stage so they can start the funnel — never 'complete'.
+        // permission-denied for a brand-new uninitialized user → genuinely at
+        // the start of the funnel. Any OTHER error (unavailable, transient
+        // auth hiccup) must NOT demote a fully-set-up user to /setup — leave
+        // the hook loading and let Firestore's auto-retrying stream recover.
         console.error('Error subscribing to telegram doc:', err)
+        if (err?.code !== 'permission-denied') return
         tg = null
         tgReady = true
         if (cfReady) recompute()
@@ -2576,7 +2580,10 @@ function useSetupStage(user) {
         if (tgReady) recompute()
       },
       (err) => {
+        // Same rule as the telegram doc: only permission-denied is a real
+        // "not set up" signal; transient errors must not demote the stage.
         console.error('Error subscribing to cloudflare doc:', err)
+        if (err?.code !== 'permission-denied') return
         cf = null
         cfReady = true
         if (tgReady) recompute()

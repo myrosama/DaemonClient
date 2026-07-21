@@ -83,9 +83,20 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url)
 
-    // CORS — must echo exact origin when credentials are included
+    // CORS — must echo an exact origin when credentials are included, but ONLY
+    // for our own origins. Reflecting arbitrary Origins with credentials:true
+    // let any website read a visitor's login state / CSRF the logout.
+    const ALLOWED_ORIGINS = new Set([
+      'https://daemonclient.uz',
+      'https://www.daemonclient.uz',
+      'https://accounts.daemonclient.uz',
+      'https://photos.daemonclient.uz',
+      'https://drive.daemonclient.uz',
+    ])
     const requestOrigin = request.headers.get('Origin')
-    const origin = requestOrigin || 'https://accounts.daemonclient.uz'
+    const origin = requestOrigin && ALLOWED_ORIGINS.has(requestOrigin)
+      ? requestOrigin
+      : 'https://accounts.daemonclient.uz'
 
     const corsHeaders = {
       'Access-Control-Allow-Origin': origin,
@@ -112,13 +123,17 @@ export default {
           })
         }
 
-        // Create session token
+        // Create session token. Lifetime matches the rest of the ecosystem
+        // (long-lived sessions; 400 days is the browser cookie cap) — the old
+        // 7-day expiry made the landing page think logged-in users were
+        // logged out after a week.
+        const SESSION_MS = 400 * 24 * 60 * 60 * 1000
         const sessionData: SessionData = {
           uid: user.uid,
           email: user.email,
           idToken: body.idToken,
           refreshToken: body.refreshToken,
-          exp: Date.now() + 7 * 24 * 60 * 60 * 1000, // 7 days
+          exp: Date.now() + SESSION_MS,
           scope: 'global'
         }
 
@@ -138,7 +153,7 @@ export default {
         // Set cookie
         const headers = new Headers(corsHeaders)
         headers.set('Content-Type', 'application/json')
-        headers.set('Set-Cookie', `__session=${sessionToken}; Domain=.daemonclient.uz; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${7 * 24 * 60 * 60}`)
+        headers.set('Set-Cookie', `__session=${sessionToken}; Domain=.daemonclient.uz; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${400 * 24 * 60 * 60}`)
 
         return new Response(JSON.stringify({ redirectUrl: body.returnUrl }), {
           status: 200,
@@ -149,6 +164,32 @@ export default {
           status: 500,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' }
         })
+      }
+    }
+
+    // Session check — lets the landing page (and any *.daemonclient.uz origin)
+    // ask "is this browser logged in?" so CTAs can point at the dashboard
+    // instead of the signup funnel. Verifies the HMAC + expiry; never returns
+    // the token contents beyond the email.
+    if (url.pathname === '/check-session' && request.method === 'GET') {
+      const respond = (body: object) =>
+        new Response(JSON.stringify(body), {
+          status: 200,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }
+        })
+      try {
+        const cookie = request.headers.get('Cookie') || ''
+        const match = cookie.match(/(?:^|;\s*)__session=([^;]+)/)
+        if (!match) return respond({ loggedIn: false })
+        const [payloadB64, signature] = match[1].split('.')
+        if (!payloadB64 || !signature) return respond({ loggedIn: false })
+        const expected = await hmacSign(payloadB64, env.SESSION_SECRET)
+        if (expected !== signature) return respond({ loggedIn: false })
+        const session = JSON.parse(atob(payloadB64)) as SessionData
+        if (!session.exp || session.exp < Date.now()) return respond({ loggedIn: false })
+        return respond({ loggedIn: true, email: session.email })
+      } catch {
+        return respond({ loggedIn: false })
       }
     }
 

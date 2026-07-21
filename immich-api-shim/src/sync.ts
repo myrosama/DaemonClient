@@ -1,7 +1,7 @@
 import type { Env } from './index';
 import { requireAuth, firestoreQuery } from './helpers';
 import { D1Adapter } from './d1-adapter';
-import { backfillExifBatch, backfillChecksumBatch } from './assets';
+import { backfillExifBatch, backfillChecksumBatch, backfillHeicThumbBatch } from './assets';
 import { repairLivePhotoLinks } from './link-live-photos';
 
 // Fire at most once per Worker isolate lifetime (typically 30 min – a few hours).
@@ -247,6 +247,16 @@ export async function handleSyncStream(request: Request, env: Env): Promise<Resp
     env.waitUntil(
       repairLivePhotoLinks(env, session.uid).catch(err =>
         console.log('[LivePhotoRepair] dispatch failed:', err?.message)
+      )
+    );
+  }
+
+  // HEIC thumbnail heal: retries conversions that failed because the Render
+  // backend was asleep at upload time (self-paced inside the function).
+  if (env.DB && env.waitUntil) {
+    env.waitUntil(
+      backfillHeicThumbBatch(env, session.uid, session.idToken).catch(err =>
+        console.log('[HeicThumbBackfill] dispatch failed:', err?.message)
       )
     );
   }

@@ -48,6 +48,8 @@ export interface Photo {
   exifChecked?: number;
   // 1 = the checksum backfill already attempted this row (heals empty checksums).
   checksumChecked?: number;
+  // 1 = the HEIC thumbnail backfill settled this row (thumb stored/undecodable).
+  heicThumbChecked?: number;
 }
 
 export interface Album {

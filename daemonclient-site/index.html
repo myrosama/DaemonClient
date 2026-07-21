@@ -640,5 +640,26 @@ setTimeout(()=>document.querySelectorAll('.reveal').forEach(el=>el.classList.add
   size();addEventListener('resize',()=>size(),{passive:true});requestAnimationFrame(draw);
 })();
 </script>
+<script>
+// Session-aware CTAs: if this browser already holds a DaemonClient session
+// (cookie on .daemonclient.uz, set by the accounts portal at login/signup),
+// "Sign in" / "Create account" go straight to the dashboard instead of the
+// signup funnel. Fails silent — logged-out and blocked-network visitors see
+// the normal CTAs.
+(function(){
+  fetch('https://auth.daemonclient.uz/check-session',{credentials:'include'})
+    .then(function(r){return r.json()})
+    .then(function(s){
+      if(!s||!s.loggedIn)return;
+      document.querySelectorAll('a[href^="https://accounts.daemonclient.uz/signup"],a[href^="https://accounts.daemonclient.uz/login"]').forEach(function(a){
+        a.href='https://accounts.daemonclient.uz/dashboard';
+        var t=(a.textContent||'').trim().toLowerCase();
+        if(t.indexOf('sign in')!==-1)a.textContent='Open dashboard';
+        else if(t.indexOf('create')!==-1||t.indexOf('get started')!==-1)a.textContent='Open your dashboard';
+      });
+    })
+    .catch(function(){});
+})();
+</script>
 </body>
 </html>

@@ -1,7 +1,7 @@
 import type { Env } from './index';
 import { requireAuth, firestoreQuery, firestoreGet, json } from './helpers';
 import { D1Adapter } from './d1-adapter';
-import { backfillChecksumBatch } from './assets';
+import { backfillChecksumBatch, backfillHeicThumbBatch } from './assets';
 
 // Per-user workers store photos in D1 (env.DB). The central worker (no D1
 // binding) still uses Firestore. Read from whichever is present and normalize
@@ -58,6 +58,13 @@ export async function handleTimeline(request: Request, env: Env, path: string, u
     env.waitUntil(
       backfillChecksumBatch(env, session.uid, session.idToken).catch(err =>
         console.log('[ChecksumBackfill] timeline dispatch failed:', err?.message)
+      )
+    );
+    // Web browsing also heals missing HEIC thumbnails (the very grid that
+    // shows the gaps drives the fix; self-paced inside the function).
+    env.waitUntil(
+      backfillHeicThumbBatch(env, session.uid, session.idToken).catch(err =>
+        console.log('[HeicThumbBackfill] timeline dispatch failed:', err?.message)
       )
     );
   }
