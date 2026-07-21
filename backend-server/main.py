@@ -5,6 +5,7 @@ import re
 import json
 import time
 import hashlib
+import threading
 from functools import wraps
 
 from flask import Flask, request, jsonify
@@ -48,7 +49,21 @@ load_dotenv()
 
 # --- Initialize Flask App ---
 app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": "*"}})
+# Browser-facing endpoints are only ever called from the DaemonClient web apps.
+# The old wildcard CORS combined with unauthenticated setup endpoints let ANY
+# website drive bot/channel mutations for arbitrary uids from a visitor's
+# browser. Server-to-server callers (the per-user worker's HEIC conversion)
+# send no Origin header, so CORS does not affect them.
+ALLOWED_ORIGINS = [
+    "https://accounts.daemonclient.uz",
+    "https://daemonclient.uz",
+    "https://www.daemonclient.uz",
+    "https://photos.daemonclient.uz",
+    "https://drive.daemonclient.uz",
+    "http://localhost:5173",
+    "http://localhost:5174",
+]
+CORS(app, resources={r"/*": {"origins": ALLOWED_ORIGINS}}, allow_headers=["Content-Type", "Authorization"])
 
 # --- HEIC support ---
 # Cloudflare Workers can't decode HEIC (libheif is too heavy for the 10ms free
@@ -99,6 +114,14 @@ def get_available_bots():
             .stream()
         )
         bots_list = [{"doc_id": bot.id, **bot.to_dict()} for bot in bots_ref]
+        # Skip userbots another process is mid-conversation with (best-effort
+        # cross-process lease; in-process _userbot_lock is the hard guard).
+        # Interleaving two BotFather conversations on one account corrupts both.
+        now = time.time()
+        leased = [b for b in bots_list if (b.get("busy_until") or 0) > now]
+        if leased:
+            print(f"Skipping {len(leased)} busy userbot(s): {[b['doc_id'] for b in leased]}")
+        bots_list = [b for b in bots_list if (b.get("busy_until") or 0) <= now]
         print(f"Found {len(bots_list)} active bots.")
         return bots_list
     except Exception as e:
@@ -143,89 +166,128 @@ async def click_button_containing_text_in_msg(msg, text, retries=5, delay=2, pas
         print("⚠️ Available buttons:", [b.text for row in msg.buttons for b in row])
     return None
 
-async def _create_resources_with_userbot(client, user_id, user_email):
+async def _create_resources_with_userbot(client, user_id, user_email, checkpoint=None, save=None):
+    """Create (or RESUME creating) the user's bot + channel.
+
+    Every external side effect is checkpointed to Firestore the moment it
+    exists, and every step first checks the checkpoint. This is what stops the
+    double-bot bug: previously ANY failure after /newbot (FloodWait on channel
+    creation, a killed request, a BotFather hiccup on /setdescription) threw
+    the whole attempt away, released the idempotency lock, and the retry —
+    next pool userbot or the user clicking again — created a SECOND bot and
+    channel, with the config doc keeping whichever finished last.
+    """
     print(f"[{user_id}] Starting resource creation...")
-    bot_name = f"{user_email.split('@')[0]}'s DaemonClient"
-    bot_username, bot_token = "", ""
-    
-    async with client.conversation("BotFather", timeout=120) as conv:
-        await conv.send_message("/newbot")
-        await conv.get_response()
-        await conv.send_message(bot_name)
-        await conv.get_response()
+    checkpoint = checkpoint or {}
 
-        for i in range(5):
-            bot_username = f"dc_{user_id[:7]}_{os.urandom(4).hex()}_bot"
-            await conv.send_message(bot_username)
-            response = await conv.get_response()
-            if "Done! Congratulations" in response.text:
-                token_match = re.search(r"(\d+:[A-Za-z0-9\-_]+)", response.text)
-                if not token_match: raise Exception("Could not find bot token")
-                bot_token = token_match.group(1)
-                break
-            if "username is already taken" in response.text and i < 4: continue
-            if i == 4: 
-                raise Exception(f"Failed to create bot username. Last response: {response.text}")
-        
-        if not bot_token: raise Exception("Failed to create a bot")
-        
-        # Set Description
-        description_text = (
-            "👇 Click START below, then return to the website to finalize the setup.\n\n"
-            "_(Note: This bot will not reply after you press Start.)_"
-        )
-        await conv.send_message(f"/setdescription")
-        await conv.get_response()
-        await conv.send_message(f"@{bot_username}")
-        await conv.get_response()
-        await conv.send_message(description_text)
-        await conv.get_response()
-
-        # Set Profile Pic
-        if ASSET_CHANNEL_ID and BOT_PIC_MESSAGE_ID:
+    def _save(fields):
+        if save:
             try:
-                await conv.send_message("/setuserpic")
+                save(fields)
+            except Exception as e:
+                print(f"[{user_id}] checkpoint save failed (continuing): {e}")
+
+    bot_name = f"{user_email.split('@')[0]}'s DaemonClient"
+    bot_username = checkpoint.get("botUsername") or ""
+    bot_token = checkpoint.get("botToken") or ""
+    bot_created_now = False
+
+    if bot_token and bot_username:
+        print(f"[{user_id}] Resuming with existing bot @{bot_username} (checkpoint)")
+    else:
+        async with client.conversation("BotFather", timeout=120) as conv:
+            await conv.send_message("/newbot")
+            await conv.get_response()
+            await conv.send_message(bot_name)
+            await conv.get_response()
+
+            for i in range(5):
+                bot_username = f"dc_{user_id[:7]}_{os.urandom(4).hex()}_bot"
+                await conv.send_message(bot_username)
+                response = await conv.get_response()
+                if "Done! Congratulations" in response.text:
+                    token_match = re.search(r"(\d+:[A-Za-z0-9\-_]+)", response.text)
+                    if not token_match: raise Exception("Could not find bot token")
+                    bot_token = token_match.group(1)
+                    break
+                if "username is already taken" in response.text and i < 4: continue
+                if i == 4:
+                    raise Exception(f"Failed to create bot username. Last response: {response.text}")
+
+            if not bot_token: raise Exception("Failed to create a bot")
+
+        # The bot exists at BotFather from this moment — persist it BEFORE any
+        # other step so no later failure can ever lead to a second /newbot.
+        _save({"botToken": bot_token, "botUsername": bot_username, "setup_stage": "bot_created"})
+        bot_created_now = True
+
+    # Cosmetics (description + profile pic) — best-effort, never abort setup.
+    if bot_created_now:
+        try:
+            description_text = (
+                "👇 Click START below, then return to the website to finalize the setup.\n\n"
+                "_(Note: This bot will not reply after you press Start.)_"
+            )
+            async with client.conversation("BotFather", timeout=60) as conv:
+                await conv.send_message("/setdescription")
                 await conv.get_response()
                 await conv.send_message(f"@{bot_username}")
                 await conv.get_response()
-                photo_message = await client.get_messages(ASSET_CHANNEL_ID, ids=BOT_PIC_MESSAGE_ID)
-                await conv.send_file(photo_message.photo)
-                await conv.get_response(timeout=30)
-            except Exception as e:
-                print(f"⚠️ Could not set bot profile picture: {e}")
-    
-    # Create Channel
-    channel_title = f"DaemonClient Storage - {user_id[:6]}"
-    result = await client(CreateChannelRequest(title=channel_title, about="Private storage.", megagroup=True))
-    new_channel = result.chats[0]
-    channel_id = f"-100{new_channel.id}"
+                await conv.send_message(description_text)
+                await conv.get_response()
 
-    # Add Bot as Admin
+                if ASSET_CHANNEL_ID and BOT_PIC_MESSAGE_ID:
+                    await conv.send_message("/setuserpic")
+                    await conv.get_response()
+                    await conv.send_message(f"@{bot_username}")
+                    await conv.get_response()
+                    photo_message = await client.get_messages(ASSET_CHANNEL_ID, ids=BOT_PIC_MESSAGE_ID)
+                    await conv.send_file(photo_message.photo)
+                    await conv.get_response(timeout=30)
+        except Exception as e:
+            print(f"⚠️ Bot cosmetics failed (non-fatal): {e}")
+
+    # Create Channel (skipped on resume)
+    channel_id = checkpoint.get("channelId") or ""
+    channel_created_now = False
+    if channel_id:
+        print(f"[{user_id}] Resuming with existing channel {channel_id} (checkpoint)")
+    else:
+        channel_title = f"DaemonClient Storage - {user_id[:6]}"
+        result = await client(CreateChannelRequest(title=channel_title, about="Private storage.", megagroup=True))
+        new_channel = result.chats[0]
+        channel_id = f"-100{new_channel.id}"
+        _save({"channelId": channel_id, "setup_stage": "channel_created"})
+        channel_created_now = True
+
+    # Add Bot as Admin (idempotent — safe to repeat on resume)
     await client(
         EditAdminRequest(
-            channel=new_channel.id,
+            channel=int(channel_id),
             user_id=bot_username,
             admin_rights=ChatAdminRights(post_messages=True, edit_messages=True, delete_messages=True),
             rank="bot",
         )
     )
 
-    # Generate Invite Link
+    # Generate Invite Link (a fresh link on resume is fine)
     invite_link_result = await client(ExportChatInviteRequest(int(channel_id)))
     invite_link = invite_link_result.link
 
     await client.send_message(bot_username, "/start")
 
-    # Clean up service messages
-    try:
-        messages_to_delete = []
-        async for message in client.iter_messages(int(channel_id), limit=10):
-            if message.action:
-                messages_to_delete.append(message.id)
-        if messages_to_delete:
-            await client.delete_messages(int(channel_id), messages_to_delete)
-    except Exception as e:
-        print(f"⚠️ Could not clean up service messages: {e}")
+    # Clean up service messages + send the pinned welcome only when the channel
+    # was created in THIS run — a resume must not double-post/pin.
+    if channel_created_now:
+        try:
+            messages_to_delete = []
+            async for message in client.iter_messages(int(channel_id), limit=10):
+                if message.action:
+                    messages_to_delete.append(message.id)
+            if messages_to_delete:
+                await client.delete_messages(int(channel_id), messages_to_delete)
+        except Exception as e:
+            print(f"⚠️ Could not clean up service messages: {e}")
 
     # Send Sentinel Message
     welcome_text = """🚨 **Welcome to Your DaemonClient Secure Storage** 🚨
@@ -247,15 +309,16 @@ Interfering with this channel **will permanently corrupt your file index and lea
 
 Thank you for understanding. Happy storing!
 """
-    try:
-        sent_message = await client.send_message(
-            entity=int(channel_id),
-            message=welcome_text.format(bot_username=bot_username),
-            parse_mode='md'
-        )
-        await client.pin_message(int(channel_id), sent_message)
-    except Exception as e:
-        print(f"⚠️ Could not send welcome message: {e}")
+    if channel_created_now:
+        try:
+            sent_message = await client.send_message(
+                entity=int(channel_id),
+                message=welcome_text.format(bot_username=bot_username),
+                parse_mode='md'
+            )
+            await client.pin_message(int(channel_id), sent_message)
+        except Exception as e:
+            print(f"⚠️ Could not send welcome message: {e}")
 
     return bot_token, bot_username, channel_id, invite_link
 
@@ -331,6 +394,44 @@ def check_auth(f):
             
         return f(*args, **kwargs)
     return decorated_function
+
+# ── Setup concurrency guards ─────────────────────────────────────────────────
+# Atomic read+claim of the per-user telegram config doc. The old read-then-set
+# pair had a race window: a Render cold start queues several /startSetup
+# retries at the proxy and replays them near-simultaneously when the service
+# boots — both pre-reads saw "no lock" and BOTH created a bot+channel.
+def claim_setup_lock(user_config_ref):
+    transaction = db.transaction()
+
+    @firestore.transactional
+    def _claim(tx):
+        snap = user_config_ref.get(transaction=tx)
+        data = snap.to_dict() if snap.exists else None
+        if data:
+            if data.get("botToken") and data.get("botUsername") and data.get("channelId"):
+                return "already_configured", data
+            started = data.get("setup_started_at")
+            if started is not None:
+                try:
+                    age = time.time() - started.timestamp()
+                except Exception:
+                    age = 0
+                if age < 240:
+                    return "in_progress", data
+        tx.set(user_config_ref, {"setup_started_at": firestore.SERVER_TIMESTAMP}, merge=True)
+        return "claimed", data
+
+    return _claim(transaction)
+
+# One BotFather conversation per userbot at a time within this process.
+_userbot_locks = {}
+_userbot_locks_guard = threading.Lock()
+
+def _userbot_lock(doc_id):
+    with _userbot_locks_guard:
+        if doc_id not in _userbot_locks:
+            _userbot_locks[doc_id] = threading.Lock()
+        return _userbot_locks[doc_id]
 
 @app.route('/api/list', methods=['GET'])
 @check_auth
@@ -437,46 +538,40 @@ def convert_heic_thumbnail():
         return jsonify({'error': f'HEIC decode failed: {str(e)}'}), 500
 
 @app.route("/startSetup", methods=["POST"])
+@check_auth
 def start_setup_endpoint():
-    data = request.get_json().get("data", {})
-    user_id, user_email = data.get("uid"), data.get("email")
-    if not user_id or not user_email:
-        return jsonify({"error": "Missing uid or email in request body."}), 400
+    # uid/email come from the VERIFIED Firebase token. The old body-supplied
+    # uid meant ANY caller could trigger bot/channel creation — or poison the
+    # config doc — for an arbitrary victim uid, with no authentication at all.
+    user_id = request.user_uid
+    user_email = request.user_email or f"{user_id}@daemonclient.uz"
 
-    # ── Idempotency guard ────────────────────────────────────────────────────
+    # ── Idempotency guard (atomic) ───────────────────────────────────────────
     # Creating a bot+channel takes 30-90s (BotFather conversation) and Render's
     # free tier cold-starts for up to a minute on top. Users WILL click again.
-    # Without this guard every extra click created another bot+channel and the
-    # last writer won (orphaning the rest). Rules:
+    # Rules:
     #   - config already complete  -> report success, create nothing
     #   - setup started <4 min ago -> 202 "in progress", create nothing
-    #   - otherwise                -> take the lock and proceed
+    #   - otherwise                -> claim the lock transactionally and proceed
     user_config_ref = db.collection(
         f"artifacts/default-daemon-client/users/{user_id}/config"
     ).document("telegram")
     try:
-        existing_doc = user_config_ref.get()
-        existing = existing_doc.to_dict() if existing_doc.exists else None
+        status, existing = claim_setup_lock(user_config_ref)
     except Exception as e:
-        print(f"[startSetup] config pre-read failed for {user_id}: {e}")
-        existing = None
-    if existing:
-        if existing.get("botToken") and existing.get("botUsername") and existing.get("channelId"):
-            return jsonify({"status": "already_configured"})
-        started_at = existing.get("setup_started_at")
-        if started_at is not None:
-            try:
-                age = time.time() - started_at.timestamp()
-            except Exception:
-                age = 0
-            if age < 240:
-                return jsonify({"status": "in_progress"}), 202
-    # Take (or refresh a stale) lock BEFORE the slow work begins, so a parallel
-    # request sees it immediately.
-    user_config_ref.set({"setup_started_at": firestore.SERVER_TIMESTAMP}, merge=True)
+        print(f"[startSetup] lock claim failed for {user_id}: {e}")
+        return jsonify({"error": {"message": "Could not acquire the setup lock — please retry."}}), 500
+    if status == "already_configured":
+        return jsonify({"status": "already_configured"})
+    if status == "in_progress":
+        return jsonify({"status": "in_progress"}), 202
 
     available_bots = get_available_bots()
     if not available_bots:
+        try:
+            user_config_ref.update({"setup_started_at": firestore.DELETE_FIELD})
+        except Exception:
+            pass
         query_err = get_last_bot_query_error()
         return jsonify({"error": {
             "message": "No available worker bots to process the request.",
@@ -484,16 +579,61 @@ def start_setup_endpoint():
             "hint": "If query_error mentions an index, Firestore needs a composite index on (is_active ASC, last_used ASC) for the userbots collection."
         }}), 500
 
+    # Any partial progress from a previous failed attempt (bot already created,
+    # channel missing, …) — resume from it instead of re-creating resources.
+    checkpoint = dict(existing) if existing else {}
+
     async def run_setup_flow():
         failures = []
-        for bot_creds in available_bots:
+        resume_created_by = checkpoint.get("createdBy")
+        has_bot_checkpoint = bool(checkpoint.get("botToken") and checkpoint.get("botUsername"))
+        bots = list(available_bots)
+        # A half-created bot belongs to the userbot that ran /newbot (only the
+        # owner can transfer it later) — try that userbot first on resume.
+        if has_bot_checkpoint and resume_created_by:
+            bots.sort(key=lambda b: 0 if b["doc_id"] == resume_created_by else 1)
+
+        for bot_creds in bots:
             bot_doc_id = bot_creds["doc_id"]
+            is_resume = has_bot_checkpoint and bot_doc_id == resume_created_by
+            if has_bot_checkpoint and not is_resume:
+                print(f"[{user_id}] creator userbot {resume_created_by} unavailable — "
+                      f"orphaning half-made bot @{checkpoint.get('botUsername')} and starting fresh with {bot_doc_id}")
+                # Clear the stale partial fields so a crash mid-fresh-attempt
+                # can never resume against the dead userbot's bot/channel.
+                try:
+                    user_config_ref.update({
+                        "botToken": firestore.DELETE_FIELD,
+                        "botUsername": firestore.DELETE_FIELD,
+                        "channelId": firestore.DELETE_FIELD,
+                        "invite_link": firestore.DELETE_FIELD,
+                        "setup_stage": firestore.DELETE_FIELD,
+                    })
+                except Exception:
+                    pass
+            attempt_checkpoint = checkpoint if is_resume else {}
+
+            lock = _userbot_lock(bot_doc_id)
+            if not lock.acquire(timeout=300):
+                failures.append({"bot": bot_doc_id, "error": "busy (another setup in progress)"})
+                continue
+            bot_ref = db.collection("userbots").document(bot_doc_id)
+            try:
+                bot_ref.update({"busy_until": time.time() + 300})
+            except Exception:
+                pass
             client = TelegramClient(StringSession(bot_creds["session_string"]), bot_creds["api_id"], bot_creds["api_hash"])
             try:
                 await client.start(password=lambda: TELETHON_2FA_PASSWORD)
-                bot_token, bot_username, channel_id, invite_link = await _create_resources_with_userbot(client, user_id, user_email)
 
-                user_config_ref = db.collection(f"artifacts/default-daemon-client/users/{user_id}/config").document("telegram")
+                def save_checkpoint(fields):
+                    user_config_ref.set({**fields, "createdBy": bot_doc_id}, merge=True)
+
+                bot_token, bot_username, channel_id, invite_link = await _create_resources_with_userbot(
+                    client, user_id, user_email,
+                    checkpoint=attempt_checkpoint, save=save_checkpoint,
+                )
+
                 user_config_ref.set({
                     "botToken": bot_token,
                     "botUsername": bot_username,
@@ -501,42 +641,66 @@ def start_setup_endpoint():
                     "invite_link": invite_link,
                     "ownership_transferred": False,
                     "createdBy": bot_doc_id
-                })
-                db.collection("userbots").document(bot_doc_id).update({'last_used': firestore.SERVER_TIMESTAMP, 'status': 'healthy'})
-                return jsonify({"status": "success"})
+                }, merge=True)
+                try:
+                    user_config_ref.update({
+                        "setup_started_at": firestore.DELETE_FIELD,
+                        "setup_stage": firestore.DELETE_FIELD,
+                    })
+                except Exception:
+                    pass
+                bot_ref.update({'last_used': firestore.SERVER_TIMESTAMP, 'status': 'healthy', 'busy_until': 0})
+                print(f"[{user_id}] Setup complete: @{bot_username} / {channel_id}")
+                return
 
             except UserDeactivatedBanError as e:
-                db.collection("userbots").document(bot_doc_id).update({'is_active': False, 'status': 'banned'})
+                bot_ref.update({'is_active': False, 'status': 'banned'})
                 failures.append({"bot": bot_doc_id, "error": "banned"})
                 print(f"[{bot_doc_id}] BANNED: {e}")
                 continue
             except Exception as e:
                 err_str = f"{type(e).__name__}: {str(e)[:300]}"
-                db.collection("userbots").document(bot_doc_id).update({'status': f'error: {err_str[:200]}', 'error_count': firestore.Increment(1)})
+                bot_ref.update({'status': f'error: {err_str[:200]}', 'error_count': firestore.Increment(1)})
                 failures.append({"bot": bot_doc_id, "error": err_str})
                 print(f"[{bot_doc_id}] FAILED: {err_str}")
-                import traceback; traceback.print_exc()
+                traceback.print_exc()
                 continue
             finally:
+                try:
+                    bot_ref.update({'busy_until': 0})
+                except Exception:
+                    pass
                 if client.is_connected(): await client.disconnect()
+                lock.release()
 
-        # Release the idempotency lock — nothing was created, so the user's
-        # retry must be allowed immediately instead of waiting out the 4 min.
-        try:
-            user_config_ref.update({"setup_started_at": firestore.DELETE_FIELD})
-        except Exception:
-            pass
-        return jsonify({
-            "error": {"message": "All available worker bots failed.", "failures": failures, "bot_count": len(available_bots)}
-        }), 500
+        # Every pool userbot failed. If a PARTIAL checkpoint exists (bot made,
+        # channel not), KEEP the lock+checkpoint so the next attempt resumes
+        # instead of creating a second bot; the lock's 4-min age gates retries.
+        # Only a truly empty attempt releases the lock immediately.
+        latest = user_config_ref.get()
+        latest_data = latest.to_dict() if latest.exists else None
+        if not (latest_data and latest_data.get("botToken")):
+            try:
+                user_config_ref.update({"setup_started_at": firestore.DELETE_FIELD})
+            except Exception:
+                pass
+        print(f"[{user_id}] All worker bots failed: {failures}")
 
-    return asyncio.run(run_setup_flow())
+    # Run the slow Telethon flow in a background thread and answer 202 now.
+    # Blocking the request for 30-90s starved the single web worker (health
+    # checks + every other user 502'd), tripped proxy/worker timeouts mid-
+    # creation (orphaning bots), and made the signup page hang for minutes —
+    # which is exactly when users refresh and click again. The client already
+    # polls Firestore for the finished config, so it needs no response body.
+    threading.Thread(target=lambda: asyncio.run(run_setup_flow()), daemon=True).start()
+    return jsonify({"status": "started"}), 202
 
 @app.route("/finalizeTransfer", methods=["POST"])
+@check_auth
 def finalize_transfer_endpoint():
-    data = request.get_json().get("data", {})
-    user_id = data.get("uid")
-    if not user_id: return jsonify({"error": {"message": "Missing uid."}}), 400
+    # uid from the verified token — the body-supplied uid let anyone trigger an
+    # ownership transfer of a victim's channel (to whichever human joined it).
+    user_id = request.user_uid
 
     async def run_finalization():
         config_ref = db.collection(f"artifacts/default-daemon-client/users/{user_id}/config").document("telegram")
@@ -618,17 +782,22 @@ def register_file():
         return jsonify({'error': str(e)}), 500
 
 @app.route("/addPhotosBot", methods=["POST"])
+@check_auth
 def add_photos_bot_endpoint():
     """
     Takes a user-provided bot token and adds it as admin to their existing channel.
     This gives the photos feature its own bot for rate-limit separation.
+
+    uid from the verified token — the old body-supplied uid let an attacker add
+    THEIR OWN bot as admin to a victim's storage channel (full read/delete of
+    the victim's stored files) knowing nothing but the victim's uid.
     """
-    data = request.get_json().get("data", {})
-    user_id = data.get("uid")
+    data = (request.get_json(silent=True) or {}).get("data", {})
+    user_id = request.user_uid
     photos_bot_token = data.get("bot_token")
 
-    if not user_id or not photos_bot_token:
-        return jsonify({"error": {"message": "Missing uid or bot_token."}}), 400
+    if not photos_bot_token:
+        return jsonify({"error": {"message": "Missing bot_token."}}), 400
 
     # Validate the bot token format
     if ":" not in photos_bot_token:

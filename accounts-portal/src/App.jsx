@@ -568,12 +568,24 @@ function SignupPage() {
       }
       const idToken = await user.getIdToken()
 
-      // Call Render backend to start setup
+      // Kick the automated Telegram setup in the BACKGROUND. Two hard rules
+      // learned from the double-bot bug:
+      //  1. Set the in-flight lock BEFORE the request — SetupPage's guards
+      //     read it; the old unlocked call here plus a click on /setup was
+      //     the double-bot recipe.
+      //  2. Never await the full response — the server holds it for the whole
+      //     30-90s creation, and a signup spinner that hangs for minutes is
+      //     exactly what makes users refresh and re-trigger.
       try {
-        await fetch(`${RENDER_BACKEND}/startSetup`, {
+        localStorage.setItem(`dc_setup_inflight_${user.uid}`, String(Date.now()))
+        fetch(`${RENDER_BACKEND}/startSetup`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${idToken}` },
           body: JSON.stringify({ data: { uid: user.uid, email: user.email } }),
+          keepalive: true,
+        }).catch(() => {
+          // Request never reached the server → release so /setup can retry now.
+          localStorage.removeItem(`dc_setup_inflight_${user.uid}`)
         })
       } catch (setupErr) {
         console.warn('Setup call failed, will retry on setup page:', setupErr)
@@ -804,9 +816,10 @@ function SetupPage() {
         // Mark in-flight BEFORE the call so a reload mid-creation can't re-trigger.
         localStorage.setItem(inflightKey, String(Date.now()))
         startTicker()
+        const idToken = await auth.currentUser.getIdToken()
         const response = await fetch(`${RENDER_BACKEND}/startSetup`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${idToken}` },
           body: JSON.stringify({ data: { uid, email: auth.currentUser.email } }),
         })
         const result = await response.json().catch(() => ({}))
@@ -891,9 +904,14 @@ function SetupPage() {
       .onSnapshot((doc) => {
         setSnapshotReady(true)
         const data = doc.exists ? (doc.data() || {}) : null
-        // ANY presence (even just botToken from an in-flight /startSetup) means
-        // the bot/channel exist and we must NEVER call /startSetup again.
-        setDocExists(!!(data && data.botToken))
+        // ANY presence of botToken (even partial) means the bot exists and we
+        // must NEVER call /startSetup again. A FRESH setup_started_at lock
+        // (written by the server before the slow creation) counts too — during
+        // the 30-90s creation window the doc has no botToken yet, and treating
+        // that window as "nothing exists" armed the button for a second create.
+        const startedAt = data?.setup_started_at?.toDate ? data.setup_started_at.toDate().getTime() : 0
+        const lockFresh = !!startedAt && Date.now() - startedAt < 240000
+        setDocExists(!!(data && (data.botToken || lockFresh)))
         const complete = !!(data && data.botToken && data.botUsername && data.channelId)
         if (!complete) return
         setAlreadyConfigured(true)
@@ -903,6 +921,25 @@ function SetupPage() {
       })
     return () => unsubscribe()
   }, [navigate])
+
+  // Auto-resume: if a creation is already in flight (signup fired it, a
+  // reload, or another tab), enter the waiting/polling flow instead of showing
+  // an armed button — clicking that button during the creation window was the
+  // main double-bot path. handleStartAutomatedSetup skips the POST when
+  // in-flight and just polls for the finished config.
+  const autoResumed = useRef(false)
+  useEffect(() => {
+    if (autoResumed.current || !snapshotReady || alreadyConfigured || isLoading) return
+    const uid = auth.currentUser?.uid
+    if (!uid) return
+    const startedTs = parseInt(localStorage.getItem(`dc_setup_inflight_${uid}`) || '0', 10)
+    const recentlyStarted = startedTs && Date.now() - startedTs < 240000
+    if (docExists || recentlyStarted) {
+      autoResumed.current = true
+      handleStartAutomatedSetup()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [snapshotReady, docExists, alreadyConfigured, isLoading])
 
   const handleLogout = async () => {
     await auth.signOut()
@@ -1249,9 +1286,10 @@ function OwnershipPage() {
       channel: { status: 'pending', message: 'Attempting to transfer channel ownership...' },
     })
     try {
+      const idToken = await auth.currentUser.getIdToken()
       const response = await fetch(`${RENDER_BACKEND}/finalizeTransfer`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${idToken}` },
         body: JSON.stringify({ data: { uid: auth.currentUser.uid } }),
       })
       const result = await response.json()

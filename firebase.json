@@ -105,7 +105,7 @@
           "headers": [
             {
               "key": "Cache-Control",
-              "value": "public, max-age=86400"
+              "value": "public, max-age=3600"
             }
           ]
         },
@@ -119,7 +119,7 @@
           ]
         },
         {
-          "source": "_app/version.json",
+          "source": "/index.html",
           "headers": [
             {
               "key": "Cache-Control",
@@ -128,43 +128,7 @@
           ]
         },
         {
-          "source": "_app/env.js",
-          "headers": [
-            {
-              "key": "Cache-Control",
-              "value": "no-cache, no-store, must-revalidate"
-            }
-          ]
-        },
-        {
-          "source": "service-worker.js",
-          "headers": [
-            {
-              "key": "Cache-Control",
-              "value": "no-cache, no-store, must-revalidate"
-            }
-          ]
-        },
-        {
-          "source": "app.html",
-          "headers": [
-            {
-              "key": "Cache-Control",
-              "value": "no-cache, no-store, must-revalidate"
-            }
-          ]
-        },
-        {
-          "source": "index.html",
-          "headers": [
-            {
-              "key": "Cache-Control",
-              "value": "no-cache, no-store, must-revalidate"
-            }
-          ]
-        },
-        {
-          "source": "/",
+          "source": "/service-worker.js",
           "headers": [
             {
               "key": "Cache-Control",
@@ -183,16 +147,65 @@
         "**/node_modules/**"
       ],
       "rewrites": [
-        { "source": "/login", "destination": "/app.html" },
-        { "source": "/dashboard", "destination": "/app.html" },
-        { "source": "**", "destination": "/index.html" }
+        {
+          "source": "/login",
+          "destination": "/app.html"
+        },
+        {
+          "source": "/dashboard",
+          "destination": "/app.html"
+        },
+        {
+          "source": "**",
+          "destination": "/index.html"
+        }
       ],
       "headers": [
-        { "source": "/sw.js", "headers": [ { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" } ] },
-        { "source": "/index.html", "headers": [ { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" } ] },
-        { "source": "/app.html", "headers": [ { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" } ] },
-        { "source": "/login", "headers": [ { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" } ] },
-        { "source": "/dashboard", "headers": [ { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" } ] }
+        {
+          "source": "/sw.js",
+          "headers": [
+            {
+              "key": "Cache-Control",
+              "value": "no-cache, no-store, must-revalidate"
+            }
+          ]
+        },
+        {
+          "source": "/index.html",
+          "headers": [
+            {
+              "key": "Cache-Control",
+              "value": "no-cache, no-store, must-revalidate"
+            }
+          ]
+        },
+        {
+          "source": "/app.html",
+          "headers": [
+            {
+              "key": "Cache-Control",
+              "value": "no-cache, no-store, must-revalidate"
+            }
+          ]
+        },
+        {
+          "source": "/login",
+          "headers": [
+            {
+              "key": "Cache-Control",
+              "value": "no-cache, no-store, must-revalidate"
+            }
+          ]
+        },
+        {
+          "source": "/dashboard",
+          "headers": [
+            {
+              "key": "Cache-Control",
+              "value": "no-cache, no-store, must-revalidate"
+            }
+          ]
+        }
       ]
     },
     {
