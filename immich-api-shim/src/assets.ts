@@ -723,15 +723,15 @@ async function fetchTelegramThumb(
 }
 
 // HEIC can't be thumbnailed by Telegram, nor decoded in-Worker (libheif is far
-// too heavy for the 10ms free CPU limit). The Python backend (Render, real CPU)
-// decodes it via pillow-heif. We POST the raw HEIC and get back a downscaled
-// JPEG, which the caller encrypts + stores like any other thumb. Auth reuses
-// the user's Firebase idToken (the backend verifies it). Returns null on any
-// failure → caller falls back to serving the original.
-const HEIC_CONVERT_URL = 'https://daemonclient-elnj.onrender.com/convertHeicThumbnail';
-async function convertHeicThumbViaBackend(heicBytes: ArrayBuffer, idToken: string): Promise<ArrayBuffer | null> {
+// too heavy for the 10ms free CPU limit). A processor with real CPU decodes it
+// via pillow-heif. PRIVACY RULE (operator decision 2026-07-21): plaintext user
+// bytes must NEVER transit shared operator infrastructure — conversion runs
+// ONLY against a PER-USER processor URL from the user's own config
+// (config/telegram.heicConvertUrl). No configured URL → no conversion → the
+// manual fix flow remains the path. Returns null on any failure.
+async function convertHeicThumbViaBackend(heicBytes: ArrayBuffer, idToken: string, convertUrl: string): Promise<ArrayBuffer | null> {
   try {
-    const res = await fetch(HEIC_CONVERT_URL, {
+    const res = await fetch(convertUrl, {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${idToken}`, 'Content-Type': 'application/octet-stream' },
       body: heicBytes,
@@ -1336,10 +1336,15 @@ async function handleUploadImpl(request: Request, env: Env, uid: string, idToken
             let thumbBytes: ArrayBuffer | null = null;
             let tmpMsgId: number | null = null;
             if (isHeic) {
-              // Telegram can't thumbnail HEIC — decode it on the Python backend
-              // (real CPU) and get a JPEG back. No Telegram temp-send needed.
-              thumbBytes = await convertHeicThumbViaBackend(rawData, idToken);
-              if (thumbBytes) console.log(`[Upload] HEIC converted to JPEG via backend for ${fileName}`);
+              // Telegram can't thumbnail HEIC. Convert ONLY when this user has
+              // their own processor configured — plaintext bytes never go to
+              // shared operator infrastructure. Otherwise leave thumb-less;
+              // /api/assets/pending-thumbnail-fix + the manual fix flow cover it.
+              const heicUrl = (config as any)?.heicConvertUrl;
+              if (heicUrl) {
+                thumbBytes = await convertHeicThumbViaBackend(rawData, idToken, heicUrl);
+                if (thumbBytes) console.log(`[Upload] HEIC converted to JPEG via per-user processor for ${fileName}`);
+              }
             } else {
               const r = await fetchTelegramThumb(botToken, channelId, rawData, fileName, mimeType);
               thumbBytes = r.thumbBytes;
@@ -2493,15 +2498,15 @@ export async function backfillExifBatch(env: Env, uid: string, idToken: string, 
   }
 }
 
-// ── Lazy HEIC thumbnail backfill ─────────────────────────────────────────────
-// HEIC grid thumbnails come from the Render backend (pillow-heif) at upload
-// time. Render's free tier SLEEPS: the first HEICs of a backup session hit a
-// cold service, conversion fails, the row stays thumb-less → the grid 404s and
-// users had to run the manual "fix" flow after every backup. This heals those
-// rows in the background with zero new infrastructure. A failed convert is
-// itself the wake-up call — Render boots from the dead request — so the next
-// cycle (sync/timeline fire every few minutes during use) finds it warm and
-// converts. Undecodable files are stamped heicThumbChecked=1 so nothing loops.
+// ── Lazy HEIC thumbnail backfill (per-user processor ONLY) ───────────────────
+// Heals thumb-less HEIC rows in the background — but ONLY for users who have
+// configured their OWN converter (config/telegram.heicConvertUrl). Without it
+// this is fully dormant: plaintext user bytes must never transit shared
+// operator infrastructure, so the manual fix flow remains the default path.
+// For users WITH a processor: free-tier hosts sleep, and a failed convert is
+// itself the wake-up call — the next cycle (sync/timeline fire every few
+// minutes during use) converts against a warm service. Undecodable files are
+// stamped heicThumbChecked=1 so nothing loops.
 let heicThumbBackfillComplete = false;
 let heicThumbBackfillRunning = false;
 let lastHeicThumbBackfill = 0;
@@ -2522,6 +2527,21 @@ export async function backfillHeicThumbBatch(env: Env, uid: string, idToken: str
   let subrequests = 0;
 
   try {
+    // PRIVACY GATE first: this backfill may run ONLY for users who configured
+    // their OWN processor (config/telegram.heicConvertUrl). Plaintext photo
+    // bytes must never transit shared operator infrastructure — without a
+    // per-user URL the backfill is fully dormant (no downloads, no queries).
+    const config = await getCachedConfig<any>(env, uid, idToken, 'telegram');
+    subrequests++;
+    const heicConvertUrl = config?.heicConvertUrl;
+    if (!heicConvertUrl) {
+      heicThumbBackfillComplete = true;
+      return;
+    }
+    const botToken = config?.botToken || config?.bot_token;
+    const channelId = config?.channelId || config?.channel_id;
+    if (!botToken || !channelId) return;
+
     await ensureDeduplicationSchema(env.DB);
     const rows = (await env.DB.prepare(
       `SELECT * FROM photos
@@ -2538,12 +2558,6 @@ export async function backfillHeicThumbBatch(env: Env, uid: string, idToken: str
       heicThumbBackfillComplete = true;
       return;
     }
-
-    const config = await getCachedConfig<any>(env, uid, idToken, 'telegram');
-    subrequests++;
-    const botToken = config?.botToken || config?.bot_token;
-    const channelId = config?.channelId || config?.channel_id;
-    if (!botToken || !channelId) return;
     const adapter = new D1Adapter(env.DB);
     let serverKey: CryptoKey | null | undefined; // fetched lazily, once
 
@@ -2583,12 +2597,11 @@ export async function backfillHeicThumbBatch(env: Env, uid: string, idToken: str
         if (isServerZke && serverKey) data = await decryptChunk(data, serverKey);
 
         subrequests++;
-        const jpeg = await convertHeicThumbViaBackend(data, idToken);
+        const jpeg = await convertHeicThumbViaBackend(data, idToken, heicConvertUrl);
         if (!jpeg) {
-          // Cold/unreachable Render — that request just woke it. Leave the row
-          // unchecked and end this cycle; the next one converts against a warm
-          // service.
-          console.log('[HeicThumbBackfill] convert backend unavailable — woke it, retrying next cycle');
+          // Cold/unreachable processor — that request just woke it. Leave the
+          // row unchecked and end this cycle; the next one converts warm.
+          console.log('[HeicThumbBackfill] processor unavailable — woke it, retrying next cycle');
           break;
         }
 
