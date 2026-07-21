@@ -117,16 +117,30 @@ describe('multi-chunk video range stitching (handleOriginal)', () => {
     expect(firstMismatch(await bodyBytes(res), FULL.slice(TOTAL - 1000))).toBeNull();
   });
 
-  it('caps an open-ended bytes=0- request at the serving window', async () => {
+  it('streams the FULL file for an open-ended bytes=0- request (native players treat a truncated 206 as EOF)', async () => {
     const res = await handleOriginal(makeRequest('bytes=0-'), env, 'u1', 'vid1', 'tok');
     expect(res.status).toBe(206);
-    const cr = res.headers.get('Content-Range')!;
-    const m = cr.match(/^bytes 0-(\d+)\/(\d+)$/)!;
-    expect(parseInt(m[2], 10)).toBe(TOTAL);
-    const end = parseInt(m[1], 10);
+    expect(res.headers.get('Content-Range')).toBe(`bytes 0-${TOTAL - 1}/${TOTAL}`);
+    expect(res.headers.get('Content-Length')).toBe(String(TOTAL));
     const body = await bodyBytes(res);
-    expect(body.length).toBe(end + 1);
-    expect(firstMismatch(body, FULL.slice(0, end + 1))).toBeNull();
+    expect(firstMismatch(body, FULL)).toBeNull();
+  });
+
+  it('streams an open-ended range from mid-file (a seek) to the end', async () => {
+    const start = 20_000_000;
+    const res = await handleOriginal(makeRequest(`bytes=${start}-`), env, 'u1', 'vid1', 'tok');
+    expect(res.status).toBe(206);
+    expect(res.headers.get('Content-Range')).toBe(`bytes ${start}-${TOTAL - 1}/${TOTAL}`);
+    expect(firstMismatch(await bodyBytes(res), FULL.slice(start))).toBeNull();
+  });
+
+  it('streams a large explicit range spanning all three chunks byte-identically', async () => {
+    const start = 1000;
+    const end = 44_000_000;
+    const res = await handleOriginal(makeRequest(`bytes=${start}-${end}`), env, 'u1', 'vid1', 'tok');
+    expect(res.status).toBe(206);
+    expect(res.headers.get('Content-Range')).toBe(`bytes ${start}-${end}/${TOTAL}`);
+    expect(firstMismatch(await bodyBytes(res), FULL.slice(start, end + 1))).toBeNull();
   });
 
   it('serves a mid-file range entirely inside chunk 2', async () => {

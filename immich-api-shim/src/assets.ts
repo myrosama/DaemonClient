@@ -2000,56 +2000,80 @@ export async function handleOriginal(request: Request, env: Env, uid: string, as
         return json({ message: 'Invalid range', requested: `${start}-${end}`, totalSize }, 416);
       }
 
-      // Cap the served window. Native mobile video players (ExoPlayer/AVPlayer)
-      // open playback with `Range: bytes=0-`, i.e. they ask for the ENTIRE file.
-      // Fulfilling that allocates `new Uint8Array(totalSize)` below — for a
-      // multi-hundred-MB video that blows the Worker's 128MB memory limit and
-      // the Worker (and the app's player) crash. Returning a smaller 206 than
-      // requested is valid HTTP: the player simply requests the next window.
-      // Browsers tolerate it too, so this fixes mobile without regressing web.
-      const MAX_RANGE_BYTES = 8 * 1024 * 1024; // 8 MB per response
-      if (end - start + 1 > MAX_RANGE_BYTES) end = start + MAX_RANGE_BYTES - 1;
-
-      // Chunk-align large windows: a window that straddles two 19MB chunks
-      // costs TWO Telegram downloads before the first byte goes out, which is
-      // exactly when mobile players time out (single-chunk videos played fine,
-      // multi-chunk ones didn't). Trimming to the current chunk's end keeps
-      // every large 206 behind ONE chunk download — and that chunk is cached,
-      // so the player's next sequential window is nearly free. Small explicit
-      // ranges (≤2MB, e.g. moov probes) still get exactly what they asked for.
-      const lastByteOfStartChunk = (Math.floor(start / chunkSize) + 1) * chunkSize - 1;
-      if (end > lastByteOfStartChunk && end - start + 1 > 2 * 1024 * 1024) {
-        end = lastByteOfStartChunk;
+      // Small explicit ranges (moov probes, header sniffs) stay buffered and
+      // byte-exact. Everything larger is served as a STREAMED 206 covering the
+      // FULL requested range. This distinction is load-bearing for the mobile
+      // app: native players (ExoPlayer/AVPlayer) open playback with
+      // `bytes=0-` and treat a truncated 206 as end-of-file — the old
+      // 8MB/chunk-end caps made multi-chunk videos play their first window
+      // then freeze in the app, while browsers (which politely re-request the
+      // remainder) kept working. Streaming holds at most ~2 chunks in memory,
+      // so the 128MB isolate cap that motivated the old truncation never binds.
+      const SMALL_RANGE = 2 * 1024 * 1024;
+      if (end - start + 1 <= SMALL_RANGE) {
+        const firstChunkIdx = Math.floor(start / chunkSize);
+        const lastChunkIdx = Math.min(Math.floor(end / chunkSize), chunks.length - 1);
+        const parts2: Uint8Array[] = [];
+        let bytesCollected = 0;
+        const neededBytes = end - start + 1;
+        for (let i = firstChunkIdx; i <= lastChunkIdx && bytesCollected < neededBytes; i++) {
+          const chunkData = await getChunk(chunks[i]);
+          const chunkStart = i * chunkSize;
+          const sliceStart = Math.max(start - chunkStart, 0);
+          const sliceEnd = Math.min(end - chunkStart + 1, chunkData.byteLength);
+          parts2.push(new Uint8Array(chunkData, sliceStart, sliceEnd - sliceStart));
+          bytesCollected += sliceEnd - sliceStart;
+        }
+        const body = new Uint8Array(neededBytes);
+        let offset = 0;
+        for (const part of parts2) {
+          body.set(part, offset);
+          offset += part.length;
+        }
+        headers['Content-Range'] = `bytes ${start}-${end}/${totalSize}`;
+        headers['Content-Length'] = neededBytes.toString();
+        return new Response(body, { status: 206, headers });
       }
 
-      // Calculate which chunks we need for this byte range
+      // Free-plan invocations get ~50 subrequests and each chunk costs 2
+      // (getFile + download). 20 chunks ≈ 380MB per response covers everything
+      // today's upload paths can produce; a larger web-chunked monster gets an
+      // honest shorter 206 at a chunk boundary (a seek reopens from there).
+      const MAX_CHUNKS_PER_RESPONSE = 20;
       const firstChunkIdx = Math.floor(start / chunkSize);
+      const lastAllowedByte = Math.min(totalSize - 1, (firstChunkIdx + MAX_CHUNKS_PER_RESPONSE) * chunkSize - 1);
+      if (end > lastAllowedByte) end = lastAllowedByte;
       const lastChunkIdx = Math.min(Math.floor(end / chunkSize), chunks.length - 1);
-
-      // Download only the required chunks and extract the requested bytes
-      const parts2: Uint8Array[] = [];
-      let bytesCollected = 0;
       const neededBytes = end - start + 1;
 
-      for (let i = firstChunkIdx; i <= lastChunkIdx && bytesCollected < neededBytes; i++) {
-        const chunkData = await getChunk(chunks[i]);
-        const chunkStart = i * chunkSize;
-        const sliceStart = Math.max(start - chunkStart, 0);
-        const sliceEnd = Math.min(end - chunkStart + 1, chunkData.byteLength);
-        parts2.push(new Uint8Array(chunkData, sliceStart, sliceEnd - sliceStart));
-        bytesCollected += sliceEnd - sliceStart;
-      }
-
-      const body = new Uint8Array(neededBytes);
-      let offset = 0;
-      for (const part of parts2) {
-        body.set(part, offset);
-        offset += part.length;
-      }
+      const { readable, writable } = new TransformStream();
+      const pump = async () => {
+        const writer = writable.getWriter();
+        try {
+          // Pipeline: fetch chunk i+1 from Telegram while chunk i's bytes
+          // drain to the client at playback speed — the chunk-boundary stalls
+          // that tripped player watchdogs disappear. Awaiting writer.write
+          // gives real backpressure, so memory stays ~2 chunks.
+          let pending = getChunk(chunks[firstChunkIdx]);
+          for (let i = firstChunkIdx; i <= lastChunkIdx; i++) {
+            const chunkData = await pending;
+            if (i < lastChunkIdx) pending = getChunk(chunks[i + 1]);
+            const chunkStart = i * chunkSize;
+            const sliceStart = Math.max(start - chunkStart, 0);
+            const sliceEnd = Math.min(end - chunkStart + 1, chunkData.byteLength);
+            await writer.write(new Uint8Array(chunkData, sliceStart, sliceEnd - sliceStart));
+          }
+          await writer.close();
+        } catch (e) {
+          writer.abort(e).catch(() => { /* client gone */ });
+        }
+      };
+      const pumping = pump();
+      env.waitUntil?.(pumping);
 
       headers['Content-Range'] = `bytes ${start}-${end}/${totalSize}`;
       headers['Content-Length'] = neededBytes.toString();
-      return new Response(body, { status: 206, headers });
+      return new Response(readable, { status: 206, headers });
     } else {
       // No range — stream all chunks
       const stream = new ReadableStream({

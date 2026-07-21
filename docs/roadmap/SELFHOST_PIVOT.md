@@ -58,7 +58,7 @@ The script is interactive, idempotent, and resumable (state file in `.selfhost-s
 2. **Telegram**: prompt for bot token (they make the bot at @BotFather — README has a 60-second walkthrough with screenshots) + channel id; script verifies with `getMe` + a test `sendMessage`/`deleteMessage` to the channel, tells them exactly what permission is missing if it fails.
 3. **Cloudflare**: `wrangler login` (OAuth — no pasted API tokens unless they insist via `CLOUDFLARE_API_TOKEN`); script creates D1, applies the canonical `MIGRATION_SQL`, deploys the worker with bindings + vars, prints the `workers.dev` URL (custom domain optional).
 4. **Auth/config store**: default = **their own Firebase project** (script drives `firebase projects:create` + enables email auth + deploys `firestore.rules` + writes the config docs). This keeps today's code paths unchanged. A later milestone can offer "no-Firebase" mode (worker-local auth in D1), but do NOT block the pivot on that refactor.
-5. **HEIC processor (optional)**: choice of (a) Render blueprint (`render.yaml` in repo — one-click), (b) Vercel/Cloud Run container (same Flask app, Dockerfile provided), (c) skip — photos still work; HEIC grid thumbs absent until they add one (the backfill picks them up whenever it appears).
+5. **HEIC/media processor (optional)**: choice of (a) Render blueprint (`render.yaml` in repo — one-click), (b) Vercel/Cloud Run container (same Flask app, Dockerfile provided), (c) skip — photos still work; HEIC grid thumbs absent until they add one (the backfill picks them up whenever it appears).
 6. **Web apps**: deploy photos/drive/portal builds to their CF Pages (free) — or run locally (`npm run dev`) for the fully-offline flavor.
 7. Print a summary card: all URLs, where secrets live, how to update.
 
@@ -76,6 +76,31 @@ Inventory (verify each before deleting — several dirs look dead but aren't):
 
 **README structure** (the repo's face): what DaemonClient is (one paragraph + screenshot), how it works (the per-user diagram above), managed quickstart (link), self-host quickstart (the one script), architecture doc link, contributing guide, security policy (how to report), license. Docs live in `docs/` — the roadmap files already there are a good base.
 
+## 4b. DECIDED (2026-07-21): per-user media processor via one-click Render
+
+Operator decision — this is the plan of record for HEIC + video thumbnails:
+
+- **Privacy rule (enforced in code since shim `2177f7698abb`)**: plaintext user
+  bytes NEVER transit shared operator infrastructure. The shim converts HEIC
+  only against `config/telegram.heicConvertUrl` — a per-user URL. No URL →
+  dormant → manual fix flow. The old hardcoded operator-Render call is gone.
+- **Managed onboarding gets one more step**: after the Cloudflare step, a
+  "Deploy your processor" button → Render's *Deploy-to-Render* blueprint link
+  (repo `render.yaml`, prefilled) → user signs into THEIR OWN (free) Render
+  account → one click → their instance URL is saved to
+  `config/telegram.heicConvertUrl`. Boom. Their photos only ever touch their
+  own box.
+- **The processor app** (extend `backend-server`-style Flask, but a SLIM
+  standalone app — no Telethon/setup code): `/convertHeicThumbnail` (exists) +
+  `/extractVideoPoster` (new: ffmpeg first-frame JPEG) + later
+  `/extractMotionPhoto` (Samsung embedded video) and small-video H.264
+  renditions. Auth: verify the user's Firebase idToken; optionally pin an
+  `OWNER_UID` env var so an instance serves exactly one user.
+- The already-built `backfillHeicThumbBatch` (dormant) lights up per-user the
+  moment their URL lands; a sibling video-poster backfill follows the same
+  pattern. Cold starts are handled (failed convert = wake-up call, next cycle
+  converts warm).
+
 ## 5. photos.daemonclient.uz → Google-Photos-grade seamlessness
 
 Honest gap list, ordered by user-visible impact:
@@ -86,6 +111,7 @@ Honest gap list, ordered by user-visible impact:
 4. **Android motion photos** — embedded video is not extracted (needs real CPU; candidate job for the per-user processor).
 5. **Sharing** — cross-user shared albums are BUILT but held for security review (branch worktree).
 6. **>100MB mobile videos** — deferred (CF body cap; needs chunked upload in an app fork).
+7. **Mobile multi-chunk video playback — ROOT CAUSE FOUND 2026-07-21, fix built (NOT yet deployed)**: the app's native players (ExoPlayer/AVPlayer) treat a truncated 206 as end-of-file; the worker capped range responses at 8MB/chunk-end, so >19MB videos played their first window and froze (browsers re-request politely → web worked). Fix in `assets.ts`: large ranges are now STREAMED 206s covering the full requested range (≤2 chunks in memory, next-chunk pipelined from Telegram while the current one drains — chunk-boundary stalls gone). Proven byte-perfect in `range-stitch.test.ts`. Deploy = the standard 4-step shim pipeline. The >100MB upload cap is the OTHER half of "mobile videos don't work" and stays deferred.
 
 ## 6. Security actions ONLY THE OWNER can do (do these first)
 
