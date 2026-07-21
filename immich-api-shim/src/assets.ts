@@ -10,7 +10,7 @@ import { sha1Base64OfFile, Sha1, bytesToBase64 } from './sha1';
 import { extractExif, type PhotoExif } from './exif';
 import { StoreZipWriter } from './zip';
 import { toAssetManifest } from './asset-manifest';
-import { earlyDedupDecision } from './upload-dedup';
+import { earlyDedupDecision, videoHintFromFields } from './upload-dedup';
 import { parseUploadRequest, makeFormDataLike } from './upload-stream';
 
 // --- ZKE Crypto Implementation ---
@@ -880,11 +880,15 @@ async function handleUploadImpl(request: Request, env: Env, uid: string, idToken
     // (no second full-size copy), and the rest of this handler is unchanged via
     // the formData-shaped view. The precise dedup block further down still runs,
     // so the early check is a pure fast-path, never the sole source of truth.
-    const parsed = await parseUploadRequest(request, async (deviceAssetId, deviceId) => {
+    const parsed = await parseUploadRequest(request, async (deviceAssetId, deviceId, fields) => {
       if (!env.DB) return null;
       try {
         const rows = await new D1Adapter(env.DB).getPhotosByDeviceAsset(uid, deviceAssetId, deviceId);
-        const decision = earlyDedupDecision(rows);
+        // Media-kind hint from the filename field (arrives before the file).
+        // Load-bearing for live photos: the MOV and its still share one
+        // deviceAssetId, so a kind-blind single-row match returned the video's
+        // DTO for the still's first upload and the still was never stored.
+        const decision = earlyDedupDecision(rows, videoHintFromFields(fields));
         if (decision.short) {
           console.log(`[Upload] Early dedup (deviceAsset) ${deviceAssetId} uid=${uid} — skipped file, returning ${decision.photo.id}`);
           return json(toAssetResponseDto(D1Adapter.normalizeRow(decision.photo), uid));

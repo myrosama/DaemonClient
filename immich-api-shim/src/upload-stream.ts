@@ -58,7 +58,7 @@ export type ParseResult =
 
 export async function parseUploadRequest(
   request: Request,
-  checkEarlyDedup: (deviceAssetId: string, deviceId: string) => Promise<Response | null>,
+  checkEarlyDedup: (deviceAssetId: string, deviceId: string, fields: Map<string, string>) => Promise<Response | null>,
 ): Promise<ParseResult> {
   const fields = new Map<string, string>();
   let file: FileLike | null = null;
@@ -84,7 +84,7 @@ export async function parseUploadRequest(
       const da = fields.get('deviceAssetId') || '';
       const di = fields.get('deviceId') || '';
       if (da && di) {
-        const resp = await checkEarlyDedup(da, di);
+        const resp = await checkEarlyDedup(da, di, fields);
         if (resp) return { kind: 'dedup', response: resp };
       }
     }
