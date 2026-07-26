@@ -38,6 +38,8 @@ done.
 | 3.7 | A cached Telegram path can no longer outlive its validity; dead paths self-heal | `229cc08` |
 | 4.6a | Attach a HEIC processor, **proving** it belongs to this user | `2b15066` |
 | 2.1 + 2.2 | Delete the SQL injection route; allowlist columns so the class is closed | `5d57cde` |
+| 2.4 | **The owner gate** — one install, one owner, enforced inside `requireAuth` so every route is covered by construction | `825db6c` |
+| 1.2b | Single schema module `schema/schema.mjs` (landed early; a commit referenced it before it was tracked) | `825db6c`, fix in the next commit |
 
 236 tests, 29 files, all green. Shim went `1533a4952213` → `c34620fed144`.
 
@@ -48,9 +50,25 @@ done.
 - Browser audit of photos.daemonclient.uz.
 
 ### Next
-2.0 (owner filters on single-asset paths), 2.4 (the owner gate — now the whole
-boundary), 2.5/2.6/2.7 (sessions), then Phase 4 (the CLI), then the HEIC
-onboarding UI for hosted, then Phase 6 docs.
+- **2.0 is now optional.** With 2.4's gate in `requireAuth`, per-row owner
+  filters are defence in depth. Twenty-seven call sites, and a wrong uid at any
+  of them reads as "all my photos vanished" — do it deliberately or not at all.
+- 2.5 / 2.6 / 2.7 — sessions. 2.6 is still gated on confirming every hosted
+  worker has a `SESSION_SECRET`; `wrangler secret list --name <worker>` works,
+  but enumerating the fleet needs an API token with more scope than the
+  wrangler OAuth session carries (D1 query returned 7403).
+- The HEIC onboarding **UI**: the worker endpoint is done and verified
+  (`POST /api/server/processor`); what is missing is the portal step for hosted
+  and the `daemonclient processor` command for self-host. A Vercel deploy-button
+  URL needs no OAuth and no server, so this stays zero-cost.
+- Phase 4 (the CLI), Phase 6 (docs + Starlight site).
+
+### A trap that cost time twice
+A fix aimed at code that is never executed passes every gate. It happened to
+tasks 1.3/1.4 (dead `deploy.mjs`) and again to 1.2 (a field no client reads).
+**Grep the consumers before touching an endpoint, and make one test drive the
+real path** — several tests here now exist purely to fail if a fix is wired to
+nothing.
 
 ---
 
