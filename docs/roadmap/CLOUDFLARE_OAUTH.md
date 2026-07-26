@@ -1,3 +1,9 @@
+> **Status: hosted service only.** Self-hosting does NOT use this OAuth app.
+> It uses `wrangler login`, which is Cloudflare's own OAuth client — so a
+> self-hosted install depends on no application of ours. Cloudflare matches
+> redirect URIs exactly, so this app could not serve a localhost CLI callback
+> even if we wanted it to.
+
 # One-button Cloudflare provisioning (self-managed OAuth)
 
 Replaces "create token → copy → paste" with a single **Authorize Cloudflare**

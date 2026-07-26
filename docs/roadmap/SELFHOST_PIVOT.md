@@ -1,3 +1,8 @@
+> **Status: historical.** This is the original brief for going open-source and
+> self-hostable, kept for the reasoning behind it. For what is actually being
+> built, see [SELFHOST_CLI_DESIGN.md](SELFHOST_CLI_DESIGN.md) and
+> [../plan/MASTER_PLAN.md](../plan/MASTER_PLAN.md).
+
 # The Self-Hosting Pivot — Design & Readiness Plan
 
 *Written 2026-07-21. Status: PLANNING — hardening phase shipped first (see "What already got fixed").*

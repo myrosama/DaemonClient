@@ -1,3 +1,9 @@
+> **Status: partly superseded.** The setup-CLI portions of this document were
+> replaced by [SELFHOST_CLI_DESIGN.md](SELFHOST_CLI_DESIGN.md), which was verified
+> against how wrangler, Vercel and Firebase actually behave. The architecture
+> and decision-log sections here are still accurate. Where the two disagree,
+> the CLI design wins.
+
 # Self-hosting — architecture for review
 
 Status: **awaiting approval**. Nothing in "To build" has been written yet.
