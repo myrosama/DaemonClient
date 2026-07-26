@@ -63,9 +63,26 @@ fixture**, every single-asset route, asserting 404 for the non-owner.
 
 **Watch for:** Defence in depth. 2.1 removes today's route; this removes the class. Test with a key crafted to break out of the identifier list.
 
-### 2.3 — Stop serving key material over HTTP
+### 2.3 — REVERSED. Do not do this. Merged into 2.4.
 `server.ts` ~66-109
 
+- [x] Resolved: no code change
+
+**Both** the principles and alternatives reviews reached this independently.
+Removing `botToken` / ZKE material from `/api/server/*` would collapse the
+browser byte path onto the worker — `immich/web/src/service-worker/index.ts`
+reads those fields precisely so the worker never touches the bytes, which is the
+load Phase 3 spends eight tasks relieving. It would also make browser uploads
+fall through to `encryptionMode:'off'`, re-arming the Phase 1 plaintext bug from
+the client side in the same plan. And it deletes response fields, which
+`PARITY.md` forbids.
+
+The narrow real defect — any account on a single-worker install can read them —
+is closed by the owner gate. See 2.4.
+
+### 2.4 — The owner gate (now the whole boundary)
+`selfhost/src/commands/setup.mjs`, `deployment-service/src/index.ts`, `index.ts` router, `drive.ts:50-74`
+
 - [ ] Implemented
 - [ ] Gate 1 · Security
 - [ ] Gate 2 · Principles
@@ -73,19 +90,22 @@ fixture**, every single-asset route, asserting 404 for the non-owner.
 - [ ] Gate 4 · Works for real
 - [ ] Deployed & committed
 
-**Watch for:** **Audit the readers first.** A client may depend on a field; find out before removing it. Drive uses its own `drive_zke` path and should be unaffected — verify rather than assume.
+**Watch for:** With multi-user ruled out, this is the security boundary, not a
+supplement to one. So it goes **in the router before dispatch**, covering every
+authenticated route — a route added next year must be covered by default. Per
+handler is how one gets missed.
 
-### 2.4 — Add an owner check for single-worker installs
-`selfhost/src/commands/setup.mjs`, `server.ts`, `index.ts`
+**Fail closed**, but only where that is safe: `SELF_HOST=1` with no `owner_uid`
+must refuse and say to re-run setup. Hosted with no `owner_uid` keeps today's
+behaviour, or every existing user is locked out on deploy.
 
-- [ ] Implemented
-- [ ] Gate 1 · Security
-- [ ] Gate 2 · Principles
-- [ ] Gate 3 · Correctness
-- [ ] Gate 4 · Works for real
-- [ ] Deployed & committed
+`owner_uid` gets written in **two** places — the CLI at setup, and the
+deployment service when it provisions or force-updates. Installs predating both
+claim it on first authenticated login, once, never overwritten.
 
-**Watch for:** Hosted is one worker per user, so this is a no-op there. Must not break it. Depends on 2.3.
+Include `/api/drive/config` (GET **and** POST). On a per-user worker the telegram
+config is worker-global D1, not per-uid, so GET hands out the install's bot token
+and POST redirects all future uploads. Finding 16.
 
 ### 2.5 — Make sessions revocable
 `auth.ts`, `helpers.ts`
@@ -103,7 +123,9 @@ adding `requireAuth` first and you have handed any anonymous caller a repeatable
 one-request sign-out of the entire install. Assert it by reading the epoch back,
 not by checking a response status.
 
-Everyone gets logged out once when this ships. Say so in the commit and the release note. Self-host has no refresh path, so pick a TTL that does not force weekly logins there.
+Everyone gets logged out once when this ships. Say so in the commit and the
+release note. **TTL is 30 days for both flavours** — decided. Self-host's lack of
+a refresh path is fixed by 2.7 rather than papered over with a longer expiry.
 
 ### 2.6 — Close the public-constant signing fallback
 `selfhost-auth.ts` ~44, **`auth.ts` ~96**, `auth-security.test.ts` ~86-93
@@ -135,20 +157,6 @@ promised.** `wrangler secret list --name <worker>` reports whether
 one that cannot be enumerated as failing. Deleting this early locks users out.
 The test that currently asserts forged tokens are accepted gets flipped to assert rejection.
 
----
-
-## Exit criteria
-
-- [ ] No route returns key material or a bot token.
-- [ ] No authenticated account can read another's config.
-- [ ] Sessions can be revoked; tokens are bounded.
-- [ ] No forged token is accepted anywhere.
-- [ ] The test suite asserts each of the above, and fails if the protection is removed.
-
-## Notes during implementation
-
-_(append as you go — surprises, decisions, anything the plan got wrong)_
-
 ### 2.7 — Give self-host the same silent refresh hosted has
 `helpers.ts` ~94, `auth.ts`. Depends on 2.5 AND 2.6.
 
@@ -171,3 +179,17 @@ combination does.
 Why it matters: mobile backup runs in the background, so an expired session does
 not prompt for login — it silently stops backing up. A short TTL without refresh
 would manufacture the exact failure this plan exists to remove.
+
+---
+
+## Exit criteria
+
+- [ ] No route returns key material or a bot token.
+- [ ] No authenticated account can read another's config.
+- [ ] Sessions can be revoked; tokens are bounded.
+- [ ] No forged token is accepted anywhere.
+- [ ] The test suite asserts each of the above, and fails if the protection is removed.
+
+## Notes during implementation
+
+_(append as you go — surprises, decisions, anything the plan got wrong)_

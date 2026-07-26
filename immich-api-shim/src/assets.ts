@@ -170,20 +170,61 @@ async function decryptChunk(encryptedChunk: ArrayBuffer, key: CryptoKey): Promis
   return crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, encrypted.buffer);
 }
 
-async function getEncryptionKey(env: Env, uid: string, idToken: string): Promise<CryptoKey | null> {
-  if (env.DB) {
-    const adapter = new D1Adapter(env.DB);
-    const zkeConfig = await adapter.getZkeConfig();
-    if (zkeConfig && zkeConfig.enabled && zkeConfig.password && zkeConfig.salt) {
-      return deriveKey(zkeConfig.password, zkeConfig.salt);
-    }
-  } else {
-    const zkeConfig = await firestoreGet(env, uid, 'config/zke', idToken);
-    if (zkeConfig && zkeConfig.enabled && zkeConfig.password && zkeConfig.salt) {
-      return deriveKey(zkeConfig.password, zkeConfig.salt);
-    }
+/** Encryption is switched on, but the key material to do it is missing.
+ *
+ *  This is NOT the same as encryption being off, and conflating the two is what
+ *  caused the bug this class exists to stop. See `getEncryptionKey`.
+ */
+export class EncryptionUnavailableError extends Error {
+  constructor(where: string) {
+    super(
+      `Encryption is enabled for this install but its key material is missing (${where}). ` +
+      `Refusing rather than storing your file unencrypted. ` +
+      `Run \`daemonclient doctor\` to generate the missing keys.`,
+    );
+    this.name = 'EncryptionUnavailableError';
   }
-  return null;
+}
+
+/** The AES key for server-side encryption, or `null` when there deliberately
+ *  is none.
+ *
+ *  This function used to return `null` for two completely different situations:
+ *  "encryption is off, store plaintext" and "encryption is on but we cannot
+ *  do it". Every caller treats a null key as the former, so the latter meant a
+ *  file was written to Telegram in the clear, under its real name, while
+ *  `/api/assets/zke-status` went on reporting the install as encrypted. Silent,
+ *  and not retroactively fixable once the file is in the channel.
+ *
+ *  The broken state is not hypothetical: the migration seeds
+ *  `zke_mode='server', zke_enabled='1', zke_password='', zke_salt=''` and
+ *  relies on a *second* step to fill the last two. The hosted provisioner runs
+ *  that step (`deployment-service/src/index.ts:334-338`); the self-host CLI
+ *  never did — that is finding §1, and Task 1.3 fixes the seeding side.
+ *
+ *  So the two cases are now distinguished:
+ *    - `enabled` is false, or there is no config at all → `null`. Plaintext, on
+ *      purpose. Task 1.2 makes `zke-status` say so honestly.
+ *    - `enabled` is TRUE but password or salt is empty → throw. The config
+ *      claims encryption; we cannot deliver it; the only wrong answer is to
+ *      quietly store the file anyway.
+ */
+async function getEncryptionKey(env: Env, uid: string, idToken: string): Promise<CryptoKey | null> {
+  const zkeConfig = env.DB
+    ? await new D1Adapter(env.DB).getZkeConfig()
+    : await firestoreGet(env, uid, 'config/zke', idToken);
+
+  if (!zkeConfig || !zkeConfig.enabled) return null;
+
+  if (!zkeConfig.password || !zkeConfig.salt) {
+    const missing = [
+      !zkeConfig.password && 'password',
+      !zkeConfig.salt && 'salt',
+    ].filter(Boolean).join(' and ');
+    throw new EncryptionUnavailableError(`no ${missing}`);
+  }
+
+  return deriveKey(zkeConfig.password, zkeConfig.salt);
 }
 
 export async function handleAssets(request: Request, env: Env, path: string, url: URL): Promise<Response> {
@@ -1605,6 +1646,22 @@ async function handleUploadImpl(request: Request, env: Env, uid: string, idToken
 
     return json(toAssetResponseDto(photo, uid));
   } catch (e: any) {
+    // Encryption was asked for and cannot be done. This is a configuration
+    // fault, not a transient one, so say exactly that instead of burying it in
+    // "Internal upload error" — and do NOT let the client's retry loop hammer
+    // it, because every retry fails identically until a human fixes the keys.
+    if (e instanceof EncryptionUnavailableError) {
+      console.error('[Upload] refused:', e.message);
+      // Retry-After is deliberately long. This does not clear on its own — it
+      // clears when a human fixes the keys — and the mobile app retries failed
+      // uploads on its own schedule. Without a hint, a backup of a few thousand
+      // photos becomes a few thousand identical failures against a worker that
+      // is already in a bad state.
+      return new Response(
+        JSON.stringify({ message: e.message, code: 'encryption_unavailable' }),
+        { status: 503, headers: { 'Content-Type': 'application/json', 'Retry-After': '3600' } },
+      );
+    }
     console.error('Upload handler error:', e?.message, e?.stack);
     return json({ message: 'Internal upload error', error: e?.message }, 500);
   }

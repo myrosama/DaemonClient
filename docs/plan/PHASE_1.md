@@ -39,15 +39,15 @@ was reachable from the second consumer.
 
 ## Tasks
 
-### 1.1 — Make encryption fail closed
+### 1.1 — Make encryption fail closed ✅ DONE (shim `0ac7fc2b4938`)
 `assets.ts` `getEncryptionKey` (~173-187), call site (~1063)
 
-- [ ] Implemented
-- [ ] Gate 1 · Security
-- [ ] Gate 2 · Principles
-- [ ] Gate 3 · Correctness
-- [ ] Gate 4 · Works for real
-- [ ] Deployed & committed
+- [x] Implemented
+- [x] Gate 1 · Security
+- [x] Gate 2 · Principles
+- [x] Gate 3 · Correctness
+- [x] Gate 4 · Works for real
+- [x] Deployed & committed
 
 **Watch for:** the "encryption deliberately off" case must keep working. Three
 states, not two: off, on-and-working, on-but-broken.
@@ -134,3 +134,50 @@ the options are. Do not bury it.
 ## Notes during implementation
 
 _(append as you go — surprises, decisions, anything the plan got wrong)_
+
+---
+
+## 1.1 — notes from doing it
+
+**The bug was slightly different from the plan's description, in a way that
+mattered.** The plan said to keep the "off" case working. But at the upload site
+there *is* no distinct off case: `isServerZke = !isClientZke`, so `mode:'off'`
+takes the **server** branch too and reaches `getEncryptionKey` like everything
+else. Had the fix keyed on mode, deliberate-plaintext installs would have been
+refused along with broken ones.
+
+So the split is on `enabled`, not on mode:
+- `enabled` false, or no config at all → `null`, plaintext, on purpose.
+- `enabled` true but password or salt empty → **throw**.
+
+Absent config deliberately does NOT throw. The central worker serves users who
+never provisioned their own worker and may have no config row; absent config is
+not a claim to be encrypting, and refusing there would have broken working users
+to fix a bug they do not have.
+
+**Nothing about the encryption itself was touched** — `deriveKey`,
+`encryptChunk`, `decryptChunk`, chunking and the Telegram send are exactly as
+they were. The change is which of two situations a null return meant.
+
+**Retry-After: 3600 on the refusal.** Added during Gate 1. This fault does not
+clear on its own, and the app retries failed uploads on its own schedule — a
+few thousand queued photos would otherwise become a few thousand identical
+failures against a worker already in a bad state.
+
+**Read paths now throw too** (thumbnail, original, the two backfill jobs). On a
+broken install those photos were undecryptable anyway and were being served as
+corrupt bytes; an error is more honest. Both background jobs are dispatched
+through `waitUntil(... .catch(...))`, verified, so a throw there logs and stops
+rather than failing the request.
+
+**Two test-harness traps worth remembering**, neither a product bug:
+- `vi.spyOn(fetch).mockResolvedValue(new Response(...))` returns ONE shared
+  Response; the second `.json()` reads a consumed body and the upload stalls in
+  its retry loop. Use `mockImplementation` and build a fresh Response per call.
+- The Telegram send pacer keeps a token bucket per bot in module scope, so tests
+  sharing a bot token drain it and wait on a rate limiter unrelated to what they
+  are testing. Vary the token per test.
+
+**Not verified live:** an actual upload. That needs a session on a real install,
+which means the operator's phone or browser. What is verified live is that all
+three workers are serving and auth is intact.
