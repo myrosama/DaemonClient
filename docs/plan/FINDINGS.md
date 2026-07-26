@@ -629,3 +629,51 @@ operation; no 4xx/5xx, CORS failures or mixed content; CORS correctly scoped to
 secrets in any of the 64 photos-origin bundles; the service worker registers and
 activates cleanly; no horizontal overflow at 390×844; all internal and external
 links 200; `robots.txt` and `sitemap.xml` present and correct.
+
+## 22 — The per-worker session secret is stored in Firestore in cleartext · HIGH · **open**
+
+Found 2026-07-27 while looking for a Cloudflare token in
+`artifacts/default-daemon-client/users/{uid}/config/cloudflare`.
+
+That document stores, side by side:
+
+- `refreshToken` — **encrypted** (`encryptToken`, `deployment-service/src/index.ts:226`)
+- `sessionSecret` — **plaintext**
+
+The session secret is the HMAC key that signs every session token for that
+user's worker. It exists specifically so a session cannot be forged: finding §4
+was about sessions being signed with a public constant, and per-install secrets
+were the fix. Storing the fix in cleartext, in a document the user's own
+`idToken` can read, gives most of that ground back.
+
+**The escalation chain, all of it already in the code:**
+
+1. A session token is `base64(payload).signature` (`auth.ts:28`). The payload is
+   **not encrypted** and contains the user's Firebase `idToken` *and*
+   `refreshToken` (`auth.ts:89-96`).
+2. So anyone who obtains a session token — any XSS on the origin, anything that
+   can read Cache Storage where the web app persists it (audit finding §21),
+   any log that captured it — can base64-decode it and take the Firebase
+   refresh token.
+3. That refresh token mints fresh `idToken`s indefinitely.
+4. An `idToken` reads this Firestore document.
+5. Which yields `sessionSecret` — and from there sessions for that worker can be
+   forged forever, with no further access to anything.
+
+Step 5 is what turns a stolen session into permanent, self-renewing access.
+Without it, the damage is bounded by the refresh token being revocable.
+
+**Fix, in order of value:**
+
+- Encrypt `sessionSecret` at rest exactly as `refreshToken` already is. One call
+  to the function next to it. Note this makes it unreadable to the *client*,
+  which is correct — nothing client-side needs it; the worker gets it as a
+  binding at deploy time.
+- Stop putting the Firebase `refreshToken` in the session payload. It is the
+  root of the chain and the payload is world-readable to anyone holding the
+  token.
+- Task 2.5's session epoch would let a compromised secret be retired instead of
+  being permanent.
+
+Confirmed against the live document for the operator's own account. The value is
+not reproduced here.
