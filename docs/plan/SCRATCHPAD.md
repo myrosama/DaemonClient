@@ -2,52 +2,47 @@
 
 Rewritten after every task. Read `docs/MASTER_PLAN.md` first, then this.
 
-## Now
-Autonomous run 2026-07-27, on branch `autonomous/selfhost-vercel-and-cleanup`
-(NOT pushed — held for operator review). Whole-repo discovery done + independently
-verified. Working through the safe, high-value tasks.
+## State
+Autonomous run 2026-07-27 complete for this session. Branch
+`autonomous/selfhost-vercel-and-cleanup` — **7 commits, NOT pushed** (held for
+operator review). Everything green.
 
-## Done this run (each independently reviewed before commit)
-- [x] **1.1** Processor Render → Vercel across setup.mjs / processor.mjs /
-      doctor.mjs / status.mjs / SELF_HOSTING.md. Also fixed a request-killing bug
-      (FIREBASE_PROJECT_ID was told to be left blank; convert.js 401s every
-      request when unset) and removed false video-thumbnail claims. Review: SHIP.
-      Commit 03cb81c.
-- [x] **0.1** Deleted dead `daemonclient-immich-bridge/` (mock worker) and
-      `local-server/` (dev scrap). Review: SHIP. Commit 77c0d0a.
-- [x] **0.2** `@types/node` (dev only) → `tsc --noEmit` clean; tsconfig types
-      array untouched so no Node globals leak into worker source. 261 tests pass.
-      Review: SHIP. Commit 5fcd85f.
-- [x] **0.3** Reconciled reference docs: `/validate-cf-token` is authenticated
-      now (was fixed in 29d61e0), `daemonclient-auth` added as a live component,
-      Drive corrected to "not an Immich fork", takeover downgraded (FINDINGS §23),
-      processor known-issue marked fixed. (this commit)
+## Done this run (each independently gate-reviewed by a separate agent before commit)
+| Commit | Task | What |
+|---|---|---|
+| 77c0d0a | 0.1 | delete dead mock worker `daemonclient-immich-bridge/` + `local-server/` |
+| 5fcd85f | 0.2 | `@types/node` (dev) → `tsc --noEmit` clean; tsconfig types untouched |
+| 03cb81c | 1.1 | processor Render→Vercel; fixed the "leave FIREBASE_PROJECT_ID blank" request-killer; removed false video claims |
+| 04b866c | —  | fresh MASTER_PLAN + this scratchpad |
+| 8705829 | 0.3 | reconcile REPO_MAP/API/FINDINGS/HANDOFF (validate-cf-token authed, daemonclient-auth live, Drive not a fork, §23 takeover downgrade) |
+| 749a138 | 1.1b | processor Edge→Node runtime + `processor/test/handler.test.mjs` (5 tests) |
+| b4d19a8 | 0.4c | delete dead `landing-page/` + `daemonclient-desktop/` |
 
-## In progress
-- [~] **1.1b** Processor Edge → Node runtime (libheif WASM ~1.5MB > Vercel Edge
-      1MB Hobby cap). `convert.js` now exports `{ fetch }` (Vercel Node form);
-      added `processor/test/handler.test.mjs` (4 tests pass). Independent review
-      RUNNING. NOT yet committed. Deploy verification (a real `vercel deploy`)
-      needs the operator — flagged.
+Self-hosting processor path is now correct end-to-end: right platform (Vercel),
+right runtime (Node, for the CPU-heavy WASM decode), right env var (project id
+required), honest capabilities (HEIC-only), and tested.
 
-## Queue (safe, next)
-- [ ] **0.4** README / CONTRIBUTING / SECURITY accuracy for a public repo.
-
-## Deferred (need operator / live verification — documented in MASTER_PLAN)
-- **2.1** refuse telegram-config/zke-config when !env.DB (marginal value; safe but
-  won't deploy a live-worker change unsupervised).
-- **2.2** retire APP_IDENTIFIER signing fallback (subtle; breaks login on the
-  secret-less shared worker if done naively — design + operator deploy).
-- **1.2** SW `DEFAULT_WORKER_URL` self-host independence (build-time config; touches
-  the Immich web build — needs a browser check).
-
-## Baseline
+## Verified green (whole branch)
 - immich-api-shim: `tsc --noEmit` CLEAN; 261 vitest tests pass.
-- selfhost: 67 tests pass. processor: 4 tests pass.
-- Live CF workers (acct 364fb59a…): immich-api (shared, no DB/secret),
-  dc-ozkv3fuz (per-user, DB+SESSION_SECRET), daemonclient-deployment,
-  daemonclient-proxy, daemonclient-auth. Prod healthy: 1485 photos, all encrypted.
+- selfhost: 67 node:test pass. processor: 5 node:test pass.
 
-## Gate policy
-Each task: independent adversarial review (separate agent) before commit. Deploy
-low-risk changes; DON'T deploy live-auth/worker changes without operator + live check.
+## 0.4 secret sweep (no code change — finding)
+No real secrets tracked. Only the public Firebase web key (hardcoded in configs +
+dead trees) and operator infra ids in HANDOFF.md. Blockers = operator decisions:
+rotate the key, templatize configs so forkers don't inherit the operator's
+Firebase project, remove/sanitize HANDOFF.md. Documented in MASTER_PLAN Phase 0.4.
+
+## Not done — needs operator or a live check (documented in MASTER_PLAN)
+- **2.2** retire APP_IDENTIFIER signing fallback — subtle: naive removal breaks
+  login on the secret-less shared worker. Design first, operator deploys.
+- **2.1** refuse telegram-config/zke-config when !env.DB — safe but marginal;
+  won't deploy a live-worker change unsupervised.
+- **1.2** SW `DEFAULT_WORKER_URL='https://api.daemonclient.uz'` self-host
+  independence. Design ready (`import.meta.env`/`$env` gate, default preserved for
+  hosted) but immich/web uses NO `import.meta.env` today — needs a real web build
+  check before touching the SW (SW breakage takes down the whole Photos web app).
+- Deploy of anything above + a real `vercel deploy` of the processor.
+
+## Next-session start
+`git checkout autonomous/selfhost-vercel-and-cleanup`, re-read MASTER_PLAN, then
+continue Phase 1 (1.2) / Phase 2 with the operator for live-auth deploys.

@@ -102,6 +102,25 @@ worker logic with strong tests, non-auth routes) deploy + verify normally.
 - **0.4** README / CONTRIBUTING / SECURITY accuracy pass for a public repo; confirm
   no tracked secrets (history scrub + key rotation stay operator-only).
 
+#### 0.4 findings — open-sourcing readiness (secret sweep, 2026-07-27)
+
+A tracked-repo sweep found **no real secrets** — no live bot tokens, no private
+keys. What's there, and why each is an *operator* decision rather than an
+overnight edit:
+
+- The **Firebase Web API key** (`AIza…`) is hardcoded in `immich-api-shim/`,
+  `deployment-service/` (wrangler.toml — the hosted config), and in dead/legacy
+  trees (`frontend/`, `daemon-cli/`). Web keys are public by design, so this is
+  not a breach. But two things want doing before open-sourcing: (a) the operator
+  still wants this key rotated (it's in git history), and (b) a forker should not
+  inherit the operator's Firebase project — configs should read the key from an
+  env/placeholder, not hardcode it. Not changed here: editing the live
+  `wrangler.toml` values would disturb the running deploy.
+- **`HANDOFF.md`** carries the operator's Cloudflare account id and D1 database id
+  (not secrets, but operator-specific infra) plus a since-corrected overstated
+  finding. It should be removed or sanitized before the repo goes public. Left in
+  place for the operator to decide, since they referenced it directly.
+
 ### Phase 1 — Finish self-hosting
 - **1.1** Processor **Render → Vercel** across `selfhost/src/commands/setup.mjs`,
   `doctor.mjs`, `processor.mjs`, and `docs/SELF_HOSTING.md`. Point at
