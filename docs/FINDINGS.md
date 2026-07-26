@@ -677,3 +677,33 @@ Without it, the damage is bounded by the refresh token being revocable.
 
 Confirmed against the live document for the operator's own account. The value is
 not reproduced here.
+
+## 23 — Re-verification 2026-07-27: the "shared-worker account takeover" is contained
+
+A handoff written for this session called the `immich-api` (shared worker)
+session forgery a **live account takeover** — anyone reading the public repo
+could forge an `APP_IDENTIFIER`-signed session and call
+`/api/server/telegram-config` / `zke-config` to steal a user's bot token and ZKE
+keys. Re-checked against the code, that last step does **not** hold:
+
+1. The forgery itself is real. `immich-api` has no `SESSION_SECRET`, so
+   `sessionScope` falls back to the public `APP_IDENTIFIER` (§4), and it has no
+   `env.DB`, so the owner gate is a no-op (`owner-gate.ts:77`). A forged
+   `APP_IDENTIFIER`-signed token is accepted there.
+2. But `immich-api` **holds no data**. With no `env.DB`, both config handlers
+   fall through to `firestoreGet` (`server.ts:90`, `cached-config.ts:28`), which
+   reads Firestore with the session's **`idToken`**. A forged session carries a
+   fake idToken, and `firestore.rules` enforce `request.auth.uid == userId`, so
+   Firestore returns 401 → the handlers return **nulls, not secrets**.
+3. Per-user `dc-*` workers carry their own `SESSION_SECRET` (verified: the
+   operator's `dc-ozkv3fuz` has it) **and** an `env.DB`, so the owner gate binds
+   there. The forgery does not verify on them.
+
+So there is no live secret leak on the deployed fleet. The genuine residual
+issue is the **latent signing fallback itself** (§4): it must be retired, but the
+naive removal breaks login verification on the secret-less shared worker, so it
+needs the design in Phase 2 of `MASTER_PLAN.md`, not a hurried patch. The
+smaller mitigation the handoff suggested — refuse `telegram-config`/`zke-config`
+when `!env.DB` — is sound defense-in-depth (the only legitimate callers are on a
+per-user worker, verified: Drive uses `workerUrl`, Photos uses the SW → per-user
+worker), and is queued as Task 2.1.

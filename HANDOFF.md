@@ -59,7 +59,8 @@ A personal photo and file cloud where **each user's data lives in their own
 Telegram channel**, with their own Cloudflare Worker and D1 for the API and
 metadata, and Firebase for login. Files are chunked at 19 MB — Telegram's
 download cap is 20 MB, so chunks are never merged — and encrypted with
-AES-256-GCM. Photos and Drive are forks of Immich.
+AES-256-GCM. Photos is a fork of Immich (web + mobile); Drive is a standalone
+React app, not a fork.
 
 Two flavours of the **same codebase**:
 

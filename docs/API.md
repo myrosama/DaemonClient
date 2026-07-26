@@ -259,13 +259,16 @@ Provisions a per-user worker. Not part of the self-hosted product.
 | POST | `/deploy-worker` | Firebase ID token |
 | POST | `/oauth/cloudflare/exchange` | Firebase ID token |
 | POST | `/auto-update` | Firebase ID token |
-| POST | `/validate-cf-token` | **none — see below** |
+| POST | `/validate-cf-token` | Firebase ID token |
 | POST | `/admin/force-update` | `X-Admin-Secret` |
 | POST/DELETE | `/admin/announce` | `X-Admin-Secret` |
 
-`/validate-cf-token` takes a Cloudflare token from an unauthenticated request
-body and forwards it to Cloudflare. That is an open validation oracle with
-`ACAO: *`, and it makes an outbound request per call. Flagged, not yet fixed.
+`/validate-cf-token` takes a Cloudflare token from the request body and forwards
+it to Cloudflare to name the account it belongs to. It **used to be
+unauthenticated** — an open validation oracle with `ACAO: *`, one outbound
+request per anonymous call. It now requires a Firebase ID token first
+(`deployment-service/src/index.ts:616`), so only a signed-in user (the setup
+wizard, its one real caller) can reach it. Fixed in commit `29d61e0`.
 
 ## The processor — `processor/`
 
