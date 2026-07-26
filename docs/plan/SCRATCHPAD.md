@@ -7,17 +7,32 @@
 
 ## Right now
 
-**State:** PLANNING COMPLETE, awaiting approval. **No task has been
-implemented.** Implementation starts only when the operator gives the word.
+**State:** PLANNING COMPLETE, awaiting approval on the rest. **One task has
+shipped** — Task 3.4, released early because the operator was actively hitting
+error 1102. Everything else waits for the word.
 
-**Last updated:** 2026-07-26.
+**Last updated:** 2026-07-26, ~21:15.
 
-**In flight:** three review agents against the master plan — security,
-principles fit, and alternatives research. Their output lands in
-`docs/plan/review/` and `docs/plan/ALTERNATIVES.md`. Findings get folded into
-the plan before implementation.
+**In flight:** two review agents — security, and alternatives research. The
+**principles review has landed and is folded in** (see the bottom of
+`MASTER_PLAN.md` for what it changed; the headline is that Task 2.3 was reversed
+because it would have broken the web media path and re-armed the Phase 1
+plaintext bug from the client side).
 
-**Next action:** fold the reviews in, present the plan, wait for approval.
+**Next action:** fold in the remaining two reviews as they land, then present
+for approval.
+
+### Task 3.4 — DONE (shim `ea08d9704ab2`, commit `1af4daa`)
+The timeline fired two background jobs per request whose budgets sum to 64
+against a cap of 50; sync had already been fixed the same way. Now rotates one
+per request. All four gates passed, tests fail without the change, deployed to
+the deployment service, the central worker, and `dc-ozkv3fuz`, verified live.
+Tick it in `PHASE_3.md`.
+
+**This is one of three causes of the 1102s.** The other two — the 19 MB
+per-chunk copies queued in `waitUntil`, and the chunk budget being wrong by 3x —
+are Tasks 3.2 and 3.3 and are NOT yet fixed. Expect 1102s to continue, less
+often.
 
 ---
 
@@ -47,7 +62,7 @@ the plan before implementation.
 
 ## Already shipped this session (deployed — do not re-plan)
 
-Worker shim went `1533a4952213` → `4927d7bf9772`.
+Worker shim went `1533a4952213` → `ea08d9704ab2`.
 
 | What | Commit |
 |---|---|
@@ -59,6 +74,9 @@ Worker shim went `1533a4952213` → `4927d7bf9772`.
 | HEAD/GET agreement, orphan motions, false live-photo pairing | `61da778` |
 | Corrected CLI design + config module + Cloudflare layer | `63141e1` |
 | Doc set organised | `889a606` |
+| Master plan, four gates, phase docs | `d9b4369` |
+| Principles review folded in | `504dc50` |
+| **Task 3.4** — timeline one job per request | `1af4daa` |
 
 ## Known-good vs stale in `selfhost/`
 

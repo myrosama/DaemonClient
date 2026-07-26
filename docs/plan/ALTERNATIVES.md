@@ -356,7 +356,121 @@ of the fallback path.
 
 ## c. Documentation site (Task 6.2)
 
-_(pending)_
+**Current/planned approach:** a new `docs-site/`, static, on Cloudflare Pages,
+rendering the markdown already in `docs/`, in the shape of Cloudflare's own
+docs. Generator unchosen — it is open question 3 in the plan.
+
+### What Cloudflare's docs are actually built with
+
+`github.com/cloudflare/cloudflare-docs`, branch `production`, read directly:
+
+- `package.json` → `"astro": "^7.0.2"`. It is an Astro site.
+- Search is `@docsearch/js` + `@docsearch/css` — Algolia DocSearch, a hosted
+  service.
+- `astro.config.ts` imports `@cloudflare/nimbus-docs`, their own in-house docs
+  framework (public on npm at 0.8.2).
+
+But read the comments in that config. They say things like *"mirrors CF's
+`autogenSections` in the Starlight config"*, *"Starlight ships a native `seti:`
+file-icon set"*, and *"...differs from Starlight's — a parity item for the
+parity gate"*. Cloudflare's docs were built on **Astro Starlight**, and Nimbus
+is the successor they are still measuring against it.
+
+So the look the operator likes is, quite literally, the Starlight look with
+Cloudflare's content in it. That settles most of the question.
+
+### Alternatives considered
+
+- **Astro Starlight** — closest to the target by construction, and it ships the
+  three specific things asked for. One-line verdict: this is the one.
+- **VitePress** — genuinely good, lighter, faster builds, has left nav, right
+  ToC, local search and copy buttons. But the nav is hand-maintained in config
+  rather than generated from the file tree, and it looks like Vue's docs, not
+  Cloudflare's. Strong runner-up.
+- **Docusaurus** — heaviest of the three, React at runtime, most configuration
+  surface, and the result looks like Docusaurus. No.
+- **mdBook** — would add a Rust toolchain to a repository that has no Rust. No
+  right-hand contents rail by default. Search is there but the typography is not
+  close. No.
+- **Nextra** — couples the docs site to Next.js, which then needs an adapter to
+  reach Cloudflare Pages. Most machinery for least gain here. No.
+- **Plain Eleventy** — you would hand-build the nav tree, the contents rail, the
+  search index and the copy buttons. That is precisely the reinvention this
+  review exists to catch. No.
+- **Material for MkDocs** — very close on look and famously low-maintenance, but
+  it puts Python in the build. Worth a mention only because it is the one option
+  outside the JS world that genuinely competes.
+- **Mintlify** — hosted product. Fails "static files, free, Cloudflare Pages".
+  No.
+- **`@cloudflare/nimbus-docs`** — 0.8.2, built around Cloudflare's own content
+  model, no outside users to speak of. Tempting because it is *the* answer to
+  "what does Cloudflare use", and wrong for the same reason. No.
+
+### Starlight, checked against the actual requirements
+
+Read from `@astrojs/starlight@0.41.4`'s dependency list on the npm registry:
+
+| Requirement | How Starlight answers it |
+|---|---|
+| Left nav tree | Built in, and it can autogenerate from the directory structure |
+| Right-hand contents rail | Built in, on by default |
+| Code blocks with copy buttons | `astro-expressive-code`, a direct dependency |
+| Search, no external service | `pagefind` + `@pagefind/default-ui`, direct dependencies. A static index built at build time. No Algolia account, nothing to sign up for, nothing to pay. |
+| Static output | `astro build` → `dist/`. Cloudflare Pages serves it. |
+| Dense, calm typography | Its default. It is where Cloudflare's came from. |
+
+Two things to plan for:
+
+- **Frontmatter.** Starlight requires a `title` in each page's frontmatter.
+  Every file in `docs/` today starts with a bare `# Heading` and has none
+  (checked: only `docs/SKILL.md` has frontmatter). Adding it is a one-line
+  change per published file — and it is the right change anyway, because nav
+  labels and ordering should be stated, not guessed at from an H1.
+- **Files outside the site directory.** Astro content collections take a
+  `loader`, and the built-in `glob()` loader accepts a `base`, so
+  `glob({ pattern: '**/*.md', base: '../docs' })` reads `docs/` in place. No
+  copying, no symlinks, no duplicated source of truth. This is the documented
+  mechanism, not a workaround.
+
+The honest cost: Starlight is still on **0.41.x**. It has been pre-1.0 for
+years, and minor bumps carry breaking changes. Pin exact versions, and expect to
+spend an afternoon on it once or twice a year. That is the price of the only
+option that gives the requested look with no custom CSS.
+
+### One scoping problem the task does not name
+
+"Source of truth stays the markdown in `docs/` — the site renders it" cannot
+mean *all* of `docs/`. Right now that tree holds `plan/`, `plan/review/`,
+`roadmap/` and `superpowers/` — internal planning, a principles review, and a
+798-line security review that names unfixed exploitable holes by file and line.
+
+Publishing those is not the intent, so Task 6.2 needs an explicit list of what
+the site renders — Getting started, Self-hosting, Architecture, API reference,
+Contributing, Security — and everything else stays out of the glob.
+
+Worth saying separately: `docs/plan/review/SECURITY_REVIEW.md` is already in a
+public repository, describing holes that are still open. A docs site would make
+that worse, but it is a problem today, before any site exists. That is the
+operator's call, not mine, but it should be a deliberate call.
+
+**Recommendation:** CHANGE TO Astro Starlight (the plan leaves it open;
+this closes it).
+
+**Why:** every other option means either building the requested layout by hand
+or accepting a layout that is recognisably someone else's. Starlight gives the
+exact look with no custom CSS, and it brings local search and code-copy buttons
+as ordinary dependencies rather than as separate integrations to wire up. The
+cost is a 0.x dependency that will break on upgrade — real, but bounded and
+predictable, and cheaper than any of the alternatives.
+
+If the 0.x versioning is a dealbreaker, take VitePress and accept that the site
+will look like VitePress.
+
+**Evidence:** fetched and read `package.json` and `astro.config.ts` from
+`raw.githubusercontent.com/cloudflare/cloudflare-docs/production`; queried the
+npm registry for `@astrojs/starlight/latest` (0.41.4, dependency list quoted
+above) and `@cloudflare/nimbus-docs` (0.8.2). Surveyed the local `docs/` tree
+with `find`/`head -1` on all 35 markdown files to check for frontmatter.
 
 ---
 
