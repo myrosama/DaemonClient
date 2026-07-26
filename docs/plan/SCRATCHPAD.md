@@ -7,95 +7,50 @@
 
 ## Right now
 
-**State:** PLANNING COMPLETE. All three reviews are in and folded in. **Waiting
-on the operator's approval to start implementation.** Two things shipped early
-because they were live problems, not plan items.
+**State:** IMPLEMENTING, autonomously. The operator granted full autonomy on
+2026-07-27: implement everything, self-test, self-audit, pass the gates without
+asking, and only reach out when finished or on something extreme.
 
-**Last updated:** 2026-07-26, ~22:00.
+**Last updated:** 2026-07-27, ~00:50.
 
-**The security review returned `reject`** — and it was right. Ten blockers, all
-folded into `MASTER_PLAN.md`; see "The security review returned reject" at the
-bottom of that file. The four that mattered:
-1. Tasks 1.3 and 1.4 edited `selfhost/src/deploy.mjs`, which **nothing imports**
-   (verified). Both would have passed all four gates and changed nothing on a
-   real install. Re-targeted at `setup.mjs` / `update.mjs` / `build.mjs`.
-2. Task 2.5 would have given an **unauthenticated** caller a global sign-out
-   switch — `handleLogout` is routed before any auth check. Reworked.
-3. Task 2.6 deleted the verifier's fallback and left the issuer's
-   (`auth.ts:96`). Both now go together.
-4. **Photos has no ownership check on any single-asset path**, and `albums` has
-   no owner column. Now Task 2.0 — but **demoted** by the operator's scope call
-   below, since its severity assumed multi-user.
+**Uploads from the mobile app are confirmed working by the operator** — that
+closes Gate 4 for tasks 1.1 and 1.2.
 
-**Scope set by the operator, 2026-07-26: one storage per user.** Multi-user is
-not being built for either flavour; it may be reconsidered later. Consequences,
-already folded in: Task 2.0 keeps the cheap half (accessor signatures) and drops
-the albums backfill; **Task 2.4's owner gate becomes the whole boundary**, so it
-must be enforced in the router across every authenticated route rather than per
-handler.
+### Live issue being chased: auto-backup shows "finished" instead of uploading
+See `FINDINGS.md` §19. Established: background backup is gated on sync
+succeeding (`background_worker.service.dart:112,132`), and "finished" means
+remainder 0 in `backup.repository.dart` — every local checksum matched a remote
+row. Empty album selection is already surfaced by the page, so that is ruled
+out. **Operator reports sync succeeds**, so the sync gate is probably not it.
+Going further needs a device log. Phase 3 is the actionable part and is being
+done.
 
-**Next action:** present the corrected plan for approval. Nothing else starts
-until then.
+### Shipped today (all deployed to deployment-service + immich-api + dc-ozkv3fuz)
 
-### Shipped early — Task 3.4 (shim `ea08d9704ab2`, commit `1af4daa`)
-The timeline fired two background jobs per request whose budgets sum to 64
-against a cap of 50; sync had already been fixed the same way. Now rotates one
-per request. All four gates passed, tests fail without the change, deployed to
-the deployment service, the central worker, and `dc-ozkv3fuz`, verified live.
+| Task | What | Commit |
+|---|---|---|
+| 1.1 | Encryption fails closed — refuse rather than store plaintext | `0b07a5a` |
+| — | Gate 3 (independent) FAILED it: backfills were permanently retiring healable rows. Fixed. | `4756a23` |
+| — | Gate 2 found the error message told hosted users to run a CLI they do not have | `49bfc4c` |
+| 1.2 | `zke-status` reports three states, not two | `af01af4` |
+| — | **Encryption toggle deleted** (operator's call; it could also destroy the key on a transient read) | `df039cd` |
+| 3.3 + 3.0 | Stop the isolate accumulating 19 MB copies and an unbounded path cache | `f677cc0` |
+| 3.7 | A cached Telegram path can no longer outlive its validity; dead paths self-heal | `229cc08` |
+| 4.6a | Attach a HEIC processor, **proving** it belongs to this user | `2b15066` |
+| 2.1 + 2.2 | Delete the SQL injection route; allowlist columns so the class is closed | `5d57cde` |
 
-**This was one of the causes of the 1102s, not the only one.** The 19 MB
-per-chunk copies queued in `waitUntil` (Task 3.3) are still there and are
-probably the dominant term. Expect 1102s to continue, less often.
+236 tests, 29 files, all green. Shim went `1533a4952213` → `c34620fed144`.
 
-The "chunk budget is wrong by 3x" line that used to sit here was **wrong**, and
-the alternatives review caught it: the body cache already short-circuits a warm
-chunk (`assets.ts:2131-2134`, shipped April), and D1 was never on the
-50-subrequest budget in the first place. See Task 3.2, which is now mostly
-"do not do this".
+### In flight (subagents)
+- Phase 1 tasks 1.2b + 1.3 — unify the schema source, seed real ZKE keys in the
+  self-host CLI. **This is the other half of 1.1**: until it lands, a
+  self-hosted install cannot upload at all, because the worker now refuses.
+- Browser audit of photos.daemonclient.uz.
 
-### Shipped early — two live vulnerabilities (shim `34ccd3fa9a39`, commit `0311248`)
-Found by the security review, exploitable while the plan was being written, so
-not deferred. Both through the four gates, both verified live.
-
-- **`daemonclient-proxy` was a fully open proxy** — any url, any caller, no
-  auth, the caller's Cookie and Authorization forwarded on, every response
-  header reflected with `ACAO: *`. The shim's `/proxy` was closed back in
-  `b0202c4`; this is a separate deployment and was missed. Both now require the
-  exact host `api.telegram.org`. The shim's `.telegram.org` **suffix** rule was
-  itself too loose — `аpi.telegram.org` with a Cyrillic "а" normalises to the
-  real subdomain `xn--pi-6kc.telegram.org` — and had **no test at all**.
-- **The bot token was logged in full** on every Telegram 429
-  (`url.substring(0, 80)` over `.../bot<TOKEN>/method`).
-
-Two more the review found are **planned, not patched**: `/api/drive/config`
-(finding 16 → Task 2.4) and the missing asset ownership checks (finding 17 →
-Task 2.0). Neither is exploitable on hosted today. With multi-user ruled out,
-the owner gate closes both; finding 17 is now defence behind it, not the fix.
-Reasoning in `FINDINGS.md`.
-
-### Update channel — designed, not built (Tasks 5.5, 5.6)
-Researched on the operator's ask. Two things found in the code:
-- **There is no Cron Trigger anywhere in this repo.**
-- **The hosted fleet updates from one place only** —
-  `accounts-portal/src/App.jsx:1744`, fired when someone loads the *accounts
-  portal*. Not Photos login. Most users never return there, which is why
-  `dc-ozkv3fuz` stalled through daily logins.
-
-Design: 5.5 puts the hosted fleet walk on a daily cron using the **master
-token** (all provisioned workers are on the operator's account; the per-user
-OAuth refresh tokens are what kept failing). 5.6 gives each self-hosted install
-a cron on **its own** worker plus a notification through **its own** Telegram
-bot. `update-check.ts` was already the right shape — anonymous GitHub poll,
-cached in their D1, no telemetry — it just had no alarm clock and no audience.
-
-**Declined:** a worker of ours that tells self-hosters to update. It would need
-to know where they are, i.e. a registry of self-hosted installs — telemetry to
-collect, a target to hold, and a P3 violation. GitHub is already the tunnel.
-
-**Deploy note:** `dc-ozkv3fuz` kept its `SESSION_SECRET` across the direct
-wrangler deploy — confirmed with `wrangler secret list --name dc-ozkv3fuz`.
-Worth re-checking after any future direct deploy, because losing it silently
-re-arms the public-constant signing fallback for that worker.
+### Next
+2.0 (owner filters on single-asset paths), 2.4 (the owner gate — now the whole
+boundary), 2.5/2.6/2.7 (sessions), then Phase 4 (the CLI), then the HEIC
+onboarding UI for hosted, then Phase 6 docs.
 
 ---
 
