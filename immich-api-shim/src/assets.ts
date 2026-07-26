@@ -70,8 +70,39 @@ const EXIF_PARSE_VERSION = 2;
 // Module-level file_path cache. Telegram file paths are valid for ~1 hour;
 // caching them avoids the getFile round-trip on every thumbnail request.
 // Shared across all requests within the same CF isolate instance.
-const filePathCache = new Map<string, { path: string; expiresAt: number }>();
+export const filePathCache = new Map<string, { path: string; expiresAt: number }>();
 const FILE_PATH_TTL_MS = 55 * 60 * 1000; // 55 min — safely under Telegram's 1-hour validity
+
+// The map above had `get` and `set` and no `delete` anywhere: expired entries
+// were read, ignored, and left in place. Cloudflare reuses an isolate across
+// requests, so it grew for the isolate's whole life — one entry per distinct
+// chunk the user ever touched. An unbounded cache in a process with no defined
+// lifetime is a leak whatever else is going on, and this one shares the 128 MB
+// that a backup run is already straining.
+export const FILE_PATH_CACHE_MAX = 2000;
+
+/** Drop expired entries, then oldest-first until under the cap.
+ *  Exported for tests — this is isolate-lifetime state and the only way to
+ *  prove it stays bounded is to drive it directly. */
+export function pruneFilePathCache(now: number): void {
+  for (const [k, v] of filePathCache) {
+    if (v.expiresAt <= now) filePathCache.delete(k);
+  }
+  // Map iterates in insertion order, so the first keys are the oldest.
+  if (filePathCache.size > FILE_PATH_CACHE_MAX) {
+    const excess = filePathCache.size - FILE_PATH_CACHE_MAX;
+    let dropped = 0;
+    for (const k of filePathCache.keys()) {
+      filePathCache.delete(k);
+      if (++dropped >= excess) break;
+    }
+  }
+}
+
+// At most one chunk-cache write held open at a time — see the note at the
+// `cache.put` call site. Module scope, so it bounds the isolate, not a request.
+let chunkCacheWritesInFlight = 0;
+const MAX_CHUNK_CACHE_WRITES = 1;
 
 // Minimal JPEG EXIF GPS extractor — scans APP1 segment for GPS IFD tags.
 // Returns decimal lat/lon or null. Best-effort; silently ignores corrupt EXIF.
@@ -2225,9 +2256,31 @@ export async function handleOriginal(request: Request, env: Env, uid: string, as
       let data = result.data!;
       if (isServerZke && key) data = await decryptChunk(data, key);
 
-      env.waitUntil?.(cache.put(ck, new Response(data.slice(0), {
-        headers: { 'Content-Type': 'application/octet-stream', 'Cache-Control': 'public, max-age=86400' }
-      })));
+      // Cache the decrypted chunk — but AT MOST ONE WRITE AT A TIME.
+      //
+      // `data.slice(0)` copies the whole chunk, up to 19 MB, and handing that
+      // copy to `waitUntil` keeps it alive after the response has been returned.
+      // A multi-chunk video fetched several chunks concurrently, so several
+      // 19 MB copies were retained at once, on top of the chunks themselves,
+      // against a 128 MB isolate cap. That is error 1102 — the invocation is
+      // killed, and the app reports it as sync or backup failure. It also
+      // explains the operator's "reopen the app and it's good for a while":
+      // a new connection lands on a fresh isolate.
+      //
+      // The cache is an optimisation, so dropping an entry is free. Skipping
+      // the write when one is already in flight bounds the retained bytes to a
+      // single chunk instead of one per concurrent fetch.
+      if (chunkCacheWritesInFlight < MAX_CHUNK_CACHE_WRITES) {
+        chunkCacheWritesInFlight++;
+        env.waitUntil?.(
+          cache
+            .put(ck, new Response(data.slice(0), {
+              headers: { 'Content-Type': 'application/octet-stream', 'Cache-Control': 'public, max-age=86400' },
+            }))
+            .catch(() => { /* best effort: a missed cache entry costs one refetch */ })
+            .finally(() => { chunkCacheWritesInFlight--; }),
+        );
+      }
       return data;
     };
 
@@ -3232,6 +3285,8 @@ async function tgGetFileUrl(botToken: string, fileId: string): Promise<{ ok: boo
   if (mem && mem.expiresAt > now) {
     return { ok: true, url: `https://api.telegram.org/file/bot${botToken}/${mem.path}` };
   }
+  // A stale entry is dead weight, and this is the only place that can notice.
+  if (mem) filePathCache.delete(fileId);
 
   // L2: CF edge cache (persists across worker restarts + shared within PoP)
   const edgeCache = (caches as any).default as Cache;
@@ -3241,6 +3296,7 @@ async function tgGetFileUrl(botToken: string, fileId: string): Promise<{ ok: boo
     if (cfHit) {
       const path = await cfHit.text();
       filePathCache.set(fileId, { path, expiresAt: now + FILE_PATH_TTL_MS });
+      pruneFilePathCache(now);
       return { ok: true, url: `https://api.telegram.org/file/bot${botToken}/${path}` };
     }
   } catch { /* edge cache unavailable — fall through */ }
@@ -3252,6 +3308,7 @@ async function tgGetFileUrl(botToken: string, fileId: string): Promise<{ ok: boo
 
   const path = data.result.file_path;
   filePathCache.set(fileId, { path, expiresAt: now + FILE_PATH_TTL_MS });
+  pruneFilePathCache(now);
   try {
     // Cache for 55 min at CF edge (well within Telegram's stated ~1 hr validity)
     edgeCache.put(cfCacheKey, new Response(path, {

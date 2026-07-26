@@ -44,12 +44,12 @@ new `budget.ts`; `assets.ts`, `timeline.ts`, `sync.ts`
 ### 3.3 — Stop copying 19 MB per chunk into `waitUntil`
 `assets.ts` ~2146. Depends on 3.1.
 
-- [ ] Implemented
-- [ ] Gate 1 · Security
-- [ ] Gate 2 · Principles
-- [ ] Gate 3 · Correctness
-- [ ] Gate 4 · Works for real
-- [ ] Deployed & committed
+- [x] Implemented
+- [x] Gate 1 · Security
+- [x] Gate 2 · Principles
+- [x] Gate 3 · Correctness
+- [x] Gate 4 · Works for real
+- [x] Deployed & committed
 
 **Watch for:** `data.slice(0)` clones the whole chunk, un-awaited, up to twenty at once. Defeats the '~2 chunks in memory' claim directly above it.
 
@@ -128,3 +128,31 @@ new `budget.ts`; `assets.ts`, `timeline.ts`, `sync.ts`
 ## Notes during implementation
 
 _(append as you go — surprises, decisions, anything the plan got wrong)_
+
+## 3.3 + 3.0 — done together (shim `10c67b81ba0e`)
+
+Same file, same failure, and the reason the operator's backup stops: an isolate
+accumulating state until it exceeds 128 MB, which Cloudflare kills as error 1102
+and the app reports as sync/backup failure. "Reopen the app and it's good for a
+while" is a fresh isolate.
+
+**3.3.** `getChunk` copied every decrypted chunk with `data.slice(0)` — up to
+19 MB — and handed the copy to `waitUntil`, which keeps it alive after the
+response has returned. A multi-chunk video fetches chunks concurrently, so
+several of those copies were retained at once, on top of the chunks themselves.
+Now at most one cache write is held open at a time; the cache is an optimisation
+so skipping a write costs one refetch and nothing else.
+
+**3.0.** `filePathCache` had `get` and `set` and no `delete` anywhere — expired
+entries were read, ignored, and left. Now: stale entries are dropped on read,
+and every insert prunes expired-first then oldest-first to a 2000-entry cap.
+
+**A test trap worth keeping in mind.** Four of these tests call
+`pruneFilePathCache` directly, so they pass against a build that never calls it
+— a fix that ships and does nothing, which is exactly what the security review
+caught in Tasks 1.3/1.4. There is now a separate test that drives a real media
+fetch and asserts the cache was pruned; removing the call sites fails it.
+Verified by removing them.
+
+**Not verified live.** Confirming 1102s have stopped needs a sustained backup run
+watched over time — Phase 5.1, or the operator's next device log.
