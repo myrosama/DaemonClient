@@ -77,3 +77,48 @@ describe('photos queries only name real columns', () => {
     });
   }
 });
+
+// ── PHOTO_COLUMNS must not drift from the real schema ───────────────────────
+//
+// savePhoto/updatePhoto filter incoming keys against PHOTO_COLUMNS before
+// interpolating them into SQL. That makes the list load-bearing in BOTH
+// directions: a name missing from it is silently dropped (a write that appears
+// to succeed and does nothing — which nearly happened to
+// telegramPlaybackChunks), and a name in it that is not a real column is a
+// filter that does not filter.
+import { PHOTO_COLUMNS } from './d1-adapter';
+
+describe('PHOTO_COLUMNS matches the schema', () => {
+  const schemaSrc = read('../../deployment-service/src/index.ts');
+
+  const realColumns = (() => {
+    const create = schemaSrc.match(/CREATE TABLE photos \(([\s\S]*?)\);/);
+    const cols = new Set<string>();
+    for (const line of (create?.[1] || '').split(',')) {
+      const name = line.trim().split(/\s+/)[0];
+      if (name && !['PRIMARY', 'FOREIGN', 'UNIQUE', 'CHECK'].includes(name)) cols.add(name);
+    }
+    // Columns added by self-healing ALTERs are just as real, and they do NOT
+    // all live beside the CREATE TABLE — telegramPlaybackChunks and purgedAt
+    // are added from the worker at runtime. Scanning only the provisioner's
+    // file makes this test declare real columns bogus.
+    for (const src of [schemaSrc, read('./migrations.ts'), read('./assets.ts')]) {
+      for (const m of src.matchAll(/ALTER TABLE photos ADD COLUMN (\w+)/g)) cols.add(m[1]);
+    }
+    return cols;
+  })();
+
+  it('finds the schema (guards against this test silently passing on nothing)', () => {
+    expect(realColumns.size).toBeGreaterThan(20);
+  });
+
+  it('lists no column that does not exist', () => {
+    const bogus = [...PHOTO_COLUMNS].filter((c) => !realColumns.has(c));
+    expect(bogus).toEqual([]);
+  });
+
+  it('omits no column that does exist', () => {
+    const missing = [...realColumns].filter((c) => !PHOTO_COLUMNS.has(c));
+    expect(missing).toEqual([]);
+  });
+});

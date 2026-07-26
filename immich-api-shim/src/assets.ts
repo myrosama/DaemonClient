@@ -453,9 +453,11 @@ export async function handleAssets(request: Request, env: Env, path: string, url
   if (path === '/api/assets/upload-plan' && request.method === 'POST') {
     return handleUploadPlan(request, env, uid, idToken);
   }
-  if (path === '/api/assets/finalize-client-upload' && request.method === 'POST') {
-    return handleFinalizeClientUpload(request, env, uid, idToken);
-  }
+  // `/api/assets/finalize-client-upload` is GONE. It spread the raw request
+  // body into savePhoto, whose column names were interpolated into SQL — so a
+  // crafted JSON KEY was arbitrary SQL for any authenticated user. It had no
+  // caller anywhere in the repo. Deleting beats hardening a dead route; the
+  // class is closed separately in d1-adapter.savePhoto.
   const chunkManifestMatch = path.match(/^\/api\/assets\/([^/]+)\/chunk-manifest$/);
   if (chunkManifestMatch && request.method === 'GET') {
     return handleChunkManifest(env, uid, chunkManifestMatch[1], idToken);
@@ -1729,26 +1731,6 @@ async function handleUploadPlan(request: Request, env: Env, uid: string, idToken
     uploadSessionId: crypto.randomUUID(),
     status: 'created'
   });
-}
-
-async function handleFinalizeClientUpload(request: Request, env: Env, uid: string, idToken: string): Promise<Response> {
-    const body = await request.json() as any;
-    const assetId = crypto.randomUUID();
-    const photo = {
-        ...body,
-        id: assetId,
-        ownerId: uid,
-        uploadedAt: new Date().toISOString(),
-    };
-
-    if (env.DB) {
-      const adapter = new D1Adapter(env.DB);
-      await adapter.savePhoto(photo);
-    } else {
-      await firestoreSet(env, uid, `photos/${assetId}`, photo, idToken);
-    }
-
-    return json(toAssetResponseDto(photo, uid));
 }
 
 async function handleChunkManifest(env: Env, uid: string, assetId: string, idToken: string): Promise<Response> {

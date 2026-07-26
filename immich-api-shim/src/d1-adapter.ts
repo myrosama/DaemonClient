@@ -61,6 +61,33 @@ export interface Album {
   albumThumbnailAssetId?: string | null;
 }
 
+/** Every column that actually exists on `photos`.
+ *
+ *  `savePhoto` builds its statement from the KEYS of the object it is given —
+ *  values are bound and safe, identifiers are interpolated. A caller that
+ *  passed user-controlled keys therefore passed user-controlled SQL. One such
+ *  caller existed (`/api/assets/finalize-client-upload`, now deleted), and the
+ *  point of this list is that the NEXT one cannot do the same by accident.
+ *
+ *  Kept in step with the canonical schema by `schema-columns.test.ts`.
+ */
+export const PHOTO_COLUMNS: ReadonlySet<string> = new Set([
+  'id', 'ownerId', 'fileName', 'fileSize',
+  'mimeType', 'width', 'height', 'duration',
+  'fileCreatedAt', 'uploadedAt', 'telegramOriginalId', 'telegramThumbId',
+  'telegramChunks', 'encryptionMode', 'thumbEncrypted', 'checksum',
+  'isHeic', 'livePhotoVideoId', 'isFavorite', 'isTrashed',
+  'visibility', 'description', 'city', 'country',
+  'thumbhash', 'telegramPreviewId', 'previewEncrypted', 'latitude',
+  'longitude', 'deviceAssetId', 'deviceId', 'make',
+  'model', 'lensModel', 'fNumber', 'focalLength',
+  'iso', 'exposureTime', 'orientation', 'dateTimeOriginal',
+  'exifChecked', 'checksumChecked', 'heicThumbChecked',
+  // Added by self-healing ALTERs rather than CREATE TABLE — just as real, and
+  // omitting them here would silently drop video playback renditions.
+  'telegramPlaybackChunks', 'purgedAt',
+]);
+
 export class D1Adapter {
   constructor(private db: D1Database) {}
 
@@ -97,9 +124,19 @@ export class D1Adapter {
     // D1 .bind() rejects `undefined` ("D1_TYPE_ERROR: Type 'undefined' not
     // supported"). Drop undefined fields entirely (the column will keep its
     // default / NULL) and coerce any other non-bindable values (NaN) to null.
-    const entries = Object.entries(photo).filter(([, v]) => v !== undefined).map(
-      ([k, v]) => [k, typeof v === 'number' && Number.isNaN(v) ? null : v] as const
-    );
+    const entries = Object.entries(photo)
+      .filter(([, v]) => v !== undefined)
+      // Drop anything that is not a real column BEFORE it reaches the SQL
+      // string. Defence in depth: the route that made this reachable is gone,
+      // but the shape that made it dangerous — identifiers from an object's
+      // keys — is still here, and this is what makes it safe by construction.
+      .filter(([k]) => {
+        if (PHOTO_COLUMNS.has(k)) return true;
+        console.warn(`[savePhoto] ignoring unknown column: ${JSON.stringify(k).slice(0, 60)}`);
+        return false;
+      })
+      .map(([k, v]) => [k, typeof v === 'number' && Number.isNaN(v) ? null : v] as const);
+    if (entries.length === 0) return;
     const keys = entries.map(([k]) => k);
     const values = entries.map(([, v]) => v);
     const placeholders = keys.map(() => '?').join(', ');
@@ -122,9 +159,11 @@ export class D1Adapter {
   // an INSERT, which fails the NOT NULL constraints (ownerId etc.) when the
   // object is partial, before the conflict-update can run.
   async updatePhoto(id: string, fields: Partial<Photo>): Promise<void> {
-    const entries = Object.entries(fields).filter(([k, v]) => k !== 'id' && v !== undefined).map(
-      ([k, v]) => [k, typeof v === 'number' && Number.isNaN(v) ? null : v] as const
-    );
+    const entries = Object.entries(fields)
+      .filter(([k, v]) => k !== 'id' && v !== undefined)
+      // Same identifier-interpolation shape as savePhoto, same guard.
+      .filter(([k]) => PHOTO_COLUMNS.has(k))
+      .map(([k, v]) => [k, typeof v === 'number' && Number.isNaN(v) ? null : v] as const);
     if (entries.length === 0) return;
     const setClause = entries.map(([k]) => `${k} = ?`).join(', ');
     const values = entries.map(([, v]) => v);
