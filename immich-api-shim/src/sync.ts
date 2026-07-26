@@ -71,9 +71,13 @@ export async function handleSyncStream(request: Request, env: Env): Promise<Resp
   // endpoint, and it counted against the same CPU/memory budget whose overrun
   // Cloudflare kills as error 1102 (the app then reports sync as failed).
   const photos = env.DB
+    // Every name here must exist in the photos table. `type` and
+    // `fileModifiedAt` were listed once and do not: SELECT * had been hiding
+    // that the code reads them as optional properties, so naming them
+    // explicitly turned every sync into "D1_ERROR: no such column".
     ? (await env.DB.prepare(
-        `SELECT id, checksum, deviceAssetId, deviceId, mimeType, type, duration,
-                fileCreatedAt, fileModifiedAt, uploadedAt, width, height,
+        `SELECT id, checksum, deviceAssetId, deviceId, mimeType, duration,
+                fileCreatedAt, uploadedAt, width, height,
                 isFavorite, livePhotoVideoId, fileName, thumbhash, visibility
          FROM photos
          WHERE ownerId = ? AND (isTrashed = 0 OR isTrashed IS NULL)
