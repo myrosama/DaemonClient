@@ -3,47 +3,47 @@
 Read `docs/MASTER_PLAN.md` first, then this.
 
 ## State
-Autonomous run 2026-07-27 on **main** (pushed). Deep in Phase 1 (self-hosting).
-Operator away, wants it FULLY finished. Gates: each run as a SEPARATE agent.
+Autonomous run 2026-07-27 on **main** (pushed). Phase 1 (self-hosting) now largely
+FUNCTIONAL. Operator away, wants it fully finished + separate-agent gates.
 
-## Committed to main this run
-- Merge 421ca3e: processor Vercel/Node + repo cleanup + fresh plan.
-- b6f6494 (1.2+1.3): Photos + Drive web apps self-hostable (build-time worker URL,
-  fail-safe, trailing-slash). 4 gate agents; their trailing-slash bug + fail-open
-  footgun fixed. Verified: self-host builds contain the given worker, ZERO operator.
-- ad5a904: Cloudflare-style docs site `docs-site/index.html` (self-hosting guide).
+## Phase 1 (self-hosting) — committed & verified this run
+- Setup script (`daemonclient setup`) already existed; its worker build path
+  VERIFIED for real (builds a 550 KB deployable bundle from source).
+- **Processor** Vercel/Node + env fix + test (merge 421ca3e).
+- **b6f6494** Photos + Drive web apps self-hostable (build-time worker URL,
+  fail-safe, trailing-slash). 4 separate gate agents.
+- **7f3c3d1 (security)** the self-host dashboard was POSTing the user's Firebase
+  idToken+refreshToken to operator auth.daemonclient.uz on every login — GATED
+  behind !IS_SELF_HOST; verified tree-shaken out of self-host build, hosted intact.
+  Also Drive isAppDomain now recognises self-host domains.
+- **57ec24e** `daemonclient web`: builds all 3 apps (hub/Photos/Drive) self-host +
+  deploys to the user's Firebase Hosting (3 sites, firebase.selfhost.json) +
+  ALLOWED_ORIGINS. assertNoOperator guard (fails closed). 2 separate gate agents
+  (security+correctness); all their findings fixed. Build orchestration verified;
+  Firebase deploy needs the user's `firebase login` (documented).
+- **ad5a904** Cloudflare-style docs site `docs-site/index.html`.
 
-## Uncommitted, UNDER GATE (2 separate agents: security + correctness)
-- `selfhost/src/commands/web.mjs` — new `daemonclient web`: builds all 3 apps
-  (dashboard/Photos/Drive) self-host + deploys to the user's Firebase Hosting
-  (3 sites) via `firebase deploy --config firebase.selfhost.json` + updates
-  ALLOWED_ORIGINS. Includes `assertNoOperator` guard (refuses to ship a build that
-  routes data to the operator). Registered in bin/daemonclient.mjs; SELF_HOSTING.md
-  "Web apps — one command" section; .gitignore firebase.selfhost.json.
-  Build orchestration VERIFIED (all 3 apps build self-host, data host absent).
-  Firebase DEPLOY itself untested (needs the user's firebase login). Awaiting gates
-  → fix → commit.
+## Self-host verified: NO operator DATA link
+Self-host builds of all 3 apps contain the user's worker and ZERO operator data
+host. accounts-portal IS the hub (self-host-aware). The `web` command wires it up.
 
-## Background: HEIC hosted feature (SEPARATE isolated worktree agent)
-Operator asked (own agent): make HEIC thumbnails automatic for HOSTED users +
-add a 3rd onboarding step (Vercel processor, most-comfortable method) in
-accounts-portal. Agent implements+tests+self-reviews on its worktree, does NOT
-deploy live. When it returns → run separate gate agents → integrate.
+## Background: HEIC hosted feature (SEPARATE isolated worktree agent — RUNNING)
+Auto HEIC thumbnails for HOSTED users + 3rd onboarding step (Vercel processor) in
+accounts-portal. Implements+tests+self-reviews on its worktree, does NOT deploy.
+When it lands → run SEPARATE gate agents → integrate. NOTE: it edits accounts-portal
+(onboarding) — I avoided editing accounts-portal further to prevent merge conflicts.
 
-## Remaining Phase 1
-- Fix+commit `web` command after gates.
-- Integrate HEIC feature after its gates.
-- **Nav-link cleanup**: accounts-portal self-host bundle still carries operator
-  PROVISIONING/nav strings (daemonclient-deployment, onrender, accounts.daemonclient.uz)
-  in unreached setup code, and drive/immich login pages have signup→accounts.daemonclient.uz.
-  Not a DATA path, but "a link to us" — make configurable/tree-shaken for full independence.
-- **1.5 real e2e test**: run CF provisioning for real (throwaway worker on operator
-  CF acct → /api/health → clean up). Telegram bot creation can't be automated.
-
-## Operator standing instructions
-- Merge to main + work on main (DONE).
-- At the FINAL open-source stage: move unneeded stuff to a PRIVATE repo (don't delete).
-- No bugs / no security / no bad design — separate agent per gate.
+## Remaining
+- Integrate HEIC feature (after its gates).
+- **Nav-link cleanup** (LOW, follow-up): self-host bundles still carry DEAD
+  operator strings in unreached provisioning/nav code (photos./app.daemonclient.uz
+  nav links, daemonclient-deployment, onrender in accounts-portal; drive/immich
+  login signup→accounts.daemonclient.uz). Not a data path. Make env-gated/tree-shaken
+  for full "nothing linked to us". Do AFTER HEIC integrates (same files).
+- **1.5** full e2e (needs Telegram bot creation — can't automate).
+- Phase 2 open-source cleanup, Phase 3 maintenance (release action, CI), Phase 4 product.
+- FINAL open-source stage: move unneeded stuff to a PRIVATE repo (operator instruction).
 
 ## Baseline green
-shim tsc clean + 261; selfhost 68; processor 5. All 3 web apps build hosted + self-host.
+shim tsc clean + 261; selfhost 68; processor 5. All 3 web apps build hosted +
+self-host clean. Worker bundle builds (550 KB).
