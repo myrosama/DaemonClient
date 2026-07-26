@@ -40,6 +40,11 @@
   const hasUnreadNotifications = $derived(notificationManager.notifications.length > 0);
 
   let zkeMode = $state<'off' | 'server' | 'client'>('off');
+  // Configured for encryption, but the keys to do it are missing. The padlock
+  // used to render from `mode` alone, so this state showed a closed lock and
+  // "Encryption: ON" over an install that was storing photos in the clear.
+  // Uploads are now refused instead, and this is how the user finds out why.
+  let zkeKeysMissing = $state(false);
   let isZkeLoading = $state(true);
 
   onMount(async () => {
@@ -53,6 +58,7 @@
       if (res.ok) {
         const data = await res.json();
         zkeMode = data.mode || 'off';
+        zkeKeysMissing = data.keyMaterialMissing === true;
       }
     } catch (e) {
       console.error('ZKE Status error', e);
@@ -169,14 +175,18 @@
         <!-- Encryption Toggle -->
         <IconButton
           shape="round"
-          color={zkeMode === 'off' ? 'secondary' : 'primary'}
+          color={zkeKeysMissing ? 'danger' : zkeMode === 'off' ? 'secondary' : 'primary'}
           variant="ghost"
           size="medium"
-          icon={zkeMode === 'off' ? mdiLockOpenVariant : mdiLock}
+          icon={zkeMode === 'off' || zkeKeysMissing ? mdiLockOpenVariant : mdiLock}
           onclick={toggleZKE}
           disabled={isZkeLoading}
           aria-label={'Toggle encryption'}
-          title={zkeMode === 'off' ? 'Encryption: OFF' : 'Encryption: ON'}
+          title={zkeKeysMissing
+            ? 'Encryption is switched on but its keys are missing — uploads are being refused. This needs fixing on the server.'
+            : zkeMode === 'off'
+              ? 'Encryption: OFF'
+              : 'Encryption: ON'}
         />
 
         <ThemeButton />

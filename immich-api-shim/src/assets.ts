@@ -295,15 +295,37 @@ export async function handleAssets(request: Request, env: Env, path: string, url
     return json({ ids: (rows.results || []).map((r: any) => r.id) });
   }
 
+  // This endpoint is what made the plaintext bug invisible: it reported
+  // `enabled` straight from the flag and never checked that the key material
+  // to honour it existed, so the UI showed a closed padlock over an install
+  // that was writing photos to Telegram in the clear.
+  //
+  // There are THREE states, not two, and the response now says which:
+  //   mode 'off'                          → deliberately unencrypted
+  //   mode 'server' + keys present        → genuinely encrypted
+  //   mode 'server' + keys missing        → BROKEN. Uploads are refused (1.1).
+  //
+  // `mode` keeps meaning "what this install is configured for" — `PARITY.md`
+  // forbids repurposing a field, and `daemonclient-drive.ts:34` branches on it
+  // to decide whether to fetch key config at all. The truth arrives as
+  // `enabled` (which no client read, so making it honest breaks nothing) plus
+  // an additive `keyMaterialMissing`, which is what a UI needs to tell "off"
+  // apart from "broken" — those want opposite messages.
   if (path === '/api/assets/zke-status' && request.method === 'GET') {
-    if (env.DB) {
-      const adapter = new D1Adapter(env.DB);
-      const zkeConfig = await adapter.getZkeConfig();
-      return json({ mode: zkeConfig?.mode || 'off', enabled: !!zkeConfig?.enabled });
-    } else {
-      const zkeConfig = await firestoreGet(env, uid, 'config/zke', idToken) || {};
-      return json({ mode: zkeConfig.mode || 'off', enabled: !!zkeConfig.enabled });
-    }
+    const cfg: any = env.DB
+      ? await new D1Adapter(env.DB).getZkeConfig()
+      : (await firestoreGet(env, uid, 'config/zke', idToken)) || {};
+
+    const mode = cfg?.mode || 'off';
+    const claimsEncryption = mode !== 'off' && !!cfg?.enabled;
+    const hasKeyMaterial = !!(cfg?.password && cfg?.salt);
+
+    return json({
+      mode,
+      // Only true when encryption can actually happen.
+      enabled: claimsEncryption && hasKeyMaterial,
+      keyMaterialMissing: claimsEncryption && !hasKeyMaterial,
+    });
   }
 
   if (path === '/api/assets/zke-toggle' && request.method === 'POST') {

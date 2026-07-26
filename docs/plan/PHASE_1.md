@@ -52,15 +52,15 @@ was reachable from the second consumer.
 **Watch for:** the "encryption deliberately off" case must keep working. Three
 states, not two: off, on-and-working, on-but-broken.
 
-### 1.2 — Stop `zke-status` claiming encryption that is not happening
+### 1.2 — Stop `zke-status` claiming encryption that is not happening · worker DONE (shim `b15dcd3618a0`), web change awaiting a build
 `assets.ts` (~236). Depends on 1.1.
 
-- [ ] Implemented
-- [ ] Gate 1 · Security
-- [ ] Gate 2 · Principles
-- [ ] Gate 3 · Correctness
-- [ ] Gate 4 · Works for real
-- [ ] Deployed & committed
+- [x] Implemented
+- [x] Gate 1 · Security
+- [x] Gate 2 · Principles
+- [x] Gate 3 · Correctness
+- [~] Gate 4 · Works for real — 198 tests green, types clean, shim deployed. **The web half is committed but NOT built/deployed**, so the padlock still renders from `mode` until photos.daemonclient.uz is rebuilt.
+- [x] Deployed & committed
 
 ### 1.3 — Seed real keys during self-host setup
 `selfhost/src/commands/setup.mjs` (~441-449), `selfhost/src/api/cloudflare.mjs`
@@ -205,3 +205,38 @@ running them myself — which I did for Gate 1, and for Gate 2 after two agent
 stalls — is a weaker version of the check, not an equivalent one.
 
 **Still open:** Gate 4's live half. Needs one real upload from a real session.
+
+## 1.2 — notes from doing it
+
+**The plan's one-liner would have fixed a field nobody reads.** It said to make
+`enabled` honest. But grepping the consumers, both of them branch on **`mode`**:
+`daemonclient-drive.ts:34` (`if (status.mode === 'server')`) and
+`NavigationBar.svelte:55` (`zkeMode = data.mode`). Nothing in the repo reads
+`enabled` at all. And the padlock — the thing a user actually sees — renders
+`mdiLock` and "Encryption: ON" whenever `mode !== 'off'`
+(`NavigationBar.svelte:172-179`). So the stated fix would have left the visible
+claim untouched.
+
+Same shape as the `deploy.mjs` mistake: correct-sounding change, aimed at
+something that is not on the live path.
+
+**What was done instead.** Three states, reported as three:
+
+| state | mode | enabled | keyMaterialMissing |
+|---|---|---|---|
+| deliberately off | `off` | false | false |
+| genuinely encrypted | `server` | true | false |
+| configured but broken | `server` | **false** | **true** |
+
+`mode` deliberately keeps meaning "what this install is configured for" —
+`PARITY.md` forbids repurposing a field, and quietly turning it into `off` would
+change what `daemonclient-drive.ts` *does*, not just what it says. The new truth
+is additive, which is what parity allows.
+
+The padlock now has a third rendering: open, `danger` colour, and a title saying
+uploads are being refused and it needs fixing on the server.
+
+**Web deploy still outstanding.** The worker change is live; the Svelte change is
+committed but photos.daemonclient.uz has not been rebuilt, so the padlock keeps
+rendering from `mode` for now. Not a regression — that is exactly what it did
+before — but 1.2 is not finished until the web is rebuilt.
