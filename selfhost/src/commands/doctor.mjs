@@ -14,6 +14,7 @@ import { c, accent, line, blank, panel, ok, fail, warn, info, hint, spinner, sym
 import { loadState, redact, checkStatePermissions, statePath, isDone } from '../state.mjs';
 import * as cf from '../api/cloudflare.mjs';
 import * as tg from '../api/telegram.mjs';
+import { ensureEncryptionKeys } from '../zke.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '../../..');
@@ -80,6 +81,35 @@ export async function runDoctor() {
   } catch (e) {
     s2.fail('Database');
     add('error', `Cannot query the database: ${e.message}`, 'Check the token has D1:Edit permission');
+  }
+
+  // ── Encryption
+  //
+  // Doctor repairs this one rather than only reporting it, because the worker's
+  // own error message sends people here by name: "Run `daemonclient doctor` to
+  // generate the missing keys" (immich-api-shim/src/assets.ts). An install set
+  // up before the CLI seeded key material has encryption enabled with nothing to
+  // encrypt with, and every upload is refused until these rows are filled.
+  const s2b = spinner('Encryption');
+  try {
+    const outcome = await ensureEncryptionKeys({
+      query: (sql, params) => cf.queryD1(
+        state.cloudflareToken, state.cloudflareAccountId, state.databaseId, sql, params),
+    });
+    if (outcome.seeded) {
+      s2b.succeed('Encryption keys generated');
+      add('warn', 'This install had no encryption keys — uploads were being refused. New keys have been generated.',
+        'Nothing else to do. Anything uploaded before this was stored unencrypted; see docs/SELF_HOSTING.md');
+    } else {
+      s2b.succeed('Encryption keys present');
+    }
+  } catch (e) {
+    // A read that fails is not a read that came back empty, so nothing was
+    // written. Rotating a live key on a network blip would make every photo
+    // already in the channel undecryptable, permanently.
+    s2b.fail('Encryption');
+    add('error', `Could not check the encryption keys: ${e.message} (nothing was changed)`,
+      'Fix the database access above, then run daemonclient doctor again');
   }
 
   // ── API

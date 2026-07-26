@@ -14,7 +14,9 @@ import { promisify } from 'node:util';
 import { c, accent, line, blank, panel, ok, fail, warn, info, hint, spinner, confirm } from '../ui.mjs';
 import { loadState, saveState, isDone } from '../state.mjs';
 import * as cf from '../api/cloudflare.mjs';
-import { buildWorkerBundle, readMigrationSql } from '../build.mjs';
+import { buildWorkerBundle } from '../build.mjs';
+import { ensureEncryptionKeys } from '../zke.mjs';
+import { MIGRATION_SQL, splitStatements } from '../../../schema/schema.mjs';
 
 const run = promisify(execFile);
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -71,8 +73,7 @@ export async function runUpdate({ silent = false } = {}) {
   // statement is CREATE/ALTER-if-missing, so this is safe to repeat.
   const s1 = spinner('Applying any new database changes');
   try {
-    const sql = readMigrationSql(REPO_ROOT);
-    for (const statement of sql.split(';').map((x) => x.trim()).filter(Boolean)) {
+    for (const statement of splitStatements(MIGRATION_SQL)) {
       await cf.queryD1(state.cloudflareToken, state.cloudflareAccountId, state.databaseId, statement)
         .catch((e) => {
           if (!/already exists|duplicate column/i.test(e.message)) throw e;
@@ -82,6 +83,26 @@ export async function runUpdate({ silent = false } = {}) {
   } catch (e) {
     s1.fail(`Schema update failed: ${e.message}`);
     return;
+  }
+
+  // Installs created before the CLI seeded key material have encryption enabled
+  // with an empty password, which the worker treats as fail-closed: every upload
+  // is refused. Repairing that here means an operator who runs `update` — the
+  // command that brings in the fix — also gets the data fix, without being told
+  // to reinstall. Keys that already exist are never rewritten (see zke.mjs).
+  const s1b = spinner('Checking encryption keys');
+  try {
+    const outcome = await ensureEncryptionKeys({
+      query: (sql, params) => cf.queryD1(
+        state.cloudflareToken, state.cloudflareAccountId, state.databaseId, sql, params),
+    });
+    s1b.succeed(outcome.seeded ? 'Encryption keys generated' : 'Encryption keys present');
+  } catch (e) {
+    // Deliberately not fatal. The keys are untouched either way, and refusing to
+    // deploy over a failed *read* would block the very update that carries the
+    // fix for whatever is broken.
+    s1b.fail(`Could not check the encryption keys: ${e.message}`);
+    warn('Nothing was changed. Run "daemonclient doctor" after this finishes.');
   }
 
   const s2 = spinner('Building');

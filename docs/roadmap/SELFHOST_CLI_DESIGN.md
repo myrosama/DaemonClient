@@ -58,7 +58,12 @@ Probe: `getMe(token)`, then `verifyChannelAccess` — which actually sends and d
 Probe `GET /accounts/{id}/d1/database?per_page=100`, match on `<worker>-db`. Absent → `POST` to create. Read `uuid`. Never parse `d1 create` stdout.
 
 ### Step 7 — Schema
-Read `MIGRATION_SQL` + `DRIVE_MIGRATION_SQL` from `deployment-service/src/index.ts`, split, and run each statement via `POST /accounts/{id}/d1/database/{uuid}/query` with real `{sql, params}` binding. Tolerate `already exists` / `duplicate column` — re-running is normal. Then verify by querying `sqlite_master` for the expected table set, so 'migrated' means observed, not assumed.
+Import `MIGRATION_SQL` from `schema/schema.mjs` — the single definition the hosted provisioner imports too — split it with `splitStatements`, and run each statement via `POST /accounts/{id}/d1/database/{uuid}/query` with real `{sql, params}` binding. Tolerate `already exists` / `duplicate column` — re-running is normal. Then verify by querying `sqlite_master` for the expected table set, so 'migrated' means observed, not assumed.
+
+> This step used to scrape the SQL out of `deployment-service/src/index.ts` as text. That is what let the two provisioners drift apart over `zke_password`; do not reintroduce it.
+
+### Step 7b — Encryption key material
+The schema seeds `zke_password` / `zke_salt` **empty** and the worker refuses uploads while they are (fail-closed, not plaintext). `selfhost/src/zke.mjs` fills them, from `setup`, `update` **and** `doctor` — existing installs are already in the broken state and need a repair path. It writes only when a successful read shows no password: a read that fails is "unknown", and unknown writes nothing, because rotating a live key makes every stored photo undecryptable.
 
 ### Step 8 — Generate and store the local secrets
 `SESSION_SECRET` and `STORAGE_KEY`: generate if absent, and never regenerate silently. Print the STORAGE_KEY warning loudly, once: lose this and files already in Telegram cannot be decrypted.

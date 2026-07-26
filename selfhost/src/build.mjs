@@ -32,26 +32,9 @@ export async function buildWorkerBundle(repoRoot) {
   return fs.readFileSync(outFile, 'utf8');
 }
 
-/** The canonical schema, read from the deployment service so self-hosted
- *  installs and managed ones always create identical tables. */
-export function readMigrationSql(repoRoot) {
-  const source = path.join(repoRoot, 'deployment-service', 'src', 'index.ts');
-  const text = fs.readFileSync(source, 'utf8');
-
-  const grab = (name) => {
-    const start = text.indexOf(`const ${name} = \``);
-    if (start < 0) return '';
-    const from = text.indexOf('`', start) + 1;
-    const to = text.indexOf('`', from);
-    return to > from ? text.slice(from, to) : '';
-  };
-
-  const photos = grab('MIGRATION_SQL');
-  if (!photos) throw new Error('could not read MIGRATION_SQL from deployment-service');
-  const drive = grab('DRIVE_MIGRATION_SQL');
-
-  // Accounts live in the operator's own Firebase project, exactly as they do
-  // on the hosted service, so there is no users table here — the schema a
-  // self-hosted install creates is identical to a managed one.
-  return [photos, drive].filter(Boolean).join('\n');
-}
+// The schema used to be recovered here, by scraping the template literal out of
+// `deployment-service/src/index.ts` with string indexes. It now lives in
+// `schema/schema.mjs`, which the deployment service imports too — so a
+// self-hosted install and a hosted one create the same tables by construction
+// rather than by two definitions happening to agree. Import it directly; the
+// scraper is gone on purpose and should not come back.

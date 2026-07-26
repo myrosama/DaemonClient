@@ -20,7 +20,9 @@ import {
 import { loadState, saveState, markDone, isDone, checkStatePermissions, statePath } from '../state.mjs';
 import * as tg from '../api/telegram.mjs';
 import * as cf from '../api/cloudflare.mjs';
-import { buildWorkerBundle, readMigrationSql } from '../build.mjs';
+import { buildWorkerBundle } from '../build.mjs';
+import { ensureEncryptionKeys } from '../zke.mjs';
+import { MIGRATION_SQL, splitStatements } from '../../../schema/schema.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '../../..');
@@ -256,9 +258,8 @@ async function stepCloudflare(state) {
 
   const s3 = spinner('Creating tables');
   try {
-    const sql = readMigrationSql(REPO_ROOT);
     // D1's HTTP query endpoint runs one statement at a time.
-    for (const statement of splitSql(sql)) {
+    for (const statement of splitStatements(MIGRATION_SQL)) {
       await cf.queryD1(token, account.id, dbId, statement).catch((e) => {
         // Re-running setup is normal; existing objects are not an error.
         if (!/already exists|duplicate column/i.test(e.message)) throw e;
@@ -281,13 +282,6 @@ async function stepCloudflare(state) {
   state.workersSubdomain = subdomain;
   markDone(state, 'cloudflare');
   saveState(state);
-}
-
-function splitSql(sql) {
-  return sql
-    .split(';')
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0 && !/^--/.test(s));
 }
 
 // ── 4. Your account ─────────────────────────────────────────────────────────
@@ -455,6 +449,24 @@ async function stepDeployWorker(state) {
     s3.succeed('Settings saved');
   } catch (e) {
     s3.fail(`Could not save settings: ${e.message}`);
+    process.exit(1);
+  }
+
+  // The schema turns encryption ON and leaves the key material empty; without
+  // this step the worker refuses every upload rather than storing your photos
+  // in the clear. Existing keys are never touched — see zke.mjs.
+  const s3b = spinner('Setting up encryption');
+  try {
+    const outcome = await ensureEncryptionKeys({
+      query: (sql, params) => cf.queryD1(
+        state.cloudflareToken, state.cloudflareAccountId, state.databaseId, sql, params),
+    });
+    s3b.succeed(outcome.seeded ? 'Encryption keys generated' : 'Encryption keys already in place');
+  } catch (e) {
+    // Stop here rather than finishing with a cheerful summary: an install whose
+    // key state is unknown cannot upload, and saying nothing would hide that.
+    s3b.fail(`Could not set up encryption: ${e.message}`);
+    hint('Nothing was changed. Check your connection, then run "daemonclient doctor".');
     process.exit(1);
   }
 
