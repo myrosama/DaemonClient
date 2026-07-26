@@ -724,6 +724,13 @@ it from unit tests.
 - **How:** new Telegram bot and channel, new Firebase project, a Cloudflare
   account, optionally Vercel. Take notes at every point of confusion — those are
   bugs in the copy, not user error.
+- **Who does what — decided.** The **operator creates the accounts** (signup
+  needs phone and captcha) and hands over the credentials; **I drive the run**
+  end to end, so every failure is observed directly rather than relayed. The
+  accounts must be genuinely disposable — nothing shared with a real one.
+- **Delete the accounts when the phase ends.** Part of the task. A throwaway
+  Cloudflare account left alive with a working token is a live credential
+  nobody is watching.
 - **Verify:** photo uploads from the mobile app, appears on the web, thumbnail
   renders, download matches byte for byte.
 - **Risk:** high — the first honest test of the whole thing.
@@ -858,13 +865,18 @@ it, and where the code lives — without asking.
 ### Task 6.2 — A documentation site
 - **What:** a browsable docs site, in the shape of Cloudflare's docs.
 - **Files:** new `docs-site/`.
+- **Generator: Astro Starlight.** Decided. Cloudflare's own docs are Astro with
+  a bespoke in-house theme — their `package.json` has no Starlight in it — so
+  copying them means owning a hand-built theme, which is precisely the "docs
+  site becomes a project of its own" risk. Starlight is the same framework with
+  the wanted shape already built.
 - **How:** the operator specifically likes the Cloudflare docs layout — a
   persistent left-hand navigation tree, a page-contents rail on the right, dense
-  and calm typography, code samples with copy buttons, and search. Build it with
-  a static generator that produces plain HTML and deploys to Cloudflare Pages
-  for free. Sections: Getting started, Self-hosting, Architecture, API
-  reference, Contributing, Security. Source of truth stays the markdown in
-  `docs/` — the site renders it, so nothing is written twice.
+  and calm typography, code samples with copy buttons, and search. Starlight
+  ships all of that; the work is content and navigation structure, not chrome.
+  Deploys to Cloudflare Pages for free. Sections: Getting started, Self-hosting,
+  Architecture, API reference, Contributing, Security. Source of truth stays the
+  markdown in `docs/` — the site renders it, so nothing is written twice.
 - **Verify:** builds clean, deploys, search works, every nav link resolves, and
   it is legible on a phone.
 - **Depends on:** 6.1
@@ -898,10 +910,14 @@ it, and where the code lives — without asking.
   hosting target, and `daemonclient-proxy` is the live `TELEGRAM_PROXY` for
   hosted users. Neither can simply be deleted. For the genuinely dead ones
   (`landing-page`, `photos`, `daemon-cli`, `daemonclient-desktop`,
-  `daemonclient-immich-bridge`, `local-server`), move to an `attic` branch so
-  nothing is lost and the front page is clean.
+  `daemonclient-immich-bridge`, `local-server`), push them to a **separate
+  private archive repo** and then delete them here.
+- **Not an `attic` branch — decided.** A branch would be publicly visible, would
+  puzzle contributors, and the history scrub would have to rewrite it too or the
+  leaked keys stay reachable from the public repo. One public repo, one branch.
 - **Verify:** hosted service unaffected after the change; `git ls-files` shows
-  only what a contributor needs.
+  only what a contributor needs; `git branch -r` shows only `main`; the archive
+  repo is private and contains what was removed.
 - **Risk:** medium — deleting something live breaks production.
 
 **Exit criteria**
@@ -922,25 +938,59 @@ it, and where the code lives — without asking.
 | Docs site becomes a project of its own | Ships with real content or not at all |
 | Removing a `/api/server` field breaks a client | 2.3 audits readers before removing |
 
-## Open questions
+## Decisions — settled by the operator, 2026-07-26
 
-1. **Session TTL after 2.5.** Self-host has no refresh path, so a short TTL
-   means frequent logins there. Thirty days, or longer for self-host only?
-2. **Phase 6.5 attic branch** — branch in this repo, or a separate archive repo?
-3. **Docs site generator.** Preference, or shall I choose for the smallest
-   maintenance burden?
-4. **Phase 5.1 throwaway accounts** — will you create them, or should the run be
-   scripted for you to execute?
-5. **Does a self-hosted install ever apply an update by itself?** (Task 5.6.)
-   The recommendation is **no**: notify loudly through the owner's own bot,
-   apply with `daemonclient update`. Auto-applying means storing a
-   deploy-capable Cloudflare token inside the worker, which turns a worker
-   compromise into a Cloudflare account compromise and makes unattended
-   `git pull` + deploy the normal path. The cost of saying no is that a lazy
-   self-hoster can sit on a known-vulnerable install indefinitely, and we cannot
-   tell — by design, since we do not know they exist. If that trade is wrong,
-   the alternative is an opt-in flag at setup that stores a **scoped**
-   deploy-only token, defaulting to off.
+No open questions remain. Implementation may start.
+
+1. **Session TTL: 30 days for both, with silent refresh on both.** Self-host
+   gets a refresh path rather than a longer expiry, so there is one number and
+   no asymmetry. That is **new Task 2.7**, and it touches token issuance while
+   2.5 and 2.6 are in flight — so it goes *after* both, and its gates are run
+   against the combined behaviour, not against 2.7 alone.
+2. **Attic: a separate private archive repo**, not a branch here. The public
+   repo keeps only `main`, contributors meet no mystery branch, and the history
+   scrub has one repo to rewrite instead of two.
+3. **Docs site: Astro Starlight.** Cloudflare's own docs are Astro with a
+   **bespoke in-house theme** — checked their `package.json`, there is no
+   Starlight in it. Matching them exactly would mean building and then owning
+   that theme, which is the "docs site becomes a project of its own" risk the
+   reviews flagged. Starlight is the same framework with the shape already
+   built: left nav, right contents rail, search, copy buttons, dark mode. We
+   write content, not chrome.
+4. **Phase 5.1: the operator creates the throwaway accounts, I drive the run.**
+   Signup needs phone and captcha, which I cannot do. They hand over
+   credentials for genuinely disposable accounts; I run setup end to end, log
+   every failure directly, fix, and re-run until clean. **Delete those accounts
+   afterwards** — that is part of the task, not an afterthought.
+5. **Self-hosted installs never auto-apply.** Confirmed. Notify through the
+   owner's own bot, apply with `daemonclient update`. No deploy-capable
+   Cloudflare token is ever stored inside a worker. The accepted cost: someone
+   can sit on a known-vulnerable install indefinitely and we cannot know, by
+   design, because we do not know they exist.
+
+### Task 2.7 — Give self-host the same silent refresh hosted has
+- **What:** remove the self-host early return in `requireAuth` so both flavours
+  renew a session the same way, then set one 30-day TTL.
+- **Files:** `immich-api-shim/src/helpers.ts` (~94), `immich-api-shim/src/auth.ts`.
+- **How:** `requireAuth` currently does `if (env && isSelfHost(env)) return
+  session;` before the expiry check, so a self-hosted session is trusted for its
+  whole TTL and its Firebase token is never renewed. A self-hosted install has
+  its own `FIREBASE_API_KEY` and the session carries a `refreshToken`, so the
+  existing refresh path works there unchanged — **first establish why that early
+  return exists** before deleting it, and say so in the task notes. If it guards
+  something real, keep the guard and narrow it.
+- **Why it matters more than it looks:** on mobile the backup runs in the
+  background. An expired session does not show a login prompt — it silently
+  stops backing up until the user next opens the app. That is the exact failure
+  mode this whole plan is trying to eliminate, so a short TTL without refresh
+  would have manufactured a new instance of it.
+- **Verify:** `src/session-refresh.test.ts` — a self-host session with an
+  expired Firebase token is renewed rather than rejected; a genuinely expired
+  *session* (past 30 days) is still rejected; a failed refresh does not fall
+  back to accepting the stale token.
+- **Depends on:** 2.5 and 2.6, both of which touch the same issuance path.
+- **Risk:** medium — it is auth code, in the phase where auth mistakes cost the
+  most. Run its gates against 2.5 + 2.6 + 2.7 together.
 
 
 ---

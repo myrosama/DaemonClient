@@ -148,3 +148,26 @@ The test that currently asserts forged tokens are accepted gets flipped to asser
 ## Notes during implementation
 
 _(append as you go — surprises, decisions, anything the plan got wrong)_
+
+### 2.7 — Give self-host the same silent refresh hosted has
+`helpers.ts` ~94, `auth.ts`. Depends on 2.5 AND 2.6.
+
+- [ ] Implemented
+- [ ] Gate 1 · Security
+- [ ] Gate 2 · Principles
+- [ ] Gate 3 · Correctness
+- [ ] Gate 4 · Works for real
+- [ ] Deployed & committed
+
+**Watch for:** `requireAuth` has `if (env && isSelfHost(env)) return session;`
+before the expiry check. **Find out why it is there before removing it.** If it
+guards something real, narrow the guard rather than deleting it — this is auth
+code in the phase where auth mistakes are most expensive.
+
+Run the gates against 2.5 + 2.6 + 2.7 **together**, not against 2.7 alone. All
+three touch issuance and verification; passing individually proves less than the
+combination does.
+
+Why it matters: mobile backup runs in the background, so an expired session does
+not prompt for login — it silently stops backing up. A short TTL without refresh
+would manufacture the exact failure this plan exists to remove.

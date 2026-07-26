@@ -103,7 +103,7 @@ re-arms the public-constant signing fallback for that worker.
 
 | File | What it is |
 |---|---|
-| `MASTER_PLAN.md` | the phased plan of record — 6 phases, 45 tasks |
+| `MASTER_PLAN.md` | the phased plan of record — 6 phases, 46 tasks |
 | `PHASE_1.md` … `PHASE_6.md` | working docs: gate checklist per task, notes as you go |
 | `GATES.md` | the four gates every task passes before commit |
 | `FINDINGS.md` | the verified backlog — every item confirmed at file:line |
@@ -169,17 +169,16 @@ Worker shim went `1533a4952213` → **`34ccd3fa9a39`**.
 - `www.daemonclient.uz` DNS does not resolve.
 - Redeploy Render for the hosted setup service (auth + double-bot fixes).
 
-## Open questions for the operator
+## Decisions — settled 2026-07-26. No open questions.
 
-1. Session TTL after Task 2.5 — self-host has no refresh path, so a short TTL
-   means frequent logins there. Thirty days, or longer for self-host only?
-2. Task 6.5 attic branch — a branch in this repo, or a separate archive repo?
-3. Docs site generator — preference, or shall I pick for lowest maintenance?
-4. Task 5.1 throwaway accounts — will you create them, or should I script the
-   run for you to execute?
-5. **Does a self-hosted install ever apply an update by itself?** (Task 5.6.)
-   Recommendation: **no** — notify through their own bot, apply with
-   `daemonclient update`. Auto-applying means storing a deploy-capable
-   Cloudflare token *inside* their worker, so a worker compromise becomes a
-   Cloudflare account compromise. Cost of saying no: a lazy self-hoster can sit
-   on a vulnerable install forever and we cannot know, by design.
+1. **Session TTL 30 days both flavours, with silent refresh on both.** Self-host
+   gets a refresh path instead of a longer expiry → **new Task 2.7**, gated
+   after 2.5 and 2.6 and reviewed together with them.
+2. **Attic = separate private archive repo**, not a branch. One public repo, one
+   branch, one thing for the history scrub to rewrite.
+3. **Docs site = Astro Starlight.** Cloudflare's docs are Astro with a *bespoke*
+   theme (checked their package.json — no Starlight), so copying them means
+   owning a theme forever. Starlight gives the same shape prebuilt.
+4. **Task 5.1: operator creates throwaway accounts, I drive the run.** Delete
+   those accounts when the phase ends — part of the task.
+5. **Self-host never auto-applies updates.** No deploy token inside a worker.
