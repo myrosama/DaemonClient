@@ -1,5 +1,6 @@
 import { CloudflareAPI } from './cloudflare-api';
 import { SHIM_BUNDLE, SHIM_VERSION } from './shim-bundle';
+import { MIGRATION_SQL } from '../../schema/schema.mjs';
 
 // Inline encryption helpers
 const IV_LENGTH = 12;
@@ -92,66 +93,13 @@ function buildShimBindings(env: Env, databaseId: string, sessionSecret?: string)
   return bindings;
 }
 
-const MIGRATION_SQL = `
-CREATE TABLE photos (
-  id TEXT PRIMARY KEY, ownerId TEXT NOT NULL, fileName TEXT NOT NULL,
-  fileSize INTEGER NOT NULL, mimeType TEXT NOT NULL, width INTEGER, height INTEGER,
-  duration TEXT, fileCreatedAt TEXT NOT NULL, uploadedAt TEXT NOT NULL,
-  telegramOriginalId TEXT, telegramThumbId TEXT, telegramChunks TEXT,
-  encryptionMode TEXT DEFAULT 'off', thumbEncrypted INTEGER DEFAULT 0,
-  checksum TEXT, isHeic INTEGER DEFAULT 0, livePhotoVideoId TEXT,
-  isFavorite INTEGER DEFAULT 0, isTrashed INTEGER DEFAULT 0,
-  visibility TEXT DEFAULT 'timeline', description TEXT, city TEXT, country TEXT,
-  thumbhash TEXT, telegramPreviewId TEXT, previewEncrypted INTEGER DEFAULT 0,
-  latitude REAL, longitude REAL,
-  deviceAssetId TEXT, deviceId TEXT,
-  make TEXT, model TEXT, lensModel TEXT, fNumber REAL, focalLength REAL,
-  iso INTEGER, exposureTime TEXT, orientation TEXT, dateTimeOriginal TEXT,
-  exifChecked INTEGER DEFAULT 0,
-  checksumChecked INTEGER DEFAULT 0,
-  heicThumbChecked INTEGER DEFAULT 0
-);
-CREATE INDEX idx_photos_uploadedAt ON photos(uploadedAt DESC);
-CREATE INDEX idx_photos_fileCreatedAt ON photos(fileCreatedAt DESC);
-CREATE INDEX idx_photos_livePhoto ON photos(livePhotoVideoId) WHERE livePhotoVideoId IS NOT NULL;
-CREATE INDEX idx_photos_favorite ON photos(isFavorite) WHERE isFavorite = 1;
-CREATE INDEX idx_photos_trashed ON photos(isTrashed);
-CREATE TABLE albums (
-  id TEXT PRIMARY KEY, albumName TEXT NOT NULL, description TEXT,
-  createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL, albumThumbnailAssetId TEXT
-);
-CREATE TABLE album_assets (
-  albumId TEXT NOT NULL, assetId TEXT NOT NULL, addedAt TEXT NOT NULL,
-  PRIMARY KEY (albumId, assetId),
-  FOREIGN KEY (albumId) REFERENCES albums(id) ON DELETE CASCADE,
-  FOREIGN KEY (assetId) REFERENCES photos(id) ON DELETE CASCADE
-);
-CREATE INDEX idx_album_assets_albumId ON album_assets(albumId);
-CREATE INDEX idx_album_assets_assetId ON album_assets(assetId);
-CREATE TABLE config (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-INSERT INTO config (key, value) VALUES ('zke_mode','server'),('zke_enabled','1'),('zke_password',''),('zke_salt','');
-CREATE TABLE upload_sessions (
-  sessionId TEXT PRIMARY KEY, status TEXT NOT NULL DEFAULT 'active',
-  createdAt TEXT NOT NULL, expiresAt TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS files (
-  id TEXT PRIMARY KEY, ownerId TEXT NOT NULL, parentId TEXT NOT NULL DEFAULT 'root',
-  type TEXT NOT NULL DEFAULT 'file', fileName TEXT NOT NULL, fileSize INTEGER DEFAULT 0,
-  fileType TEXT, messages TEXT, encrypted INTEGER DEFAULT 0,
-  encryptionMode TEXT DEFAULT 'off', uploadedAt TEXT NOT NULL, updatedAt TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_files_owner_parent ON files(ownerId, parentId);`;
-
-// Standalone Drive migration — passed as `migrationSql` to /admin/force-update so
-// existing per-user workers (provisioned before 1.2.0) get the files table + index
-// without a full reprovision. Safe to re-run (IF NOT EXISTS).
-export const DRIVE_MIGRATION_SQL = `CREATE TABLE IF NOT EXISTS files (
-  id TEXT PRIMARY KEY, ownerId TEXT NOT NULL, parentId TEXT NOT NULL DEFAULT 'root',
-  type TEXT NOT NULL DEFAULT 'file', fileName TEXT NOT NULL, fileSize INTEGER DEFAULT 0,
-  fileType TEXT, messages TEXT, encrypted INTEGER DEFAULT 0,
-  encryptionMode TEXT DEFAULT 'off', uploadedAt TEXT NOT NULL, updatedAt TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_files_owner_parent ON files(ownerId, parentId);`;
+// The schema itself lives in `schema/schema.mjs`, imported by this worker and
+// by the self-host CLI alike. It used to be a template literal right here, and
+// the CLI recovered it by scraping this file — which is how the two
+// provisioners drifted apart over the one row that mattered (see that file).
+// DRIVE_MIGRATION_SQL is re-exported because callers of /admin/force-update
+// pass it as `migrationSql`.
+export { DRIVE_MIGRATION_SQL } from '../../schema/schema.mjs';
 
 const CORS_HEADERS: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',

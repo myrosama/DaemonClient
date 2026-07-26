@@ -19,10 +19,10 @@ import path from 'node:path';
 const here = path.dirname(new URL(import.meta.url).pathname);
 const read = (p: string) => fs.readFileSync(path.join(here, p), 'utf8');
 
-/** Column names for the photos table: the CREATE TABLE in the deployment
- *  service, plus every self-healing ALTER in assets.ts. */
+/** Column names for the photos table: the CREATE TABLE in the shared schema
+ *  module, plus every self-healing ALTER in assets.ts. */
 function photoColumns(): Set<string> {
-  const deploy = read('../../deployment-service/src/index.ts');
+  const deploy = read('../../schema/schema.mjs');
   const create = deploy.split('CREATE TABLE photos (')[1]?.split(');')[0];
   expect(create, 'found CREATE TABLE photos').toBeTruthy();
 
@@ -89,7 +89,9 @@ describe('photos queries only name real columns', () => {
 import { PHOTO_COLUMNS } from './d1-adapter';
 
 describe('PHOTO_COLUMNS matches the schema', () => {
-  const schemaSrc = read('../../deployment-service/src/index.ts');
+  // The canonical schema lives in one module now (task 1.2b) — it used to be
+  // inline in the deployment service with the CLI string-scraping it out.
+  const schemaSrc = read('../../schema/schema.mjs');
 
   const realColumns = (() => {
     const create = schemaSrc.match(/CREATE TABLE photos \(([\s\S]*?)\);/);
@@ -102,7 +104,9 @@ describe('PHOTO_COLUMNS matches the schema', () => {
     // all live beside the CREATE TABLE — telegramPlaybackChunks and purgedAt
     // are added from the worker at runtime. Scanning only the provisioner's
     // file makes this test declare real columns bogus.
-    for (const src of [schemaSrc, read('./migrations.ts'), read('./assets.ts')]) {
+    // (`migrations.ts` used to be scanned here too. It was a second, never-
+    // executed copy of this schema and is gone — task 1.2b.)
+    for (const src of [schemaSrc, read('./assets.ts')]) {
       for (const m of src.matchAll(/ALTER TABLE photos ADD COLUMN (\w+)/g)) cols.add(m[1]);
     }
     return cols;

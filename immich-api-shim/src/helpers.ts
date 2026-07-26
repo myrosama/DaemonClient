@@ -1,5 +1,6 @@
 import type { Env } from './index';
 import { isSelfHost, sessionScope } from './selfhost-auth';
+import { requireOwner } from './owner-gate';
 
 /** Shared helpers for Firestore REST and auth token extraction */
 
@@ -91,6 +92,12 @@ export async function requireAuth(request: Request, env?: Env): Promise<SessionD
   if (!token.includes('.')) throw new Error('Session expired');
   session = await verifySignedSessionToken(token, sessionScope(env || ({} as Env)));
   if (!session) throw new Error('Session expired');
+
+  // One install, one owner. Enforced HERE rather than per route, so a route
+  // added later is covered by default — see owner-gate.ts for why this is the
+  // boundary rather than per-row filters.
+  if (env) await requireOwner(env, session.uid);
+
   if (env && isSelfHost(env)) return session;
 
   let idTokenExpired = false;
