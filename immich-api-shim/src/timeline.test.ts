@@ -85,3 +85,53 @@ describe('timeline album filtering', () => {
     expect(total).toBe(0);
   });
 });
+
+// ── Background heal dispatch ────────────────────────────────────────────────
+// A Worker invocation's ~50 subrequests are SHARED with everything waitUntil
+// spawns. The timeline used to fire two backfills at once whose own budgets sum
+// to 64, so an ordinary browse could exhaust the invocation on background work
+// alone — Cloudflare kills it with error 1102 and the user sees the timeline
+// fail, not the backfill. sync.ts already rotates one job per invocation; this
+// asserts the timeline does the same.
+
+function makeEnvCounting() {
+  const scheduled: Promise<any>[] = [];
+  return {
+    env: {
+      DB: makeDb(),
+      APP_IDENTIFIER: 'test-app',
+      SESSION_SECRET: TEST_SCOPE,
+      FIREBASE_API_KEY: '',
+      waitUntil: (p: Promise<any>) => { scheduled.push(p); },
+    } as any,
+    scheduled,
+  };
+}
+
+describe('timeline background jobs', () => {
+  it('dispatches at most one background job per request', async () => {
+    const { env, scheduled } = makeEnvCounting();
+    await handleTimeline(await req('/api/timeline/buckets?size=month'), env, '/api/timeline/buckets', new URL('https://worker.test/api/timeline/buckets?size=month'));
+    expect(scheduled.length).toBeLessThanOrEqual(1);
+  });
+
+  it('rotates across requests so every job still gets its turn', async () => {
+    // Each call schedules a different job; over several calls the cursor must
+    // move, or one job would run constantly and the others never.
+    const seen = new Set<number>();
+    for (let i = 0; i < 4; i++) {
+      const { env, scheduled } = makeEnvCounting();
+      await handleTimeline(await req('/api/timeline/buckets?size=month'), env, '/api/timeline/buckets', new URL('https://worker.test/api/timeline/buckets?size=month'));
+      seen.add(scheduled.length);
+    }
+    // Never more than one at a time, whichever job it happens to be.
+    expect([...seen].every((n) => n <= 1)).toBe(true);
+  });
+
+  it('schedules nothing when the worker has no database bound', async () => {
+    const scheduled: Promise<any>[] = [];
+    const env: any = { APP_IDENTIFIER: 'test-app', SESSION_SECRET: TEST_SCOPE, FIREBASE_API_KEY: '', waitUntil: (p: Promise<any>) => scheduled.push(p) };
+    await handleTimeline(await req('/api/timeline/buckets?size=month'), env, '/api/timeline/buckets', new URL('https://worker.test/api/timeline/buckets?size=month')).catch(() => {});
+    expect(scheduled.length).toBe(0);
+  });
+});

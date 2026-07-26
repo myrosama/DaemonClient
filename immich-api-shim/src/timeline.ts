@@ -47,25 +47,33 @@ async function facetAssetIds(env: Env, uid: string, idToken: string, url: URL): 
   return null;
 }
 
+// Round-robin cursor over the background heal jobs — one per request. Module
+// scope, so it persists for the isolate's life and successive requests rotate.
+let timelineJobCursor = 0;
+
 export async function handleTimeline(request: Request, env: Env, path: string, url: URL): Promise<Response> {
   const session = await requireAuth(request, env);
 
-  // Drive the checksum heal from the timeline too (not just sync). The web app
-  // and any browsing activity polls these constantly, and each invocation gets
-  // its own subrequest budget — so the "every photo shows twice" backfill makes
-  // progress whenever the library is in use, not only during a mobile sync.
+  // ── Background heal jobs: ONE per request, round-robin ────────────────────
+  // Browsing drives the heals too, not just mobile sync — the grid that shows
+  // the gaps is what fixes them. But an invocation's ~50 subrequests are SHARED
+  // with everything waitUntil spawns, and these two budget 40 and 24 for
+  // themselves independently: 64 against a cap of 50, on what is otherwise a
+  // trivial request. Cloudflare kills the whole invocation with error 1102, and
+  // the user sees the timeline fail rather than the background work.
+  //
+  // sync.ts has rotated one job per invocation since the same problem was found
+  // there; this is that fix applied here. Each job self-guards for completion
+  // and overlap, so a finished one costs a single cheap query before bowing out.
   if (env.DB && env.waitUntil) {
+    const jobs: Array<{ name: string; run: () => Promise<void> }> = [
+      { name: 'ChecksumBackfill', run: () => backfillChecksumBatch(env, session.uid, session.idToken) },
+      { name: 'HeicThumbBackfill', run: () => backfillHeicThumbBatch(env, session.uid, session.idToken) },
+    ];
+    const job = jobs[timelineJobCursor % jobs.length];
+    timelineJobCursor++;
     env.waitUntil(
-      backfillChecksumBatch(env, session.uid, session.idToken).catch(err =>
-        console.log('[ChecksumBackfill] timeline dispatch failed:', err?.message)
-      )
-    );
-    // Web browsing also heals missing HEIC thumbnails (the very grid that
-    // shows the gaps drives the fix; self-paced inside the function).
-    env.waitUntil(
-      backfillHeicThumbBatch(env, session.uid, session.idToken).catch(err =>
-        console.log('[HeicThumbBackfill] timeline dispatch failed:', err?.message)
-      )
+      job.run().catch(err => console.log(`[${job.name}] timeline dispatch failed:`, err?.message))
     );
   }
 
