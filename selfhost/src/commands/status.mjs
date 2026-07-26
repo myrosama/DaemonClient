@@ -60,7 +60,7 @@ export async function runStatus() {
       mark(false, 'Processor', 'not answering (a free instance may be asleep)');
     }
   } else {
-    rows.push(`${c.gray('–')} Processor ${c.gray('not configured — HEIC and video thumbnails will be blank')}`);
+    rows.push(`${c.gray('–')} Processor ${c.gray('not configured — HEIC photos will have no grid thumbnail')}`);
   }
 
   panel('Status', rows);

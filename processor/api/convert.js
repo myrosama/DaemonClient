@@ -220,11 +220,21 @@ export function handleHealth() {
   });
 }
 
-/** Vercel / Netlify / Cloudflare Pages all pass a standard Request here. */
-export default async function handler(request) {
+/** The portable Web-standard handler: a standard `Request` in, a `Response` out.
+ *  Kept as a named export so the same function serves every host that speaks the
+ *  Web interface (and so it is unit-testable in plain Node). */
+export async function handler(request) {
   const url = new URL(request.url);
   if (url.pathname.endsWith('/health')) return handleHealth();
   return handleConvert(request);
 }
 
-export const config = { runtime: 'edge' };
+// Runs on Vercel's NODE.js runtime, NOT Edge. Decoding HEIC through the libheif
+// WASM is computationally intense — and Vercel documents the Node.js runtime as
+// the one "suited to computationally intense or large functions", with far more
+// generous CPU, memory and bundle limits than an Edge Function on the free plan.
+// The Node runtime serves the same Web `Request`/`Response` handler via the
+// `{ fetch }` export, so the handler above is reused unchanged.
+// Do NOT re-add `export const config = { runtime: 'edge' }` — its absence is
+// asserted in test/handler.test.mjs.
+export default { fetch: handler };

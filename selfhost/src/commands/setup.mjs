@@ -501,7 +501,7 @@ async function stepProcessor(state) {
   step(6, TOTAL_STEPS, 'Photo processing (optional)');
 
   line();
-  hint('iPhone photos (HEIC) and video thumbnails need real CPU to convert — more than a Cloudflare Worker is allowed to use. A small companion service handles it. Skip this and everything still works; those thumbnails just stay blank until you add one.');
+  hint('iPhone photos (HEIC) need real CPU to turn into a grid thumbnail — more than a Cloudflare Worker is allowed to use. A small companion service does it. Skip this and everything still works; HEIC photos just show no grid thumbnail until you add one. (Other formats are thumbnailed by Telegram automatically.)');
   blank();
 
   if (isDone(state, 'processor') && state.processorUrl) {
@@ -512,7 +512,7 @@ async function stepProcessor(state) {
   const choice = await select('How do you want to handle it?', [
     { label: 'Skip for now', value: 'skip', hint: 'add it later with: daemonclient processor' },
     { label: 'I have already deployed one', value: 'url', hint: 'paste its URL' },
-    { label: 'Show me how to deploy one free', value: 'guide', hint: 'Render, one click' },
+    { label: 'Show me how to deploy one free', value: 'guide', hint: 'Vercel, one command' },
   ]);
 
   if (choice === 'skip') {
@@ -523,16 +523,18 @@ async function stepProcessor(state) {
 
   if (choice === 'guide') {
     blank();
-    line(`  ${c.bold('Deploy on Render (free)')}`);
-    line(`    1. Fork this repository on GitHub (if you have not already)`);
-    line(`    2. Open ${accent('https://render.com/deploy')} and point it at your fork`);
-    line(`       ${c.gray('Render reads processor/render.yaml and configures everything')}`);
-    line('    3. When it asks for environment variables, enter:');
-    line(`         FIREBASE_PROJECT_ID = ${c.gray('(leave blank for self-hosted)')}`);
+    line(`  ${c.bold('Deploy on Vercel (free)')}`);
+    line(`    1. Install the Vercel CLI if you need it: ${accent('npm i -g vercel')}`);
+    line(`    2. From this repository, in another terminal:`);
+    line(`         ${accent('cd processor && npx vercel deploy --prod')}`);
+    line(`       ${c.gray('Follow the prompts to sign in and create the project.')}`);
+    line('    3. Set two environment variables on the Vercel project, then redeploy');
+    line(`       ${c.gray('(Vercel dashboard → Settings → Environment Variables):')}`);
+    line(`         FIREBASE_PROJECT_ID = ${accent(state.firebaseProjectId || '(your Firebase project id)')}`);
     line(`         OWNER_UID           = ${accent(state.adminUserId || '(your user id)')}`);
-    line('    4. Wait for the first deploy, then copy the service URL');
+    line('    4. Copy the deployment URL Vercel prints');
     blank();
-    hint('Pinning OWNER_UID means only your account can use that instance, so its URL is safe to have in a config file.');
+    hint('OWNER_UID pins the instance to your account, so its URL is safe to store in config. FIREBASE_PROJECT_ID must match your project — the processor rejects every request while it is unset.');
     blank();
   }
 
@@ -555,7 +557,7 @@ async function stepProcessor(state) {
         for (const p of body.problems) warn(p);
         if (!(await confirm('Use it anyway?', false))) continue;
       } else {
-        s.succeed(`Processor healthy (HEIC: ${body.capabilities?.heicThumbnail ? 'yes' : 'no'}, video posters: ${body.capabilities?.videoPoster ? 'yes' : 'no'})`);
+        s.succeed(`Processor healthy (HEIC thumbnails: ${body.capabilities?.heicThumbnail ? 'yes' : 'no'})`);
       }
       url = base;
       break;

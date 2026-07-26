@@ -15,13 +15,13 @@ export async function runProcessor() {
   }
 
   panel('Media processor', [
-    c.gray('Cloudflare Workers cannot decode iPhone HEIC photos or pull a frame'),
-    c.gray('out of a video — both need more CPU than a worker is allowed. This'),
-    c.gray('small companion service does it, on a free instance you own.'),
+    c.gray('Cloudflare Workers cannot decode iPhone HEIC photos — that needs more'),
+    c.gray('CPU than a worker is allowed. This small companion service does it, on'),
+    c.gray('a free instance you own. (Other formats Telegram thumbnails for you.)'),
     '',
     state.processorUrl
       ? `Currently: ${c.bold(state.processorUrl)}`
-      : c.gray('Currently: none — HEIC and video thumbnails stay blank.'),
+      : c.gray('Currently: none — HEIC photos show no grid thumbnail.'),
   ]);
   blank();
 
@@ -36,16 +36,15 @@ export async function runProcessor() {
 
   if (action === 'guide') {
     blank();
-    line(`  ${c.bold('Deploy on Render (free)')}`);
-    line('    1. Fork this repository on GitHub');
-    line(`    2. Open ${accent('https://render.com/deploy')} and select your fork`);
-    line(`       ${c.gray('Render reads processor/render.yaml — no other config needed')}`);
-    line('    3. Set the environment variables it asks for:');
-    line(`         OWNER_UID = ${accent(state.adminUserId || '(your user id)')}`);
-    line(`         ${c.gray('FIREBASE_PROJECT_ID can stay blank on a self-hosted install')}`);
-    line('    4. Copy the service URL once the first deploy finishes');
+    line(`  ${c.bold('Deploy on Vercel (free)')}`);
+    line(`    1. Install the Vercel CLI if you need it: ${accent('npm i -g vercel')}`);
+    line(`    2. From this repository: ${accent('cd processor && npx vercel deploy --prod')}`);
+    line('    3. Set two environment variables on the Vercel project, then redeploy:');
+    line(`         FIREBASE_PROJECT_ID = ${accent(state.firebaseProjectId || '(your Firebase project id)')}`);
+    line(`         OWNER_UID           = ${accent(state.adminUserId || '(your user id)')}`);
+    line('    4. Copy the service URL once the deploy finishes');
     blank();
-    hint('OWNER_UID pins the instance to your account, so its URL is safe to store in config.');
+    hint('OWNER_UID pins the instance to your account; FIREBASE_PROJECT_ID must match your project or every conversion is rejected.');
     blank();
     if (!(await confirm('Connect it now?', true))) return;
   }
@@ -54,7 +53,7 @@ export async function runProcessor() {
     await writeProcessorUrl(state, null);
     delete state.processorUrl;
     saveState(state);
-    ok('Processor disconnected. HEIC and video thumbnails will stop being generated.');
+    ok('Processor disconnected. HEIC photos will stop getting grid thumbnails.');
     blank();
     return;
   }
@@ -76,7 +75,7 @@ export async function runProcessor() {
         hint('Anyone with a valid token for its Firebase project could use it. Fine if you are the only user; otherwise set OWNER_UID and redeploy.');
         if (!(await confirm('Use it anyway?', false))) continue;
       } else {
-        s.succeed(`Healthy — HEIC: ${body.capabilities?.heicThumbnail ? 'yes' : 'no'}, video posters: ${body.capabilities?.videoPoster ? 'yes' : 'no'}`);
+        s.succeed(`Healthy — HEIC thumbnails: ${body.capabilities?.heicThumbnail ? 'yes' : 'no'}`);
       }
       break;
     } catch (e) {

@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "description": "Serverless HEIC to JPEG converter — one free function per user, no server to run",
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
   "dependencies": {
     "@jsquash/jpeg": "^1.4.0",
     "libheif-js": "^1.19.8"

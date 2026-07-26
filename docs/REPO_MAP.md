@@ -27,6 +27,7 @@ this wins.
 | Drive web | `drive/` | `drive.daemonclient.uz` | yes |
 | Accounts / setup | `accounts-portal/` | `accounts.daemonclient.uz` | yes |
 | Marketing | `daemonclient-site/` | `daemonclient.uz` | yes |
+| Cross-domain session broker | `auth-worker/` | `daemonclient-auth` | yes (hosted only) |
 | Mobile | `immich/mobile/` | not released | no |
 | Self-host CLI | `selfhost/` | npm bin `daemonclient` | not published |
 | HEIC processor | `processor/` | user's own Vercel | manual only |
@@ -191,15 +192,23 @@ release tags.
 | `POST /api/sync/ack` unimplemented | falls to `stubs.ts:114` | every ack is a no-op |
 | `/api/assets/worker-config` unreachable | shadowed by `assets.ts:416` | dead route |
 | `/api/assets/{id}/ocr` in assets.ts unreachable | shadowed by `index.ts:166` | duplicate |
-| `POST /validate-cf-token` **unauthenticated** | `deployment-service/src/index.ts:603` | open Cloudflare-token validation oracle, `ACAO: *` |
-| processor deploy is manual | no `render.yaml` exists | CLI + `SELF_HOTING.md` point users at a file that is not there |
 | `status`'s update check | `status.mjs:71` sends no auth | always 401 → always prints "sign in" |
 | `sessionSecret` cleartext in Firestore | `deployment-service/src/index.ts:230` | finding §22 |
 | `drive_zke` password cleartext in D1 | verified live | auto-mode trade-off, now behind the owner gate |
 
-Fixed on 2026-07-27: schema replay (`update` was broken on every install), six
+Fixed on 2026-07-26: schema replay (`update` was broken on every install), six
 404ing search routes, onboarding PUT, `filePathCache` growth, 19 MB `waitUntil`
-copies, Telegram path expiry, the open relay, bot-token logging, the owner gate.
+copies, Telegram path expiry, the open relay, bot-token logging, the owner gate,
+and `/validate-cf-token` — which now requires a Firebase ID token
+(`deployment-service/src/index.ts:616`), so it is no longer the open oracle older
+notes describe.
+
+Fixed on 2026-07-27 (this session): the processor deploy — the CLI and
+`docs/SELF_HOSTING.md` no longer point at a non-existent `render.yaml`; they
+deploy the real Vercel function (`processor/`), which runs on Vercel's Node.js
+runtime because the libheif WASM bundle exceeds the Edge size cap. Dead code
+(`daemonclient-immich-bridge/`, `local-server/`) removed, and the shim now
+typechecks clean.
 
 ---
 
