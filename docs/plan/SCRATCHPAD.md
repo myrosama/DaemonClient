@@ -49,26 +49,43 @@ done.
   self-hosted install cannot upload at all, because the worker now refuses.
 - Browser audit of photos.daemonclient.uz.
 
-### Next
-- **2.0 is now optional.** With 2.4's gate in `requireAuth`, per-row owner
-  filters are defence in depth. Twenty-seven call sites, and a wrong uid at any
-  of them reads as "all my photos vanished" — do it deliberately or not at all.
-- 2.5 / 2.6 / 2.7 — sessions. 2.6 is still gated on confirming every hosted
-  worker has a `SESSION_SECRET`; `wrangler secret list --name <worker>` works,
-  but enumerating the fleet needs an API token with more scope than the
-  wrangler OAuth session carries (D1 query returned 7403).
-- The HEIC onboarding **UI**: the worker endpoint is done and verified
-  (`POST /api/server/processor`); what is missing is the portal step for hosted
-  and the `daemonclient processor` command for self-host. A Vercel deploy-button
-  URL needs no OAuth and no server, so this stays zero-cost.
-- Phase 4 (the CLI), Phase 6 (docs + Starlight site).
+### Next — resume here
 
-### A trap that cost time twice
-A fix aimed at code that is never executed passes every gate. It happened to
-tasks 1.3/1.4 (dead `deploy.mjs`) and again to 1.2 (a field no client reads).
-**Grep the consumers before touching an endpoint, and make one test drive the
-real path** — several tests here now exist purely to fail if a fix is wired to
-nothing.
+**Phase 1 is DONE** (1.1, 1.2, 1.2b, 1.3 all shipped; 1.4 and 1.5 remain and are
+small). **Phase 3 is largely done** (3.0, 3.3, 3.4, 3.7). **Phase 2 is
+half done** (2.1, 2.2, 2.3-reversed, 2.4 shipped).
+
+In order:
+1. **1.4 / 1.5** — delete `ENCRYPTION_MASTER_KEY` from the shim and `STORAGE_KEY`
+   from the CLI (NOT from `deployment-service`, where it is real), move the
+   backup warning to the `zke_*` rows, write the recovery note. `setup.mjs:606`
+   still warns the state file "holds your tokens and encryption key" — that is
+   the fake key. `assets.ts:913` has a stale comment about `migrations.ts`,
+   which is now deleted.
+2. **2.5 / 2.6 / 2.7** — sessions. 2.6 is gated on confirming every hosted
+   worker has a `SESSION_SECRET`; `wrangler secret list --name <worker>` works
+   per worker, but enumerating the fleet needs a token with more scope than the
+   wrangler OAuth session carries (D1 query returns 7403).
+3. **The audit backlog** — `FINDINGS.md` §21, ten items. The bot token in a URL
+   query string is the one that matters.
+4. **Phase 4** — the CLI. `setup` can now RUN (see §20), but 4.3 still rewrites
+   it around `config.mjs`, and `state.mjs`/`env.mjs`/`deploy.mjs` still need
+   deleting.
+5. **The HEIC onboarding UI** — the worker endpoint is done and tested; what is
+   missing is the portal step (hosted) and `daemonclient processor` (self-host).
+   A Vercel deploy-button URL needs no OAuth and no server.
+6. **Phase 5, Phase 6.**
+
+### Two things that keep biting
+- **A fix aimed at code nothing executes passes every gate.** Three times now:
+  dead `deploy.mjs` (1.3/1.4), a field no client reads (1.2), and four
+  Cloudflare functions that never existed (§20). Grep the consumers first, and
+  make at least one test drive the real path.
+- **Deploying is four steps.** `wrangler deploy --dry-run --outdir dist` →
+  `node deployment-service/scripts/embed-shim.mjs` → deploy deployment-service →
+  deploy immich-api → direct-deploy `dc-ozkv3fuz` with a temporary config.
+  Grep the regenerated bundle to confirm a fix actually reached it.
+
 
 ---
 
