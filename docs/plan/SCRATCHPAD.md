@@ -24,8 +24,15 @@ bottom of that file. The four that mattered:
 3. Task 2.6 deleted the verifier's fallback and left the issuer's
    (`auth.ts:96`). Both now go together.
 4. **Photos has no ownership check on any single-asset path**, and `albums` has
-   no owner column. Bigger than anything in the original findings. Now Task 2.0,
-   first in Phase 2.
+   no owner column. Now Task 2.0 — but **demoted** by the operator's scope call
+   below, since its severity assumed multi-user.
+
+**Scope set by the operator, 2026-07-26: one storage per user.** Multi-user is
+not being built for either flavour; it may be reconsidered later. Consequences,
+already folded in: Task 2.0 keeps the cheap half (accessor signatures) and drops
+the albums backfill; **Task 2.4's owner gate becomes the whole boundary**, so it
+must be enforced in the router across every authenticated route rather than per
+handler.
 
 **Next action:** present the corrected plan for approval. Nothing else starts
 until then.
@@ -62,8 +69,28 @@ not deferred. Both through the four gates, both verified live.
 
 Two more the review found are **planned, not patched**: `/api/drive/config`
 (finding 16 → Task 2.4) and the missing asset ownership checks (finding 17 →
-Task 2.0). Neither is exploitable on hosted today; both must be closed before
-self-host ships. Reasoning in `FINDINGS.md`.
+Task 2.0). Neither is exploitable on hosted today. With multi-user ruled out,
+the owner gate closes both; finding 17 is now defence behind it, not the fix.
+Reasoning in `FINDINGS.md`.
+
+### Update channel — designed, not built (Tasks 5.5, 5.6)
+Researched on the operator's ask. Two things found in the code:
+- **There is no Cron Trigger anywhere in this repo.**
+- **The hosted fleet updates from one place only** —
+  `accounts-portal/src/App.jsx:1744`, fired when someone loads the *accounts
+  portal*. Not Photos login. Most users never return there, which is why
+  `dc-ozkv3fuz` stalled through daily logins.
+
+Design: 5.5 puts the hosted fleet walk on a daily cron using the **master
+token** (all provisioned workers are on the operator's account; the per-user
+OAuth refresh tokens are what kept failing). 5.6 gives each self-hosted install
+a cron on **its own** worker plus a notification through **its own** Telegram
+bot. `update-check.ts` was already the right shape — anonymous GitHub poll,
+cached in their D1, no telemetry — it just had no alarm clock and no audience.
+
+**Declined:** a worker of ours that tells self-hosters to update. It would need
+to know where they are, i.e. a registry of self-hosted installs — telemetry to
+collect, a target to hold, and a P3 violation. GitHub is already the tunnel.
 
 **Deploy note:** `dc-ozkv3fuz` kept its `SESSION_SECRET` across the direct
 wrangler deploy — confirmed with `wrangler secret list --name dc-ozkv3fuz`.
@@ -150,3 +177,9 @@ Worker shim went `1533a4952213` → **`34ccd3fa9a39`**.
 3. Docs site generator — preference, or shall I pick for lowest maintenance?
 4. Task 5.1 throwaway accounts — will you create them, or should I script the
    run for you to execute?
+5. **Does a self-hosted install ever apply an update by itself?** (Task 5.6.)
+   Recommendation: **no** — notify through their own bot, apply with
+   `daemonclient update`. Auto-applying means storing a deploy-capable
+   Cloudflare token *inside* their worker, so a worker compromise becomes a
+   Cloudflare account compromise. Cost of saying no: a lazy self-hoster can sit
+   on a vulnerable install forever and we cannot know, by design.
