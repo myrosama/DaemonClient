@@ -632,6 +632,14 @@ wrangler, Vercel and Firebase actually behave.
 
 ### Task 4.6 — Vercel processor deploy
 - **What:** deploy the HEIC function without the user leaving the terminal.
+- **Why it matters more than "one more setup step":** it is what retires the
+  manual HEIC fix. Every other image gets a free thumbnail from Telegram — the
+  worker sends the original, Telegram thumbnails it, the message is deleted.
+  Telegram will not do that for HEIC, so HEIC images currently have no thumbnail
+  until the user runs the fix tool from the web by hand. This function is the
+  automated replacement, and it runs on the **user's own** Vercel account, so
+  plaintext still never reaches operator infrastructure. Hosted users get the
+  same thing through the same `heicConvertUrl` config.
 - **Files:** new `selfhost/src/api/vercel.mjs`; `selfhost/src/commands/processor.mjs`.
 - **How:** `vercel login` is a real device flow, so it works over SSH where
   Cloudflare's does not. Runtime environment variables must be set with the

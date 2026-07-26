@@ -458,49 +458,37 @@ file:line. Where their conclusions differed from the original suspicion, the
 code won — finding 2's SQL injection and finding 7's timeline dispatch were both
 discovered during verification rather than being on the original list.
 
-## 18 — The plaintext original is uploaded to Telegram on every encrypted upload · HIGH · **open**
+## 18 — The plaintext-then-delete thumbnail trick · **KNOWN AND ACCEPTED** (operator, 2026-07-26)
 
-Found while writing a test that asserts the encrypted upload path sends
-ciphertext. It does not — not only.
+Not a finding. Recorded so it is not re-raised as one.
 
-`fetchTelegramThumb` (`assets.ts:792`) uploads the **complete plaintext original**
-to the user's channel, under its real filename, so that Telegram will generate a
-thumbnail for it. The temporary message is then deleted (`assets.ts:1537`).
-
-Observed directly on the encrypted path, with real key material, for a
-four-byte fixture:
+`fetchTelegramThumb` (`assets.ts:792`) uploads the plaintext original to the
+user's own channel so Telegram will generate a thumbnail, then deletes that
+message (`assets.ts:1537`). On the encrypted path both sends are observable —
+the encrypted chunk, and briefly the original:
 
 ```
-sendDocument  document=32B  name=blob.bin    ← the encrypted chunk
-sendDocument  document=4B   name=secret.jpg  ← the plaintext original
+sendDocument  document=32B  name=blob.bin    ← the encrypted chunk (kept)
+sendDocument  document=4B   name=secret.jpg  ← the original (deleted immediately)
 deleteMessage
 ```
 
-This is deliberate and the code says so. It is also the weakest point in the
-server-ZKE claim, for three reasons:
+**This is deliberate and the operator has confirmed it is fine.** It is how free
+server-side thumbnails are obtained at all, the bytes go to the *user's own*
+channel and nowhere else, and the message is deleted straight afterwards. The
+delete was already moved ahead of the heavier encrypt step specifically so a
+free-tier worker dying mid-request cannot leave the original behind
+(`assets.ts:1530-1536`).
 
-1. **Telegram receives the plaintext.** Whatever happens afterwards, the bytes
-   were transmitted to and stored by a third party. "Encrypted at rest in your
-   channel" is not true of the moment between the two calls.
-2. **Deletion is best-effort.** If `deleteMessage` fails — a 429, a network
-   fault, or the worker being killed by error 1102 mid-flight — the plaintext
-   stays in the channel permanently, and nothing retries or notices. The comment
-   at `assets.ts:1530-1536` records that this has already happened once (the
-   "PNG raw copy not deleting" regression) and that the delete was moved earlier
-   specifically because free-tier workers were dying before reaching it.
-3. **It doubles the cost** of every image upload in bandwidth and in Telegram
-   send quota — the quota whose exhaustion produces the 429s that make the
-   delete fail.
+**HEIC cannot use the trick** — Telegram will not thumbnail it. That is why HEIC
+images currently need the manual fix from the web, and why the per-user
+processor exists: a serverless HEIC→JPEG function on the user's own Vercel
+account. Automating that is **Task 4.6**, and it removes the manual step. The
+plaintext never touches operator infrastructure either way — the conversion runs
+against the user's own `heicConvertUrl`.
 
-HEIC does not do this (`assets.ts:1514-1523` routes to the per-user processor
-instead), so the pattern for avoiding it already exists in the codebase.
+`zke-failclosed.test.ts` keeps one test on this: the persisted chunks must be
+ciphertext, and the temporary message must be deleted. That is not a challenge
+to the design — it just means a future change that drops the delete fails the
+suite instead of shipping quietly.
 
-**Not fixed here.** It is a deliberate design decision with a real benefit —
-free server-side thumbnails — and replacing it means generating thumbnails
-another way for every non-HEIC image. That is a task, not an edit, and it needs
-the operator's call on the trade. Recorded now so the decision is explicit
-rather than inherited.
-
-`zke-failclosed.test.ts` pins the current behaviour: the persisted chunks must
-be ciphertext, and the temporary plaintext message must be deleted. Remove the
-delete and the suite fails.
