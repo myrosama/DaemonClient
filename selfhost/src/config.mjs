@@ -39,7 +39,6 @@ export const KEYS = {
   D1_DATABASE_NAME: {},
 
   SESSION_SECRET: { secret: true },
-  STORAGE_KEY: { secret: true },
 
   PROCESSOR_URL: {},
   DASHBOARD_URL: {},
@@ -143,7 +142,7 @@ const SECTIONS = [
   ['Telegram — stores your files', ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_BOT_USERNAME', 'TELEGRAM_CHANNEL_ID', 'TELEGRAM_CHANNEL_TITLE']],
   ['Firebase — signs you in', ['FIREBASE_PROJECT_ID', 'FIREBASE_API_KEY', 'FIREBASE_AUTH_EMAIL', 'FIREBASE_USER_ID']],
   ['Cloudflare — runs the API', ['CLOUDFLARE_ACCOUNT_ID', 'DC_CF_TOKEN', 'WORKER_NAME', 'WORKER_URL', 'D1_DATABASE_ID', 'D1_DATABASE_NAME']],
-  ['Keys — back these up; losing STORAGE_KEY loses your files', ['SESSION_SECRET', 'STORAGE_KEY']],
+  ['Keys', ['SESSION_SECRET']],
   ['Your apps', ['PROCESSOR_URL', 'DASHBOARD_URL', 'PHOTOS_URL', 'DRIVE_URL', 'ALLOWED_ORIGINS', 'UPDATE_REPO']],
 ];
 
@@ -155,9 +154,19 @@ export function save(values) {
   const out = [
     '# DaemonClient — your self-hosted install.',
     '#',
-    '# Back this file up somewhere private. STORAGE_KEY is the only thing that',
-    '# can decrypt files already in your Telegram channel: lose it and they are',
-    '# gone. Everything else here can be regenerated.',
+    '# Back this file up somewhere private: it holds live credentials.',
+    '#',
+    '# It does NOT hold your encryption keys. This file used to advertise a',
+    '# STORAGE_KEY as "the only thing that can decrypt your files" — that key',
+    '# was shipped to the worker as ENCRYPTION_MASTER_KEY, which the worker',
+    '# never read. It protected nothing, and the warning pointed at the wrong',
+    '# thing entirely.',
+    '#',
+    '# What actually decrypts your photos is zke_password and zke_salt in the',
+    '# `config` table of your D1 database. Losing THOSE loses your files, and',
+    '# no copy of them exists outside that database. Run',
+    '# `daemonclient doctor --show-keys` to print them, and keep them somewhere',
+    '# safe.',
     '#',
     '# Edit it by hand if you like — the setup re-checks every value when it runs.',
     '',

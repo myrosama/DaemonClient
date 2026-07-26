@@ -229,7 +229,10 @@ describe('the seeding runs on the paths people actually use', () => {
   for (const name of ['setup', 'update', 'doctor']) {
     test(`${name} seeds the keys`, () => {
       const src = read(`selfhost/src/commands/${name}.mjs`);
-      assert.match(src, /import \{ ensureEncryptionKeys \} from '\.\.\/zke\.mjs'/,
+      // Allow other named imports alongside it — doctor also pulls in
+      // readKeyMaterial for `--show-keys`. What matters is that the seeding
+      // helper is imported, not that it is imported alone.
+      assert.match(src, /import \{[^}]*\bensureEncryptionKeys\b[^}]*\} from '\.\.\/zke\.mjs'/,
         `${name} does not import the seeding helper`);
       assert.match(src, /await ensureEncryptionKeys\(\{/, `${name} imports it but never calls it`);
       // Called with the install's own credentials, against its own database.

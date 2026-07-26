@@ -14,12 +14,12 @@ import { c, accent, line, blank, panel, ok, fail, warn, info, hint, spinner, sym
 import { loadState, redact, checkStatePermissions, statePath, isDone } from '../state.mjs';
 import * as cf from '../api/cloudflare.mjs';
 import * as tg from '../api/telegram.mjs';
-import { ensureEncryptionKeys } from '../zke.mjs';
+import { ensureEncryptionKeys, readKeyMaterial } from '../zke.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '../../..');
 
-export async function runDoctor() {
+export async function runDoctor({ showKeys = false } = {}) {
   const state = loadState();
   const findings = [];
   const add = (level, message, fix) => findings.push({ level, message, fix });
@@ -102,6 +102,26 @@ export async function runDoctor() {
         'Nothing else to do. Anything uploaded before this was stored unencrypted; see docs/SELF_HOSTING.md');
     } else {
       s2b.succeed('Encryption keys present');
+    }
+
+    // The config file tells the user to run this to back the keys up. They are
+    // the ONLY copy — nothing outside this database can decrypt their photos —
+    // and there is no export anywhere else, so refusing to print them would
+    // leave "back up your keys" as advice with no way to follow it.
+    if (showKeys) {
+      const material = await readKeyMaterial(
+        (sql, params) => cf.queryD1(
+          state.cloudflareToken, state.cloudflareAccountId, state.databaseId, sql, params),
+      );
+      blank();
+      warn('The two lines below decrypt every photo you have stored.');
+      hint('Anyone who has them can read your library. Do not paste them anywhere.');
+      blank();
+      line(`  zke_password  ${material.password || '(missing)'}`);
+      line(`  zke_salt      ${material.salt || '(missing)'}`);
+      blank();
+      hint('Keep them somewhere safe and offline. They exist nowhere else.');
+      blank();
     }
   } catch (e) {
     // A read that fails is not a read that came back empty, so nothing was

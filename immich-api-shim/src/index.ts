@@ -91,7 +91,6 @@ export interface Env {
   TELEGRAM_PROXY: string;
   ALLOWED_ORIGINS: string;
   DB?: D1Database;
-  ENCRYPTION_MASTER_KEY?: string;
   DEPLOYMENT_SERVICE_URL?: string;
   waitUntil?: (promise: Promise<any>) => void;
 

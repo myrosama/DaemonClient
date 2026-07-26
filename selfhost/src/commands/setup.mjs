@@ -380,7 +380,6 @@ async function stepDeployWorker(state) {
   // Secrets are generated once and reused on later runs, so redeploying never
   // invalidates existing sessions or makes stored files unreadable.
   state.sessionSecret = state.sessionSecret || randomSecret(32);
-  state.storageKey = state.storageKey || randomSecret(32);
   saveState(state);
 
   const s = spinner('Building the worker bundle');
@@ -413,7 +412,6 @@ async function stepDeployWorker(state) {
       { type: 'plain_text', name: 'BUILD_VERSION', text: readVersion(REPO_ROOT) },
       // secret_text keeps these out of the dashboard's plain-text env listing.
       { type: 'secret_text', name: 'SESSION_SECRET', text: state.sessionSecret },
-      { type: 'secret_text', name: 'ENCRYPTION_MASTER_KEY', text: state.storageKey },
     ];
     await cf.deployWorker(state.cloudflareToken, state.cloudflareAccountId, state.workerName, bundle, bindings);
     await cf.enableWorkersDev(state.cloudflareToken, state.cloudflareAccountId, state.workerName).catch(() => {});

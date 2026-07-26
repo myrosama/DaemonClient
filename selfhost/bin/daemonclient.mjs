@@ -29,7 +29,8 @@ const COMMANDS = {
   },
   doctor: {
     summary: 'Diagnose a broken install and print a redacted report',
-    run: async () => (await import('../src/commands/doctor.mjs')).runDoctor(),
+    run: async (argv = []) => (await import('../src/commands/doctor.mjs'))
+      .runDoctor({ showKeys: argv.includes('--show-keys') }),
   },
 };
 

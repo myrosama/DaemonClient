@@ -135,7 +135,6 @@ export async function runUpdate({ silent = false } = {}) {
       // everyone out, and a new encryption key would make stored files
       // unreadable.
       { type: 'secret_text', name: 'SESSION_SECRET', text: state.sessionSecret },
-      { type: 'secret_text', name: 'ENCRYPTION_MASTER_KEY', text: state.storageKey },
     ];
     await cf.deployWorker(state.cloudflareToken, state.cloudflareAccountId, state.workerName, bundle, bindings);
     s3.succeed('Deployed');

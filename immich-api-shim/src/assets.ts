@@ -910,8 +910,8 @@ async function convertHeicThumbViaBackend(heicBytes: ArrayBuffer, idToken: strin
 // ────────────────────────────────────────────────────────────────────────────
 // Self-healing deduplication schema
 // Adding columns to the photos table for per-user workers deployed BEFORE this
-// code existed. The migration system (migrations.ts) is never run during
-// auto-update (code-only), so we replicate the drive.ts pattern: a module-level
+// code existed. Auto-update ships code only — it never re-runs the schema from
+// `schema/schema.mjs` — so we replicate the drive.ts pattern: a module-level
 // bool guard ensures the ALTER runs at most once per isolate lifecycle.
 // SQLite has no "ALTER TABLE … ADD COLUMN IF NOT EXISTS", so we try/catch each
 // ALTER and swallow the "duplicate column name" error silently.

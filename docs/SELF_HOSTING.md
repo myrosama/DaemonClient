@@ -191,6 +191,60 @@ is no backdoor, by design.
 
 ---
 
+## If you set this up before 27 July 2026
+
+Read this once, then you can forget it.
+
+**What happened.** Setting up an install used to leave it with encryption
+switched *on* and no key to encrypt with. The schema created the
+`zke_password` and `zke_salt` rows empty and a second step filled them — the
+hosted service ran that step, the setup command never did. The worker treated
+"no key" and "encryption is off" as the same thing, so it stored your photos
+in Telegram **unencrypted, under their original filenames**, while
+`/api/assets/zke-status` and the padlock in the web app both reported
+encryption as on.
+
+**Are you affected?** Only self-hosted installs, and only photos uploaded
+before you update. Run:
+
+```bash
+daemonclient doctor
+```
+
+If it says *"This install had no encryption keys — uploads were being
+refused"*, you were affected and it has just fixed the cause. If it says
+*"Encryption keys present"* and you have never seen an upload refused, your
+keys were fine.
+
+**What to do about photos already uploaded.** They are in your own Telegram
+channel, in the clear. Nobody else has them unless somebody else can read that
+channel — check who is in it, and check whether the channel is private. Nothing
+can retroactively encrypt them, so there are two honest options:
+
+- **Leave them.** They are in a private channel you control. If that is
+  acceptable to you, it is a reasonable answer.
+- **Delete and re-upload.** Remove the affected photos from the app so it
+  clears the Telegram messages too, confirm `daemonclient doctor` reports keys
+  present, then upload them again. They will be encrypted this time.
+
+There is no third option, and anyone telling you the files can be encrypted
+where they sit is wrong.
+
+**Two related things changed at the same time:**
+
+- **The worker now refuses an upload it cannot encrypt** rather than quietly
+  storing it in the clear. If uploads start failing with *"Encryption is
+  enabled for this install but its key material is missing"*, run
+  `daemonclient doctor` — that is what generates them.
+- **The `STORAGE_KEY` in your config file was never used for anything.** The
+  CLI generated it, called it your "File encryption key", warned you that
+  losing it would lose your files, and shipped it to the worker under a name
+  the worker never read. It is gone. What actually decrypts your photos is
+  `zke_password` and `zke_salt` in your D1 database, they exist nowhere else,
+  and `daemonclient doctor --show-keys` prints them so you can back them up.
+
+---
+
 ## Troubleshooting
 
 **Start here:** `daemonclient doctor`. It checks every part in turn and prints
