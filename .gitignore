@@ -119,3 +119,10 @@ serviceAccount*.json
 
 # Claude Code local state (worktrees contain full repo copies)
 .claude/
+
+# Operator one-off force-deploy configs (contain real account/database ids)
+immich-api-shim/wrangler-dc-*.toml
+immich-api-shim/wrangler-ozkv3fuz.toml
+
+# Local test venvs
+processor/.venv*/

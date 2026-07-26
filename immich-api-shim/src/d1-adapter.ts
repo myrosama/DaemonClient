@@ -434,9 +434,18 @@ export class D1Adapter {
     const mimeClause = isVideo
       ? "AND mimeType LIKE 'video/%'"
       : "AND mimeType NOT LIKE 'video/%'";
+    // Trashed rows MUST be excluded. Deleting an asset removes its Telegram
+    // bytes immediately and keeps the row only as a sync tombstone, so matching
+    // one here made the worker answer "duplicate, already stored" to an upload
+    // whose bytes it then threw away: the photo existed nowhere, the app
+    // believed it was backed up, and because sync keeps tombstoning the id the
+    // phone re-offered the same file on every single backup run. Skipping
+    // tombstones lets the re-upload land as a fresh row — the photo comes back
+    // and the loop ends.
     const result = await this.db
       .prepare(
-        `SELECT * FROM photos WHERE ownerId = ? AND deviceAssetId = ? AND deviceId = ? ${mimeClause} LIMIT 1`,
+        `SELECT * FROM photos WHERE ownerId = ? AND deviceAssetId = ? AND deviceId = ? ${mimeClause}
+           AND (isTrashed = 0 OR isTrashed IS NULL) LIMIT 1`,
       )
       .bind(ownerId, deviceAssetId, deviceId)
       .first<Photo>();
@@ -455,7 +464,10 @@ export class D1Adapter {
   ): Promise<Photo[]> {
     const result = await this.db
       .prepare(
-        `SELECT * FROM photos WHERE ownerId = ? AND deviceAssetId = ? AND deviceId = ? LIMIT 3`,
+        // Same tombstone exclusion as getPhotoByDeviceAsset — a trashed row has
+        // no bytes behind it and must never satisfy a dedup check.
+        `SELECT * FROM photos WHERE ownerId = ? AND deviceAssetId = ? AND deviceId = ?
+           AND (isTrashed = 0 OR isTrashed IS NULL) LIMIT 3`,
       )
       .bind(ownerId, deviceAssetId, deviceId)
       .all<Photo>();

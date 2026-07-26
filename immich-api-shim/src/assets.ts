@@ -19,6 +19,11 @@ const IV_LENGTH = 12;
 const KEY_LENGTH = 256;
 const PBKDF2_ITERATIONS = 100000;
 const CHUNK_SIZE = 19 * 1024 * 1024; // 19 MB
+
+// The only visibility values the mobile app's strict enum parse accepts.
+// Anything else aborts its entire sync, so writes are filtered against this
+// set (sync.ts clamps again on emit, for rows written before this guard).
+const VALID_VISIBILITY = new Set(['timeline', 'hidden', 'archive', 'locked']);
 // Bumped when the EXIF extraction logic improves so the lazy backfill re-checks
 // already-parsed photos. v2: re-check photos that got camera EXIF but no GPS
 // (the old backfill skipped any row with `make` set, so HEIC photos whose GPS
@@ -395,7 +400,18 @@ export async function handleAssets(request: Request, env: Env, path: string, url
               } catch { /* best effort */ }
             }
           }
-          await adapter.deletePhoto(id);
+          // Keep the row as a tombstone instead of DELETEing it. A hard delete
+          // erased the only record sync has of the asset's existence, so any
+          // device that had not synced between "trash" and "empty trash" never
+          // received an AssetDeleteV1 and kept the asset forever as a ghost —
+          // which later collides on checksum and can abort its whole sync.
+          // purgedAt lets a tombstone be reclaimed once every device has had
+          // ample time to see it (see purgeExpiredTombstones).
+          await adapter.updatePhoto(id, {
+            isTrashed: 1,
+            telegramChunks: '[]',
+            purgedAt: new Date().toISOString(),
+          } as any);
         }
       }
     }
@@ -642,7 +658,12 @@ async function handleBulkUpdate(request: Request, env: Env, uid: string, idToken
 
   const updates: Record<string, any> = {};
   if (body.isFavorite !== undefined) updates.isFavorite = body.isFavorite ? 1 : 0;
-  if (body.visibility !== undefined) updates.visibility = body.visibility;
+  // Reject unknown visibility values at the door. The mobile app force-unwraps
+  // this enum while parsing the sync stream, so one bad row would abort every
+  // future sync for the whole library (sync.ts clamps on the way out too).
+  if (body.visibility !== undefined && VALID_VISIBILITY.has(body.visibility)) {
+    updates.visibility = body.visibility;
+  }
 
   if (Object.keys(updates).length > 0) {
     if (env.DB) {
@@ -793,6 +814,10 @@ async function ensureDeduplicationSchema(db: any): Promise<void> {
   // 1 = the HEIC thumbnail backfill settled this row (thumb stored, or the file
   // is undecodable/multi-chunk) — stops backfillHeicThumbBatch from looping.
   await addColumn('ALTER TABLE photos ADD COLUMN heicThumbChecked INTEGER DEFAULT 0');
+  // When the user emptied the trash. The row stays as a sync tombstone so every
+  // device eventually learns the asset is gone; it is reclaimed only after
+  // TOMBSTONE_TTL_DAYS (see purgeExpiredTombstones).
+  await addColumn('ALTER TABLE photos ADD COLUMN purgedAt TEXT');
   // JSON array of the H.264/web-playable rendition's Telegram chunks (the
   // Fix-Videos transcode of an HEVC/incompatible video). Served for
   // /video/playback so the browser can play it; the ORIGINAL is untouched and
@@ -835,6 +860,19 @@ let inFlightUploadBytes = 0;
 const UPLOAD_BYTE_BUDGET = 16 * 1024 * 1024; // ~16 MB of concurrent bodies
 const UPLOAD_MAX_WAIT_MS = 55_000;           // wait up to ~55s for a slot, then shed
 
+// ── Single-flight per asset ─────────────────────────────────────────────────
+// The dedup check and the row INSERT are separated by the whole multi-second
+// Telegram upload, and no UNIQUE constraint covers (ownerId, deviceAssetId,
+// deviceId, kind). Two overlapping uploads of the SAME asset — which the app
+// produces routinely, since it fires several uploads per second and retries
+// aggressively — therefore both missed dedup and both inserted: the user's
+// "every photo twice". Collapsing concurrent uploads of one asset onto the
+// first one's result closes that window; the loser waits and receives the
+// winner's response instead of creating a second row.
+type UploadFlight = { promise: Promise<Response | null>; resolve: (r: Response | null) => void };
+const inFlightAssetUploads = new Map<string, UploadFlight>();
+export type FlightHolder = { key: string };
+
 async function handleUpload(request: Request, env: Env, uid: string, idToken: string): Promise<Response> {
   const size = parseInt(request.headers.get('Content-Length') || '0', 10) || 8 * 1024 * 1024;
   const start = Date.now();
@@ -850,14 +888,29 @@ async function handleUpload(request: Request, env: Env, uid: string, idToken: st
     await new Promise((r) => setTimeout(r, 150));
   }
   inFlightUploadBytes += size;
+  const flight: FlightHolder = { key: '' };
+  let settled = false;
   try {
-    return await handleUploadImpl(request, env, uid, idToken);
+    const result = await handleUploadImpl(request, env, uid, idToken, flight);
+    // Hand waiters a clone while this response is still unread, then release.
+    if (flight.key) {
+      inFlightAssetUploads.get(flight.key)?.resolve(result.clone());
+      inFlightAssetUploads.delete(flight.key);
+      settled = true;
+    }
+    return result;
   } finally {
     inFlightUploadBytes -= size;
+    // On a throw, waiters must not hang: release them with null so each falls
+    // back to performing its own upload.
+    if (flight.key && !settled) {
+      inFlightAssetUploads.get(flight.key)?.resolve(null);
+      inFlightAssetUploads.delete(flight.key);
+    }
   }
 }
 
-async function handleUploadImpl(request: Request, env: Env, uid: string, idToken: string): Promise<Response> {
+async function handleUploadImpl(request: Request, env: Env, uid: string, idToken: string, flight?: FlightHolder): Promise<Response> {
   const flags = await getFlagsForUser(env, uid, idToken);
   if (!flags.directBytePath) {
     return json({ message: 'Direct upload path is disabled by feature flag' }, 503);
@@ -885,6 +938,29 @@ async function handleUploadImpl(request: Request, env: Env, uid: string, idToken
     // so the early check is a pure fast-path, never the sole source of truth.
     const parsed = await parseUploadRequest(request, async (deviceAssetId, deviceId, fields) => {
       if (!env.DB) return null;
+
+      // Single-flight: this fires as soon as the asset's identity is known and
+      // before its bytes are read, so a concurrent upload of the same asset can
+      // be collapsed onto the in-progress one instead of racing it to INSERT.
+      if (flight && deviceAssetId && deviceId) {
+        const kind = videoHintFromFields(fields);
+        const key = `${uid}|${deviceAssetId}|${deviceId}|${kind === null ? '?' : kind ? 'v' : 'i'}`;
+        const running = inFlightAssetUploads.get(key);
+        if (running) {
+          const winner = await running.promise;
+          // null = the first attempt failed; fall through and try ourselves.
+          if (winner) {
+            console.log(`[Upload] Collapsed duplicate in-flight upload for ${deviceAssetId} uid=${uid}`);
+            return winner;
+          }
+        } else {
+          let resolve!: (r: Response | null) => void;
+          const promise = new Promise<Response | null>(res => { resolve = res; });
+          inFlightAssetUploads.set(key, { promise, resolve });
+          flight.key = key;
+        }
+      }
+
       try {
         const rows = await new D1Adapter(env.DB).getPhotosByDeviceAsset(uid, deviceAssetId, deviceId);
         // Media-kind hint from the filename field (arrives before the file).
@@ -1183,7 +1259,11 @@ async function handleUploadImpl(request: Request, env: Env, uid: string, idToken
         tgStatus = tgRes.status;
         tgData = await tgRes.json() as any;
       } catch (err: any) {
-        queue.release();
+        // NOTE: no queue.release() here — the `finally` below runs on the
+        // return path too, and releasing twice for one acquire corrupted the
+        // semaphore: RequestQueue.release() has no floor, so each flaky send
+        // permanently raised this isolate's effective Telegram concurrency
+        // limit, letting later bursts fan out far past the intended cap.
         console.error(`[Upload] Telegram API error on chunk ${i}:`, err);
 
         // Cleanup: delete already-uploaded chunks
@@ -1462,6 +1542,10 @@ async function handleUploadImpl(request: Request, env: Env, uid: string, idToken
       // identified as duplicates without re-uploading to Telegram.
       deviceAssetId: deviceAssetId || undefined,
       deviceId: deviceId || undefined,
+      // Both mobile uploaders send this; it used to be dropped on the floor, so
+      // favourites marked on the phone before the first backup silently
+      // un-favourited themselves once the asset synced back.
+      isFavorite: (formData.get('isFavorite') as string) === 'true' ? 1 : 0,
     };
 
     if (env.DB) {
@@ -1799,10 +1883,20 @@ async function handleThumbnail(request: Request, env: Env, uid: string, assetId:
   // that makes the app feel like it's crashing. Return 404 so the app keeps its
   // thumbhash blur placeholder instead. (High-quality/full-view requests still
   // fall through to the original, where the platform decoder handles HEIC.)
-  if (!wantsHighQuality && fileId === photo.telegramOriginalId &&
-      !photo.telegramThumbId && !photo.telegramPreviewId) {
+  if (fileId === photo.telegramOriginalId && !photo.telegramThumbId && !photo.telegramPreviewId) {
     const mt = (photo.mimeType || '').toLowerCase();
-    if (photo.isHeic || mt === 'image/heic' || mt === 'image/heif' || mt.startsWith('video/')) {
+    // A video has no still image to fall back to. Streaming the whole clip
+    // under a thumbnail URL sent megabytes of video into an image decoder AND
+    // cached it for a year as immutable, so the tile stayed broken until the
+    // cache expired. High-quality requests are included: `size=preview` on a
+    // video hit exactly this path.
+    if (mt.startsWith('video/')) {
+      return json({ message: 'No poster available for this video yet' }, 404);
+    }
+    // HEIC has no browser-decodable thumbnail either, but the platform decoder
+    // CAN handle the original on a full-view request — so only the grid path
+    // (which would log a decode error per tile) gets the 404.
+    if (!wantsHighQuality && (photo.isHeic || mt === 'image/heic' || mt === 'image/heif')) {
       return json({ message: 'No decodable thumbnail yet' }, 404);
     }
   }
@@ -1853,12 +1947,31 @@ async function handleThumbnail(request: Request, env: Env, uid: string, assetId:
     if (!result.ok) return json({ message: result.error }, 502);
 
     let responseData = result.data!;
+    if (decryptThis && !key) {
+      // Server-encrypted bytes with no key available (zero-knowledge toggled
+      // off, or the key fetch failed). Serving them anyway meant handing the
+      // client AES ciphertext labelled image/jpeg — and the immutable cache
+      // header below then pinned that garbage for a year, so the tile stayed
+      // broken long after the key came back. Fail loudly and cache nothing.
+      console.error(`[Thumbnail] ${assetId}: server-encrypted but no key available`);
+      return json({ message: 'Encryption key unavailable' }, 503);
+    }
     if (decryptThis && key) {
       try {
         responseData = await decryptChunk(responseData, key);
       } catch (e: any) {
         // AES-GCM auth failure → thumb was stored unencrypted (old sendPhoto path or plain thumb).
-        // Fall through and serve the raw bytes — they're a valid JPEG already.
+        // Serve the raw bytes ONLY if they really are an image; otherwise this
+        // is undecryptable ciphertext and must not be cached as a picture.
+        if (servingThumb || servingPreview) {
+          const head = new Uint8Array(responseData.slice(0, 4));
+          const isJpeg = head[0] === 0xff && head[1] === 0xd8;
+          const isPng = head[0] === 0x89 && head[1] === 0x50 && head[2] === 0x4e && head[3] === 0x47;
+          if (!isJpeg && !isPng) {
+            console.error(`[Thumbnail] ${assetId}: decrypt failed and bytes are not an image — refusing to serve`);
+            return json({ message: 'Thumbnail unavailable' }, 502);
+          }
+        }
         console.warn(`[Thumbnail] ${assetId}: decrypt attempted, thumb not encrypted — serving raw (${e?.message})`);
       }
     }
@@ -1996,9 +2109,19 @@ export async function handleOriginal(request: Request, env: Env, uid: string, as
         end = parts[1] !== '' ? parseInt(parts[1], 10) : totalSize - 1;
       }
 
-      if (isNaN(start) || isNaN(end) || start < 0 || end >= totalSize || start > end) {
-        return json({ message: 'Invalid range', requested: `${start}-${end}`, totalSize }, 416);
+      // RFC 7233: a last-byte-pos past EOF is CLAMPED, not rejected — players
+      // routinely ask for more than exists (e.g. `bytes=0-99999999`) and a 416
+      // here reads as a hard failure and stops playback. Only a start that is
+      // genuinely outside the file is unsatisfiable, and that answer must carry
+      // Content-Range: bytes */size.
+      if (isNaN(start) || start < 0 || start >= totalSize) {
+        return new Response(JSON.stringify({ message: 'Range not satisfiable', totalSize }), {
+          status: 416,
+          headers: { 'Content-Type': 'application/json', 'Content-Range': `bytes */${totalSize}` },
+        });
       }
+      if (isNaN(end) || end >= totalSize) end = totalSize - 1;
+      if (end < start) end = start;
 
       // Small explicit ranges (moov probes, header sniffs) stay buffered and
       // byte-exact. Everything larger is served as a STREAMED 206 covering the
@@ -2145,14 +2268,15 @@ export async function handleOriginal(request: Request, env: Env, uid: string, as
         end = parts[1] !== '' ? parseInt(parts[1], 10) : totalSize - 1;
       }
 
-      // Validate range header
-      if (isNaN(start) || isNaN(end) || start < 0 || end >= totalSize || start > end) {
-        return json({
-          message: 'Invalid range',
-          requested: `${start}-${end}`,
-          totalSize
-        }, 416);
+      // Same RFC 7233 clamping as the chunked path above.
+      if (isNaN(start) || start < 0 || start >= totalSize) {
+        return new Response(JSON.stringify({ message: 'Range not satisfiable', totalSize }), {
+          status: 416,
+          headers: { 'Content-Type': 'application/json', 'Content-Range': `bytes */${totalSize}` },
+        });
       }
+      if (isNaN(end) || end >= totalSize) end = totalSize - 1;
+      if (end < start) end = start;
 
       headers['Content-Range'] = `bytes ${start}-${end}/${totalSize}`;
       headers['Content-Length'] = (end - start + 1).toString();
@@ -2522,6 +2646,28 @@ export async function backfillExifBatch(env: Env, uid: string, idToken: string, 
   }
 }
 
+// ── Tombstone reclamation ────────────────────────────────────────────────────
+// Emptied-trash rows are kept so every device learns the asset is gone (a hard
+// DELETE left un-synced devices holding ghosts forever). They can't be kept
+// indefinitely either — sync re-emits every tombstone on every run — so they
+// are reclaimed once they are far older than any plausible offline period.
+const TOMBSTONE_TTL_DAYS = 90;
+export async function purgeExpiredTombstones(env: Env, uid: string): Promise<void> {
+  if (!env.DB) return;
+  try {
+    await ensureDeduplicationSchema(env.DB);
+    const cutoff = new Date(Date.now() - TOMBSTONE_TTL_DAYS * 86400_000).toISOString();
+    const res: any = await env.DB.prepare(
+      `DELETE FROM photos
+        WHERE ownerId = ? AND isTrashed = 1 AND purgedAt IS NOT NULL AND purgedAt < ?`
+    ).bind(uid, cutoff).run();
+    const n = res?.meta?.changes || 0;
+    if (n > 0) console.log(`[Tombstones] reclaimed ${n} row(s) older than ${TOMBSTONE_TTL_DAYS}d for uid=${uid}`);
+  } catch (e: any) {
+    console.log('[Tombstones] purge failed (non-fatal):', e?.message);
+  }
+}
+
 // ── Lazy HEIC thumbnail backfill (per-user processor ONLY) ───────────────────
 // Heals thumb-less HEIC rows in the background — but ONLY for users who have
 // configured their OWN converter (config/telegram.heicConvertUrl). Without it
@@ -2768,7 +2914,15 @@ export async function backfillChecksumBatch(env: Env, uid: string, idToken: stri
 
           let checksum: string | null = null;
           if (fileIds.length && (!serverZke || key)) {
-            const hasher = new Sha1();
+            // Collect the plaintext chunks first, then hash. Single-chunk files
+            // (every photo and most short videos) go through WebCrypto's native
+            // SHA-1 — C++, effectively free — instead of the interpreted Sha1
+            // fallback, which costs real CPU on a budget whose overrun
+            // Cloudflare kills as error 1102. Multi-chunk files still stream
+            // through Sha1 incrementally so memory stays at one chunk.
+            const parts: Uint8Array[] = [];
+            let hasher: Sha1 | null = null;
+            const multi = fileIds.length > 1;
             let ok = true;
             for (const fileId of fileIds) {
               const queue = getTgQueue(botToken);
@@ -2780,16 +2934,33 @@ export async function backfillChecksumBatch(env: Env, uid: string, idToken: stri
               if (!result.ok || !result.data) { ok = false; break; }
               let data = result.data;
               if (serverZke && key) data = await decryptChunk(data, key);
-              hasher.update(new Uint8Array(data));
+              if (multi) {
+                hasher = hasher || new Sha1();
+                hasher.update(new Uint8Array(data));
+              } else {
+                parts.push(new Uint8Array(data));
+              }
             }
-            if (ok) checksum = bytesToBase64(hasher.digest());
+            if (ok) {
+              if (multi && hasher) {
+                checksum = bytesToBase64(hasher.digest());
+              } else if (parts.length === 1) {
+                const digest = await crypto.subtle.digest('SHA-1', parts[0]);
+                checksum = bytesToBase64(new Uint8Array(digest));
+              }
+            }
           }
 
-          // On success: store the real checksum. Either way mark checked so an
-          // unhealable row can't block the LIMIT-paged cursor (we always mark
-          // even on failure so a permanently-broken file never starves the
-          // healable ones — its checksum heals via the upload dedup path on the
-          // app's next re-upload).
+          // Store the real checksum on success. A TRANSIENT failure (Telegram
+          // 429/5xx, or this run simply running out of budget mid-file) must
+          // NOT be stamped: doing so retired healable rows permanently on the
+          // strength of a temporary blip, leaving photos duplicated on the
+          // phone with no path back. Stop the run instead and retry next cycle.
+          // Permanent failures are stamped by the catch below.
+          if (!checksum && fileIds.length) {
+            console.log(`[ChecksumBackfill] transient failure on ${photo.id} — leaving unstamped for retry`);
+            break pages;
+          }
           const patch: Record<string, any> = { checksumChecked: 1 };
           if (checksum) { patch.checksum = checksum; healed++; }
           await adapter.updatePhoto(photo.id, patch);

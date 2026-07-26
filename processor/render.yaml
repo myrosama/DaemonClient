@@ -1,0 +1,28 @@
+# One-click blueprint. Render reads this file and provisions the service below
+# on its FREE plan.
+#
+# Two values are asked for at deploy time; everything else is fixed:
+#
+#   FIREBASE_PROJECT_ID — the project whose ID tokens this instance trusts.
+#   OWNER_UID           — your Firebase user id. Setting it means only YOU can
+#                         use this instance, so a leaked URL is worthless to
+#                         anyone else. The accounts portal and the setup CLI
+#                         both show you the value to paste.
+#
+# Free instances sleep after roughly 15 minutes idle and take up to a minute to
+# wake. That is fine by design: a conversion that fails against a sleeping
+# instance is retried by the worker's background heal a few minutes later, and
+# the failed request is itself what woke the service.
+services:
+  - type: web
+    name: daemonclient-processor
+    runtime: docker
+    plan: free
+    rootDir: processor
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    envVars:
+      - key: FIREBASE_PROJECT_ID
+        sync: false
+      - key: OWNER_UID
+        sync: false

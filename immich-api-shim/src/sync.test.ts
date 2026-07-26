@@ -80,6 +80,94 @@ describe('handleSyncStream — duplicate-checksum dedup', () => {
     const checksums = events.filter((e) => e.type === 'AssetV1').map((e) => e.data.checksum);
     expect(new Set(checksums).size).toBe(checksums.length);
   });
+
+  it('deletes the duplicate BEFORE emitting the survivor that takes over its checksum', async () => {
+    // The phone upserts remote assets keyed by id, under a partial unique index
+    // UQ_remote_assets_owner_checksum. If the loser row is already on the phone
+    // holding checksum X and we send the winner's AssetV1 (also checksum X)
+    // first, that insert violates the index, the sync isolate throws, and ALL
+    // remote sync aborts — on every subsequent sync too, since the stream
+    // replays identically. The delete has to land first.
+    const photos = [
+      photo('p1', 'X', '2024-03-12T00:00:00Z'),
+      photo('p2', 'X', '2024-03-12T00:00:00Z'),
+    ];
+    const { env } = makeEnv(photos, { syncResetEpoch: await currentEpoch() });
+    const events = await streamEvents(await handleSyncStream(req(), env));
+
+    const deleteIdx = events.findIndex((e) => e.type === 'AssetDeleteV1' && e.data.assetId === 'p2');
+    const winnerIdx = events.findIndex((e) => e.type === 'AssetV1' && e.data.id === 'p1');
+    expect(deleteIdx).toBeGreaterThanOrEqual(0);
+    expect(winnerIdx).toBeGreaterThanOrEqual(0);
+    expect(deleteIdx).toBeLessThan(winnerIdx);
+  });
+
+  it('repoints a still at the surviving copy when its motion loses the dedup', async () => {
+    // still1 links to mov_dup, which shares a checksum with mov_keep and loses
+    // the dedup. Emitting the still with a livePhotoVideoId that the very same
+    // stream deletes leaves a dangling reference; the survivor must inherit the
+    // link, and must be hidden from the grid because it is now the companion.
+    const photos = [
+      photo('mov_keep', 'V', '2024-03-12T00:00:02Z', { mimeType: 'video/quicktime' }),
+      photo('mov_dup', 'V', '2024-03-12T00:00:01Z', { mimeType: 'video/quicktime' }),
+      photo('still1', 'I', '2024-03-12T00:00:00Z', { livePhotoVideoId: 'mov_dup' }),
+    ];
+    const { env } = makeEnv(photos, { syncResetEpoch: await currentEpoch() });
+    const events = await streamEvents(await handleSyncStream(req(), env));
+
+    const assets = events.filter((e) => e.type === 'AssetV1');
+    const deletedIds = events.filter((e) => e.type === 'AssetDeleteV1').map((e) => e.data.assetId);
+    const still = assets.find((e) => e.data.id === 'still1')!;
+    const survivor = assets.find((e) => e.data.id === 'mov_keep')!;
+
+    expect(deletedIds).toContain('mov_dup');
+    expect(still.data.livePhotoVideoId).toBe('mov_keep'); // remapped, not dangling
+    expect(survivor.data.visibility).toBe('hidden');      // inherits companion status
+  });
+
+  it('never emits an AssetV1 whose livePhotoVideoId is deleted in the same stream', async () => {
+    const photos = [
+      photo('mov_keep', 'V', '2024-03-12T00:00:02Z', { mimeType: 'video/quicktime' }),
+      photo('mov_dup', 'V', '2024-03-12T00:00:01Z', { mimeType: 'video/quicktime' }),
+      photo('still1', 'I', '2024-03-12T00:00:00Z', { livePhotoVideoId: 'mov_dup' }),
+    ];
+    const { env } = makeEnv(photos, { syncResetEpoch: await currentEpoch() });
+    const events = await streamEvents(await handleSyncStream(req(), env));
+
+    const deleted = new Set(events.filter((e) => e.type === 'AssetDeleteV1').map((e) => e.data.assetId));
+    for (const e of events.filter((x) => x.type === 'AssetV1')) {
+      if (e.data.livePhotoVideoId) expect(deleted.has(e.data.livePhotoVideoId)).toBe(false);
+    }
+  });
+});
+
+describe('handleSyncStream — Dart strict-parse safety', () => {
+  it('clamps an unknown visibility to timeline instead of emitting it verbatim', async () => {
+    // AssetVisibility.fromJson(...)! throws on an unrecognised string, and one
+    // throw aborts parsing of the entire stream — so a single row with a junk
+    // visibility (PUT /api/assets accepts arbitrary strings) would kill sync
+    // for the whole library until that row was fixed by hand.
+    const photos = [
+      photo('p1', 'X', '2024-03-12T00:00:00Z', { visibility: 'wat-is-this' }),
+      photo('p2', 'Y', '2024-03-11T00:00:00Z', { visibility: 'archive' }),
+    ];
+    const { env } = makeEnv(photos, { syncResetEpoch: await currentEpoch() });
+    const events = await streamEvents(await handleSyncStream(req(), env));
+    const byId = Object.fromEntries(
+      events.filter((e) => e.type === 'AssetV1').map((e) => [e.data.id, e.data])
+    );
+    expect(byId.p1.visibility).toBe('timeline'); // junk clamped
+    expect(byId.p2.visibility).toBe('archive');  // valid value preserved
+  });
+
+  it('emits booleans as real booleans even when D1 hands back integers', async () => {
+    const photos = [photo('p1', 'X', '2024-03-12T00:00:00Z', { isFavorite: 1 })];
+    const { env } = makeEnv(photos, { syncResetEpoch: await currentEpoch() });
+    const events = await streamEvents(await handleSyncStream(req(), env));
+    const asset = events.find((e) => e.type === 'AssetV1')!;
+    expect(asset.data.isFavorite).toBe(true);
+    expect(typeof asset.data.isFavorite).toBe('boolean');
+  });
 });
 
 describe('handleSyncStream — live-photo companion videos', () => {

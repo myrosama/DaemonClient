@@ -20,6 +20,12 @@ export interface FileLike {
   name: string;
   type: string;
   slice(start: number, end: number): { arrayBuffer(): Promise<ArrayBuffer> };
+  // Zero-copy replay of the parsed chunks. Its presence is what lets
+  // sha1Base64OfFile use Cloudflare's native crypto.DigestStream (C++) instead
+  // of the pure-JS fallback: hashing every upload in interpreted JS burned tens
+  // of ms of CPU per photo, and the app fires 4-6 uploads per second while
+  // draining a backlog — a direct contributor to 1102 worker kills.
+  stream(): ReadableStream<Uint8Array>;
 }
 
 export function makeFileLike(chunks: Uint8Array[], size: number, name: string, type: string): FileLike {
@@ -27,6 +33,18 @@ export function makeFileLike(chunks: Uint8Array[], size: number, name: string, t
     size,
     name,
     type,
+    stream() {
+      let i = 0;
+      return new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (i >= chunks.length) {
+            controller.close();
+            return;
+          }
+          controller.enqueue(chunks[i++]);
+        },
+      });
+    },
     slice(start: number, end: number) {
       const from = Math.max(0, start);
       const to = Math.min(size, end);

@@ -1,7 +1,7 @@
 import type { Env } from './index';
 import { requireAuth, firestoreQuery } from './helpers';
 import { D1Adapter } from './d1-adapter';
-import { backfillExifBatch, backfillChecksumBatch, backfillHeicThumbBatch } from './assets';
+import { backfillExifBatch, backfillChecksumBatch, backfillHeicThumbBatch, purgeExpiredTombstones } from './assets';
 import { repairLivePhotoLinks } from './link-live-photos';
 
 // Fire at most once per Worker isolate lifetime (typically 30 min – a few hours).
@@ -9,10 +9,19 @@ import { repairLivePhotoLinks } from './link-live-photos';
 // sessions still get worker updates even when the user never re-logs in.
 let lastAutoUpdateAttempt = 0;
 
-// Lazy EXIF backfill pacing: one small batch per sync, but never more often
-// than this, so a burst of syncs doesn't stack Telegram downloads.
-let lastExifBackfill = 0;
-const EXIF_BACKFILL_INTERVAL_MS = 3 * 60 * 1000;
+// Round-robin cursor over the background heal jobs — one job per sync
+// invocation (see the dispatch block at the end of handleSyncStream).
+let healJobCursor = 0;
+
+// The only visibility values the mobile app can parse. AssetVisibility.fromJson
+// returns null for anything else and SyncAssetV1.fromJson force-unwraps it, so
+// one unexpected string throws and takes the WHOLE sync down — for every asset,
+// on every sync, until that row is repaired. PUT /api/assets stores whatever
+// visibility a client sends, so this clamp is the last line of defence.
+const VALID_VISIBILITY = new Set(['timeline', 'hidden', 'archive', 'locked']);
+function safeVisibility(v: any): string {
+  return typeof v === 'string' && VALID_VISIBILITY.has(v) ? v : 'timeline';
+}
 
 // Bump this to force every per-user worker to emit ONE SyncResetV1 (a client
 // rebuild) on its next sync. Use after a data change that can leave the phone
@@ -54,12 +63,22 @@ export async function handleSyncStream(request: Request, env: Env): Promise<Resp
   // motion as a standalone clip. We emit them with visibility:'hidden' below so
   // the timeline grid (which filters visibility=0) excludes them — exactly how
   // real Immich keeps motions tracked-but-hidden.
+  // Narrow projection, deliberately NOT `SELECT *` + normalizeRow. The stream
+  // below reads only these columns, while `SELECT *` also dragged in every
+  // row's telegramChunks JSON — and normalizeRow JSON.parse'd it for EVERY row
+  // plus spread each row into a fresh object. On a 1300-photo library that is
+  // thousands of pointless parses/allocations on the single most-called
+  // endpoint, and it counted against the same CPU/memory budget whose overrun
+  // Cloudflare kills as error 1102 (the app then reports sync as failed).
   const photos = env.DB
     ? (await env.DB.prepare(
-        `SELECT * FROM photos
+        `SELECT id, checksum, deviceAssetId, deviceId, mimeType, type, duration,
+                fileCreatedAt, fileModifiedAt, uploadedAt, width, height,
+                isFavorite, livePhotoVideoId, fileName, thumbhash, visibility
+         FROM photos
          WHERE ownerId = ? AND (isTrashed = 0 OR isTrashed IS NULL)
          ORDER BY fileCreatedAt DESC, id ASC`
-      ).bind(session.uid).all()).results.map(D1Adapter.normalizeRow)
+      ).bind(session.uid).all()).results.map((r: any) => ({ ...r, _id: r.id, originalFileName: r.fileName }))
     : await firestoreQuery(env, session.uid, 'photos', session.idToken, 'fileCreatedAt', 'DESCENDING');
 
   const adapter = env.DB ? new D1Adapter(env.DB) : null;
@@ -72,8 +91,11 @@ export async function handleSyncStream(request: Request, env: Env): Promise<Resp
 
   // Tombstones: soft-deleted rows (Telegram data gone, D1 row kept with isTrashed=1).
   // Emit AssetDeleteV1 for each so mobile removes them from its local DB on sync.
-  const deletedPhotos = adapter
-    ? (await adapter.queryPhotos({ ownerId: session.uid, isTrashed: 1 })).map(D1Adapter.normalizeRow)
+  // Only the id is needed for AssetDeleteV1 — same narrow-projection reasoning.
+  const deletedPhotos = env.DB
+    ? (await env.DB.prepare(
+        `SELECT id FROM photos WHERE ownerId = ? AND isTrashed = 1`
+      ).bind(session.uid).all()).results.map((r: any) => ({ _id: r.id }))
     : [];
 
   const stream = new ReadableStream({
@@ -115,16 +137,56 @@ export async function handleSyncStream(request: Request, env: Env): Promise<Resp
         ids: [session.uid]
       });
 
-      // Collect IDs of videos that are live photo companions
-      const livePhotoVideoIds = new Set<string>();
+      // ── Pre-pass: resolve duplicates BEFORE emitting anything ─────────────
+      // Two rows can share a checksum (legacy overload-era uploads, or a heal
+      // that filled in a checksum matching an existing row). Exactly one may
+      // reach the phone: its remote_asset table has a partial unique index on
+      // (owner_id, checksum), and a violation throws inside the sync isolate,
+      // which aborts ALL remote sync — permanently, because every later sync
+      // replays the identical stream.
+      //
+      // Deciding winners up front buys two things the old inline loop could
+      // not: the losers' AssetDeleteV1 can be emitted FIRST (so the phone frees
+      // the checksum before the survivor claims it), and a still whose motion
+      // lost can be repointed at the survivor instead of at an id this very
+      // stream deletes.
+      const winnerByChecksum = new Map<string, string>(); // checksum -> winning id
+      const remap = new Map<string, string>();            // loser id -> winner id
+      const loserIds: string[] = [];
       for (const p of photos) {
-        if (p?.livePhotoVideoId) livePhotoVideoIds.add(p.livePhotoVideoId);
+        if (!p) continue;
+        const csum = p.checksum || p._id;
+        const winner = winnerByChecksum.get(csum);
+        if (winner === undefined) {
+          winnerByChecksum.set(csum, p._id);
+        } else {
+          remap.set(p._id, winner);
+          loserIds.push(p._id);
+        }
       }
 
-      const seenChecksums = new Set<string>();
+      // Companion motions, resolved through the remap so a still that pointed
+      // at a losing duplicate marks the SURVIVOR as the hidden companion.
+      const livePhotoVideoIds = new Set<string>();
+      for (const p of photos) {
+        if (!p?.livePhotoVideoId) continue;
+        livePhotoVideoIds.add(remap.get(p.livePhotoVideoId) || p.livePhotoVideoId);
+      }
+
+      // Losers go out first — the phone must drop these ids (and release their
+      // checksums) before any survivor arrives holding the same checksum.
+      for (const id of loserIds) {
+        send({ type: 'AssetDeleteV1', data: { assetId: id }, ack: `AssetDeleteV1|${id}`, ids: [id] });
+      }
+
+      const emitted = new Set<string>();
       // Send all assets
       for (const photo of photos) {
         if (!photo) continue;
+        if (remap.has(photo._id)) continue; // duplicate loser, already deleted above
+        if (emitted.has(photo._id)) continue;
+        emitted.add(photo._id);
+
         // A companion motion video (some still's livePhotoVideoId points at it) is
         // emitted but marked hidden, so the phone tracks it (no re-upload) yet keeps
         // it out of the timeline grid.
@@ -136,16 +198,6 @@ export async function handleSyncStream(request: Request, env: Env): Promise<Resp
         // that haven't been backfilled yet — those still show twice until the next
         // upload backfills their checksum (see handleUpload).
         const csum = photo.checksum || photo._id;
-        if (seenChecksums.has(csum)) {
-          // A duplicate of an already-emitted asset (same checksum). Tell the app
-          // to drop THIS id so its UNIQUE(owner_id, checksum) table never keeps a
-          // ghost row that later collides and aborts sync. Real Immich dedups at
-          // upload; the per-user worker does it here. Stable ORDER BY (…, id ASC)
-          // keeps the same representative across syncs so this never flip-flops.
-          send({ type: 'AssetDeleteV1', data: { assetId: photo._id }, ack: `AssetDeleteV1|${photo._id}`, ids: [photo._id] });
-          continue;
-        }
-        seenChecksums.add(csum);
 
         const isVideo = photo.mimeType?.startsWith('video/') || photo.type === 'VIDEO';
         const dateStr = photo.fileCreatedAt || photo.uploadedAt || new Date().toISOString();
@@ -168,13 +220,17 @@ export async function handleSyncStream(request: Request, env: Env): Promise<Resp
           // photos load. `!!` coerces both D1 ints and Firestore bools correctly.
           isFavorite: !!photo.isFavorite,
           libraryId: null,
-          livePhotoVideoId: photo.livePhotoVideoId || null,
+          // Through the remap: if this still's motion lost a checksum dedup,
+          // point at the survivor rather than at an id deleted in this stream.
+          livePhotoVideoId: photo.livePhotoVideoId
+            ? (remap.get(photo.livePhotoVideoId) || photo.livePhotoVideoId)
+            : null,
           localDateTime: dateStr,
           originalFileName: photo.originalFileName || photo.fileName || photo._id,
           ownerId: session.uid,
           stackId: null,
           thumbhash: photo.thumbhash || null,
-          visibility: isCompanionMotion ? 'hidden' : (photo.visibility || 'timeline'),
+          visibility: isCompanionMotion ? 'hidden' : safeVisibility(photo.visibility),
           width: photo.width || 0,
         };
 
@@ -217,47 +273,28 @@ export async function handleSyncStream(request: Request, env: Env): Promise<Resp
     }
   });
 
-  // Kick a small lazy EXIF-backfill batch for rows uploaded before server-side
-  // EXIF extraction existed (needs the user's idToken for the server-ZKE key,
-  // which is why it rides on sync rather than a cron).
-  if (env.DB && env.waitUntil && now - lastExifBackfill > EXIF_BACKFILL_INTERVAL_MS) {
-    lastExifBackfill = now;
-    env.waitUntil(
-      backfillExifBatch(env, session.uid, session.idToken).catch(err =>
-        console.log('[ExifBackfill] dispatch failed:', err?.message)
-      )
-    );
-  }
-
-  // Checksum backfill: heals photos with empty checksums (the "every photo
-  // shows twice" bug) so the app can match local↔cloud. Runs every sync — the
-  // function self-guards against overlap + completion — so a library heals fast
-  // during active use.
+  // ── Background heal jobs: ONE per invocation, round-robin ─────────────────
+  // These used to all dispatch on every sync. A Worker invocation's ~50
+  // subrequests and its CPU/memory budget are SHARED with everything waitUntil
+  // spawns, so four jobs racing each other (each downloading and decrypting
+  // Telegram chunks) could exhaust the budget on their own — Cloudflare kills
+  // the whole invocation with error 1102 and the app sees the *sync* fail, not
+  // the background work. Rotating means each job still runs regularly (sync
+  // fires every few minutes during use) while any single invocation carries at
+  // most one job's load. Each job additionally self-guards for completion and
+  // overlap, so a finished job costs one cheap query before it bows out.
   if (env.DB && env.waitUntil) {
+    const jobs: Array<{ name: string; run: () => Promise<void> }> = [
+      { name: 'ChecksumBackfill', run: () => backfillChecksumBatch(env, session.uid, session.idToken) },
+      { name: 'LivePhotoRepair', run: () => repairLivePhotoLinks(env, session.uid) },
+      { name: 'ExifBackfill', run: () => backfillExifBatch(env, session.uid, session.idToken) },
+      { name: 'HeicThumbBackfill', run: () => backfillHeicThumbBatch(env, session.uid, session.idToken) },
+      { name: 'Tombstones', run: () => purgeExpiredTombstones(env, session.uid) },
+    ];
+    const job = jobs[healJobCursor % jobs.length];
+    healJobCursor++;
     env.waitUntil(
-      backfillChecksumBatch(env, session.uid, session.idToken).catch(err =>
-        console.log('[ChecksumBackfill] dispatch failed:', err?.message)
-      )
-    );
-  }
-
-  // One-shot (per isolate) live-photo link repair: clears poisoned video-row
-  // links and re-pairs stills with their motion videos via deviceAssetId.
-  if (env.DB && env.waitUntil) {
-    env.waitUntil(
-      repairLivePhotoLinks(env, session.uid).catch(err =>
-        console.log('[LivePhotoRepair] dispatch failed:', err?.message)
-      )
-    );
-  }
-
-  // HEIC thumbnail heal: retries conversions that failed because the Render
-  // backend was asleep at upload time (self-paced inside the function).
-  if (env.DB && env.waitUntil) {
-    env.waitUntil(
-      backfillHeicThumbBatch(env, session.uid, session.idToken).catch(err =>
-        console.log('[HeicThumbBackfill] dispatch failed:', err?.message)
-      )
+      job.run().catch(err => console.log(`[${job.name}] dispatch failed:`, err?.message))
     );
   }
 
