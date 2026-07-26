@@ -2858,6 +2858,28 @@ export async function purgeExpiredTombstones(env: Env, uid: string): Promise<voi
 let heicThumbBackfillComplete = false;
 let heicThumbBackfillRunning = false;
 let lastHeicThumbBackfill = 0;
+
+// Re-arm the HEIC backfill after a processor is (re)attached.
+//
+// The completion flag is module-scope, so it lives for the isolate's whole
+// life. The FIRST time this backfill runs on an isolate whose user has NO
+// processor configured, it sets `heicThumbBackfillComplete = true` (line ~2886)
+// and goes permanently dormant — correct, because without a per-user processor
+// the backfill must never run (plaintext bytes would have nowhere safe to go).
+//
+// But if that same user LATER attaches a processor (the whole point of the
+// onboarding step and the manual add), the flag is already stuck true, so
+// every existing thumb-less HEIC row would stay unhealed until a fresh isolate
+// happens to serve them — which, under active use, may not be for a long time.
+// `handleProcessor` calls this the instant a URL is saved, so the next sync or
+// timeline request re-runs the heal against the freshly-configured processor.
+// `lastHeicThumbBackfill` is cleared too so the 2-minute throttle does not add
+// a further delay to that first healing pass.
+export function resetHeicThumbBackfill(): void {
+  heicThumbBackfillComplete = false;
+  lastHeicThumbBackfill = 0;
+}
+
 export async function backfillHeicThumbBatch(env: Env, uid: string, idToken: string): Promise<void> {
   if (heicThumbBackfillComplete || heicThumbBackfillRunning || !env.DB) return;
   const nowTs = Date.now();
