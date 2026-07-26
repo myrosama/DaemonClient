@@ -24,6 +24,19 @@
 /** The full schema a fresh database gets: photos, albums, config, upload
  *  sessions and Drive files.
  *
+ *  The config seed is INSERT **OR IGNORE**, and that matters twice:
+ *
+ *  1. Replaying this script is a supported operation — `daemonclient update`
+ *     does it on every run, and setup does it when resuming an interrupted
+ *     install. A plain INSERT raises "UNIQUE constraint failed: config.key" the
+ *     second time, which does NOT match the already-exists/duplicate-column
+ *     pattern the callers swallow, so update aborted before it ever deployed —
+ *     on every install that had already been set up, i.e. all of them.
+ *
+ *  2. OR IGNORE, never OR REPLACE. These seeds are EMPTY strings. Replacing
+ *     them would overwrite a live zke_password with '' and make every photo
+ *     already in the user's channel permanently undecryptable.
+ *
  *  Note what the config seed does NOT contain: real `zke_password` /
  *  `zke_salt` values. Key material is generated per install and written
  *  afterwards — by the hosted provisioner in `deployment-service`, and by
@@ -68,7 +81,7 @@ CREATE TABLE album_assets (
 CREATE INDEX idx_album_assets_albumId ON album_assets(albumId);
 CREATE INDEX idx_album_assets_assetId ON album_assets(assetId);
 CREATE TABLE config (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-INSERT INTO config (key, value) VALUES ('zke_mode','server'),('zke_enabled','1'),('zke_password',''),('zke_salt','');
+INSERT OR IGNORE INTO config (key, value) VALUES ('zke_mode','server'),('zke_enabled','1'),('zke_password',''),('zke_salt','');
 CREATE TABLE upload_sessions (
   sessionId TEXT PRIMARY KEY, status TEXT NOT NULL DEFAULT 'active',
   createdAt TEXT NOT NULL, expiresAt TEXT NOT NULL
