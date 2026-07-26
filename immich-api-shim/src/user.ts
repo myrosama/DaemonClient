@@ -18,7 +18,11 @@ export async function handleUser(request: Request, env: Env, path: string): Prom
   if (path === '/api/users/me/preferences' && request.method === 'PUT') {
     return json(defaultPreferences());
   }
-  if (path === '/api/users/me/onboarding' && request.method === 'POST') {
+  // PUT is what the client actually sends — the generated SDK's
+  // setUserOnboarding is `PUT /users/me/onboarding` — so a POST-only route
+  // meant onboarding never persisted and the user was asked again every login.
+  // POST stays accepted; nothing is gained by breaking a caller that guessed.
+  if (path === '/api/users/me/onboarding' && (request.method === 'PUT' || request.method === 'POST')) {
     await setCachedConfig(env, session.uid, session.idToken, 'immich_profile', { isOnboarded: true }, { mergeExisting: true });
     return json({});
   }

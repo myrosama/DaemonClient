@@ -18,6 +18,27 @@ export async function handleSearch(request: Request, env: Env, path: string): Pr
     return handleSearchMetadata(request, env);
   }
 
+  // Everything else under /api/search gets an EMPTY, correctly SHAPED result
+  // rather than a 404.
+  //
+  // These are not hypothetical routes. Web and mobile both call
+  // searchSmart, getSearchSuggestions, getExploreData, searchPlaces and
+  // getAssetsByCity, and every one of them was getting a 404 — because this
+  // handler is dispatched from index.ts BEFORE the catch-all in stubs.ts, so
+  // the correctly shaped stubs that already existed at stubs.ts:35-40 were
+  // unreachable. The clients then fail on `.length` / `.assets.items` against
+  // an error body.
+  //
+  // Shapes match stubs.ts exactly; there is no smart search, no people and no
+  // places in the isolated per-user model, so empty is the honest answer.
+  if (path === '/api/search/suggestions') return json([]);
+  if (path === '/api/search/explore') return json([]);
+  if (path === '/api/search/places') return json([]);
+  if (path === '/api/search/cities') return json([]);
+  if (path === '/api/search/smart') {
+    return json({ assets: { total: 0, count: 0, items: [], facets: [] } });
+  }
+
   return new Response(JSON.stringify({ message: 'Not found' }), { status: 404 });
 }
 
