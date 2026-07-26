@@ -10,7 +10,11 @@ import { redactTelegramUrl } from './assets';
 // those 80 characters contained the entire token — logged on every 429, which
 // under a backup storm is constant.
 
-const TOKEN = '8154329871:AAHf3kZq7Lm2pXvN9dRtYuIoP0aSdFgHjKl';
+// Assembled at runtime, never written as a literal. A fixture shaped exactly
+// like a real Telegram token trips secret scanners on every push — and a repo
+// that cries wolf is a repo whose real alerts get waved through. The redaction
+// under test does not care how the string was built.
+const TOKEN = ['1'.repeat(10), ':', 'NOT-A-REAL-TOKEN-', 'x'.repeat(20)].join('');
 
 describe('redactTelegramUrl', () => {
   it('removes the token from a Bot API call', () => {
@@ -28,12 +32,9 @@ describe('redactTelegramUrl', () => {
   // The old bug was a fixed-length prefix. Assert on the token, not on a length.
   it('leaves no fragment of the token behind', () => {
     const out = redactTelegramUrl(`https://api.telegram.org/bot${TOKEN}/getFile?file_id=abc`);
-    for (const part of [TOKEN, TOKEN.split(':')[1], 'AAHf3kZq']) {
+    for (const part of [TOKEN, TOKEN.split(':')[1], TOKEN.slice(0, 8)]) {
       expect(out).not.toContain(part);
     }
-    // The numeric bot id is public (it is the bot's user id), but it is part of
-    // the same path segment and goes with it.
-    expect(out).not.toContain('8154329871');
   });
 
   it('keeps the method name, which is the reason the line is logged at all', () => {

@@ -7,6 +7,14 @@ vi.mock('./cached-config', () => ({
 import { handleAssets } from './assets';
 import { testSessionToken, testAuthEnv } from './test-session';
 
+// Fixtures are deliberately self-describing rather than realistic. A test
+// constant that LOOKS like a credential trips secret scanners on every push,
+// and a repo whose alerts are all false positives is a repo where a real leak
+// gets waved through. These only need to be non-empty and valid base64 where
+// the code decodes them.
+const FAKE_PASSWORD = 'not-a-real-password-'.padEnd(32, 'x');
+const FAKE_SALT = btoa('not-a-real-salt');
+
 // `/api/assets/zke-status` is the endpoint that made the plaintext bug
 // invisible. It reported `enabled` straight from the config flag and never
 // checked that the key material to honour it existed — so an install writing
@@ -47,7 +55,7 @@ async function status(zke: Zke) {
   return (await res.json()) as any;
 }
 
-const REAL = { password: 'p'.repeat(32), salt: 'c2FsdHNhbHQ=' };
+const REAL = { password: FAKE_PASSWORD, salt: FAKE_SALT };
 
 describe('zke-status tells the truth about all three states', () => {
   it('genuinely encrypted → enabled, nothing missing', async () => {
@@ -73,12 +81,12 @@ describe('zke-status tells the truth about all three states', () => {
   });
 
   it('a half-seeded install counts as missing (salt only)', async () => {
-    const s = await status({ mode: 'server', enabled: '1', password: 'p'.repeat(32), salt: '' });
+    const s = await status({ mode: 'server', enabled: '1', password: FAKE_PASSWORD, salt: '' });
     expect(s).toMatchObject({ enabled: false, keyMaterialMissing: true });
   });
 
   it('a half-seeded install counts as missing (password only)', async () => {
-    const s = await status({ mode: 'server', enabled: '1', password: '', salt: 'c2FsdA==' });
+    const s = await status({ mode: 'server', enabled: '1', password: '', salt: FAKE_SALT });
     expect(s).toMatchObject({ enabled: false, keyMaterialMissing: true });
   });
 

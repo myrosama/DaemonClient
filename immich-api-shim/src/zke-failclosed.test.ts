@@ -12,6 +12,14 @@ vi.mock('./cached-config', () => ({
 import { handleAssets } from './assets';
 import { testSessionToken, testAuthEnv } from './test-session';
 
+// Fixtures are deliberately self-describing rather than realistic. A test
+// constant that LOOKS like a credential trips secret scanners on every push,
+// and a repo whose alerts are all false positives is a repo where a real leak
+// gets waved through. These only need to be non-empty and valid base64 where
+// the code decodes them.
+const FAKE_PASSWORD = 'not-a-real-password-'.padEnd(32, 'x');
+const FAKE_SALT = btoa('not-a-real-salt');
+
 // Encryption must fail CLOSED.
 //
 // `getEncryptionKey` used to return null for two unrelated situations —
@@ -138,13 +146,13 @@ describe('encryption enabled but key material missing', () => {
   });
 
   it('refuses when only the salt is missing', async () => {
-    const res = await upload({ mode: 'server', enabled: '1', password: 'p'.repeat(32), salt: '' });
+    const res = await upload({ mode: 'server', enabled: '1', password: FAKE_PASSWORD, salt: '' });
     expect(((await res.json()) as any).code).toBe('encryption_unavailable');
     expect(sentToTelegram()).toBe(false);
   });
 
   it('refuses when only the password is missing', async () => {
-    const res = await upload({ mode: 'server', enabled: '1', password: '', salt: 'c2FsdA==' });
+    const res = await upload({ mode: 'server', enabled: '1', password: '', salt: FAKE_SALT });
     expect(((await res.json()) as any).code).toBe('encryption_unavailable');
     expect(sentToTelegram()).toBe(false);
   });
@@ -176,12 +184,12 @@ describe('the cases that must keep working', () => {
   });
 
   it('uploads when the key material is real', async () => {
-    await upload({ mode: 'server', enabled: '1', password: 'p'.repeat(32), salt: 'c2FsdHNhbHQ=' });
+    await upload({ mode: 'server', enabled: '1', password: FAKE_PASSWORD, salt: FAKE_SALT });
     expect(sentToTelegram()).toBe(true);
   });
 
   it('uploads when enabled is off even though material happens to exist', async () => {
-    await upload({ mode: 'server', enabled: '0', password: 'p'.repeat(32), salt: 'c2FsdHNhbHQ=' });
+    await upload({ mode: 'server', enabled: '0', password: FAKE_PASSWORD, salt: FAKE_SALT });
     expect(sentToTelegram()).toBe(true);
   });
 });
@@ -212,7 +220,7 @@ describe('the positive case actually encrypts', () => {
 
     botSeq++;
     const env: any = testAuthEnv({
-      DB: fakeDb({ mode: 'server', enabled: '1', password: 'p'.repeat(32), salt: 'c2FsdHNhbHQ=' }),
+      DB: fakeDb({ mode: 'server', enabled: '1', password: FAKE_PASSWORD, salt: FAKE_SALT }),
       waitUntil: () => {},
     });
     const req = new Request('https://worker.test/api/assets', {
@@ -264,7 +272,7 @@ describe('the positive case actually encrypts', () => {
 
     botSeq++;
     const env: any = testAuthEnv({
-      DB: fakeDb({ mode: 'server', enabled: '1', password: 'p'.repeat(32), salt: 'c2FsdHNhbHQ=' }),
+      DB: fakeDb({ mode: 'server', enabled: '1', password: FAKE_PASSWORD, salt: FAKE_SALT }),
       waitUntil: () => {},
     });
     const req = new Request('https://worker.test/api/assets', {

@@ -20,6 +20,12 @@ import path from 'node:path';
 import { ensureEncryptionKeys } from '../src/zke.mjs';
 import { MIGRATION_SQL, splitStatements } from '../../schema/schema.mjs';
 
+// Self-describing rather than realistic. Fixtures shaped like credentials trip
+// secret scanners on every push, and a repo full of false positives is one
+// where a real leak gets waved through.
+const FAKE_EXISTING_PASSWORD = btoa('not-a-real-existing-password');
+const FAKE_EXISTING_SALT = btoa('not-a-real-existing-salt');
+
 const REPO = path.join(import.meta.dirname, '..', '..');
 const read = (p) => fs.readFileSync(path.join(REPO, p), 'utf8');
 
@@ -110,7 +116,7 @@ describe('seeding key material', () => {
   });
 
   test('never touches an install that already has a password', async () => {
-    const db = fakeD1({ zke_password: 'ZXhpc3Rpbmcta2V5', zke_salt: 'ZXhpc3Rpbmctc2FsdA==' });
+    const db = fakeD1({ zke_password: FAKE_EXISTING_PASSWORD, zke_salt: FAKE_EXISTING_SALT });
     const outcome = await ensureEncryptionKeys({ query: db.query });
     assert.equal(outcome.seeded, false);
     assert.deepEqual(db.writes, []);
