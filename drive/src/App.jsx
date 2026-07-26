@@ -2039,10 +2039,15 @@ const NeedsOnboardingView = () => (
 // ============================================================================
 function App() {
     const hostname = window.location.hostname;
+    // A self-hosted Drive IS the app — it lives at the self-hoster's own domain
+    // (e.g. <project>-drive.web.app), which none of the operator host checks below
+    // would match. Without this it would render the marketing landing page and
+    // "Launch App" would send the user to the operator's drive.daemonclient.uz.
+    const IS_SELF_HOST = import.meta.env.VITE_SELF_HOST === '1';
     // drive.* is an APP domain: the marketing landing is the static index.html
     // served at `/`, so the SPA (app.html at /login, /dashboard) goes straight to
     // auth/dashboard and never renders the in-app LandingPage.
-    const isAppDomain = hostname.startsWith('app.') || hostname.startsWith('drive.')
+    const isAppDomain = IS_SELF_HOST || hostname.startsWith('app.') || hostname.startsWith('drive.')
         || hostname === 'daemonclient-app.web.app' || hostname === 'daemonclient-drive.web.app';
     const [appState, setAppState] = useState('loading');
 

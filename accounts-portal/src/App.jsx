@@ -84,6 +84,14 @@ function configPath(uid) {
 // ============================================================================
 
 async function createSession(idToken, refreshToken, returnUrl = '/dashboard') {
+  // Hosted-only. This is the cross-subdomain cookie broker that lets one login on
+  // accounts.daemonclient.uz carry across photos./drive./daemonclient.uz. A
+  // self-hosted install has none of that — and it must NEVER send the user's own
+  // Firebase idToken + refreshToken (a long-lived bearer credential for THEIR
+  // project) to the operator's auth worker. The dashboard routes off Firebase auth
+  // state directly on self-host, so this is skipped entirely. Return a benign
+  // success shape so the caller's redirect check simply finds nothing to do.
+  if (IS_SELF_HOST) return { ok: true, json: async () => ({ redirectUrl: '' }) }
   const res = await fetch(`${AUTH_WORKER}/create-session`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -94,6 +102,7 @@ async function createSession(idToken, refreshToken, returnUrl = '/dashboard') {
 }
 
 async function destroySession() {
+  if (IS_SELF_HOST) return
   await fetch(`${AUTH_WORKER}/logout`, {
     method: 'POST',
     credentials: 'include',
