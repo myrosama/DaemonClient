@@ -176,11 +176,19 @@ async function decryptChunk(encryptedChunk: ArrayBuffer, key: CryptoKey): Promis
  *  caused the bug this class exists to stop. See `getEncryptionKey`.
  */
 export class EncryptionUnavailableError extends Error {
-  constructor(where: string) {
+  constructor(where: string, selfHosted = false) {
+    // The remedy differs, so the message has to. A self-hoster has the CLI and
+    // can fix this themselves; a hosted user does not have a terminal, a CLI,
+    // or any idea what `daemonclient doctor` means — telling them to run it
+    // would be a self-host detail leaking into the hosted product, and a hosted
+    // user CAN reach this state (a provisioning step-2 failure, a D1 restore).
+    // Same code, same behaviour, one sentence chosen at the edge.
+    const remedy = selfHosted
+      ? 'Run `daemonclient doctor` to generate the missing keys.'
+      : 'This needs to be repaired on the server — please report it; nothing you can do in the app will fix it.';
     super(
       `Encryption is enabled for this install but its key material is missing (${where}). ` +
-      `Refusing rather than storing your file unencrypted. ` +
-      `Run \`daemonclient doctor\` to generate the missing keys.`,
+      `Refusing rather than storing your file unencrypted. ${remedy}`,
     );
     this.name = 'EncryptionUnavailableError';
   }
@@ -237,7 +245,7 @@ async function getEncryptionKey(env: Env, uid: string, idToken: string): Promise
       !zkeConfig.password && 'password',
       !zkeConfig.salt && 'salt',
     ].filter(Boolean).join(' and ');
-    throw new EncryptionUnavailableError(`no ${missing}`);
+    throw new EncryptionUnavailableError(`no ${missing}`, isSelfHost(env));
   }
 
   return deriveKey(zkeConfig.password, zkeConfig.salt);

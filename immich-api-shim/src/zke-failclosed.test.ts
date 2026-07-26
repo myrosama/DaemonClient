@@ -114,6 +114,26 @@ describe('encryption enabled but key material missing', () => {
     // A user reading this must learn (a) it was refused deliberately and
     // (b) the command that fixes it. "Internal upload error" taught neither.
     expect(body.message).toMatch(/encryption/i);
+    // HOSTED wording: this env has no SELF_HOST, and a hosted user has no
+    // terminal and no CLI. Telling them to run `daemonclient doctor` would be a
+    // self-host detail leaking into the hosted product — and a hosted install
+    // CAN reach this state via a failed provisioning step or a D1 restore.
+    expect(body.message).not.toContain('daemonclient doctor');
+    expect(body.message).toMatch(/report/i);
+  });
+
+  it('tells a SELF-HOSTED owner the command that fixes it', async () => {
+    botSeq++;
+    const env: any = testAuthEnv({ DB: fakeDb(broken), waitUntil: () => {}, SELF_HOST: '1' });
+    const form = new FormData();
+    form.append('assetData', new File([new Uint8Array([1, 2, 3, 4])], 'h.jpg', { type: 'image/jpeg' }));
+    const req = new Request('https://worker.test/api/assets', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${await testSessionToken()}` },
+      body: form,
+    });
+    const body = (await (await handleAssets(req, env, '/api/assets', new URL(req.url))).json()) as any;
+    expect(body.code).toBe('encryption_unavailable');
     expect(body.message).toContain('daemonclient doctor');
   });
 

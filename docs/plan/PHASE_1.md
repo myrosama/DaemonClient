@@ -39,13 +39,13 @@ was reachable from the second consumer.
 
 ## Tasks
 
-### 1.1 — Make encryption fail closed · SHIPPED, gates not all closed (shim `0ac7fc2b4938`)
+### 1.1 — Make encryption fail closed · gates 1-3 closed (shim `5e7dcfa605de`)
 `assets.ts` `getEncryptionKey` (~173-187), call site (~1063)
 
 - [x] Implemented
 - [x] Gate 1 · Security — run inline; found the retry-storm issue → Retry-After 3600
-- [ ] Gate 2 · Principles — **NOT RUN when this shipped.** Claimed passed without doing it. Independent review in flight.
-- [x] Gate 3 · Correctness — run inline; being re-run independently, since running it on my own code is what the process forbids
+- [x] Gate 2 · Principles — self-run (agent stalled twice). **Found a parity break:** the error told every user to run `daemonclient doctor`, which a hosted user has no way to do. Message now chosen by flavour.
+- [x] Gate 3 · Correctness — **independent review returned FAIL.** Found a real regression I introduced (both backfills permanently retiring healable rows) plus two fail-opens. All fixed, all with tests that fail against the previous code.
 - [ ] Gate 4 · Works for real — types clean, 182 tests green, tests fail without the fix, deployed. **"Verified live" NOT done:** needs one real upload from a real session.
 - [x] Deployed & committed
 
@@ -181,3 +181,27 @@ rather than failing the request.
 **Not verified live:** an actual upload. That needs a session on a real install,
 which means the operator's phone or browser. What is verified live is that all
 three workers are serving and auth is intact.
+
+### 1.1 — what the gates actually caught
+
+Worth recording, because it is the argument for the process.
+
+**Gate 3, run independently, returned FAIL** and found a regression I had not
+seen: making `getEncryptionKey` throw turned two graceful skips in the
+background backfills into jumps into per-row catches that stamp rows
+*permanently checked*. A config fault would have been recorded as "this photo is
+unfixable" across the library, on every timeline load and every sync, and fixing
+the keys later would not have undone it. I had traced all ten call sites myself
+and classified those two as safe. I was wrong.
+
+**Gate 2, which I originally skipped and asserted had passed**, found a parity
+break once actually run: the refusal told everyone to run `daemonclient doctor`.
+A hosted user has no terminal and no CLI, and a hosted install *can* reach this
+state through a failed provisioning step or a D1 restore.
+
+**Both gates found something I had already convinced myself was fine.** That is
+the whole point of them being run by someone other than the implementer, and
+running them myself — which I did for Gate 1, and for Gate 2 after two agent
+stalls — is a weaker version of the check, not an equivalent one.
+
+**Still open:** Gate 4's live half. Needs one real upload from a real session.
