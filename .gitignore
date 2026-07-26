@@ -81,7 +81,6 @@ Thumbs.db
 # Ignore the environment file for Cloud Functions
 functions/.env
 
-daemonclient-desktop/node_modules
 daemon-cli/src/daemonclient/config.py
 
 # wrangler files
