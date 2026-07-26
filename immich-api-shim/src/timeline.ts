@@ -88,10 +88,14 @@ async function getTimeBuckets(env: Env, uid: string, idToken: string, url: URL):
   // Narrow to an album (or empty for unsupported facets) when requested.
   const facetIds = await facetAssetIds(env, uid, idToken, url);
 
-  // Collect IDs of videos that are linked as live photo companions
+  // Videos that some LIVE still points at. Trashed stills must be excluded
+  // from this set: a motion whose still was deleted is no longer anybody's
+  // companion, and counting it as one hid it from the timeline while the trash
+  // view (which filters on isTrashed) never showed it either — the asset
+  // existed but had nowhere to appear.
   const livePhotoVideoIds = new Set<string>();
   for (const p of photos) {
-    if (p?.livePhotoVideoId) livePhotoVideoIds.add(p.livePhotoVideoId);
+    if (p?.livePhotoVideoId && !p.isTrashed) livePhotoVideoIds.add(p.livePhotoVideoId);
   }
 
   let filtered = photos.filter(p => p !== null);
@@ -131,10 +135,10 @@ async function getTimeBucket(env: Env, uid: string, idToken: string, url: URL): 
 
   const targetMonth = timeBucket.substring(0, 7); // "2024-03"
 
-  // Collect IDs of videos that are linked as live photo companions
+  // Same rule as getTimeBuckets: a trashed still's motion is not a companion.
   const livePhotoVideoIds = new Set<string>();
   for (const p of photos) {
-    if (p?.livePhotoVideoId) livePhotoVideoIds.add(p.livePhotoVideoId);
+    if (p?.livePhotoVideoId && !p.isTrashed) livePhotoVideoIds.add(p.livePhotoVideoId);
   }
 
   let filtered = photos.filter(p => {

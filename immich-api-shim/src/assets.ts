@@ -21,6 +21,31 @@ const KEY_LENGTH = 256;
 const PBKDF2_ITERATIONS = 100000;
 const CHUNK_SIZE = 19 * 1024 * 1024; // 19 MB
 
+// Durations arrive from the app as "H:MM:SS.ffffff", occasionally as plain
+// seconds, and sometimes not at all. Returns seconds, or null when there is
+// nothing trustworthy to read — callers must treat null as "unknown" rather
+// than as zero, because guessing wrong here re-pairs unrelated media.
+export function parseDurationSeconds(value: any): number | null {
+  if (value === null || value === undefined || value === '') return null;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  const text = String(value).trim();
+  if (!text) return null;
+
+  const parts = text.split(':');
+  if (parts.length === 3) {
+    const [h, m, s] = parts.map(Number);
+    if ([h, m, s].some((n) => !Number.isFinite(n))) return null;
+    return h * 3600 + m * 60 + s;
+  }
+  if (parts.length === 2) {
+    const [m, s] = parts.map(Number);
+    if ([m, s].some((n) => !Number.isFinite(n))) return null;
+    return m * 60 + s;
+  }
+  const n = Number(text);
+  return Number.isFinite(n) ? n : null;
+}
+
 // Where to send a user who needs the web app. A self-hosted install has to
 // name the operator's own address — pointing their users at our site would be
 // both wrong and a link back to infrastructure they deliberately do not use.
@@ -2014,7 +2039,29 @@ async function handleThumbnail(request: Request, env: Env, uid: string, assetId:
 async function handleMediaHead(env: Env, uid: string, assetId: string, idToken: string, path: string): Promise<Response> {
   const photo = await loadPhotoById(env, uid, assetId, idToken);
   if (!photo) return new Response(null, { status: 404 });
+
+  // A HEAD must agree with what a GET would do. This used to answer 200 for
+  // any row that merely existed, including deleted assets (whose row survives
+  // as a tombstone with its chunks emptied) and thumbnails that were never
+  // generated — so a player would begin a request the GET then failed, and the
+  // app reported a broken file rather than a missing one.
+  const isTrashed = photo.isTrashed === 1 || photo.isTrashed === true;
+  if (isTrashed) return new Response(null, { status: 404 });
+
   const isThumb = path.endsWith('/thumbnail');
+  if (isThumb) {
+    if (!photo.telegramThumbId && !photo.telegramPreviewId) {
+      return new Response(null, { status: 404 });
+    }
+  } else {
+    const hasChunks = Array.isArray(photo.telegramChunks)
+      ? photo.telegramChunks.length > 0
+      : !!(photo.telegramChunks && photo.telegramChunks !== '[]');
+    if (!hasChunks && !photo.telegramOriginalId) {
+      return new Response(null, { status: 404 });
+    }
+  }
+
   let mimeType = photo.mimeType || 'application/octet-stream';
   if (isThumb) mimeType = (photo.isHeic || !mimeType.startsWith('image/')) ? 'image/jpeg' : mimeType;
   // Match what handleOriginal will actually serve for /video/playback when an
@@ -3194,6 +3241,17 @@ async function linkLivePhoto(env: Env, uid: string, assetId: string, photo: any,
     console.log(`[LivePhoto] ${candidatesForLinking.length} candidates after filtering current asset`);
 
     if (isVideo) {
+      // A live photo's motion clip is a second or two long. Without this gate
+      // the timestamp fallback below would let a real video uploaded near an
+      // unrelated HEIC claim it as a still, which silently converts a normal
+      // video into somebody's live photo and hides it from the timeline.
+      // (The still→video branch already checks this; the video side did not.)
+      const seconds = parseDurationSeconds(photo.duration);
+      if (seconds !== null && (seconds < 0.3 || seconds > 6)) {
+        console.log(`[LivePhoto] ${assetId} is ${seconds}s — too long to be a motion clip, not pairing`);
+        return;
+      }
+
       // Look for matching HEIC image
       console.log(`[LivePhoto] Looking for HEIC pair for video ${assetId}`);
       const matchingImage = candidatesForLinking.find((p: any) => {
