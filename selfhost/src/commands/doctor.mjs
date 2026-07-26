@@ -174,7 +174,7 @@ export async function runDoctor({ showKeys = false } = {}) {
       else {
         s5.fail('Processor');
         add('warn', `Processor unhealthy: ${(body.problems || []).join('; ') || res.status}`,
-          'Check its logs on Render, or run: daemonclient processor');
+          'Check its logs on Vercel, or run: daemonclient processor');
       }
     } catch {
       s5.fail('Processor');
@@ -182,7 +182,7 @@ export async function runDoctor({ showKeys = false } = {}) {
         'It wakes on the next conversion attempt');
     }
   } else {
-    info('No processor configured — HEIC and video thumbnails will be blank');
+    info('No processor configured — HEIC photos will have no grid thumbnail');
   }
 
   report(findings, state);

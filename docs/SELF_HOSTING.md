@@ -11,9 +11,10 @@ You need three things, all free:
 | **Cloudflare** | Workers + D1 on the free plan | runs the API |
 | **Node 18+** | on the machine you set up from | runs the setup |
 
-One more is optional: a small **media processor** (also free) that converts
-iPhone HEIC photos and pulls thumbnails out of videos. Skip it and everything
-still works, those thumbnails just stay blank.
+One more is optional: a small **media processor** (also free) that turns iPhone
+HEIC photos into grid thumbnails. Skip it and everything still works — HEIC
+photos just show no grid thumbnail. (Every other format is thumbnailed by
+Telegram automatically.)
 
 ---
 
@@ -138,15 +139,26 @@ unreadable.
 
 ## The optional media processor
 
-Cloudflare Workers cannot decode HEIC or run ffmpeg — not a limitation of this
-project, just more CPU than a worker is allowed to use. The processor is a small
-service that does those two jobs.
+Cloudflare Workers cannot decode HEIC — not a limitation of this project, just
+more CPU than a worker is allowed to use. The processor is a small service that
+does that one job, so iPhone photos get a grid thumbnail.
 
-**Deploy it free on Render:** fork this repo, go to
-[render.com/deploy](https://render.com/deploy) and point it at your fork. Render
-reads `processor/render.yaml` and configures everything. Set `OWNER_UID` to your
-user id (the setup summary and `daemonclient processor` both show it) so only
-your account can use that instance. Then:
+**Deploy it free on Vercel:**
+
+```bash
+cd processor
+npx vercel deploy --prod
+```
+
+Then set two environment variables on the Vercel project (dashboard → Settings →
+Environment Variables) and redeploy:
+
+| Variable | Value |
+|---|---|
+| `FIREBASE_PROJECT_ID` | the Firebase project your install uses — **required**; the processor rejects every request while it is unset |
+| `OWNER_UID` | your user id (the setup summary and `daemonclient processor` both show it) so only your account can use that instance |
+
+Then connect it:
 
 ```bash
 daemonclient processor
@@ -154,10 +166,12 @@ daemonclient processor
 
 and paste the URL.
 
-It also runs anywhere else that takes a Dockerfile — Fly, Cloud Run, Railway, or
-your own machine. Free instances sleep when idle and take a minute to wake; that
-is fine, because a conversion that fails against a sleeping instance is retried
-a few minutes later, by which point the failed request has woken it.
+The handler in `processor/api/convert.js` is a single stateless function, so it
+runs unchanged anywhere that speaks the standard `Request`/`Response` interface —
+Netlify Functions, Cloudflare Pages Functions, Firebase Functions. Free instances
+sleep when idle and take a moment to wake; that is fine, because a conversion that
+fails against a sleeping instance is retried a few minutes later, by which point
+the failed request has woken it.
 
 ---
 
@@ -258,8 +272,9 @@ or add it in the Cloudflare dashboard under your worker's variables.
 **Uploads fail with 413.** Cloudflare's free plan caps request bodies at 100 MB,
 so single files above that cannot be uploaded from mobile. Known limitation.
 
-**HEIC photos and videos have blank thumbnails.** Expected without a processor —
-see above.
+**HEIC photos have blank thumbnails.** Expected without a processor — see above.
+(Other formats, including videos, are thumbnailed by Telegram, so they are
+unaffected.)
 
 **Everything worked, then stopped after a while.** Check
 [Cloudflare's free tier limits](https://developers.cloudflare.com/workers/platform/limits/):
@@ -279,7 +294,7 @@ GitHub's public releases endpoint, sends nothing about your install, and can be
 turned off by clearing `UPDATE_REPO`.
 
 **Is this really free?** Yes, within the free tiers of Telegram, Cloudflare and
-(if you use it) Render. There is no paid version of self-hosting and no key to
+(if you use it) Vercel. There is no paid version of self-hosting and no key to
 buy.
 
 **What if this project disappears?** You keep everything. Your files are in your
