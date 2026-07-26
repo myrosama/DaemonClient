@@ -8,6 +8,12 @@ only fix once and push, so both types of users get the update."*
 This is a hard requirement, not an aspiration. Every task in the master plan is
 checked against it.
 
+**Scope, set by the operator 2026-07-26: one storage per user.** Multi-user is
+not being built for either flavour — a self-hosted install belongs to exactly
+one person, the same as a hosted one. Where anything below reads like tenancy it
+means "this install's owner", never "one of several accounts". It may be
+revisited later; nothing gets built in anticipation of it.
+
 ---
 
 ## Where we already stand

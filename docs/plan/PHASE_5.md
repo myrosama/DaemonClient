@@ -76,3 +76,38 @@ Everything it exercises must exist first.
 ## Notes during implementation
 
 _(append as you go — surprises, decisions, anything the plan got wrong)_
+
+### 5.5 — Update the hosted fleet on a schedule
+`deployment-service/wrangler.toml` (new `[triggers]`), `deployment-service/src/index.ts`
+
+- [ ] Implemented
+- [ ] Gate 1 · Security
+- [ ] Gate 2 · Principles
+- [ ] Gate 3 · Correctness
+- [ ] Gate 4 · Works for real
+- [ ] Deployed & committed
+
+**Watch for:** This deploys to real users' workers unattended. It needs a kill
+switch, a cap per run, and per-worker success recorded — a silent failure here
+looks identical to success and the fleet drifts again.
+
+Use the **master token**, not the per-user OAuth refresh token. Those rotate on
+every use and a spent one is what stalled the fleet before. Every provisioned
+worker is on the operator's own account, so the master token can reach them all.
+
+### 5.6 — A self-hosted install notices updates on its own
+`immich-api-shim/src/update-check.ts`, `selfhost/src/commands/setup.mjs`
+
+- [ ] Implemented
+- [ ] Gate 1 · Security
+- [ ] Gate 2 · Principles
+- [ ] Gate 3 · Correctness
+- [ ] Gate 4 · Works for real
+- [ ] Deployed & committed
+
+**Watch for:** Gate 2 is the sharp one here. Nothing may be added that requires
+knowing a self-hosted install exists — no registry, no check-in, no push. The
+worker polls GitHub anonymously and messages the owner through **their own** bot.
+If a design step needs their worker URL on our side, it is the wrong design.
+
+Deduplicate the notification, or one release nags daily forever.

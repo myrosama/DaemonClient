@@ -76,7 +76,7 @@ re-arms the public-constant signing fallback for that worker.
 
 | File | What it is |
 |---|---|
-| `MASTER_PLAN.md` | the phased plan of record — 6 phases, 43 tasks |
+| `MASTER_PLAN.md` | the phased plan of record — 6 phases, 45 tasks |
 | `PHASE_1.md` … `PHASE_6.md` | working docs: gate checklist per task, notes as you go |
 | `GATES.md` | the four gates every task passes before commit |
 | `FINDINGS.md` | the verified backlog — every item confirmed at file:line |

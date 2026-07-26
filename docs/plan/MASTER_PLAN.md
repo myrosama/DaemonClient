@@ -185,10 +185,17 @@ plaintext-at-rest is worse and already happening.
   Drive gets this right (`drive.ts:150-151` checks `existing.ownerId !== uid`),
   and that asymmetry is what says this is an oversight rather than a deliberate
   single-tenant assumption.
-- **Blast radius:** nil on hosted — one worker, one database, one person. On a
-  self-hosted install with a second registered account it is cross-user read,
-  modify and permanent delete by asset id. Self-host has not shipped, so this is
-  not exploitable today; it must not be what ships with it.
+- **Blast radius — revised by the operator, 2026-07-26.** **Multi-user is not
+  being built, at all. One storage per user, both flavours.** That decision
+  demotes this task: the security review's severity rested on a second account
+  existing on one install, and by design there will not be one. The real
+  boundary is Task 2.4's owner gate, which refuses every non-owner at the door.
+  This task becomes **defence in depth behind that gate**, not the fix itself.
+- **So do the cheap half, skip the risky half.** Changing the accessor
+  signatures costs almost nothing and stops the next call site reintroducing the
+  bug. The albums schema migration — a new column plus a backfill over existing
+  rows, which can hide a user's own albums from them — buys nothing once the
+  gate is closed. Drop it unless it falls out for free.
 - **How:** change the signatures — `getPhoto(id, ownerId)`,
   `updatePhoto(id, ownerId, fields)`, `deletePhoto(id, ownerId)` — so the filter
   cannot be forgotten at a call site rather than relying on each caller to add a
@@ -253,10 +260,20 @@ plaintext-at-rest is worse and already happening.
 - **What:** store `owner_uid` at setup and gate config routes on it.
 - **Files:** `selfhost/src/commands/setup.mjs`, `immich-api-shim/src/server.ts`,
   `immich-api-shim/src/index.ts`.
+- **This is now the security boundary for self-host, not a supplement to one.**
+  The operator has ruled out multi-user entirely: one storage per user, both
+  flavours. So there is exactly one legitimate account per install, and the gate
+  can be blunt — refuse anyone who is not the owner, everywhere, rather than
+  route by route. That is easier to get right and easier to audit than owner
+  filters spread across every accessor, and it is why Task 2.0 shrank.
+  Being the whole boundary raises the bar on this task: it must cover **every**
+  authenticated route, not just the config-returning ones, and a route added
+  later must be covered by default. Put the check in the router before dispatch,
+  not in each handler.
 - **How:** hosted installs are one worker per user, so this is a no-op there.
   Self-host is one worker with an open Firebase signup, so any account that can
   register can currently read the install's config. Write `owner_uid` during
-  setup; config-returning routes require `session.uid` to match.
+  setup; require `session.uid` to match.
   **Fail closed:** the review caught that "no `owner_uid` means allow" is
   fail-open — a self-hosted install whose config row failed to write would be
   wide open. So: when `SELF_HOST=1` and `owner_uid` is absent, **refuse** and
@@ -736,14 +753,88 @@ it from unit tests.
 - **How:** from one tag: build, deploy the hosted fleet, publish the GitHub
   release the self-hosted update check watches. If it cannot do both, it does
   neither and says why.
+- **Mark the release's nature.** A `security:` prefix or label on the release,
+  because 5.6 uses it to decide how loudly to tell the owner. A convention in
+  our own repo costs nothing and is the only severity signal a self-hosted
+  install can get without us knowing anything about it.
 - **Verify:** a dry run shows both steps from one tag.
 - **Depends on:** 5.3
 - **Risk:** medium
+
+### Task 5.5 — Update the hosted fleet on a schedule, not on a page visit
+- **What:** a Cron Trigger on the deployment service that walks the fleet.
+- **Files:** `deployment-service/wrangler.toml` (add `[triggers] crons`),
+  `deployment-service/src/index.ts`.
+- **Why:** the hosted fleet updates from exactly one place today —
+  `accounts-portal/src/App.jsx:1744`, a fire-and-forget call fired when someone
+  loads the **accounts portal**. Not on Photos login, not on app sync. Most
+  users never return to that page after setup, so the fleet drifts and a
+  published security fix reaches almost nobody. This is why `dc-ozkv3fuz` sat on
+  an old shim through daily logins. **There is no Cron Trigger anywhere in this
+  repo** — verified.
+- **How:** a daily cron on the deployment service: read the users whose
+  `lastDeployedVersion` ≠ `SHIM_VERSION` and deploy each. Every provisioned
+  worker lives on the operator's own Cloudflare account, so the **master token
+  can deploy them** — no dependence on a per-user OAuth refresh token that may
+  already be spent, which is the failure that stalled the fleet in the first
+  place. Rate-limit the walk, and record per-worker success so a persistent
+  failure is visible instead of silent.
+- **Keep the on-login nudge** as the fast path for someone who just logged in.
+- **Verify:** a worker deliberately pinned to an old version is on the current
+  one within a day, with nobody visiting any page. A worker whose deploy fails
+  is reported, not swallowed.
+- **Risk:** medium — it deploys to real users' workers unattended, so it needs a
+  kill switch and a cap on how many it touches per run.
+
+### Task 5.6 — Make a self-hosted install notice an update without being watched
+- **What:** a Cron Trigger on the **owner's own** worker, and a notification
+  through their **own** Telegram bot.
+- **Files:** `immich-api-shim/src/update-check.ts`, `selfhost/src/commands/setup.mjs`
+  (provision the trigger), the self-host wrangler config the CLI generates.
+- **Why:** `update-check.ts` is already right in shape — it polls GitHub
+  anonymously, caches 12 hours in the install's own D1, sends nothing about the
+  install, and never self-mutates. What it lacks is a heartbeat and an audience:
+  it only runs when a request happens to hit the worker, and it reports to a
+  dashboard banner nobody is looking at. An install whose owner does not open
+  the dashboard never learns anything.
+- **How:** the CLI provisions a daily Cron Trigger on the user's own worker as
+  part of setup. On a hit, the worker sends **one message via the user's own bot
+  to their own channel** — the bot already exists, it is already the storage
+  layer, and it reaches their phone. Louder wording when the release is marked
+  security (see 5.4). Deduplicate so one release produces one message, not one a
+  day forever.
+- **Explicitly NOT a service of ours.** No registry of self-hosters, no
+  check-in, no push. Nothing about the install leaves it except an anonymous
+  GET to GitHub, which is what already happens. A worker of ours that told
+  installs to update would require knowing where they are — collecting that is
+  telemetry, keeping it is a target, and depending on it breaks P3 outright.
+  **GitHub is the tunnel; it already is.** What was missing was the alarm clock.
+- **Applying stays manual** — `daemonclient update` (git pull, prompted; rebuild;
+  redeploy with the owner's own credentials). See the note below on why.
+- **Verify:** an install left alone for a day, with a release published, sends
+  exactly one Telegram message and shows the banner. Two days produce no second
+  message. A GitHub outage produces neither an error to the user nor a retry
+  storm.
+- **Depends on:** 5.4
+- **Risk:** low
+
+> **Why self-host does not auto-apply.** Today the deploy credential lives only
+> on the owner's machine, in `config.env`. Auto-applying inside the worker would
+> mean storing a deploy-capable Cloudflare token **in the worker** — turning any
+> worker compromise into a compromise of their whole Cloudflare account, and
+> making an unattended `git pull` + deploy the normal path. That is the shape
+> supply-chain incidents take, and `update.mjs` already says so in its own
+> header. Anyone who wants it unattended can run `daemonclient update` from a
+> scheduler on their own machine, or from a GitHub Action in their own fork with
+> their own secrets — their infrastructure, their decision, still nothing of
+> ours. **Open question 5 asks whether the operator agrees.**
 
 **Exit criteria**
 - A stranger's install works, verified by doing it.
 - CI proves both flavours from every commit.
 - One release action reaches both kinds of user.
+- A hosted worker updates without its user doing anything.
+- A self-hosted owner hears about a security release without opening anything.
 
 ---
 
@@ -840,6 +931,16 @@ it, and where the code lives — without asking.
    maintenance burden?
 4. **Phase 5.1 throwaway accounts** — will you create them, or should the run be
    scripted for you to execute?
+5. **Does a self-hosted install ever apply an update by itself?** (Task 5.6.)
+   The recommendation is **no**: notify loudly through the owner's own bot,
+   apply with `daemonclient update`. Auto-applying means storing a
+   deploy-capable Cloudflare token inside the worker, which turns a worker
+   compromise into a Cloudflare account compromise and makes unattended
+   `git pull` + deploy the normal path. The cost of saying no is that a lazy
+   self-hoster can sit on a known-vulnerable install indefinitely, and we cannot
+   tell — by design, since we do not know they exist. If that trade is wrong,
+   the alternative is an opt-in flag at setup that stores a **scoped**
+   deploy-only token, defaulting to off.
 
 
 ---
