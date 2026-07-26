@@ -1,4 +1,5 @@
 import type { Env } from './index';
+import { isSelfHost, sessionScope } from './selfhost-auth';
 
 /** Shared helpers for Firestore REST and auth token extraction */
 
@@ -79,6 +80,18 @@ export async function requireAuth(request: Request, env?: Env): Promise<SessionD
   const token = getSessionToken(request);
   if (!token) throw new Error('Not authenticated');
   let session: SessionData | null = null;
+
+  // Self-hosted installs have no Firebase. Sessions are signed with the
+  // install's own secret and MUST NOT fall back to the unsigned decode path —
+  // that path trusts the token's contents verbatim, so accepting it here would
+  // let anyone forge a session by base64-encoding a uid.
+  if (env && isSelfHost(env)) {
+    if (!token.includes('.')) throw new Error('Session expired');
+    session = await verifySignedSessionToken(token, sessionScope(env));
+    if (!session) throw new Error('Session expired');
+    return session;
+  }
+
   if (env?.APP_IDENTIFIER && token.includes('.')) {
     session = await verifySignedSessionToken(token, env.APP_IDENTIFIER);
   } else {
@@ -139,6 +152,11 @@ export function firestoreDocPath(env: Env, uid: string, ...parts: string[]): str
 const firestoreCache = new Map<string, { value: any; expires: number }>();
 
 export async function firestoreGet(env: Env, uid: string, path: string, idToken: string): Promise<any> {
+  // A self-hosted install talks to no Google service at all. Every config read
+  // is served from its own D1 (getCachedConfig checks D1 first), so reaching
+  // this point means the key genuinely is not configured — returning null keeps
+  // that honest instead of firing a doomed cross-internet request per call.
+  if (isSelfHost(env)) return null;
   const cacheKey = `${uid}:${path}`;
   const now = Date.now();
   const cached = firestoreCache.get(cacheKey);

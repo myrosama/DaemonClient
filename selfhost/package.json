@@ -1,0 +1,19 @@
+{
+  "name": "daemonclient-selfhost",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Setup and maintenance CLI for a self-hosted DaemonClient",
+  "type": "module",
+  "bin": {
+    "daemonclient": "./bin/daemonclient.mjs"
+  },
+  "scripts": {
+    "setup": "node bin/daemonclient.mjs setup",
+    "status": "node bin/daemonclient.mjs status",
+    "update": "node bin/daemonclient.mjs update",
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

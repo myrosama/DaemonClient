@@ -126,3 +126,7 @@ immich-api-shim/wrangler-ozkv3fuz.toml
 
 # Local test venvs
 processor/.venv*/
+
+# Self-hosted setup state — contains live credentials
+.daemonclient-selfhost.json
+.daemonclient-selfhost.json.corrupt-*
