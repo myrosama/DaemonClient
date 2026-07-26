@@ -214,7 +214,23 @@ async function getEncryptionKey(env: Env, uid: string, idToken: string): Promise
     ? await new D1Adapter(env.DB).getZkeConfig()
     : await firestoreGet(env, uid, 'config/zke', idToken);
 
-  if (!zkeConfig || !zkeConfig.enabled) return null;
+  if (!zkeConfig) return null;
+
+  // `enabled` is a real boolean only on the D1 branch, which normalises
+  // `zke_enabled === '1'`. Firestore passes the wire type straight through
+  // (helpers.ts `fromFirestoreValue`), so it can arrive as a boolean, the
+  // string "true"/"false", or 0/1. A bare truthiness test gets it wrong in
+  // both directions: "false" is TRUTHY, and 0 or "" would land back in the
+  // silent-plaintext branch this function exists to delete.
+  //
+  // So: only these count as off. Anything else unrecognised is treated as ON,
+  // because a config we cannot read confidently must not become a licence to
+  // store someone's photos in the clear.
+  const off = zkeConfig.enabled === false || zkeConfig.enabled === 0 ||
+    zkeConfig.enabled === '' || zkeConfig.enabled === '0' ||
+    zkeConfig.enabled === 'false' || zkeConfig.enabled === undefined ||
+    zkeConfig.enabled === null;
+  if (off) return null;
 
   if (!zkeConfig.password || !zkeConfig.salt) {
     const missing = [
@@ -2926,6 +2942,17 @@ export async function backfillHeicThumbBatch(env: Env, uid: string, idToken: str
         await adapter.updatePhoto(photo.id, patch);
         console.log(`[HeicThumbBackfill] healed thumbnail for ${photo.id}`);
       } catch (e: any) {
+        // Missing key material is a CONFIGURATION fault, not corrupt bytes. It
+        // is install-wide, not per-row, and it is repaired by a human — so
+        // stamping here would permanently retire every server-encrypted photo
+        // the run touches, and fixing the keys afterwards would not bring their
+        // thumbnails back. Stop the run instead and leave the rows healable.
+        // (Before the fail-closed change this was the `!serverKey` early return
+        // just above, which correctly did nothing.)
+        if (e instanceof EncryptionUnavailableError) {
+          console.log(`[HeicThumbBackfill] encryption keys unavailable — stopping, nothing stamped`);
+          return;
+        }
         // A throw here is a permanent per-row failure (corrupt/undecryptable
         // bytes) — stamp it so the backfill can never loop on it.
         console.log(`[HeicThumbBackfill] ${photo.id} failed permanently (stamping checked): ${e?.message}`);
@@ -3083,6 +3110,18 @@ export async function backfillChecksumBatch(env: Env, uid: string, idToken: stri
           if (checksum) { patch.checksum = checksum; healed++; }
           await adapter.updatePhoto(photo.id, patch);
         } catch (e: any) {
+          // Missing key material is a configuration fault — install-wide and
+          // repaired by a human, not a property of this row. Stamping it would
+          // do exactly what the comment above forbids: retire healable rows
+          // permanently on the strength of a state that is meant to persist
+          // until someone fixes it, leaving photos duplicated on the phone with
+          // no path back. This ran on every timeline load and every sync, so
+          // the whole broken window would have been spent chewing through the
+          // library irreversibly.
+          if (e instanceof EncryptionUnavailableError) {
+            console.log(`[ChecksumBackfill] encryption keys unavailable — stopping, nothing stamped`);
+            break pages;
+          }
           console.log(`[ChecksumBackfill] ${photo.id} failed: ${e?.message}`);
           try { await adapter.updatePhoto(photo.id, { checksumChecked: 1 }); } catch { /* ignore */ }
         }

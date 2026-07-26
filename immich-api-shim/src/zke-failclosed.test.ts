@@ -96,6 +96,11 @@ describe('encryption enabled but key material missing', () => {
   it('refuses the upload instead of storing plaintext', async () => {
     const res = await upload(broken);
     expect(res.status).toBe(503);
+    // Pin the REASON, not just the status. THREE different 503s live on this
+    // path — this refusal, the byte-budget shed, and the direct-byte-path flag
+    // — and the other two also send nothing to Telegram. Asserting the status
+    // alone would pass against a build that refuses for an unrelated reason.
+    expect(((await res.json()) as any).code).toBe('encryption_unavailable');
   });
 
   it('sends NOTHING to Telegram', async () => {
@@ -114,13 +119,22 @@ describe('encryption enabled but key material missing', () => {
 
   it('refuses when only the salt is missing', async () => {
     const res = await upload({ mode: 'server', enabled: '1', password: 'p'.repeat(32), salt: '' });
-    expect(res.status).toBe(503);
+    expect(((await res.json()) as any).code).toBe('encryption_unavailable');
     expect(sentToTelegram()).toBe(false);
   });
 
   it('refuses when only the password is missing', async () => {
     const res = await upload({ mode: 'server', enabled: '1', password: '', salt: 'c2FsdA==' });
-    expect(res.status).toBe(503);
+    expect(((await res.json()) as any).code).toBe('encryption_unavailable');
+    expect(sentToTelegram()).toBe(false);
+  });
+
+  it('refuses when zke_mode is missing but enabled still claims encryption', async () => {
+    // getZkeConfig returned null whenever zke_mode was absent, and every caller
+    // reads null as "off" — a fail-open sitting inside the one function whose
+    // job is to fail closed.
+    const res = await upload({ enabled: '1', password: '', salt: '' });
+    expect(((await res.json()) as any).code).toBe('encryption_unavailable');
     expect(sentToTelegram()).toBe(false);
   });
 });
@@ -159,5 +173,90 @@ describe('the refusal does not invite a retry storm', () => {
     // against a worker already in a bad state.
     const res = await upload({ mode: 'server', enabled: '1', password: '', salt: '' });
     expect(Number(res.headers.get('Retry-After'))).toBeGreaterThanOrEqual(600);
+  });
+});
+
+describe('the positive case actually encrypts', () => {
+  // Every other test here asserts an ABSENCE (nothing reached Telegram). All of
+  // them would still pass if encryption were removed outright — encryptChunk
+  // made a no-op, deriveKey returning a constant. For a file whose whole point
+  // is "nothing reaches Telegram in the clear", the assertion that was missing
+  // is the positive one.
+  it('does not send the plaintext bytes to Telegram', async () => {
+    const PLAINTEXT = new Uint8Array([0xde, 0xad, 0xbe, 0xef]);
+
+    const form = new FormData();
+    form.append('assetData', new File([PLAINTEXT], 'secret.jpg', { type: 'image/jpeg' }));
+    form.append('deviceAssetId', 'dev-enc');
+    form.append('deviceId', 'phone');
+
+    botSeq++;
+    const env: any = testAuthEnv({
+      DB: fakeDb({ mode: 'server', enabled: '1', password: 'p'.repeat(32), salt: 'c2FsdHNhbHQ=' }),
+      waitUntil: () => {},
+    });
+    const req = new Request('https://worker.test/api/assets', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${await testSessionToken()}` },
+      body: form,
+    });
+    await handleAssets(req, env, '/api/assets', new URL(req.url));
+
+    const docs: Array<{ name: string; bytes: Uint8Array }> = [];
+    for (const [u, init] of fetchSpy.mock.calls) {
+      if (!String(u).includes('sendDocument')) continue;
+      const body = (init as any)?.body;
+      if (!(body instanceof FormData)) continue;
+      const doc: any = body.get('document');
+      if (!doc || typeof doc.arrayBuffer !== 'function') continue;
+      docs.push({ name: doc.name ?? '', bytes: new Uint8Array(await doc.arrayBuffer()) });
+    }
+    expect(docs.length).toBeGreaterThan(0);
+
+    // Everything PERSISTED must be ciphertext. AES-GCM is 12-byte IV +
+    // ciphertext + 16-byte tag, so it is strictly longer than its input and
+    // must not contain it verbatim.
+    const stored = docs.filter((d) => d.name !== 'secret.jpg');
+    expect(stored.length).toBeGreaterThan(0);
+    for (const d of stored) {
+      expect(d.bytes.length).toBeGreaterThan(PLAINTEXT.length);
+      const hex = Array.from(d.bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+      expect(hex).not.toContain('deadbeef');
+    }
+  });
+
+  // KNOWN AND DELIBERATE, pinned here so it cannot regress silently.
+  //
+  // `fetchTelegramThumb` (assets.ts:792) uploads the PLAINTEXT original to the
+  // user's channel so Telegram will generate a thumbnail, then deletes that
+  // message. So on an encrypted install the unencrypted file does reach
+  // Telegram — briefly — and the only thing removing it is a deleteMessage
+  // call. The comment at assets.ts:1530 records a past regression where the
+  // raw copy was NOT deleted under load.
+  //
+  // This test does not endorse it. It makes the delete load-bearing: remove it
+  // and this fails. The wider question is finding §18.
+  it('deletes the temp plaintext it sends to get a thumbnail', async () => {
+    const form = new FormData();
+    form.append('assetData', new File([new Uint8Array([1, 2, 3, 4])], 'temp.jpg', { type: 'image/jpeg' }));
+    form.append('deviceAssetId', 'dev-tmp');
+    form.append('deviceId', 'phone');
+
+    botSeq++;
+    const env: any = testAuthEnv({
+      DB: fakeDb({ mode: 'server', enabled: '1', password: 'p'.repeat(32), salt: 'c2FsdHNhbHQ=' }),
+      waitUntil: () => {},
+    });
+    const req = new Request('https://worker.test/api/assets', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${await testSessionToken()}` },
+      body: form,
+    });
+    await handleAssets(req, env, '/api/assets', new URL(req.url));
+
+    const sentPlaintext = fetchSpy.mock.calls.some(([u]: [any], _i: number) => String(u).includes('sendDocument'));
+    const deleted = fetchSpy.mock.calls.some(([u]: [any]) => String(u).includes('deleteMessage'));
+    expect(sentPlaintext).toBe(true);
+    expect(deleted).toBe(true);
   });
 });

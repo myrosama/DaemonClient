@@ -310,10 +310,15 @@ export class D1Adapter {
       result.results.map(r => [r.key, r.value])
     );
 
-    if (!config.zke_mode) return null;
+    // A missing `zke_mode` used to return null, which every caller reads as
+    // "encryption is off". That is a fail-open sitting inside a function whose
+    // job is now to fail closed: rows saying zke_enabled='1' with no mode would
+    // have uploaded plaintext with a 200. `enabled` is the flag that claims
+    // encryption, so it is the flag that decides.
+    if (!config.zke_mode && config.zke_enabled !== '1') return null;
 
     return {
-      mode: config.zke_mode,
+      mode: config.zke_mode || 'server',
       enabled: config.zke_enabled === '1',
       password: config.zke_password || '',
       salt: config.zke_salt || ''

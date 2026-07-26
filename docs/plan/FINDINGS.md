@@ -457,3 +457,50 @@ Two verification agents produced this, each reading the code and reporting
 file:line. Where their conclusions differed from the original suspicion, the
 code won — finding 2's SQL injection and finding 7's timeline dispatch were both
 discovered during verification rather than being on the original list.
+
+## 18 — The plaintext original is uploaded to Telegram on every encrypted upload · HIGH · **open**
+
+Found while writing a test that asserts the encrypted upload path sends
+ciphertext. It does not — not only.
+
+`fetchTelegramThumb` (`assets.ts:792`) uploads the **complete plaintext original**
+to the user's channel, under its real filename, so that Telegram will generate a
+thumbnail for it. The temporary message is then deleted (`assets.ts:1537`).
+
+Observed directly on the encrypted path, with real key material, for a
+four-byte fixture:
+
+```
+sendDocument  document=32B  name=blob.bin    ← the encrypted chunk
+sendDocument  document=4B   name=secret.jpg  ← the plaintext original
+deleteMessage
+```
+
+This is deliberate and the code says so. It is also the weakest point in the
+server-ZKE claim, for three reasons:
+
+1. **Telegram receives the plaintext.** Whatever happens afterwards, the bytes
+   were transmitted to and stored by a third party. "Encrypted at rest in your
+   channel" is not true of the moment between the two calls.
+2. **Deletion is best-effort.** If `deleteMessage` fails — a 429, a network
+   fault, or the worker being killed by error 1102 mid-flight — the plaintext
+   stays in the channel permanently, and nothing retries or notices. The comment
+   at `assets.ts:1530-1536` records that this has already happened once (the
+   "PNG raw copy not deleting" regression) and that the delete was moved earlier
+   specifically because free-tier workers were dying before reaching it.
+3. **It doubles the cost** of every image upload in bandwidth and in Telegram
+   send quota — the quota whose exhaustion produces the 429s that make the
+   delete fail.
+
+HEIC does not do this (`assets.ts:1514-1523` routes to the per-user processor
+instead), so the pattern for avoiding it already exists in the codebase.
+
+**Not fixed here.** It is a deliberate design decision with a real benefit —
+free server-side thumbnails — and replacing it means generating thumbnails
+another way for every non-HEIC image. That is a task, not an edit, and it needs
+the operator's call on the trade. Recorded now so the decision is explicit
+rather than inherited.
+
+`zke-failclosed.test.ts` pins the current behaviour: the persisted chunks must
+be ciphertext, and the temporary plaintext message must be deleted. Remove the
+delete and the suite fails.
