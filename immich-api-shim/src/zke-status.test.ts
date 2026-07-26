@@ -96,3 +96,46 @@ describe('zke-status tells the truth about all three states', () => {
     expect(s).toMatchObject({ mode: 'off', enabled: false, keyMaterialMissing: false });
   });
 });
+
+describe('the encryption toggle is gone', () => {
+  // It let anyone switch encryption OFF for the whole install from a button.
+  // It was also destructive: both branches read the existing config to decide
+  // whether to reuse the key material, and on the Firestore branch that read
+  // (`firestoreGet`) returns null on ANY failure — 401, 429, 500. A blip while
+  // turning encryption on therefore generated and wrote a FRESH password and
+  // salt, permanently orphaning every photo encrypted with the old ones.
+  it('POST /api/assets/zke-toggle no longer exists', async () => {
+    const req = new Request('https://worker.test/api/assets/zke-toggle', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${await testSessionToken()}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ mode: 'off' }),
+    });
+    const env: any = testAuthEnv({
+      DB: fakeDb({ mode: 'server', enabled: '1', ...REAL }),
+      waitUntil: () => {},
+    });
+    const res = await handleAssets(req, env, '/api/assets/zke-toggle', new URL(req.url));
+    expect(res.status).toBe(404);
+  });
+
+  it('and encryption cannot be switched off through it', async () => {
+    const req = new Request('https://worker.test/api/assets/zke-toggle', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${await testSessionToken()}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ mode: 'off' }),
+    });
+    const env: any = testAuthEnv({
+      DB: fakeDb({ mode: 'server', enabled: '1', ...REAL }),
+      waitUntil: () => {},
+    });
+    await handleAssets(req, env, '/api/assets/zke-toggle', new URL(req.url));
+    // Still reporting encrypted afterwards.
+    expect((await status({ mode: 'server', enabled: '1', ...REAL })).enabled).toBe(true);
+  });
+});

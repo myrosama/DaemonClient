@@ -20,8 +20,6 @@
   import { onMount } from 'svelte';
   import { t } from 'svelte-i18n';
   import { getBaseUrl } from '@immich/sdk';
-  import { toastManager } from '@immich/ui';
-  import { handleError } from '$lib/utils/handle-error';
   import ThemeButton from '../ThemeButton.svelte';
   import UserAvatar from '../UserAvatar.svelte';
   import AccountInfoPanel from './AccountInfoPanel.svelte';
@@ -67,26 +65,12 @@
     }
   });
 
-  const toggleZKE = async () => {
-    isZkeLoading = true;
-    try {
-      const nextMode = zkeMode === 'off' ? 'server' : 'off';
-      const res = await fetch(`${getBaseUrl()}/assets/zke-toggle`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode: nextMode })
-      });
-      if (res.ok) {
-        const data = await res.json();
-        zkeMode = data.mode;
-        toastManager.primary(zkeMode === 'off' ? 'Encryption disabled' : 'Encryption enabled');
-      }
-    } catch (e) {
-      handleError(e, 'Failed to toggle encryption');
-    } finally {
-      isZkeLoading = false;
-    }
-  };
+  // The encryption toggle is gone. Offering "store my photos unencrypted" as a
+  // one-click button was never a feature anyone wanted, and the endpoint behind
+  // it could regenerate the key material on a transient read failure, orphaning
+  // every photo already encrypted. Encryption is decided at provisioning time.
+  // This is now an indicator, not a switch.
+
 
   const { Cast } = $derived(getGlobalActions($t));
 </script>
@@ -172,22 +156,22 @@
           />
         {/if}
 
-        <!-- Encryption Toggle -->
-        <IconButton
-          shape="round"
-          color={zkeKeysMissing ? 'danger' : zkeMode === 'off' ? 'secondary' : 'primary'}
-          variant="ghost"
-          size="medium"
-          icon={zkeMode === 'off' || zkeKeysMissing ? mdiLockOpenVariant : mdiLock}
-          onclick={toggleZKE}
-          disabled={isZkeLoading}
-          aria-label={'Toggle encryption'}
-          title={zkeKeysMissing
-            ? 'Encryption is switched on but its keys are missing — uploads are being refused. This needs fixing on the server.'
-            : zkeMode === 'off'
-              ? 'Encryption: OFF'
-              : 'Encryption: ON'}
-        />
+        <!-- Encryption status. Not a toggle: see the note above. -->
+        {#if !isZkeLoading}
+          <IconButton
+            shape="round"
+            color={zkeKeysMissing ? 'danger' : zkeMode === 'off' ? 'secondary' : 'primary'}
+            variant="ghost"
+            size="medium"
+            icon={zkeMode === 'off' || zkeKeysMissing ? mdiLockOpenVariant : mdiLock}
+            aria-label={'Encryption status'}
+            title={zkeKeysMissing
+              ? 'Encryption is switched on but its keys are missing — uploads are being refused. This needs fixing on the server.'
+              : zkeMode === 'off'
+                ? 'Encryption: OFF'
+                : 'Encryption: ON'}
+          />
+        {/if}
 
         <ThemeButton />
 

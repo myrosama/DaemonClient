@@ -328,42 +328,21 @@ export async function handleAssets(request: Request, env: Env, path: string, url
     });
   }
 
-  if (path === '/api/assets/zke-toggle' && request.method === 'POST') {
-    const body = await request.json() as any;
-    const mode = body.mode === 'server' ? 'server' : 'off';
-    const enabled = mode === 'server';
+  // `/api/assets/zke-toggle` is GONE. It let anyone switch encryption OFF for the
+  // whole install from a button in the navigation bar — there is no reason to
+  // offer "store my photos unencrypted" as a one-click option, and nobody
+  // remembered adding it.
+  //
+  // It was also destructive. Both branches read the existing config to decide
+  // whether to reuse the key material, and on the Firestore branch that read is
+  // `firestoreGet`, which returns null on ANY failure — a 401, a 429, a 500. So
+  // a transient blip while turning encryption on generated and wrote a FRESH
+  // password and salt, permanently orphaning every photo already encrypted with
+  // the old ones. A button that can silently destroy a library.
+  //
+  // Encryption is now simply on, decided at provisioning time. Nothing writes
+  // zke config at runtime.
 
-    if (env.DB) {
-      const adapter = new D1Adapter(env.DB);
-      if (enabled) {
-        const existing = await adapter.getZkeConfig();
-        if (existing?.password && existing?.salt) {
-          await adapter.setZkeConfig({ mode, enabled });
-        } else {
-          const salt = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(16))));
-          const password = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))));
-          await adapter.setZkeConfig({ mode, enabled, password, salt });
-        }
-      } else {
-        await adapter.setZkeConfig({ mode, enabled });
-      }
-    } else {
-      if (enabled) {
-        const existing = await firestoreGet(env, uid, 'config/zke', idToken);
-        if (existing?.password && existing?.salt) {
-          await firestoreSet(env, uid, 'config/zke', { mode, enabled }, idToken);
-        } else {
-          const salt = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(16))));
-          const password = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))));
-          await firestoreSet(env, uid, 'config/zke', { mode, enabled, password, salt }, idToken);
-        }
-      } else {
-        await firestoreSet(env, uid, 'config/zke', { mode, enabled }, idToken);
-      }
-    }
-
-    return json({ mode, enabled });
-  }
 
   let resourceId: string | null = null;
   const assetsMatch = path.match(/^\/api\/assets\/([^/]+)/);
