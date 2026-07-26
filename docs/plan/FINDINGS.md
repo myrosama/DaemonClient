@@ -492,3 +492,35 @@ ciphertext, and the temporary message must be deleted. That is not a challenge
 to the design — it just means a future change that drops the delete fails the
 suite instead of shipping quietly.
 
+
+## 19 — Auto-backup shows "finished" instead of uploading · **partially diagnosed, needs a device log**
+
+Reported 2026-07-27: manual uploads from the mobile app work; automatic backup
+shows a finished state rather than uploading. Sync reported as succeeding.
+
+Established from the code (`immich/mobile`):
+
+1. **Background backup is gated on sync.** `background_worker.service.dart:112`
+   and `:132` both do `if (!await _syncAssets(...)) { "Remote sync did not
+   complete successfully, skipping backup"; return; }`. So on Android and iOS a
+   failed sync means backup never runs at all — the manual path does not go
+   through this, which is why the two can diverge. The operator reports sync
+   succeeding, so this is probably NOT the active cause, but it is the reason
+   "sync is broken" and "backup silently stops" are the same incident.
+2. **What "finished" means.** `backup.repository.dart:38-82` counts remainder as
+   local assets in *selected* albums whose `checksum` has no matching
+   `remote_asset_entity` row for this user. `getCandidates` (`:84-117`) uses the
+   same rule. Remainder 0 → nothing to upload → finished.
+3. **Empty album selection is handled** — `drift_backup.page.dart:131` hides the
+   counts and the toggle when nothing is selected, and the card says "none
+   selected" (`:207-215`). So an empty selection is visible, not silent. Ruled
+   out as the explanation unless the operator sees that text.
+
+That leaves: every local asset's checksum already matching a remote row. Which
+is either correct (everything genuinely is backed up) or a checksum-matching
+fault. Distinguishing them needs the device log — specifically whether
+`getCandidates` returns zero rows and what the counts are.
+
+**Not speculated further.** What IS actionable without the log is Phase 3: sync
+reliability is what makes background backup run at all, and its dominant
+remaining cause (the 19 MB copies retained by `waitUntil`) is Task 3.3.
