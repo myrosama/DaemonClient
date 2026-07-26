@@ -556,3 +556,76 @@ shape instead.
 code nothing executes is code nothing verifies. `test/cloudflare-surface.test.mjs`
 now checks every `cf.*` referenced by every command resolves — cheap, and it
 would have caught this the day it was introduced.
+
+## 21 — Live browser audit of photos.daemonclient.uz (2026-07-27)
+
+Driven headless against the real site. Full detail in the commit log; the
+backlog it leaves:
+
+**Fixed already** (`913b59e`): no security headers on ANY origin — the login
+page was demonstrably loadable in a cross-origin iframe, so clickjacking was
+unblocked on a page that takes a password. And the PWA opened the marketing
+landing page instead of the gallery.
+
+**Resolved, not a bug:** `service-worker.js` reads the worker URL with
+`token.split('.')[0]`. For a three-segment JWT that is the header, which would
+silently route every logged-in user's traffic to the OPERATOR's worker. Our
+token is `${base64(payload)}.${signature}` (`auth.ts:28`) — two segments — so
+index 0 is the payload. Correct as written.
+
+**Open, in priority order:**
+
+1. **The bot token travels in a URL query string.** `service-worker.js` builds
+   `${proxyUrl}?url=${encodeURIComponent('https://api.telegram.org/bot<TOKEN>/…')}`
+   for every media request, so the token lands in proxy and CDN access logs.
+   It is full control of the user's channel. Same class as finding §15, which
+   was the worker logging it — this is the client doing it. Needs the proxy to
+   accept the token in a header instead, which is a coordinated change across
+   the SW, the shim `/proxy` and `daemonclient-proxy`.
+2. **`/api/**` returns `200 text/html` when the service worker is unavailable.**
+   Firebase Hosting rewrites it to the SPA shell, and all real API traffic is
+   proxied by the SW. A browser that blocks service workers gets a permanently
+   spinning logo and no diagnostic, and any health check on
+   `/api/server/config` reads 200 while the API is effectively down. Guard the
+   `navigator.serviceWorker.register` call and return `503 application/json`
+   for `/api/**`.
+3. **`api.daemonclient.uz` is the SW's hardcoded fallback**, and login is
+   proxied through it — confirmed live. Every login on the public site carries
+   the user's bearer token to the operator's worker. Deliberate for hosted;
+   worth an explicit decision against the "nothing of ours" framing, and it is
+   what Task 4.8b exists for.
+4. **accounts-portal bundle ships operator infrastructure**:
+   `daemonclient-deployment.sadrikov49.workers.dev` (×3, including the
+   Cloudflare OAuth flow — leaks the operator's personal CF subdomain), an
+   `onrender.com` host, a `firebaseio.com` host, and the Firebase web config
+   including the key already on the owner's rotate list. Firebase web keys are
+   public by design, so this is not a breach — but it is still being served.
+5. **Immich branding leaks**: `<title>Login - Immich</title>` on `/auth/login`
+   and `/photos` (the static shell says DaemonClient, then the SPA regresses it
+   on hydration), the loading splash is the Immich rainbow logo, and upstream
+   links (`buy.immich.app`, `discord.immich.app`, `futo.org`, …) remain in the
+   bundles.
+6. **Accessibility**: login labels use `for="input-ui-id-0"` against an input
+   with `id="email"` — clicking the label focuses nothing (verified). The
+   password input has no `name`. "Create Account" is an `<a>` wrapping a
+   `<button>` — duplicate tab stop. App routes set `maximum-scale=1`, disabling
+   pinch-zoom (WCAG 1.4.4). The signup form has no `id`, `name`, `autocomplete`
+   or label association on any field, so password managers cannot fill it.
+7. **Raw `INVALID_LOGIN_CREDENTIALS` shown to users** on a failed login, in a
+   banner with no `role="alert"`/`aria-live`, so screen readers never announce
+   it.
+8. **The app shell is cached `max-age=3600` while chunks are immutable** — a
+   user on a stale shell after a deploy requests hashed chunks that no longer
+   exist. The shell should be `no-cache`.
+9. **Login page weight**: 78 requests, 2.15 MB transferred / 6.4 MB decoded, 55
+   script files, for an email and password form. Cold FCP measured 6.4 s.
+10. **The marketing copy contradicts itself** — the hero claims "post-quantum"
+    encryption, the FAQ says AES-GCM. AES-GCM is symmetric and not post-quantum;
+    one of those claims has to change.
+
+**Clean:** zero console errors or warnings on all four pages under normal
+operation; no 4xx/5xx, CORS failures or mixed content; CORS correctly scoped to
+`https://photos.daemonclient.uz` rather than a wildcard; no unexpected hosts; no
+secrets in any of the 64 photos-origin bundles; the service worker registers and
+activates cleanly; no horizontal overflow at 390×844; all internal and external
+links 200; `robots.txt` and `sitemap.xml` present and correct.
