@@ -1,6 +1,8 @@
 import type { Env } from './index';
 import { isSelfHost } from './selfhost-auth';
-import { json } from './helpers';
+import { json, requireAuth } from './helpers';
+import { D1Adapter } from './d1-adapter';
+import { getCachedConfig } from './cached-config';
 
 export async function handleServer(request: Request, env: Env, path: string): Promise<Response> {
   if (path === '/api/server/config' || path === '/api/server-info/config') return json(serverConfig(request, env));
@@ -58,6 +60,7 @@ export async function handleServer(request: Request, env: Env, path: string): Pr
   if (path === '/api/server/theme') return json({ customCss: '' });
   if (path === '/api/server/onboarding') return json({});
   if (path === '/api/server/ping') return json({ res: 'pong' });
+  if (path === '/api/server/processor') return handleProcessor(request, env);
   if (path === '/api/server/telegram-config') return handleTelegramConfig(request, env);
   if (path === '/api/server/zke-config') return handleZkeConfig(request, env);
   return json({ message: 'Not found' }, 404);
@@ -187,4 +190,124 @@ function mediaTypes() {
       '.mpg', '.mpeg', '.wmv', '.flv', '.mts', '.m2ts',
     ],
   };
+}
+
+
+// ── The HEIC processor ──────────────────────────────────────────────────────
+//
+// Telegram generates a thumbnail for anything you send it — except HEIC, which
+// it cannot decode. That is the entire reason HEIC photos have needed a manual
+// fix from the web. The answer is a tiny serverless function the USER deploys
+// to their OWN free account (`processor/`); the worker then converts through it
+// at upload time and the manual step disappears.
+//
+// This endpoint is how that URL gets attached. It is the most dangerous input
+// in the product: whatever is stored here receives the user's PLAINTEXT photo
+// bytes. So the URL is not merely stored — it must prove three things first.
+
+const PROCESSOR_PROBE_TIMEOUT_MS = 10000;
+
+/** Reject anything that is not a public https endpoint. */
+function processorUrlIsSane(raw: string): { ok: true; base: string } | { ok: false; reason: string } {
+  let u: URL;
+  try { u = new URL(raw); } catch { return { ok: false, reason: 'That is not a valid URL.' }; }
+
+  if (u.protocol !== 'https:') {
+    return { ok: false, reason: 'The processor URL must be https — your photos are sent to it.' };
+  }
+  const host = u.hostname.toLowerCase();
+  // Plaintext photos must never be posted to something inside the network.
+  const isPrivate =
+    host === 'localhost' || host.endsWith('.localhost') || host === '::1' ||
+    /^127\./.test(host) || /^10\./.test(host) || /^192\.168\./.test(host) ||
+    /^169\.254\./.test(host) || /^0\./.test(host) ||
+    /^172\.(1[6-9]|2\d|3[01])\./.test(host) ||
+    host.endsWith('.internal') || host.endsWith('.local');
+  if (isPrivate) {
+    return { ok: false, reason: 'That address is not reachable from the internet.' };
+  }
+  return { ok: true, base: `${u.origin}${u.pathname.replace(/\/+$/, '').replace(/\/convertHeicThumbnail$/, '')}` };
+}
+
+/** GET  → what is configured now.
+ *  POST → { url } : verify it really is this user's own processor, then save.
+ *  DELETE → detach it. */
+async function handleProcessor(request: Request, env: Env): Promise<Response> {
+  const session = await requireAuth(request, env);
+
+  if (request.method === 'GET') {
+    const cfg = await getCachedConfig<any>(env, session.uid, session.idToken, 'telegram').catch(() => null);
+    return json({ url: cfg?.heicConvertUrl || null, configured: !!cfg?.heicConvertUrl });
+  }
+
+  if (request.method === 'DELETE') {
+    if (!env.DB) return json({ message: 'Not supported on this server' }, 400);
+    const db = new D1Adapter(env.DB);
+    const existing = (await db.getJsonConfig<any>('telegram')) || {};
+    delete existing.heicConvertUrl;
+    await db.setJsonConfig('telegram', existing);
+    return json({ url: null, configured: false });
+  }
+
+  if (request.method !== 'POST') return json({ message: 'Method not allowed' }, 405);
+  if (!env.DB) return json({ message: 'Not supported on this server' }, 400);
+
+  const body = (await request.json().catch(() => ({}))) as any;
+  const sane = processorUrlIsSane(String(body?.url || '').trim());
+  if (!sane.ok) return json({ message: sane.reason }, 400);
+  const base = sane.base;
+
+  // 1. Is it actually one of ours? A typo pointing at some unrelated site would
+  //    otherwise be accepted and then fed photographs.
+  let health: any;
+  try {
+    const res = await fetch(`${base}/health`, { signal: AbortSignal.timeout(PROCESSOR_PROBE_TIMEOUT_MS) });
+    if (!res.ok) return json({ message: `The processor answered ${res.status}. Is the deploy finished?` }, 400);
+    health = await res.json();
+  } catch {
+    return json({ message: 'Could not reach that URL. Check the deploy finished and the URL is complete.' }, 400);
+  }
+  if (health?.service !== 'daemonclient-processor') {
+    return json({ message: 'That URL is not a DaemonClient processor.' }, 400);
+  }
+
+  // 2. Is it pinned to ONE account? An unpinned instance is usable by anyone in
+  //    the Firebase project, which for a self-hosted install with open signup is
+  //    everybody.
+  if (health.ownerPinned !== true) {
+    return json({
+      message: 'That processor has no OWNER_UID set, so anyone could use it. Set OWNER_UID and redeploy.',
+      problems: health.problems || [],
+    }, 400);
+  }
+
+  // 3. Is it pinned to THIS account? This is the check that matters, and it
+  //    cannot be faked: the processor verifies the bearer token against its own
+  //    Firebase project and its own OWNER_UID, and answers 401 to anyone else.
+  //    So if it accepts this user's token, it is this user's instance. Health
+  //    output alone could never establish that — it is the same for everyone.
+  try {
+    const probe = await fetch(`${base}/convertHeicThumbnail`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${session.idToken}`, 'Content-Type': 'application/octet-stream' },
+      // Deliberately not a real image. Authorisation is checked before decoding,
+      // so a 401 means "not your instance" and a 4xx about the image means
+      // "yours, and working".
+      body: new Uint8Array([0]),
+      signal: AbortSignal.timeout(PROCESSOR_PROBE_TIMEOUT_MS),
+    });
+    if (probe.status === 401 || probe.status === 403) {
+      return json({
+        message: 'That processor belongs to a different account. Deploy your own and use its URL.',
+      }, 400);
+    }
+  } catch {
+    return json({ message: 'The processor did not respond to an authenticated request.' }, 400);
+  }
+
+  const db = new D1Adapter(env.DB);
+  const existing = (await db.getJsonConfig<any>('telegram')) || {};
+  await db.setJsonConfig('telegram', { ...existing, heicConvertUrl: `${base}/convertHeicThumbnail` });
+
+  return json({ url: `${base}/convertHeicThumbnail`, configured: true, ok: health.ok === true });
 }
