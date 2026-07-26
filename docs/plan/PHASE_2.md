@@ -17,6 +17,28 @@ These are exploitable today. They come after Phase 1 only because plaintext-at-r
 
 ## Tasks
 
+### 2.0 — Give every single-asset path an owner filter
+`d1-adapter.ts:71,122,135` · `assets.ts:1651` · `albums.ts` · schema in `deployment-service/src/index.ts:118-122`
+
+- [ ] Implemented
+- [ ] Gate 1 · Security
+- [ ] Gate 2 · Principles
+- [ ] Gate 3 · Correctness
+- [ ] Gate 4 · Works for real
+- [ ] Deployed & committed
+
+**Watch for:** Change the *signatures* — `getPhoto(id, ownerId)` and friends — so
+a call site cannot forget the filter. Adding a `WHERE` at each of the ten callers
+is the version of this fix that regresses the moment someone adds an eleventh.
+
+The albums migration is the risky half: existing rows have no owner, and a wrong
+backfill hides a user's own albums from them. Test the migration, not just the
+query.
+
+Blast radius today is nil (hosted is one worker per person) — which means Gate 4
+cannot show you a failure on the live install. Prove it with a **two-user D1
+fixture**, every single-asset route, asserting 404 for the non-owner.
+
 ### 2.1 — Delete `finalize-client-upload`
 `assets.ts` route ~359-361, handler ~1621-1638
 
@@ -75,10 +97,16 @@ These are exploitable today. They come after Phase 1 only because plaintext-at-r
 - [ ] Gate 4 · Works for real
 - [ ] Deployed & committed
 
-**Watch for:** Everyone gets logged out once when this ships. Say so in the commit and the release note. Self-host has no refresh path, so pick a TTL that does not force weekly logins there.
+**Watch for:** **`handleLogout` runs before any auth check** (`auth.ts:38-40`, it
+takes no arguments). Give that function the power to bump a global epoch without
+adding `requireAuth` first and you have handed any anonymous caller a repeatable
+one-request sign-out of the entire install. Assert it by reading the epoch back,
+not by checking a response status.
+
+Everyone gets logged out once when this ships. Say so in the commit and the release note. Self-host has no refresh path, so pick a TTL that does not force weekly logins there.
 
 ### 2.6 — Close the public-constant signing fallback
-`selfhost-auth.ts` ~44, `auth-security.test.ts` ~86-93
+`selfhost-auth.ts` ~44, **`auth.ts` ~96**, `auth-security.test.ts` ~86-93
 
 - [ ] Implemented
 - [ ] Gate 1 · Security
@@ -87,7 +115,25 @@ These are exploitable today. They come after Phase 1 only because plaintext-at-r
 - [ ] Gate 4 · Works for real
 - [ ] Deployed & committed
 
-**Watch for:** **Gated on the operator confirming every hosted worker has been redeployed with a per-install secret.** Deleting this early locks users out. The test that currently asserts forged tokens are accepted gets flipped to assert rejection.
+**Watch for:** There are **two** fallbacks, not one. The verifier's is
+`selfhost-auth.ts:44`; the issuer's is `auth.ts:96`
+(`userSessionSecret || env.APP_IDENTIFIER || 'default'`), fed by a Firestore read
+inside a bare `catch {}`. Delete only the verifier's and a transient Firestore
+blip mints constant-signed tokens the hardened fleet rejects — the user is logged
+out and cannot log back in until the fault clears. A failed lookup must refuse to
+issue.
+
+Note the asymmetry that currently protects the fleet: login signs with the
+*user's own* secret, `requireAuth` verifies with the *worker's* `SESSION_SECRET`
+binding. That mismatch is why a session minted on one worker does not verify on
+another's. Do not remove it by accident.
+
+**Gated on every hosted worker having a per-install secret — checked, not
+promised.** `wrangler secret list --name <worker>` reports whether
+`SESSION_SECRET` exists without revealing it (confirmed working on
+`dc-ozkv3fuz`). Enumerate every `dc-*` worker, paste the output here, and treat
+one that cannot be enumerated as failing. Deleting this early locks users out.
+The test that currently asserts forged tokens are accepted gets flipped to assert rejection.
 
 ---
 

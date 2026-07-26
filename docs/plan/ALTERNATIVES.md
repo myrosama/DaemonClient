@@ -6,7 +6,7 @@ already exists, and taking on a dependency that costs more than it saves.
 Everything below was verified against the code or against current
 documentation. Where I could not verify something, I say so.
 
-**Read this first — four things in the plan are wrong, not just improvable:**
+**Read this first — five things that are wrong, not just improvable:**
 
 1. **Half of Task 3.2 has already been done.** The chunk body cache is checked
    before the file path is resolved — `assets.ts:2132-2134`, committed
@@ -25,6 +25,11 @@ documentation. Where I could not verify something, I say so.
    browser fetch and decrypt bytes without the worker touching them. Remove
    those fields and every web byte request falls back onto the worker path —
    the exact path Phase 3 is trying to fit inside its budget.
+5. **`selfhost/src/config.mjs:save()` can destroy `STORAGE_KEY`.** It truncates
+   in place with no temp file and no `fsync`. A crash mid-write loses the one
+   value the file's own header says is unrecoverable. It also writes through a
+   symlink, and `config.env` is not gitignored — in a repository that has
+   already committed a `.env` once (`6468388`, still in history).
 
 Details in the sections below.
 
@@ -427,10 +432,15 @@ Two things to plan for:
   change per published file — and it is the right change anyway, because nav
   labels and ordering should be stated, not guessed at from an H1.
 - **Files outside the site directory.** Astro content collections take a
-  `loader`, and the built-in `glob()` loader accepts a `base`, so
-  `glob({ pattern: '**/*.md', base: '../docs' })` reads `docs/` in place. No
-  copying, no symlinks, no duplicated source of truth. This is the documented
-  mechanism, not a workaround.
+  `loader`, and the built-in `glob()` loader — quoting the Astro docs —
+  *"fetches entries from directories of Markdown, MDX, Markdoc, JSON, YAML, or
+  TOML files **from anywhere on the filesystem**"*, taking a `pattern` and a
+  `base`. So `glob({ pattern: '**/*.md', base: '../docs' })` reads `docs/` in
+  place. With Starlight specifically this means overriding the `docs`
+  collection's loader with `glob()` instead of the default `docsLoader()`, and
+  declaring the extra directory so Starlight's markdown pipeline processes it.
+  Documented mechanism, not a workaround — but budget an hour for the wiring,
+  and check `withastro/starlight` discussion #1257 first.
 
 The honest cost: Starlight is still on **0.41.x**. It has been pre-1.0 for
 years, and minor bumps carry breaking changes. Pin exact versions, and expect to
@@ -469,20 +479,354 @@ will look like VitePress.
 **Evidence:** fetched and read `package.json` and `astro.config.ts` from
 `raw.githubusercontent.com/cloudflare/cloudflare-docs/production`; queried the
 npm registry for `@astrojs/starlight/latest` (0.41.4, dependency list quoted
-above) and `@cloudflare/nimbus-docs` (0.8.2). Surveyed the local `docs/` tree
-with `find`/`head -1` on all 35 markdown files to check for frontmatter.
+above) and `@cloudflare/nimbus-docs` (0.8.2). Read
+`docs.astro.build/en/guides/content-collections/` for the `glob()` loader
+contract. Surveyed the local `docs/` tree with `find`/`head -1` on all 35
+markdown files to check for frontmatter — only `docs/SKILL.md` has any.
 
 ---
 
 ## d. Setup UX (Phase 4)
 
-_(pending)_
+**Current/planned approach:** an interactive CLI, `daemonclient setup`, run after
+`git clone`. Today it is a seven-step machine with `markDone`/`isDone` and a
+state file (`setup.mjs:31-52`); Task 4.3 replaces that with
+`probe()`/`repair()`/`verify()` per subsystem, and Task 4.4 makes `doctor` the
+same code path with repair disabled.
+
+### Is the interactive CLI the right shape?
+
+Yes, for this product, and the reason is specific rather than general.
+
+Compare what the alternatives assume. A generated config file plus a
+non-interactive apply — the Terraform shape — assumes the user can fill the file
+in. Here they cannot: the values are a Telegram bot token they have to get from
+BotFather, a Cloudflare account id they have never seen, a D1 uuid that does not
+exist yet, and a Firebase API key that is created as a side effect of creating a
+project. Most of the config is *output*, not input. A file-first flow would be a
+file with four blanks and eleven "leave this alone" comments.
+
+A local web wizard is the Nextcloud/Gitea shape, and it is genuinely good when
+the software is already running and serving HTTP. Here nothing is running yet —
+that is what setup is for — so it would mean shipping a second HTTP server whose
+only job is to bootstrap the first one, and the headless case gets *worse*, not
+better: a terminal works over SSH, a browser on `localhost:3000` does not.
+
+So: keep the interactive CLI. But it needs the things interactive CLIs are
+routinely criticised for missing.
+
+### What the plan should steal
+
+**1. Detect a non-TTY and say so, rather than hanging.** The single most
+common complaint about setup wizards is that they block on a machine with no
+terminal — a VPS over SSH, a CI job, a container. The fix everyone converges on
+is the same: check `process.stdin.isatty()` up front and, when it is false,
+print what to set and exit non-zero instead of waiting forever. Task 4.8 already
+covers the headless *browser* case for Cloudflare sign-in; extend it to headless
+*stdin*, which is the more common one.
+
+**2. A real non-interactive mode.** Every value the CLI prompts for should be
+settable in `config.env` or an environment variable, and `--non-interactive`
+(or `--yes`) should run through with what is there and fail loudly on what is
+missing — naming every missing key at once, not one per run. This falls out of
+Task 4.3's probe/repair/verify almost for free: `--no-repair` is already the
+`doctor` mode, so `--non-interactive` is "repair only from config, never
+prompt". Three modes over one implementation.
+
+**3. Show what will be created before creating it.** Setup creates real
+resources in three third-party accounts: a Cloudflare Worker, a D1 database, a
+Pages project, a GCP project, a Firebase app, a Vercel project. The user should
+see that list, with the names, before the first `POST`. A `--dry-run` that runs
+every `probe()` and prints the plan — this exists, this will be created, this
+will be changed — costs almost nothing once probe/repair/verify is in place,
+and it is the difference between a tool people trust on their own account and
+one they run in a VM first.
+
+**4. A teardown command.** There is none today (`bin/daemonclient.mjs` has
+`setup`, `status`, `update`, `dashboard`, `processor`, `doctor`). Setup can
+half-fail — it currently `process.exit(1)`s mid-Cloudflare-step in two places
+(`setup.mjs:250, 268`) after having already created a D1 database. The user is
+then left with orphaned resources in an account they may not know how to
+navigate, and no way to start clean. `daemonclient destroy` should list what it
+found and what it will delete, require confirmation, and refuse to touch
+anything it did not create. This also makes Task 5.1 (a real run against
+throwaway accounts) repeatable instead of a one-shot.
+
+**5. Say the third-party account cost up front.** Before the first prompt:
+"this will create accounts or resources on Telegram, Cloudflare, Google/Firebase
+and (optionally) Vercel; all on free tiers; here is what each one is for."
+People abandon installers at the point where a new signup appears without
+warning.
+
+**6. Keep the state file dead, and mean it.** The current model prints *"Found a
+previous run — completed steps will be skipped"* (`setup.mjs:39-41`). That is
+the wrong promise: a step that succeeded in March and broke in June is never
+re-checked, so `setup` stops being able to fix anything. Task 4.3's probe/verify
+model is the right replacement precisely because re-running becomes a health
+check rather than a resume. Make sure the migration deletes the old state file
+rather than leaving it to confuse the next run.
+
+### Two smaller things in the current code
+
+- `splitSql()` (`setup.mjs:286-294`) splits the migration on bare `;`. The SQL
+  is ours so it works today, but it will break silently the first time someone
+  adds a trigger or a string containing a semicolon. Worth a comment saying so,
+  at least.
+- The Cloudflare step still walks the user through creating a custom API token
+  by hand (`setup.mjs:192-199`) — four dashboard steps and three permission
+  names. The design's move to `wrangler login` removes all of it. That is the
+  single biggest UX win in Phase 4 and it is worth doing early.
+
+**Recommendation:** KEEP AS PLANNED — the interactive CLI is the right shape.
+ADD four things the plan does not currently have: non-TTY detection,
+`--non-interactive`, `--dry-run`, and `destroy`.
+
+**Why:** the shape is right because most of this configuration is generated
+rather than supplied, and because a terminal survives SSH where a browser does
+not. What interactive setup tools reliably get wrong is everything around the
+happy path — the headless case, the half-failure, and the "what is this about to
+do to my account" question. All four additions are cheap on top of
+probe/repair/verify, and expensive to retrofit later.
+
+**Evidence:** read `selfhost/bin/daemonclient.mjs`,
+`selfhost/src/commands/setup.mjs` (full flow, and the Cloudflare step at
+183-290), `selfhost/src/state.mjs`, and `docs/roadmap/SELFHOST_CLI_DESIGN.md`.
+Compared against how Immich (compose + `.env`), Nextcloud and Gitea (first-run
+web wizard) and Terraform (`plan`/`apply`/`destroy`) handle the same problems.
+Immich's own installation docs and discussions
+([#13842](https://github.com/immich-app/immich/discussions/13842),
+[#19638](https://github.com/immich-app/immich/discussions/19638)) show the
+file-first failure mode: the complaints are about a config the user is expected
+to understand and adapt, which is exactly what this CLI avoids.
 
 ---
 
 ## e. Secret storage
 
-_(pending)_
+**Current/planned approach:** `~/.config/daemonclient/config.env`, directory
+0700, file 0600, dotenv format, written with
+`fs.openSync(file, 'w', 0o600)` and then `chmodSync` (`config.mjs:150-188`).
+Secrets marked in a `KEYS` table and redacted by `redact()`.
+
+### What comparable CLIs actually do — measured, not recalled
+
+`stat -c '%a %n'` on the credential files physically present on this machine
+(umask `0002`; no secret values were read):
+
+| CLI | Path | Mode |
+|---|---|---|
+| **wrangler 4.85** | `~/.config/.wrangler/config/default.toml` | **664** |
+| **Vercel** | `~/.local/share/com.vercel.cli/config.json` | **664** |
+| **firebase-tools** | `~/.config/configstore/firebase-tools.json` | 600 |
+| **GitHub CLI** | `~/.config/gh/hosts.yml` | 600 |
+
+And from the installed source, `node_modules/wrangler/wrangler-dist/cli.js`
+around line 132422:
+
+```js
+fs29.mkdirSync(path3.dirname(configPath), { recursive: true });   // no mode
+fs29.writeFileSync(path3.join(configPath), toml.stringify(config)); // no mode
+```
+
+No mode on either call, so it lands at `0666 & ~umask`. On a machine with the
+common `umask 022` that is **644 — world-readable — holding the live Cloudflare
+OAuth refresh token.** The same token `selfhost/src/api/cloudflare.mjs:116-130`
+reads and uses as bearer for every REST call.
+
+Read from upstream source and docs: doctl, flyctl, AWS CLI, gcloud, Docker on
+Linux and npm all write a plain 0600 file and stop. Google states the threat
+model outright — *"Any user with access to your file system can use the stored
+access credentials created by `gcloud auth login`."* flyctl has no keyring code
+at all. Docker's credential helpers are opt-in; plain docker-ce on Linux stores
+base64, not encryption, forever.
+
+The three exceptions are instructive, and none of them is a zero-dependency
+Node CLI:
+
+- **gh** (Go, statically linked, pure-Go D-Bus) falls back to a plaintext file
+  silently when no keyring is available — which has generated
+  [cli#10108](https://github.com/cli/cli/issues/10108),
+  [cli#8954](https://github.com/cli/cli/issues/8954) and a keyring race,
+  [cli#8802](https://github.com/cli/cli/issues/8802).
+- **Stripe** hedges — live keys to the keyring, `sk_test_…` left in plaintext
+  TOML.
+- **Heroku** moved to the keychain in v11.8.0, *last month*, by shelling out to
+  `security` / `secret-tool` / PasswordVault. Their own announcement lists the
+  bill: *"You may need to install the `secret-tool` package"*, headless Linux
+  falls back to `.netrc` anyway, and they had to build a git credential helper
+  because taking the token out of `~/.netrc` broke `git push heroku`.
+
+Note the symmetry with this stack: **Cloudflare, Firebase and Vercel — the three
+services this CLI orchestrates — all chose a file, and two of the three chose a
+world-readable one.**
+
+### Alternatives considered
+
+- **OS keychain via npm** (`keytar`, `@napi-rs/keyring`) — reject. `keytar` was
+  archived in December 2022 with prebuilds only up to the Node 17 N-API ABI; on
+  Node 20/22 it needs Python and a C++ toolchain to install. That alone ends
+  "runs from a fresh clone".
+- **OS keychain by shelling out** — reject, and the reason is concrete. On this
+  machine — a full GNOME desktop with `gnome-keyring-daemon` running, `libsecret`
+  present, `DBUS_SESSION_BUS_ADDRESS` and `DISPLAY` both set — **`secret-tool` is
+  not installed.** It lives in `libsecret-tools`, which is in `universe` and not
+  in the default install on Ubuntu or Fedora. So Heroku's Linux keychain path
+  degrades to a file on a stock desktop, and this is the *best* case.
+
+  The obvious workaround does not exist either: `dbus-send` can read the Secret
+  Service but cannot write to it — `CreateItem` needs `a{sv}` and `(oayays)`, and
+  `dbus-send` cannot express a variant. There is no zero-dependency way to store
+  a secret in the Linux keyring. Windows has no built-in Credential Manager
+  cmdlet; `CredentialManager` is a PSGallery module.
+- **Encrypt the file with a passphrase at rest** — reject as the default. It
+  turns every `daemonclient status` into a password prompt and breaks CI. Worth
+  having as an explicit `config --export` (below), not as the storage format.
+- **Everything in the user's D1** — already correctly rejected in the design
+  (point 6). Bootstrap secrets cannot live behind the thing they bootstrap.
+
+### What the keychain would actually protect against
+
+Against the same-user attacker: **nothing.**
+
+On Linux the Secret Service has no application isolation — any process running
+as the user reads everything from an unlocked keyring over D-Bus. That is
+CVE-2018-19358, which GNOME disputed and closed WONTFIX. It was demonstrated
+here: an ordinary process enumerated `gh`'s stored item paths with no prompt.
+
+On macOS, storing via `/usr/bin/security` grants that binary unfettered access
+to the item without prompting — so anything running as the user can read it back
+by shelling out to `security`. The one route open to a zero-dependency CLI is
+precisely the route that discards the protection.
+
+What a keychain genuinely buys is at-rest encryption while the machine is off or
+the keyring is locked. Full-disk encryption covers that better, for every file,
+with no CLI code.
+
+Rank the real risks here and the case collapses: (1) the secret gets committed
+to git, (2) it gets pasted into an issue, (3) it leaks through argv or a log,
+(4) the file mode is wrong, (5) much later, cold-disk theft. A keychain
+addresses only #5.
+
+Worth noting on #3: `/proc/<pid>/cmdline` is mode **444** — argv is readable by
+*every user on the box*, strictly worse than a 0600 file, while
+`/proc/<pid>/environ` is 400. The design's rule of piping secrets to
+`wrangler secret put` over stdin rather than argv is more load-bearing than it
+looks. Keep it.
+
+### Backup and portability — where the file wins outright
+
+Measured round-trips of a 0600 file:
+
+```
+cp / cp -p / tar / zip / rsync / rsync -a   →  600   (all preserve)
+cat config.env > backup.env                 →  644   ← widens
+git add + git checkout                      →  644   ← widens
+```
+
+Every real backup tool preserves 0600. But **`cat >` widens to 644**, and so
+does a git round-trip — git tracks only the exec bit. "Back it up in a private
+git repo", which is exactly what people will do, hands them a world-readable
+config on the new machine. The file header says losing `STORAGE_KEY` loses every
+file in the channel, so this warning has to be in the header itself.
+
+A keychain has no export path at all: macOS items are not portable, Secret
+Service has no supported export, Credential Manager is DPAPI-bound to
+user+machine. You would end up writing an `export` that decrypts to a plaintext
+file — reinventing the file with extra steps.
+
+### Hardening the plan should add
+
+Node semantics, measured rather than assumed:
+
+| Behaviour | Result |
+|---|---|
+| `openSync(f,'w',0o600)` under umask 002 / 077 | 600 / 600 — umask can only remove bits |
+| `openSync(f,'w',0o600)` over an **existing 0644 file** | **644 — the mode is not reset** |
+| `rename(tmp → dst)` | dst inherits the **source's** mode — so temp-at-0600 + rename is safe |
+| `mkdirSync(d,{recursive,mode:0o700})` on an existing 0755 dir | **755 — not tightened** |
+| `openSync` on a symlink | **follows it and truncates the target** |
+
+Five things follow, all verified against `config.mjs`:
+
+1. **`save()` is not atomic** (`config.mjs:184-186`). Crash, full disk or Ctrl-C
+   mid-write truncates the config, and there is no `fsync`, so a power loss can
+   leave it zero-length. The file's own header says that loses every stored
+   file. **This is the highest-severity item in this whole review and it has
+   nothing to do with keychains.** Write to a temp file in the same directory
+   with `O_CREAT|O_EXCL|O_NOFOLLOW` and mode 0600, `fchmod` the fd (that is what
+   makes it umask-proof), `fsync`, then `rename` — which is atomic and carries
+   the 0600 across. `fsync` the directory too. This is the same shape
+   `write-file-atomic` uses for firebase-tools, the one CLI in the survey that
+   gets this fully right.
+2. **`save()` writes through a symlink.** Confirmed. The realistic case is not
+   an attacker, it is `ln -s ~/dotfiles/dc.env ~/.config/daemonclient/config.env`
+   — which, combined with the git-644 finding above, puts live secrets in a repo
+   at 644. `lstat` and refuse.
+3. **Write-then-chmod, for the case that matters.** R1 says "never
+   write-then-chmod", but `openSync(...,0o600)` does not reset an existing
+   file's mode, so a pre-existing 0644 config holds the new secrets at 0644
+   until line 186 lands. The atomic rewrite in (1) fixes this too.
+4. **`$DAEMONCLIENT_CONFIG` silently re-permissions the user's directory.**
+   `configDir()` returns `dirname($DAEMONCLIENT_CONFIG)` and line 153 chmods it
+   unconditionally — confirmed turning a `~/backups` at 755 into 700. Only
+   tighten a directory the CLI created; otherwise check and warn.
+5. **`checkPermissions()` only stats the file**, never the directory, never
+   `lstat`s for a symlink, and never looks for `config.env~`, `.swp` or `.tmp`
+   leftovers. All three belong in `doctor`.
+
+Repo-level, and not hypothetical:
+
+6. **`config.env` is not gitignored.** `git check-ignore config.env` exits 1.
+   `.gitignore` has `.env` and `.env.*`, which do not match. There is already a
+   test at `selfhost/test/selfhost.test.mjs:101` asserting the *state* filename
+   is ignored; the mirror test for `config.env` would fail today.
+7. **A `.env` was already committed to this public repository.** Verified:
+   added in `6468388` ("Add files via upload", a GitHub web upload), deleted the
+   same day in `a24c38a`, still reachable in history. This is the exact leak
+   class R1 exists to prevent, and it has already happened here once. It also
+   matches the outstanding owner TODO about scrubbing history and revoking the
+   leaked Firebase key.
+8. **A `.env` exists at the repo root right now, mode 664** — the condition
+   Task 4.2 detects. The rule is correct and load-bearing; it can be tested
+   against a real case today.
+
+Two more, cheap:
+
+9. **Warn about wrangler's token mode.** `doctor` already knows the path
+   (`cloudflare.mjs:116`). One line — *"wrangler stored your Cloudflare token at
+   mode 664; run `chmod 600`"* — protects the credential that matters more than
+   anything DaemonClient writes. Fold into Task 4.2.
+10. **`quote()` and `parseEnv` do not round-trip backslashes.** `quote()`
+    (`config.mjs:190`) uses `JSON.stringify`, which escapes `\` as `\\`;
+    `parseEnv` only un-escapes `\n` and `\"` (`config.mjs:106`). Latent today
+    because no key holds a path. It will be a confusing afternoon the day one
+    does.
+
+And one addition worth making: **`daemonclient config --export`**, writing a
+passphrase-encrypted blob with `node:crypto` scrypt + AES-256-GCM. Zero
+dependencies, and it is the feature a keychain pretends to be, done portably —
+which matters because `STORAGE_KEY` cannot be regenerated.
+
+**Recommendation:** KEEP AS PLANNED — 0600 file at
+`~/.config/daemonclient/config.env` — with items 1-10 added to Phase 4.
+
+**Why:** the keychain protects against a threat that, on the platforms
+self-hosters actually use, it does not in fact protect against; it cannot be
+reached at all without either a dead native module or a binary that is missing
+from a stock Ubuntu desktop; and it removes the backup story for a key that
+cannot be regenerated. Meanwhile the file has two real bugs — non-atomic write
+and symlink-follow — and is not gitignored, in a repository that has already
+leaked a `.env` once. That is where the effort belongs.
+
+**Evidence:** read `selfhost/src/config.mjs`, `env.mjs`, `api/cloudflare.mjs`,
+`ui.mjs`, `test/selfhost.test.mjs`, `.gitignore`,
+`node_modules/wrangler/wrangler-dist/cli.js`, and the installed
+`firebase-tools`/`configstore`/`write-file-atomic` sources. Ran `umask`,
+`stat`/`find -printf '%m'` on credential paths, `apt-cache policy
+libsecret-tools`, `dbus-send` (session open and `SearchItems` only — no
+`GetSecret`), `git check-ignore config.env`, `git log --diff-filter=A -- .env`,
+and Node scripts measuring mode/umask/rename/symlink/backup semantics. Nothing
+was logged into, deployed or mutated; no secret values were printed.
 
 ---
 
@@ -553,6 +897,19 @@ _(pending)_
   dependency for page and modal transitions on a signup funnel where load time
   is the product. Worth a look during Phase 6, not before.
 
+### Two things in `selfhost/` that should go with Task 4.1
+
+- **`selfhost/src/env.mjs` writes `CLOUDFLARE_API_TOKEN`** into a `.env` in the
+  current working directory (`env.mjs:30`). That is the exact variable name
+  `config.mjs:33-35` renamed to `DC_CF_TOKEN` specifically to stop wrangler
+  picking it up and overriding browser sign-in, and the exact file Task 4.2
+  refuses to run with. Task 4.1 already deletes this module. It should be first
+  in the phase, not just somewhere in it — every day it exists is a day
+  something can call it by accident.
+- **`selfhost/src/api/cloudflare.mjs:98`** builds a predictable
+  `/tmp/dc-wrangler-<pid>-<ts>.ndjson`. No secrets go in it, so this is minor,
+  but `/tmp` is 1777 and `fs.mkdtempSync` is one line.
+
 ### Version drift worth pinning (supports Task 4.9)
 
 | Package | Declared |
@@ -577,6 +934,15 @@ real case immediately.
 - CHANGE `drive/package.json` — remove the five unused dependencies.
 - KEEP `sha1.ts`, `zip.ts`, `config.mjs`'s parser, and the WebDAV XML.
 - Fold the wrangler/typescript drift into Task 4.9.
+
+**Why:** most of what looks hand-rolled here was hand-rolled for a stated reason
+that holds up — a streaming hash because Web Crypto has no streaming API, a
+streaming ZIP because archives can be gigabytes, a dotenv parser because the
+error messages are the feature. Those should stay, and the reasons are already
+written in the files. The two that fail the test fail it clearly: hand-parsing
+ASN.1 inside a token verifier is risk with no upside when Google publishes the
+same keys in a format WebCrypto reads directly, and five packages nobody imports
+are 300 MB of install a first-time contributor pays for nothing.
 
 **Evidence:** read `immich-api-shim/src/sha1.ts`, `src/zip.ts`,
 `src/webdav.ts:143-200`, `src/thumbhash-util.ts`, `src/upload-stream.ts`,

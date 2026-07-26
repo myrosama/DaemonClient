@@ -367,6 +367,90 @@ which is exactly what Phase 5.1 is for.
 
 ---
 
+## 14 — `daemonclient-proxy` was a fully open proxy · CRITICAL · **FIXED**
+
+`daemonclient-proxy/src/index.js` took `?url=` from any caller, unauthenticated,
+and fetched it. No allowlist. It forwarded the caller's entire header set —
+`Cookie` and `Authorization` included — to whatever host was named, and reflected
+every response header back with `Access-Control-Allow-Origin: *` and
+`Access-Control-Expose-Headers: *`.
+
+Usable to reach private and cloud-metadata addresses from inside Cloudflare's
+network, to launder arbitrary traffic through the operator's account, and to burn
+its request quota. It is bound as `TELEGRAM_PROXY` into every worker and its URL
+is handed to browsers, so it is public and discoverable.
+
+The shim's own `/proxy` was closed in `b0202c4`; this is a **separate deployed
+worker** with the same job and it was missed. Found by the security review of the
+plan, not by the audit that produced findings 1-13.
+
+**Fixed and deployed** (`0311248`): exact host `api.telegram.org`, https, default
+port; forwarded headers reduced to what Telegram needs; redirects no longer
+followed. Verified live — blocked targets 403, Telegram still passes through.
+
+The shim's `/proxy` was tightened in the same commit: its `.telegram.org` **suffix**
+rule accepted a Cyrillic homograph, because `new URL()` normalises
+`аpi.telegram.org` to `xn--pi-6kc.telegram.org`, a genuine subdomain. It also had
+no test at all, so the earlier hardening had never been verified.
+
+## 15 — The bot token was logged in full on every Telegram 429 · HIGH · **FIXED**
+
+`assets.ts:3097` logged `url.substring(0, 80)`. A Telegram url is
+`https://api.telegram.org/bot<TOKEN>/method`; that prefix is 28 characters and a
+bot token is ~46, so the whole token went into the logs — on the code path that
+fires hardest under load, which is exactly when a backup is running. The token is
+full control of the user's channel: read every file, delete all of it.
+
+**Fixed and deployed** (`0311248`): `redactTelegramUrl()` replaces the token and
+keeps the rest of the line. A repo-wide sweep for other secrets reaching a logger
+found none; the one remaining hit (`helpers.ts:72`) logs Google's *error response*
+body, which does not echo the token.
+
+## 16 — `/api/drive/config` is not scoped to the owner · MEDIUM · **planned (2.4)**
+
+`drive.ts:50-74`. On a per-user worker the telegram config lives in
+**worker-global D1**, not under a uid: `getCachedConfig` falls through to
+`adapter.getJsonConfig(key)` (`cached-config.ts:17-20`). So GET returns the
+install's bot token to any authenticated session, and POST overwrites the bot
+token and channel for everyone — redirecting all future uploads to a channel of
+the caller's choosing.
+
+**Severity depends on which install.** On hosted it is contained: `requireAuth`
+verifies against the *worker's* `SESSION_SECRET` binding while login signs with
+the *user's own* secret, so a session minted elsewhere does not verify here. It is
+**not** contained on a multi-user self-host install — one worker, one secret,
+everyone — nor on any worker still missing `SESSION_SECRET`.
+
+Not patched in a hurry, because the correct fix is the `owner_uid` gate that Task
+2.4 already builds, and an ad-hoc ownership rule invented now could lock the
+operator out of their own worker. Self-host has not shipped, so nothing is
+exposed while it waits.
+
+## 17 — No ownership check on any single-asset path · HIGH · **planned (2.0)**
+
+Every *list* query filters on `ownerId`. Every *single-row* accessor does not:
+`getPhoto(id)` (`d1-adapter.ts:71`), `updatePhoto(id, fields)` (`:122`),
+`deletePhoto(id)` (`:135`). `loadPhotoById` (`assets.ts:1651`) receives a `uid`
+and, on the D1 branch, never uses it — so thumbnail, original, HEAD, chunk
+manifest, replace-video, playback, thumbnail upload, update, bulk update and
+delete all inherit it. The delete path removes the Telegram messages **before**
+tombstoning the row, so it is irreversible. `handleAssetInfo` reads any row and
+stamps the requester as its owner.
+
+`albums` has **no owner column at all** (`deployment-service/src/index.ts:118-122`)
+and `listAlbums()` is `SELECT * FROM albums`.
+
+Drive does this correctly (`drive.ts:150-151`), and that asymmetry is what marks
+it an oversight rather than a deliberate single-tenant assumption.
+
+Nil blast radius on hosted — one worker, one database, one person. On a
+self-hosted install with a second account it is cross-user read, modify and
+permanent delete by asset id. Self-host has not shipped; this must not be what
+ships with it. Found by the security review; larger than finding 3, which stops
+at *reading config*.
+
+---
+
 ## Sources
 
 Two verification agents produced this, each reading the code and reporting

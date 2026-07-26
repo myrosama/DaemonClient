@@ -63,7 +63,13 @@ states, not two: off, on-and-working, on-but-broken.
 - [ ] Deployed & committed
 
 ### 1.3 — Seed real keys during self-host setup
-`selfhost/src/commands/setup.mjs`, `selfhost/src/deploy.mjs`. Depends on 1.1.
+`selfhost/src/commands/setup.mjs` (~441-449), `selfhost/src/api/cloudflare.mjs`
+(`queryD1` ~228-232). Depends on 1.1.
+
+> **NOT `selfhost/src/deploy.mjs`.** It has zero importers — the live path is
+> `build.mjs`, imported by `setup.mjs:23` and `update.mjs:17`. The plan pointed
+> at the dead copy. Written there, the fix passes its unit test and all four
+> gates and does nothing on a real install.
 
 - [ ] Implemented
 - [ ] Gate 1 · Security
@@ -73,7 +79,13 @@ states, not two: off, on-and-working, on-but-broken.
 - [ ] Deployed & committed
 
 **Highest-risk task in the phase.** Writing keys when they already exist makes
-every stored photo undecryptable, permanently. The write happens only when the
+every stored photo undecryptable, permanently. A **failed** read is not an empty
+one — treat a query that errors as "unknown, do nothing", or a network blip
+rotates a live key. Finish with an end-to-end check: read `zke_password` back
+over REST against a real D1 and assert it is non-empty. That assertion is the one
+the dead-module mistake could not have passed.
+
+The write happens only when the
 current value is empty, and that condition needs its own test plus a deliberate
 check of what happens when the read *fails* rather than returning empty — a
 failed SELECT must not be treated as "empty".
@@ -90,6 +102,13 @@ failed SELECT must not be treated as "empty".
 
 **Note:** the user-facing warning about backing up a key must not simply be
 deleted — it must move to the key material that actually matters.
+
+**Do not grep-and-delete repo-wide.** `deployment-service/src/index.ts:40`
+declares a variable of the same name and there it is **real** — it encrypts every
+user's stored Cloudflare API token (`index.ts:6-35`, used at `:581`). Removing it
+would lock the whole fleet out of auto-update. Scope: the shim and the CLI. The
+live CLI writes are `setup.mjs:421-422` and `update.mjs:116-117`, not
+`deploy.mjs`.
 
 ### 1.5 — Write the recovery note for anyone already affected
 `docs/SELF_HOSTING.md`. Depends on 1.2.

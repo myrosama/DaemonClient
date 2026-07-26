@@ -85,13 +85,29 @@ doing first.
 ### Task 1.3 — Seed real keys during self-host setup
 - **What:** generate salt and password and write them, matching what the hosted
   provisioner does.
-- **Files:** `selfhost/src/commands/setup.mjs`, `selfhost/src/deploy.mjs`.
+- **Files:** `selfhost/src/commands/setup.mjs` (the existing D1 REST pattern is
+  at `setup.mjs:441-449`), `selfhost/src/api/cloudflare.mjs` (`queryD1`,
+  `:228-232`).
+  **Not `selfhost/src/deploy.mjs`.** The review caught that the plan pointed
+  here and `deploy.mjs` has **zero importers** — verified: nothing in `src/` or
+  `test/` imports it, while `build.mjs` is imported by `setup.mjs:23` and
+  `update.mjs:17`. The fix would have been written, its unit test against a fake
+  D1 would have passed, all four gates would have gone green, and a real
+  `daemonclient setup` would still leave `zke_password` empty. The plaintext bug
+  Phase 1 exists to fix would have survived Phase 1.
 - **How:** after the schema runs, `SELECT value FROM config WHERE key =
   'zke_password'`. **Only if empty**, generate 16-byte salt and 32-byte password
   and UPDATE both. The emptiness check is what stops a re-run from rotating keys
   and orphaning every existing photo. Do it over REST with bound parameters.
+  Distinguish a **failed** query from an empty result — the review's point is
+  that treating a network error as "no key yet" rotates a live key and orphans
+  every photo already stored. A failed read aborts; only a successful read
+  returning nothing seeds.
 - **Verify:** `selfhost/test/zke-seed.test.mjs` — a fake D1 with empty keys gets
-  written once; a second run leaves the existing values untouched.
+  written once; a second run leaves the existing values untouched; **a query
+  that throws or returns an error writes nothing at all**. Then the end-to-end
+  assertion the dead-module mistake could not have passed: after seeding, read
+  `zke_password` back over REST against a real D1 and assert it is non-empty.
 - **Also:** seed from `update` and `doctor`, not just `setup`. Existing
   self-hosted installs already have empty keys, and after 1.1 their worker will
   refuse uploads — they need a path to fix it that is not "run setup again from
@@ -104,13 +120,22 @@ doing first.
 - **What:** delete `ENCRYPTION_MASTER_KEY` from the shim and `STORAGE_KEY` from
   the CLI, or wire them to something real.
 - **Files:** `immich-api-shim/src/index.ts` (~94), `selfhost/src/config.mjs`,
-  `selfhost/src/deploy.mjs`, `selfhost/src/commands/update.mjs`.
+  `selfhost/src/commands/setup.mjs` (`:389`, `:421-422`),
+  `selfhost/src/commands/update.mjs` (`:116-117`), `selfhost/src/state.mjs`
+  (`:15-21`). **Again not `deploy.mjs`** — the live `secret_text` binding is
+  written from `setup.mjs` and `update.mjs`; `deploy.mjs:76-82` is dead.
 - **How:** the shim never reads it (grep confirms the declaration is the only
   hit). The CLI generates it, calls it "File encryption key" to the user, and
   warns that losing it loses their files. Delete it. The real key material is
   the `zke_*` config rows from 1.3, and the backup warning must move there.
-- **Verify:** `grep -r ENCRYPTION_MASTER_KEY immich-api-shim/src` returns
-  nothing; CLI tests pass; the warning text names the right thing.
+- **Do not touch `deployment-service/src/index.ts:40`.** It declares a variable
+  of the same name, and there it is **real**: `ENCRYPTION_MASTER_KEY` encrypts
+  every user's stored Cloudflare API token (`index.ts:6-35`, used at `:581`).
+  A repo-wide grep-and-delete would decrypt nothing and lock the whole fleet out
+  of auto-update. The task is scoped to the shim and the CLI.
+- **Verify:** `grep -r ENCRYPTION_MASTER_KEY immich-api-shim/src selfhost/src`
+  returns nothing, **and the same grep over `deployment-service/src` still
+  returns its hits**; CLI tests pass; the warning text names the right thing.
 - **Depends on:** 1.3
 - **Risk:** low
 
@@ -141,6 +166,41 @@ and no unauthenticated user can forge a session anywhere.
 **Why here:** these are exploitable today. They come after Phase 1 only because
 plaintext-at-rest is worse and already happening.
 
+### Task 2.0 — Give every single-asset path an owner filter
+- **What:** the row accessors take an `ownerId` and use it; `albums` gets an
+  owner column.
+- **Files:** `immich-api-shim/src/d1-adapter.ts`, `immich-api-shim/src/assets.ts`,
+  `immich-api-shim/src/albums.ts`, `deployment-service/src/index.ts` (schema).
+- **Why it exists:** the security review found this, and it is larger than the
+  config-exposure finding the plan was built around. Every *list* query filters
+  on `ownerId`. Every *single-row* accessor does not — `getPhoto(id)`
+  (`d1-adapter.ts:71`), `updatePhoto(id, fields)` (`:122`), `deletePhoto(id)`
+  (`:135`). `loadPhotoById` (`assets.ts:1651`) is handed a `uid` and, on the D1
+  branch, never uses it. Everything downstream inherits it: thumbnail, original,
+  HEAD, chunk manifest, replace-video, playback, thumbnail upload, update, bulk
+  update, and delete — which removes the Telegram messages *before* tombstoning
+  the row, so it is irreversible. `handleAssetInfo` reads any row and then stamps
+  the requester as its owner. The `albums` table has **no owner column at all**
+  and `listAlbums()` is `SELECT * FROM albums`.
+  Drive gets this right (`drive.ts:150-151` checks `existing.ownerId !== uid`),
+  and that asymmetry is what says this is an oversight rather than a deliberate
+  single-tenant assumption.
+- **Blast radius:** nil on hosted — one worker, one database, one person. On a
+  self-hosted install with a second registered account it is cross-user read,
+  modify and permanent delete by asset id. Self-host has not shipped, so this is
+  not exploitable today; it must not be what ships with it.
+- **How:** change the signatures — `getPhoto(id, ownerId)`,
+  `updatePhoto(id, ownerId, fields)`, `deletePhoto(id, ownerId)` — so the filter
+  cannot be forgotten at a call site rather than relying on each caller to add a
+  `WHERE`. Add `ownerId` to the `albums` schema and scope `listAlbums` and
+  `getAlbumAssets`.
+- **Verify:** `src/asset-ownership.test.ts` against a two-user D1 fixture,
+  asserting 404 on **every** single-asset route for the non-owner — not a smoke
+  test on one route. A schema migration test that existing albums get an owner.
+- **Depends on:** nothing. Do it first in the phase; 2.4 builds on it.
+- **Risk:** medium — the albums migration touches existing rows, and a wrong
+  backfill hides a user's own albums from them.
+
 ### Task 2.1 — Delete `finalize-client-upload`
 - **What:** remove the route and its handler.
 - **Files:** `immich-api-shim/src/assets.ts` (route ~359-361, handler ~1621-1638).
@@ -148,9 +208,14 @@ plaintext-at-rest is worse and already happening.
   are string-interpolated into SQL — arbitrary SQL for any authenticated user.
   It has no caller anywhere in the repo. Deleting is correct; hardening a dead
   route is not.
-- **Verify:** `grep -rn "finalize-client-upload" --include=*.ts --include=*.js
-  --include=*.dart --include=*.svelte .` returns only the bundled copy and the
-  roadmap mention; suite green.
+- **Verify:** the grep must come back clean **including
+  `deployment-service/src/shim-bundle.ts`**. The review caught the original
+  wording accepting "only the bundled copy" as a pass — but that bundle is the
+  code every hosted worker actually runs, so leaving it there leaves the
+  injection deployed on the whole fleet. The bundle is generated, so the real
+  check is: re-run `embed-shim.mjs`, then grep the regenerated file. Not green
+  until it is gone from there too, and the task is not done until the pipeline
+  has been run and the fleet is on the new bundle.
 - **Risk:** low
 
 ### Task 2.2 — Make `savePhoto` reject unknown columns
@@ -197,8 +262,30 @@ plaintext-at-rest is worse and already happening.
   wide open. So: when `SELF_HOST=1` and `owner_uid` is absent, **refuse** and
   say to re-run setup. Hosted (no `SELF_HOST`) keeps today's behaviour, because
   there the worker already belongs to exactly one person.
+  **Where `owner_uid` gets written.** The review caught that the plan scheduled
+  the write in `selfhost/src/commands/setup.mjs` only — so a hosted worker never
+  gets one, and any install provisioned before this task has none either. Add
+  it in two places: the CLI at setup time, and the deployment service when it
+  provisions or force-updates a worker (it already knows the uid it is
+  provisioning for). For installs that predate both, `owner_uid` is claimed by
+  the first uid to authenticate after the upgrade, written once, and never
+  overwritten — a self-hosted operator logs into their own install before
+  publishing its URL, so first-login is the owner in practice.
+- **Also gate `/api/drive/config`** (`drive.ts:50-74`). It is not in
+  `FINDINGS.md`. On a per-user worker the telegram config lives in **worker-global
+  D1**, not under a uid — `getCachedConfig` falls through to
+  `adapter.getJsonConfig(key)` (`cached-config.ts:17-20`). So GET returns the
+  install's bot token to *any* authenticated session, and POST overwrites the
+  bot token and channel for everyone, redirecting all future uploads. On hosted
+  this is contained by the per-worker `SESSION_SECRET`: a session minted for one
+  user does not verify on another's worker. It is **not** contained on a
+  multi-user self-host install, where everyone shares one worker and one secret,
+  and it is not contained on any worker still missing `SESSION_SECRET` (see 2.6).
+  Same owner gate, same test file.
 - **Verify:** `src/owner-gate.test.ts` — with `owner_uid` set, a different uid
-  gets 403 and the owner gets 200; with it unset, both behave as today.
+  gets 403 and the owner gets 200; with it unset **and `SELF_HOST=1`**, both are
+  refused; with it unset and no `SELF_HOST`, both behave as today. Cover
+  `/api/drive/config` GET *and* POST, not just the server config routes.
 - **Risk:** medium — must not break hosted, which has no `owner_uid`. This is
   now the whole fix for the config-exposure finding, so its tests carry weight.
 
@@ -206,26 +293,59 @@ plaintext-at-rest is worse and already happening.
 - **What:** an epoch that logout can bump.
 - **Files:** `immich-api-shim/src/auth.ts`, `immich-api-shim/src/helpers.ts`.
 - **How:** `session_epoch` integer in the config table, stamped into the token
-  at issue, compared at verify. `handleLogout` takes `(request, env)` and
-  increments it. Reduce the TTL from ten years to something bounded and lean on
-  refresh for continuity — which the comment at `auth.ts:5-13` already claims.
-  Self-host has no refresh path (`helpers.ts:94`), so pick a TTL that does not
-  force weekly logins there.
+  at issue, compared at verify. Reduce the TTL from ten years to something
+  bounded and lean on refresh for continuity — which the comment at
+  `auth.ts:5-13` already claims. Self-host has no refresh path
+  (`helpers.ts:94`), so pick a TTL that does not force weekly logins there.
+- **`handleLogout` must be authenticated first.** The review caught that the
+  plan as written creates a new vulnerability. `handleLogout` is routed at
+  `auth.ts:38-40` and takes no arguments — it runs **before any auth check**,
+  because logout has never needed one. Giving that function the power to
+  increment a global epoch hands any anonymous caller a one-request denial of
+  service that signs out every session on the install, repeatable forever. So:
+  `requireAuth` at the top of `handleLogout`, and only then the bump. A logout
+  without a valid session still clears the cookie and returns 200 — it just
+  cannot touch the epoch.
 - **Verify:** `src/session-revocation.test.ts` — a token minted before a bump is
-  rejected after it; a fresh one is accepted; no epoch present behaves as today.
+  rejected after it; a fresh one is accepted; no epoch present behaves as today;
+  **and an unauthenticated POST to `/api/auth/logout` does not change the
+  epoch**, asserted by reading it back, not by the response status.
 - **Risk:** medium — every user is logged out once when this ships. Say so.
 
 ### Task 2.6 — Close the public-constant signing fallback
 - **What:** force the hosted fleet onto per-install secrets, then delete the
   `APP_IDENTIFIER` fallback.
 - **Files:** `immich-api-shim/src/selfhost-auth.ts` (~44),
+  `immich-api-shim/src/auth.ts` (~96),
   `immich-api-shim/src/auth-security.test.ts` (~86-93).
 - **How:** redeploy every hosted worker through `/admin/force-update`, which
   already threads `sessionSecret`. Confirm each has one. Then delete the
   fallback and **flip the test** that currently asserts forged tokens are
   accepted, so it asserts rejection.
+- **Delete the issuer's fallback too, not just the verifier's.** The review
+  caught that the plan only removed `sessionScope`'s fallback
+  (`selfhost-auth.ts:44`). The *issuing* side is `auth.ts:96` —
+  `userSessionSecret || env.APP_IDENTIFIER || 'default'` — where
+  `userSessionSecret` comes from a Firestore read wrapped in a bare `catch {}`
+  (`auth.ts:75-87`). Remove one without the other and a transient Firestore
+  failure mints a token signed with the public constant, which the hardened
+  fleet then rejects: the user is silently logged out and cannot log back in
+  while the fault lasts. Both sides go in the same task, and a failed lookup
+  must **refuse to issue** rather than fall back.
+- **Note the asymmetry while it exists:** login signs with the *logged-in
+  user's* secret (from their Firestore config) while `requireAuth` verifies with
+  the *worker's* `SESSION_SECRET` binding. That mismatch is what currently stops
+  a session minted on one worker from verifying on another's — it is doing real
+  work, and 2.6 must not remove it by accident.
 - **Verify:** the flipped test; a forged `APP_IDENTIFIER`-signed token gets 401
-  against a live worker.
+  against a live worker; and a login whose Firestore lookup fails returns an
+  error rather than a constant-signed token.
+- **Fleet gate, mechanically.** The review's point stands that "operator
+  confirms" is a promise, not a check. Before the fallback is deleted, enumerate
+  the account's `dc-*` workers and assert each has a `SESSION_SECRET` binding —
+  `wrangler secret list --name <worker>` reports it without revealing the value
+  (confirmed working against `dc-ozkv3fuz`). Paste that output into the phase
+  doc. A worker that cannot be enumerated counts as failing.
 - **Cutoff:** the review noted that gating a security fix on an operator action
   can defer it indefinitely. So the fallback also gets a hard date: past it, the
   branch throws regardless of fleet state. A worker that missed the redeploy
@@ -711,3 +831,51 @@ the documentation site (6.2) as scope creep. The operator asked for it
 specifically, including the shape they want it to take, so it stays — but it
 runs last, renders the markdown that already exists rather than duplicating it,
 and ships with real content or not at all.
+
+---
+
+## The security review returned **reject**, and it was right
+
+It came back after the plan was drafted. Its verdict was reject, not
+reject-the-idea — the phasing survived, ten specific tasks did not. Folded in
+above; the four that mattered:
+
+**Two tasks were aimed at a file nothing imports.** Tasks 1.3 and 1.4 edited
+`selfhost/src/deploy.mjs`. It has zero importers — verified. Both fixes would
+have been written, tested against a fake D1, passed all four gates, and changed
+nothing on a real install. This is the failure mode the gates are least able to
+catch on their own: every gate can pass on code that is never executed. Gate 4's
+"verified live" is the only one that would have caught it, which is an argument
+for taking that gate literally rather than as a formality.
+
+**Two tasks left the system worse than they found it.** Task 2.5 would have
+handed an unauthenticated caller a global sign-out switch, because
+`handleLogout` is routed before any auth check. Task 2.6 deleted the verifier's
+fallback and left the issuer's, so a transient Firestore failure would mint
+tokens the hardened fleet rejects.
+
+**A verification step accepted leaving the vulnerability deployed.** Task 2.1's
+grep tolerated the SQL injection remaining in `shim-bundle.ts` — the artifact
+every hosted worker runs.
+
+**The largest hole was in neither document.** Photos has no ownership check on
+any single-asset path, and `albums` has no owner column. That is now Task 2.0,
+first in the phase.
+
+### Three of its findings were live, so they were fixed immediately
+
+Not deferred to the plan, because they were exploitable while the plan was being
+written. Shipped and verified live — see `FINDINGS.md` §14-16 and commit
+`0311248`:
+
+- `daemonclient-proxy` was a **fully open proxy** — any url, any caller, no
+  auth, caller's Cookie and Authorization forwarded to the target, every
+  response header reflected back with `ACAO: *`. The shim's own `/proxy` was
+  closed in `b0202c4`; this is a separate deployment and was missed. Both now
+  require the exact host `api.telegram.org`. The suffix rule the shim shipped
+  with was itself insufficient: a Cyrillic "а" normalises
+  `аpi.telegram.org` to the genuine subdomain `xn--pi-6kc.telegram.org`.
+- The bot token was **logged in full** on every Telegram 429.
+- `/api/drive/config` — analysed rather than patched. It is contained on hosted
+  by the per-worker `SESSION_SECRET`; it is not contained on multi-user
+  self-host, which has not shipped. Folded into Task 2.4 instead of rushed.

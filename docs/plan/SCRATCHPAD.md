@@ -7,32 +7,63 @@
 
 ## Right now
 
-**State:** PLANNING COMPLETE, awaiting approval on the rest. **One task has
-shipped** — Task 3.4, released early because the operator was actively hitting
-error 1102. Everything else waits for the word.
+**State:** PLANNING COMPLETE. All three reviews are in and folded in. **Waiting
+on the operator's approval to start implementation.** Two things shipped early
+because they were live problems, not plan items.
 
-**Last updated:** 2026-07-26, ~21:15.
+**Last updated:** 2026-07-26, ~22:00.
 
-**In flight:** two review agents — security, and alternatives research. The
-**principles review has landed and is folded in** (see the bottom of
-`MASTER_PLAN.md` for what it changed; the headline is that Task 2.3 was reversed
-because it would have broken the web media path and re-armed the Phase 1
-plaintext bug from the client side).
+**The security review returned `reject`** — and it was right. Ten blockers, all
+folded into `MASTER_PLAN.md`; see "The security review returned reject" at the
+bottom of that file. The four that mattered:
+1. Tasks 1.3 and 1.4 edited `selfhost/src/deploy.mjs`, which **nothing imports**
+   (verified). Both would have passed all four gates and changed nothing on a
+   real install. Re-targeted at `setup.mjs` / `update.mjs` / `build.mjs`.
+2. Task 2.5 would have given an **unauthenticated** caller a global sign-out
+   switch — `handleLogout` is routed before any auth check. Reworked.
+3. Task 2.6 deleted the verifier's fallback and left the issuer's
+   (`auth.ts:96`). Both now go together.
+4. **Photos has no ownership check on any single-asset path**, and `albums` has
+   no owner column. Bigger than anything in the original findings. Now Task 2.0,
+   first in Phase 2.
 
-**Next action:** fold in the remaining two reviews as they land, then present
-for approval.
+**Next action:** present the corrected plan for approval. Nothing else starts
+until then.
 
-### Task 3.4 — DONE (shim `ea08d9704ab2`, commit `1af4daa`)
+### Shipped early — Task 3.4 (shim `ea08d9704ab2`, commit `1af4daa`)
 The timeline fired two background jobs per request whose budgets sum to 64
 against a cap of 50; sync had already been fixed the same way. Now rotates one
 per request. All four gates passed, tests fail without the change, deployed to
 the deployment service, the central worker, and `dc-ozkv3fuz`, verified live.
-Tick it in `PHASE_3.md`.
 
 **This is one of three causes of the 1102s.** The other two — the 19 MB
 per-chunk copies queued in `waitUntil`, and the chunk budget being wrong by 3x —
 are Tasks 3.2 and 3.3 and are NOT yet fixed. Expect 1102s to continue, less
 often.
+
+### Shipped early — two live vulnerabilities (shim `34ccd3fa9a39`, commit `0311248`)
+Found by the security review, exploitable while the plan was being written, so
+not deferred. Both through the four gates, both verified live.
+
+- **`daemonclient-proxy` was a fully open proxy** — any url, any caller, no
+  auth, the caller's Cookie and Authorization forwarded on, every response
+  header reflected with `ACAO: *`. The shim's `/proxy` was closed back in
+  `b0202c4`; this is a separate deployment and was missed. Both now require the
+  exact host `api.telegram.org`. The shim's `.telegram.org` **suffix** rule was
+  itself too loose — `аpi.telegram.org` with a Cyrillic "а" normalises to the
+  real subdomain `xn--pi-6kc.telegram.org` — and had **no test at all**.
+- **The bot token was logged in full** on every Telegram 429
+  (`url.substring(0, 80)` over `.../bot<TOKEN>/method`).
+
+Two more the review found are **planned, not patched**: `/api/drive/config`
+(finding 16 → Task 2.4) and the missing asset ownership checks (finding 17 →
+Task 2.0). Neither is exploitable on hosted today; both must be closed before
+self-host ships. Reasoning in `FINDINGS.md`.
+
+**Deploy note:** `dc-ozkv3fuz` kept its `SESSION_SECRET` across the direct
+wrangler deploy — confirmed with `wrangler secret list --name dc-ozkv3fuz`.
+Worth re-checking after any future direct deploy, because losing it silently
+re-arms the public-constant signing fallback for that worker.
 
 ---
 
@@ -40,7 +71,7 @@ often.
 
 | File | What it is |
 |---|---|
-| `MASTER_PLAN.md` | the phased plan of record — 6 phases, 31 tasks |
+| `MASTER_PLAN.md` | the phased plan of record — 6 phases, 42 tasks |
 | `PHASE_1.md` … `PHASE_6.md` | working docs: gate checklist per task, notes as you go |
 | `GATES.md` | the four gates every task passes before commit |
 | `FINDINGS.md` | the verified backlog — every item confirmed at file:line |
@@ -77,6 +108,8 @@ Worker shim went `1533a4952213` → `ea08d9704ab2`.
 | Master plan, four gates, phase docs | `d9b4369` |
 | Principles review folded in | `504dc50` |
 | **Task 3.4** — timeline one job per request | `1af4daa` |
+| Compact-proof restart kit | `c04ccea` |
+| **Open relay closed, bot token out of the logs** | `0311248` |
 
 ## Known-good vs stale in `selfhost/`
 
@@ -88,7 +121,8 @@ Worker shim went `1533a4952213` → `ea08d9704ab2`.
 | `src/api/telegram.mjs` | Good. Verifies posting, not just membership. |
 | `src/commands/setup.mjs` | **STALE** — calls functions that no longer exist. Task 4.3 rewrites it. |
 | `src/state.mjs`, `src/env.mjs` | **DEAD** — superseded by `config.mjs`. Task 4.1 deletes them. |
-| `src/deploy.mjs`, `src/build.mjs` | Partly stale against the new Cloudflare layer. |
+| `src/deploy.mjs` | **DEAD — zero importers.** Verified. `build.mjs` is the live path (`setup.mjs:23`, `update.mjs:17`). Two plan tasks were aimed here and would have shipped nothing. Task 4.1 deletes it. |
+| `src/build.mjs` | **LIVE.** Partly stale against the new Cloudflare layer. |
 | `src/commands/{status,update,processor,doctor,dashboard}.mjs` | Written, not yet reconciled with `config.mjs`. |
 
 ## Outstanding — only the operator can do these
