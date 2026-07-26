@@ -18,22 +18,53 @@ export default {
       return new Response("Missing 'url' query parameter.", { status: 400 });
     }
 
-    // Prepare the new request
-    // We must be careful with headers. We want to forward almost everything,
-    // ESPECIALLY the Content-Type (which contains the multipart boundary).
-    const newHeaders = new Headers(request.headers);
-    
-    // Cloudflare/Browsers sometimes add headers we don't want to forward to the target
-    newHeaders.delete("Host"); 
-    newHeaders.delete("Cf-Ray");
-    newHeaders.delete("Cf-Visitor");
-    newHeaders.delete("Cf-Connecting-Ip");
-    // Note: Do NOT delete Content-Type or Content-Length if present
+    // Relay to Telegram ONLY.
+    //
+    // This worker exists so a browser can talk to the Telegram Bot API, which
+    // sends no CORS headers of its own. It used to forward ANY url for ANY
+    // caller, with no authentication — an open relay, on a public hostname,
+    // that also passed the caller's Authorization and Cookie headers through
+    // and reflected every response header back with `Access-Control-Allow-
+    // Origin: *`. That is usable to reach private addresses, to launder
+    // traffic through this account, and to burn its request quota.
+    //
+    // The equivalent endpoint inside the API worker was locked down earlier;
+    // this one is a separate deployment and was missed.
+    // Exact host, not a suffix rule. `endsWith(".telegram.org")` would admit
+    // a Cyrillic homograph — `аpi.telegram.org` normalises to the real
+    // subdomain `xn--pi-6kc.telegram.org` — and every caller in this repo
+    // builds exactly `https://api.telegram.org/...`, so the wider rule buys
+    // nothing. An empty port means the https default, 443.
+    let allowed = false;
+    try {
+      const t = new URL(targetUrl);
+      allowed = t.protocol === "https:" && t.hostname === "api.telegram.org" && t.port === "";
+    } catch {
+      allowed = false;
+    }
+    if (!allowed) {
+      return new Response("This proxy only relays to api.telegram.org", {
+        status: 403,
+        headers: { "Access-Control-Allow-Origin": "*" },
+      });
+    }
+
+    // Forward only what Telegram needs. Copying the whole header set sent the
+    // caller's own credentials to the target — harmless when the target is
+    // always Telegram, but it was not always Telegram, and defence in depth
+    // costs nothing here.
+    const newHeaders = new Headers();
+    for (const name of ["content-type", "content-length", "accept", "range"]) {
+      const value = request.headers.get(name);
+      if (value) newHeaders.set(name, value);
+    }
 
     const newRequestInit = {
       method: request.method,
       headers: newHeaders,
-      redirect: "follow",
+      // Telegram does not redirect; following one would let a response steer
+      // this request somewhere outside the allowlist we just enforced.
+      redirect: "manual",
     };
 
     // Forward the body for POST/PUT requests

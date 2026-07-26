@@ -186,11 +186,16 @@ export default {
         // and required no authentication — an open proxy on every deployed
         // worker, usable to reach internal addresses, launder traffic through
         // someone else's Cloudflare account, or burn their request quota.
+        //
+        // Exact host, not a suffix rule: `endsWith('.telegram.org')` accepts a
+        // Cyrillic homograph, because `аpi.telegram.org` normalises to the real
+        // subdomain `xn--pi-6kc.telegram.org`. Every caller builds exactly
+        // `https://api.telegram.org/...`. An empty port means the https
+        // default, 443.
         let allowedTarget = false;
         try {
           const t = new URL(target || '');
-          allowedTarget = t.protocol === 'https:' &&
-            (t.hostname === 'api.telegram.org' || t.hostname.endsWith('.telegram.org'));
+          allowedTarget = t.protocol === 'https:' && t.hostname === 'api.telegram.org' && t.port === '';
         } catch { allowedTarget = false; }
 
         if (!target) {
@@ -207,7 +212,9 @@ export default {
           // arrayBuffer() would risk the 10 ms CPU limit on big chunks, whereas
           // a streamed passthrough is near-zero CPU. duplex:'half' is required
           // when the body is a stream.
-          const init: RequestInit = { method: request.method, headers: fwdHeaders };
+          // Do not follow redirects: a 3xx from the target would steer this
+          // request to a host the allowlist just refused.
+          const init: RequestInit = { method: request.method, headers: fwdHeaders, redirect: 'manual' };
           if (request.method !== 'GET' && request.method !== 'HEAD') {
             init.body = request.body;
             (init as any).duplex = 'half';

@@ -3082,6 +3082,17 @@ function isSendUrl(url: string): boolean {
   return /\/(send(Document|Photo|Video|Audio|Message)|copyMessage|forwardMessage)/i.test(url);
 }
 
+// A Telegram URL carries the bot token in its PATH — `/bot<TOKEN>/method` for
+// the API and `/file/bot<TOKEN>/<path>` for downloads. Anything that logs one
+// publishes the token to whoever can read the worker's logs, and the token is
+// full control of the user's channel: read every photo, delete the lot.
+//
+// Replace the token, keep everything else, so the line still says which call
+// was rate-limited.
+export function redactTelegramUrl(url: string): string {
+  return url.replace(/\/bot[^/?#]+/g, '/bot<redacted>');
+}
+
 async function tgFetchWithRetry(url: string, options?: RequestInit, maxRetries = 3): Promise<Response> {
   const botToken = url.match(/\/bot([^/]+)\//)?.[1] || '';
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -3094,7 +3105,10 @@ async function tgFetchWithRetry(url: string, options?: RequestInit, maxRetries =
       // bounded amount; if it's still limited after retries, return the 429 and
       // let the client re-queue (background backup retries failed photos later).
       const retryAfter = Math.min(body?.parameters?.retry_after || 3, 6);
-      console.warn(`[tgFetch] 429 on ${url.substring(0, 80)}..., waiting ${retryAfter}s (attempt ${attempt + 1})`);
+      // NEVER log the raw URL: it is `https://api.telegram.org/bot<TOKEN>/method`,
+      // and the first 80 characters contain the whole token. It was being
+      // written to the log on every rate-limit, which is often.
+      console.warn(`[tgFetch] 429 on ${redactTelegramUrl(url)}, waiting ${retryAfter}s (attempt ${attempt + 1})`);
       await new Promise(r => setTimeout(r, (retryAfter + 1) * 1000));
       continue;
     }
