@@ -110,22 +110,32 @@ export function isSelfHost(env: Env): boolean {
   return v === '1' || v === 'true' || v === true;
 }
 
-/** The HMAC scope that signs session tokens.
+/** The HMAC scope that signs and verifies session tokens.
  *
- *  Managed installs keep using APP_IDENTIFIER so sessions issued before this
- *  code existed stay valid. Self-hosted installs MUST use their own generated
- *  secret: APP_IDENTIFIER is a public constant, and signing with it would let
- *  anyone who read the source mint a valid session for someone else's server.
+ *  This MUST be a per-install secret. APP_IDENTIFIER ("default-daemon-client")
+ *  is a constant committed to a public repository and injected into every
+ *  worker, so signing with it meant anyone who read the source could mint a
+ *  valid session for any account — which is exactly what an audit found.
+ *
+ *  Managed workers now receive a generated SESSION_SECRET from the deployment
+ *  service. The APP_IDENTIFIER fallback survives ONLY for workers that have not
+ *  yet been redeployed with one; without it, every existing user would be
+ *  locked out the moment this shipped. Once the fleet has rolled over, delete
+ *  the fallback branch.
  */
 export function sessionScope(env: Env): string {
-  if (!isSelfHost(env)) return env.APP_IDENTIFIER || 'default';
   const secret = (env as any).SESSION_SECRET;
-  if (typeof secret !== 'string' || secret.length < 32) {
+  if (typeof secret === 'string' && secret.length >= 32) return secret;
+
+  if (isSelfHost(env)) {
+    // Never fall back on a self-hosted install: the CLI always provisions a
+    // secret, so a missing one means something is wrong and issuing a
+    // forgeable session would be worse than failing.
     throw new Error(
       'SESSION_SECRET missing or too short: a self-hosted worker needs a 32+ character random secret to sign sessions. Re-run the setup CLI to generate one.',
     );
   }
-  return secret;
+  return env.APP_IDENTIFIER || 'default';
 }
 
 // ── Accounts ────────────────────────────────────────────────────────────────

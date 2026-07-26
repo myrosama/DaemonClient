@@ -45,7 +45,7 @@ export async function handleAuth(request: Request, env: Env, path: string): Prom
     return handleLogout();
   }
   if (path === '/api/auth/status') {
-    return handleAuthStatus(request);
+    return handleAuthStatus(request, env);
   }
   if (path === '/api/auth/change-password' && request.method === 'POST') {
     return handleChangePassword(request, env);
@@ -109,9 +109,19 @@ async function handleLogin(request: Request, env: Env): Promise<Response> {
   // subsequent /api/* request to the user's worker without any extra
   // Firestore read — pure JWT-decode + fetch.
   let workerUrl: string | null = null;
+  let userSessionSecret: string | null = null;
   try {
     const cfConfig = await firestoreGet(env, data.localId, 'config/cloudflare', data.idToken);
     if (cfConfig?.workerUrl) workerUrl = cfConfig.workerUrl;
+    // Each provisioned worker gets its own signing secret. Signing with it
+    // here means a session is only valid against the one worker it was issued
+    // for — previously everything was signed with APP_IDENTIFIER, a constant
+    // published in this repository, so any reader could forge sessions for any
+    // account. Workers provisioned before that change have no secret yet and
+    // still verify with APP_IDENTIFIER; they roll over on their next deploy.
+    if (typeof cfConfig?.sessionSecret === 'string' && cfConfig.sessionSecret.length >= 32) {
+      userSessionSecret = cfConfig.sessionSecret;
+    }
   } catch {}
 
   const sessionToken = await createSignedSessionToken({
@@ -121,7 +131,7 @@ async function handleLogin(request: Request, env: Env): Promise<Response> {
     refreshToken: data.refreshToken,
     workerUrl,
     exp: Date.now() + SESSION_TTL_SECONDS * 1000,
-  }, env.APP_IDENTIFIER || 'default');
+  }, userSessionSecret || env.APP_IDENTIFIER || 'default');
 
   const userResponse = {
     accessToken: sessionToken,
@@ -232,21 +242,17 @@ function handleLogout(): Response {
   return new Response(response.body, { status: 200, headers: newHeaders });
 }
 
-function handleAuthStatus(request: Request): Response {
-  const cookie = request.headers.get('Cookie') || '';
-  const match = cookie.match(/(?:immich_access_token|__session)=([^;]+)/);
-  let token = match ? match[1] : null;
-  if (!token) {
-    const auth = request.headers.get('Authorization') || '';
-    if (auth.startsWith('Bearer ')) token = auth.slice(7);
-  }
-  if (!token) return json({ authenticated: false }, 401);
+// Verifies the signature like every other authenticated route. It used to
+// base64-decode the token and report "authenticated, elevated" for any blob
+// that parsed as JSON with a future exp, which told a client (and an attacker
+// probing it) that a forged token was good.
+async function handleAuthStatus(request: Request, env: Env): Promise<Response> {
   try {
-    const payload = token.includes('.') ? token.split('.')[0] : token;
-    const data = JSON.parse(atob(payload));
-    if (data.exp && data.exp < Date.now()) return json({ authenticated: false }, 401);
-  } catch { return json({ authenticated: false }, 401); }
-
+    const { requireAuth } = await import('./helpers');
+    await requireAuth(request, env);
+  } catch {
+    return json({ authenticated: false }, 401);
+  }
   return json({
     authenticated: true,
     pinCode: false,

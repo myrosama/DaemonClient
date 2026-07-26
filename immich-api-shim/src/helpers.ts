@@ -81,23 +81,17 @@ export async function requireAuth(request: Request, env?: Env): Promise<SessionD
   if (!token) throw new Error('Not authenticated');
   let session: SessionData | null = null;
 
-  // Self-hosted installs have no Firebase. Sessions are signed with the
-  // install's own secret and MUST NOT fall back to the unsigned decode path —
-  // that path trusts the token's contents verbatim, so accepting it here would
-  // let anyone forge a session by base64-encoding a uid.
-  if (env && isSelfHost(env)) {
-    if (!token.includes('.')) throw new Error('Session expired');
-    session = await verifySignedSessionToken(token, sessionScope(env));
-    if (!session) throw new Error('Session expired');
-    return session;
-  }
-
-  if (env?.APP_IDENTIFIER && token.includes('.')) {
-    session = await verifySignedSessionToken(token, env.APP_IDENTIFIER);
-  } else {
-    session = decodeSession(token);
-  }
+  // EVERY session token must carry a valid signature. There used to be a
+  // fallback here that base64-decoded the token and trusted its contents
+  // whenever it contained no "." — but that condition is a property of the
+  // attacker's own input, so omitting the dot skipped verification entirely
+  // and `Authorization: Bearer <base64 of {"uid":"anyone"}>` was a complete
+  // account takeover. There is no unsigned token left in circulation to
+  // support: every issuer in this codebase signs.
+  if (!token.includes('.')) throw new Error('Session expired');
+  session = await verifySignedSessionToken(token, sessionScope(env || ({} as Env)));
   if (!session) throw new Error('Session expired');
+  if (env && isSelfHost(env)) return session;
 
   let idTokenExpired = false;
   try {

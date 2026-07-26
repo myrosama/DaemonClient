@@ -59,7 +59,21 @@ export interface Env {
 // The bindings every per-user shim worker needs. Centralised so deploy,
 // auto-update, and force-update all stay in lockstep — a binding added here
 // reaches all three deploy paths.
-function buildShimBindings(env: Env, databaseId: string): any[] {
+/** A per-worker session-signing secret.
+ *
+ *  Sessions used to be signed with APP_IDENTIFIER, which is a constant in a
+ *  public repository and identical across the whole fleet — so anyone who read
+ *  the source could mint a valid session for any account, and a session issued
+ *  for one user verified on every other user's worker. Each worker now gets its
+ *  own random secret, generated once and reused on every later deploy (rotating
+ *  it would sign that user out).
+ */
+function newSessionSecret(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(32));
+  return btoa(String.fromCharCode(...bytes)).replace(/[+/=]/g, '').slice(0, 43);
+}
+
+function buildShimBindings(env: Env, databaseId: string, sessionSecret?: string): any[] {
   const bindings: any[] = [
     { type: 'd1', name: 'DB', id: databaseId },
     { type: 'plain_text', name: 'FIREBASE_API_KEY', text: env.FIREBASE_API_KEY },
@@ -70,6 +84,10 @@ function buildShimBindings(env: Env, databaseId: string): any[] {
   ];
   if (env.DEPLOYMENT_SERVICE_URL) {
     bindings.push({ type: 'plain_text', name: 'DEPLOYMENT_SERVICE_URL', text: env.DEPLOYMENT_SERVICE_URL });
+  }
+  if (sessionSecret) {
+    // secret_text so it is not readable from the dashboard's variable list.
+    bindings.push({ type: 'secret_text', name: 'SESSION_SECRET', text: sessionSecret });
   }
   return bindings;
 }
@@ -252,7 +270,8 @@ async function handleDeployWorker(request: Request, env: Env): Promise<Response>
     if (!auth) return corsResponse(JSON.stringify({ error: 'Unauthorized' }), { status: 401 });
     const { uid, idToken } = auth;
 
-    const prov = await provisionWorker(env, uid, accountId, apiToken);
+    const priorCfg = await fetchWorkerConfig(uid, idToken, env).catch(() => null);
+    const prov = await provisionWorker(env, uid, accountId, apiToken, priorCfg?.sessionSecret);
     if (!prov.success) return corsResponse(JSON.stringify({ error: prov.error }), { status: 500 });
 
     // Paste flow: persist the long-lived API token (encrypted) for auto-update.
@@ -260,6 +279,7 @@ async function handleDeployWorker(request: Request, env: Env): Promise<Response>
     await saveWorkerConfig(uid, idToken, {
       apiToken: encryptedToken, accountId, workerName: prov.workerName, workerUrl: prov.workerUrl,
       databaseName: prov.dbName, databaseId: prov.databaseId,
+      sessionSecret: prov.sessionSecret,
       setupTimestamp: new Date().toISOString(),
       lastDeployedVersion: SHIM_VERSION, autoUpdateEnabled: true
     }, env);
@@ -277,8 +297,8 @@ async function handleDeployWorker(request: Request, env: Env): Promise<Response>
 // account. Returns the worker identity. The CALLER persists the right
 // credential afterwards (encrypted API token for paste, encrypted refresh
 // token for OAuth).
-interface ProvisionResult { success: boolean; error?: string; workerName?: string; workerUrl?: string; dbName?: string; databaseId?: string }
-async function provisionWorker(env: Env, uid: string, accountId: string, apiToken: string): Promise<ProvisionResult> {
+interface ProvisionResult { success: boolean; error?: string; workerName?: string; workerUrl?: string; dbName?: string; databaseId?: string; sessionSecret?: string }
+async function provisionWorker(env: Env, uid: string, accountId: string, apiToken: string, existingSecret?: string): Promise<ProvisionResult> {
   // Sanitize UID for Cloudflare naming (lowercase alphanumeric + dashes only)
   const shortId = uid.substring(0, 8).toLowerCase().replace(/[^a-z0-9]/g, '');
   const cfApi = new CloudflareAPI();
@@ -320,9 +340,12 @@ async function provisionWorker(env: Env, uid: string, accountId: string, apiToke
 
   // Step 4: Deploy the real immich-api-shim to USER's account, bound to USER's D1
   const workerName = `dc-${shortId}`;
+  // Reuse the caller's stored secret if there is one — generating a new secret
+  // on a re-provision would invalidate that user's existing sessions.
+  const sessionSecret = existingSecret || newSessionSecret();
   const deployResult = await cfApi.deployWorker({
     accountId, workerName, apiToken, workerCode: SHIM_BUNDLE,
-    bindings: buildShimBindings(env, databaseId)
+    bindings: buildShimBindings(env, databaseId, sessionSecret)
   });
   if (!deployResult.success) return { success: false, error: deployResult.error };
 
@@ -362,7 +385,7 @@ async function provisionWorker(env: Env, uid: string, accountId: string, apiToke
   await cfApi.enableWorkersDev(accountId, workerName, apiToken);
 
   const workerUrl = `https://${workerName}.${subdomainResult.subdomain}.workers.dev`;
-  return { success: true, workerName, workerUrl, dbName, databaseId };
+  return { success: true, workerName, workerUrl, dbName, databaseId, sessionSecret };
 }
 
 // One-button flow: exchange the PKCE authorization code for tokens, provision
@@ -405,7 +428,8 @@ async function handleOAuthExchange(request: Request, env: Env): Promise<Response
     }
 
     // 3) provision (reuses the exact paste-flow provisioning)
-    const prov = await provisionWorker(env, uid, accountId, accessToken);
+    const priorCfg = await fetchWorkerConfig(uid, idToken, env).catch(() => null);
+    const prov = await provisionWorker(env, uid, accountId, accessToken, priorCfg?.sessionSecret);
     if (!prov.success) return corsResponse(JSON.stringify({ error: prov.error }), { status: 500 });
 
     // 4) persist the encrypted REFRESH token (the access token expires in minutes)
@@ -413,6 +437,7 @@ async function handleOAuthExchange(request: Request, env: Env): Promise<Response
       authMethod: 'oauth',
       accountId, workerName: prov.workerName, workerUrl: prov.workerUrl,
       databaseName: prov.dbName, databaseId: prov.databaseId,
+      sessionSecret: prov.sessionSecret,
       setupTimestamp: new Date().toISOString(),
       lastDeployedVersion: SHIM_VERSION, autoUpdateEnabled: true,
     };
@@ -504,12 +529,18 @@ async function handleAutoUpdate(request: Request, env: Env): Promise<Response> {
       }
     }
     const cfApi = new CloudflareAPI();
+    // Workers provisioned before per-user signing secrets existed have none.
+    // Mint one here so the fleet migrates off the shared, publicly-known
+    // APP_IDENTIFIER key; it is stored below and reused from then on.
+    const sessionSecret = (typeof cfg.sessionSecret === 'string' && cfg.sessionSecret.length >= 32)
+      ? cfg.sessionSecret
+      : newSessionSecret();
     const deployResult = await cfApi.deployWorker({
       accountId: cfg.accountId,
       workerName: cfg.workerName,
       apiToken,
       workerCode: SHIM_BUNDLE,
-      bindings: buildShimBindings(env, cfg.databaseId)
+      bindings: buildShimBindings(env, cfg.databaseId, sessionSecret)
     });
     if (!deployResult.success) {
       return corsResponse(JSON.stringify({ updated: false, reason: 'deploy-failed', error: deployResult.error }), { status: 500 });
@@ -518,6 +549,7 @@ async function handleAutoUpdate(request: Request, env: Env): Promise<Response> {
     await saveWorkerConfig(uid, idToken, {
       ...cfg,
       ...(rotatedRefresh ? { refreshToken: rotatedRefresh } : {}),
+      sessionSecret,
       lastDeployedVersion: SHIM_VERSION,
       lastUpdatedAt: new Date().toISOString(),
     }, env);
@@ -541,7 +573,7 @@ async function handleForceUpdate(request: Request, env: Env): Promise<Response> 
     if (!env.ADMIN_SECRET || secret !== env.ADMIN_SECRET) {
       return corsResponse(JSON.stringify({ error: 'Unauthorized' }), { status: 401 });
     }
-    const { accountId, workerName, databaseId, apiToken: encApiToken, migrationSql } = await request.json() as any;
+    const { accountId, workerName, databaseId, apiToken: encApiToken, migrationSql, sessionSecret } = await request.json() as any;
     if (!accountId || !workerName || !databaseId || !encApiToken) {
       return corsResponse(JSON.stringify({ error: 'Missing required fields: accountId, workerName, databaseId, apiToken' }), { status: 400 });
     }
@@ -561,7 +593,9 @@ async function handleForceUpdate(request: Request, env: Env): Promise<Response> 
 
     const deployResult = await cfApi.deployWorker({
       accountId, workerName, apiToken, workerCode: SHIM_BUNDLE,
-      bindings: buildShimBindings(env, databaseId)
+      // Pass the user's stored sessionSecret so a forced redeploy does not
+      // strip the binding and invalidate their sessions.
+      bindings: buildShimBindings(env, databaseId, sessionSecret)
     });
     if (!deployResult.success) {
       return corsResponse(JSON.stringify({ success: false, error: deployResult.error, migration }), { status: 500 });

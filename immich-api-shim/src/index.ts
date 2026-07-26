@@ -175,8 +175,22 @@ export default {
         });
       } else if (path === '/proxy') {
         const target = url.searchParams.get('url');
+        // Relay to Telegram ONLY. This endpoint exists so the Drive client can
+        // push chunks to Telegram through its own worker, but it took any URL
+        // and required no authentication — an open proxy on every deployed
+        // worker, usable to reach internal addresses, launder traffic through
+        // someone else's Cloudflare account, or burn their request quota.
+        let allowedTarget = false;
+        try {
+          const t = new URL(target || '');
+          allowedTarget = t.protocol === 'https:' &&
+            (t.hostname === 'api.telegram.org' || t.hostname.endsWith('.telegram.org'));
+        } catch { allowedTarget = false; }
+
         if (!target) {
           response = new Response('Missing url parameter', { status: 400 });
+        } else if (!allowedTarget) {
+          response = new Response('This endpoint only relays to api.telegram.org', { status: 403 });
         } else {
           const fwdHeaders = new Headers();
           const ct = request.headers.get('Content-Type');

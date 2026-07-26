@@ -1,15 +1,9 @@
 import { describe, it, expect } from 'vitest';
+import { testSessionToken, TEST_SCOPE } from './test-session';
 import { handleAlbums } from './albums';
 
-function sessionCookie(): string {
-  const payload = {
-    uid: 'u1',
-    email: 'u1@example.com',
-    idToken: 'a.' + btoa(JSON.stringify({ exp: 4102444800 })) + '.c',
-    refreshToken: 'r',
-    exp: 4102444800000,
-  };
-  return btoa(JSON.stringify(payload));
+async function sessionCookie(): Promise<string> {
+  return testSessionToken('u1', 'u1@example.com');
 }
 
 const ALBUMS = [{ id: 'A1', albumName: 'Trip', createdAt: 't', updatedAt: 't', albumThumbnailAssetId: null }];
@@ -38,32 +32,32 @@ function makeDb() {
 }
 
 function makeEnv(): any {
-  return { DB: makeDb(), APP_IDENTIFIER: '', FIREBASE_API_KEY: '' };
+  return { DB: makeDb(), APP_IDENTIFIER: 'test-app', SESSION_SECRET: TEST_SCOPE, FIREBASE_API_KEY: '' };
 }
 
-function req(path: string, method = 'GET'): Request {
+async function req(path: string, method = 'GET'): Promise<Request> {
   return new Request(`https://worker.test${path}`, {
     method,
-    headers: { Cookie: `immich_access_token=${sessionCookie()}` },
+    headers: { Cookie: `immich_access_token=${await sessionCookie()}` },
   });
 }
 
 describe('album sharing graceful behavior', () => {
   it('GET /api/albums?shared=true returns [] (no album is shared here)', async () => {
-    const res = await handleAlbums(req('/api/albums?shared=true'), makeEnv(), '/api/albums');
+    const res = await handleAlbums(await req('/api/albums?shared=true'), makeEnv(), '/api/albums');
     const body = (await res.json()) as any[];
     expect(body).toEqual([]);
   });
 
   it('GET /api/albums (no shared param) still returns the album list', async () => {
-    const res = await handleAlbums(req('/api/albums'), makeEnv(), '/api/albums');
+    const res = await handleAlbums(await req('/api/albums'), makeEnv(), '/api/albums');
     const body = (await res.json()) as any[];
     expect(body.length).toBe(1);
     expect(body[0].id).toBe('A1');
   });
 
   it('PUT /api/albums/{id}/users returns a shaped album, not a 404', async () => {
-    const res = await handleAlbums(req('/api/albums/A1/users', 'PUT'), makeEnv(), '/api/albums/A1/users');
+    const res = await handleAlbums(await req('/api/albums/A1/users', 'PUT'), makeEnv(), '/api/albums/A1/users');
     expect(res.status).toBe(200);
     const body = (await res.json()) as any;
     expect(body.id).toBe('A1');
@@ -71,7 +65,7 @@ describe('album sharing graceful behavior', () => {
   });
 
   it('DELETE /api/albums/{id}/user/{userId} returns 200, not a 404', async () => {
-    const res = await handleAlbums(req('/api/albums/A1/user/u2', 'DELETE'), makeEnv(), '/api/albums/A1/user/u2');
+    const res = await handleAlbums(await req('/api/albums/A1/user/u2', 'DELETE'), makeEnv(), '/api/albums/A1/user/u2');
     expect(res.status).toBe(200);
   });
 });

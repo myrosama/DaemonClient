@@ -1,0 +1,580 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DaemonClient</title>
+<meta name="color-scheme" content="dark">
+<meta name="robots" content="noindex, nofollow">
+<style>
+/*
+  The dashboard of a self-hosted DaemonClient.
+
+  Two constraints shaped this file:
+
+  1. It must work offline and from any static host, so there are no external
+     fonts, no CDN, no build step — one file, system fonts only.
+  2. Whoever opens this page arrived here from a terminal: they just watched
+     `daemonclient setup` print checkmarks. So the page continues that
+     language rather than switching to a different visual world — the same
+     panels with a notched title on the border, the same ✔/✖ glyphs, the same
+     monospace status rows. The CLI and the dashboard are one design system,
+     one rendered in ANSI and one in CSS.
+*/
+
+:root {
+  --bg:        #0A0C0F;
+  --panel:     #101317;
+  --panel-hi:  #141920;
+  --line:      #1E242B;
+  --line-hi:   #2A323C;
+  --text:      #E6EAEF;
+  --dim:       #7C8896;
+  --dimmer:    #4A535E;
+  --ok:        #34D399;
+  --link:      #5AA9FF;
+  --warn:      #F5B14C;
+  --bad:       #F2555A;
+
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+
+  --gap: 1.5rem;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 14px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+body {
+  min-height: 100vh;
+  /* A very faint scanline-free vignette: presence without theatre. */
+  background-image: radial-gradient(120% 80% at 50% -10%, #10161C 0%, var(--bg) 60%);
+}
+
+a { color: var(--link); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+:focus-visible {
+  outline: 2px solid var(--ok);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+.wrap {
+  max-width: 60rem;
+  margin: 0 auto;
+  padding: clamp(1.25rem, 4vw, 3rem) clamp(1rem, 4vw, 2rem) 4rem;
+}
+
+/* ── The panel: a rectangle whose top border is interrupted by its title,
+      the CSS equivalent of the CLI's ╭─ title ─────╮ ───────────────────── */
+.panel {
+  position: relative;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  padding: 1.5rem;
+  margin-top: 1.75rem;
+}
+.panel > .panel-title {
+  position: absolute;
+  top: 0;
+  left: 1rem;
+  transform: translateY(-50%);
+  background: var(--bg);
+  padding: 0 .6rem;
+  font-size: 11px;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+/* ── Header ─────────────────────────────────────────────────────────────── */
+header.bar {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  padding-bottom: .9rem;
+  border-bottom: 1px solid var(--line);
+}
+.brand {
+  font-size: 15px;
+  letter-spacing: -.01em;
+}
+.brand b { font-weight: 600; }
+.brand .prompt { color: var(--ok); margin-right: .5ch; }
+.brand .host { color: var(--dimmer); }
+.whoami { color: var(--dim); font-size: 12.5px; }
+.whoami button {
+  margin-left: .75rem;
+  background: none;
+  border: 0;
+  color: var(--dim);
+  font: inherit;
+  cursor: pointer;
+  padding: 0;
+  border-bottom: 1px solid var(--line-hi);
+}
+.whoami button:hover { color: var(--text); border-color: var(--dim); }
+
+/* ── Services ───────────────────────────────────────────────────────────── */
+.services {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  gap: 1rem;
+  margin-top: 2rem;
+}
+.service {
+  display: block;
+  position: relative;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  padding: 1.25rem 1.25rem 1.1rem;
+  color: inherit;
+  text-decoration: none;
+  transition: border-color .15s ease, background .15s ease, transform .15s ease;
+}
+.service:hover, .service:focus-visible {
+  border-color: var(--line-hi);
+  background: var(--panel-hi);
+  text-decoration: none;
+  transform: translateY(-1px);
+}
+.service[aria-disabled="true"] {
+  opacity: .5;
+  pointer-events: none;
+}
+.service .name {
+  font-size: 12px;
+  letter-spacing: .16em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.service .metric {
+  font-family: var(--sans);
+  font-size: clamp(1.6rem, 5vw, 2.1rem);
+  font-weight: 300;
+  letter-spacing: -.02em;
+  line-height: 1.15;
+  margin: .5rem 0 .1rem;
+  font-variant-numeric: tabular-nums;
+}
+.service .metric .unit {
+  font-size: .5em;
+  color: var(--dim);
+  margin-left: .35ch;
+  font-weight: 400;
+}
+.service .go {
+  color: var(--ok);
+  font-size: 12.5px;
+}
+.service:hover .go .arrow { transform: translateX(3px); }
+.service .go .arrow {
+  display: inline-block;
+  transition: transform .15s ease;
+}
+
+/* ── Status readout: literal terminal output ────────────────────────────── */
+.readout { margin: 0; }
+.row {
+  display: grid;
+  grid-template-columns: 1.5rem 8.5rem 1fr auto;
+  gap: .75rem;
+  align-items: baseline;
+  padding: .3rem 0;
+  border-bottom: 1px dashed transparent;
+  font-size: 13px;
+}
+.row + .row { border-top: 1px solid #14191F; }
+.row .glyph { text-align: center; }
+.row .k { color: var(--dim); }
+.row .v { color: var(--text); overflow-wrap: anywhere; }
+.row .note { color: var(--dimmer); font-size: 12px; text-align: right; }
+.ok    { color: var(--ok); }
+.bad   { color: var(--bad); }
+.warn  { color: var(--warn); }
+.muted { color: var(--dimmer); }
+
+/* Rows arrive in sequence, the way they did in the terminal. One animated
+   moment on the page; everything else holds still. */
+@media (prefers-reduced-motion: no-preference) {
+  .row.enter { animation: rowin .28s ease both; }
+  @keyframes rowin {
+    from { opacity: 0; transform: translateY(-2px); }
+    to   { opacity: 1; transform: none; }
+  }
+}
+
+/* ── Update notice ──────────────────────────────────────────────────────── */
+.notice {
+  margin-top: 1.75rem;
+  border: 1px solid #3A3016;
+  background: #17130A;
+  padding: 1rem 1.15rem;
+  font-size: 13px;
+}
+.notice .h { color: var(--warn); }
+.notice code {
+  background: #0D0F13;
+  border: 1px solid var(--line);
+  padding: .12rem .45rem;
+  color: var(--text);
+}
+
+/* ── Login ──────────────────────────────────────────────────────────────── */
+.login-shell {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 1.5rem;
+}
+.login {
+  width: 100%;
+  max-width: 24rem;
+}
+.login .lead {
+  color: var(--dim);
+  font-size: 13px;
+  margin: 0 0 1.5rem;
+}
+.field { margin-bottom: 1rem; }
+.field label {
+  display: block;
+  font-size: 11px;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--dim);
+  margin-bottom: .4rem;
+}
+.field input {
+  width: 100%;
+  background: #0B0E12;
+  border: 1px solid var(--line);
+  color: var(--text);
+  font: inherit;
+  padding: .6rem .7rem;
+  transition: border-color .15s ease;
+}
+.field input:focus {
+  outline: none;
+  border-color: var(--ok);
+}
+button.primary {
+  width: 100%;
+  background: var(--ok);
+  color: #04120C;
+  border: 0;
+  font: inherit;
+  font-weight: 600;
+  padding: .65rem 1rem;
+  cursor: pointer;
+  transition: filter .15s ease;
+}
+button.primary:hover:not(:disabled) { filter: brightness(1.08); }
+button.primary:disabled { opacity: .55; cursor: default; }
+
+.error {
+  color: var(--bad);
+  font-size: 13px;
+  margin: 0 0 1rem;
+  border-left: 2px solid var(--bad);
+  padding-left: .7rem;
+}
+.foot {
+  margin-top: 2.5rem;
+  color: var(--dimmer);
+  font-size: 12px;
+  text-align: center;
+}
+.hidden { display: none !important; }
+
+@media (max-width: 34rem) {
+  .row { grid-template-columns: 1.25rem 1fr; }
+  .row .note { grid-column: 2; text-align: left; }
+  .row .v { grid-column: 2; }
+}
+</style>
+</head>
+<body>
+
+<!-- ── Sign in ─────────────────────────────────────────────────────────── -->
+<div class="login-shell" id="loginView">
+  <main class="login">
+    <div class="panel" style="margin-top:0">
+      <span class="panel-title">self-hosted</span>
+      <div class="brand" style="margin-bottom:.35rem">
+        <span class="prompt">❯</span><b>daemonclient</b>
+      </div>
+      <p class="lead">Sign in to your server.</p>
+
+      <p class="error hidden" id="loginError" role="alert"></p>
+
+      <form id="loginForm" novalidate>
+        <div class="field">
+          <label for="email">Email</label>
+          <input id="email" type="email" autocomplete="username" required autofocus>
+        </div>
+        <div class="field">
+          <label for="password">Password</label>
+          <input id="password" type="password" autocomplete="current-password" required>
+        </div>
+        <button class="primary" type="submit" id="loginBtn">Sign in</button>
+      </form>
+    </div>
+    <p class="foot">
+      Forgot it? Run <code>daemonclient password</code> on the machine that set this up.
+    </p>
+  </main>
+</div>
+
+<!-- ── Dashboard ───────────────────────────────────────────────────────── -->
+<div class="wrap hidden" id="appView">
+  <header class="bar">
+    <div class="brand">
+      <span class="prompt">❯</span><b>daemonclient</b>
+      <span class="host" id="hostLabel"></span>
+    </div>
+    <div class="whoami">
+      <span id="whoLabel"></span>
+      <button type="button" id="signOut">sign out</button>
+    </div>
+  </header>
+
+  <section class="services" aria-label="Your services">
+    <a class="service" id="photosCard" href="#">
+      <div class="name">Photos</div>
+      <div class="metric" id="photoCount">—</div>
+      <div class="go">open <span class="arrow">→</span></div>
+    </a>
+    <a class="service" id="driveCard" href="#">
+      <div class="name">Drive</div>
+      <div class="metric" id="driveMetric">—</div>
+      <div class="go">open <span class="arrow">→</span></div>
+    </a>
+  </section>
+
+  <div class="notice hidden" id="updateNotice">
+    <div class="h">Update available</div>
+    <div id="updateText" style="margin:.35rem 0 .6rem;color:var(--dim)"></div>
+    <div>Run <code>daemonclient update</code> where you set this up.</div>
+  </div>
+
+  <section class="panel">
+    <span class="panel-title">system</span>
+    <div class="readout" id="readout" aria-live="polite"></div>
+  </section>
+
+  <p class="foot" id="footNote"></p>
+</div>
+
+<script>
+/*
+  Everything below talks to one API: the user's own worker.
+
+  The worker URL is baked in at deploy time by the setup CLI (it rewrites the
+  API_BASE line). If that has not happened — someone opened the file directly —
+  we ask for it once and remember it, rather than failing with a blank screen.
+*/
+const API_BASE = (window.DAEMONCLIENT_API || localStorage.getItem('dc.api') || '').replace(/\/+$/, '');
+const TOKEN_KEY = 'dc.token';
+
+const $ = (id) => document.getElementById(id);
+const show = (el) => el.classList.remove('hidden');
+const hide = (el) => el.classList.add('hidden');
+
+function token() { return localStorage.getItem(TOKEN_KEY) || ''; }
+
+async function api(path, options = {}) {
+  const res = await fetch(`${API_BASE}${path}`, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token() ? { Authorization: `Bearer ${token()}` } : {}),
+      ...(options.headers || {}),
+    },
+  });
+  if (res.status === 401) {
+    localStorage.removeItem(TOKEN_KEY);
+    throw Object.assign(new Error('Session expired — sign in again.'), { unauthorized: true });
+  }
+  return res;
+}
+
+// ── Sign in ────────────────────────────────────────────────────────────────
+$('loginForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const btn = $('loginBtn');
+  const err = $('loginError');
+  hide(err);
+  btn.disabled = true;
+  btn.textContent = 'Signing in…';
+
+  try {
+    const res = await fetch(`${API_BASE}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: $('email').value.trim(), password: $('password').value }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.message || 'Could not sign in.');
+    localStorage.setItem(TOKEN_KEY, body.accessToken);
+    $('password').value = '';
+    await enterApp();
+  } catch (e2) {
+    err.textContent = e2.message.includes('fetch')
+      ? `Cannot reach ${API_BASE || 'the server'}. Check that it is deployed and that this page's address is in ALLOWED_ORIGINS.`
+      : e2.message;
+    show(err);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Sign in';
+  }
+});
+
+$('signOut').addEventListener('click', () => {
+  localStorage.removeItem(TOKEN_KEY);
+  location.reload();
+});
+
+// ── Dashboard ──────────────────────────────────────────────────────────────
+function row(glyphClass, glyph, key, value, note) {
+  const el = document.createElement('div');
+  el.className = 'row enter';
+  el.innerHTML = `
+    <span class="glyph ${glyphClass}">${glyph}</span>
+    <span class="k">${key}</span>
+    <span class="v">${value ?? ''}</span>
+    <span class="note">${note ?? ''}</span>`;
+  return el;
+}
+
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (ch) => (
+  { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]
+));
+
+function render(status) {
+  const out = $('readout');
+  out.textContent = '';
+
+  const add = (el, i) => {
+    // Stagger the rows so the readout assembles the way the setup log did.
+    el.style.animationDelay = `${Math.min(i, 8) * 45}ms`;
+    out.appendChild(el);
+  };
+
+  const rows = [];
+  const w = status.worker || {};
+  rows.push(row('ok', '✔', 'api', esc(hostOf(API_BASE)), esc(w.build || w.version || '')));
+  rows.push(w.database === 'connected'
+    ? row('ok', '✔', 'database', 'connected', status.library?.photos != null ? `${status.library.photos.toLocaleString()} photos` : '')
+    : row('bad', '✖', 'database', 'not bound', 'run daemonclient update'));
+
+  const t = status.telegram || {};
+  if (!t.botConfigured) {
+    rows.push(row('bad', '✖', 'telegram', 'no bot configured', 'run daemonclient setup'));
+  } else if (t.reachable === false) {
+    rows.push(row('bad', '✖', 'telegram', 'bot token rejected', 'run daemonclient doctor'));
+  } else {
+    rows.push(row('ok', '✔', 'telegram', 'bot connected', t.channelConfigured ? 'channel ready' : 'no channel'));
+  }
+
+  const p = status.processor || {};
+  if (!p.configured) {
+    rows.push(row('muted', '–', 'processor', 'not configured', 'HEIC + video thumbnails off'));
+  } else if (p.reachable) {
+    rows.push(row('ok', '✔', 'processor', 'healthy', ''));
+  } else {
+    rows.push(row('warn', '!', 'processor', 'asleep or unreachable', 'wakes on next use'));
+  }
+
+  const u = status.update || {};
+  if (u.updateAvailable) {
+    rows.push(row('warn', '!', 'version', `${esc(u.currentVersion)} → ${esc(u.latestVersion)}`, 'update available'));
+  } else if (u.latestVersion) {
+    rows.push(row('ok', '✔', 'version', `${esc(u.currentVersion)}`, 'up to date'));
+  } else {
+    rows.push(row('muted', '–', 'version', esc(u.currentVersion || 'unknown'), u.error ? 'check failed' : ''));
+  }
+
+  rows.forEach(add);
+
+  // Services
+  const photos = status.library?.photos;
+  $('photoCount').innerHTML = photos != null
+    ? `${photos.toLocaleString()}<span class="unit">photos</span>`
+    : '—';
+  $('driveMetric').innerHTML = `open<span class="unit">files</span>`;
+
+  const photosUrl = localStorage.getItem('dc.photosUrl') || '';
+  const driveUrl = localStorage.getItem('dc.driveUrl') || '';
+  wireCard($('photosCard'), photosUrl);
+  wireCard($('driveCard'), driveUrl);
+
+  if (u.updateAvailable) {
+    $('updateText').textContent = `You are running ${u.currentVersion}. ${u.latestVersion} is available.`;
+    show($('updateNotice'));
+  }
+
+  $('hostLabel').textContent = hostOf(API_BASE);
+  $('whoLabel').textContent = status.account?.email || '';
+  $('footNote').textContent = `${status.mode === 'self-hosted' ? 'Self-hosted' : 'Managed'} · worker ${w.version || '?'}`;
+}
+
+function wireCard(card, url) {
+  if (url) {
+    card.href = url;
+    card.removeAttribute('aria-disabled');
+  } else {
+    card.href = '#';
+    card.setAttribute('aria-disabled', 'true');
+    card.title = 'Not deployed yet';
+  }
+}
+
+function hostOf(url) {
+  try { return new URL(url).host; } catch { return url || '—'; }
+}
+
+async function enterApp() {
+  hide($('loginView'));
+  show($('appView'));
+  try {
+    const res = await api('/api/selfhost/status');
+    if (!res.ok) throw new Error(`status ${res.status}`);
+    render(await res.json());
+  } catch (e) {
+    if (e.unauthorized) return boot();
+    $('readout').innerHTML = '';
+    $('readout').appendChild(row('bad', '✖', 'api', 'not reachable', esc(e.message)));
+  }
+}
+
+async function boot() {
+  if (!API_BASE) {
+    const entered = prompt('API address of your DaemonClient server\n(e.g. https://daemonclient-abc.you.workers.dev)');
+    if (entered) {
+      localStorage.setItem('dc.api', entered.replace(/\/+$/, ''));
+      location.reload();
+      return;
+    }
+  }
+  if (token()) return enterApp();
+  show($('loginView'));
+  hide($('appView'));
+}
+
+boot();
+</script>
+</body>
+</html>
