@@ -31,16 +31,25 @@ cd processor
 npx vercel deploy --prod
 ```
 
-Then set two environment variables in the Vercel dashboard, or pass them inline:
+Then set two environment variables in the Vercel dashboard **and redeploy** (the
+first deploy has neither, so it rejects every request until they are set):
 
 | Variable | Value |
 |---|---|
-| `FIREBASE_PROJECT_ID` | the Firebase project your DaemonClient uses |
+| `FIREBASE_PROJECT_ID` | the Firebase project your DaemonClient uses — **required**; without it every request is rejected |
 | `OWNER_UID` | your user id — `daemonclient processor` prints it |
 
-Anywhere else that runs a standard `Request`/`Response` handler works too:
-Netlify Functions, Cloudflare Pages Functions, Firebase Functions. The handler
-in `api/convert.js` is the whole thing.
+Vercel runs this on its **Node.js runtime, not Edge**: decoding HEIC through
+libheif's WASM is computationally intense, which is the workload Vercel documents
+its Node.js runtime for (more CPU, memory and bundle headroom than an Edge
+Function on the free plan). `api/convert.js` exports the `{ fetch }` form that
+runtime serves — do not switch it to the edge runtime.
+
+The core is the exported Web-standard `handler(request)` in `api/convert.js`.
+Hosts that speak the Web `Request`/`Response` interface — Netlify Functions,
+Cloudflare Workers — can import and re-export it directly. Firebase Functions and
+Cloudflare Pages Functions use Node `(req, res)` / `onRequest` signatures, so they
+need a small `Request`↔`(req, res)` adapter around it.
 
 ## Connect it
 
