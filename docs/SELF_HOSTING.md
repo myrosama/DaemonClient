@@ -79,27 +79,44 @@ Install the DaemonClient app, and on the login screen enter your API address as
 the server URL, then your email and password. Backup works exactly as it does on
 a managed account.
 
-### Web apps
+### Web apps — one command
 
-The Photos and Drive web apps are in this repo. Run them locally:
+The web side is three apps, all in this repo: the **dashboard** (your main page —
+sign in, then open Photos or Drive), **Photos**, and **Drive**. One command builds
+all three from your own checkout, each pointed at *your* worker and *your*
+Firebase, and deploys them to **Firebase Hosting** on your own project (free):
 
 ```bash
-cd immich/web && npm install && npm run dev     # Photos
-cd drive && npm install && npm run dev          # Drive
+daemonclient web
 ```
 
-Or deploy them anywhere static — Cloudflare Pages, Vercel, Netlify, your own
-nginx. Two things to set:
+It builds, creates three Firebase Hosting sites, deploys, and adds their addresses
+to your worker's `ALLOWED_ORIGINS` for you. Firebase Hosting deploy signs in with
+your own Google account (`firebase login` — a browser opens; nothing reaches us).
+When it finishes you get three addresses:
 
-1. Point the app at your API address.
-2. Add the address you serve the app from to `ALLOWED_ORIGINS` on your worker,
-   or the browser will block the requests.
+```
+https://<project>.web.app          ← dashboard (open this one)
+https://<project>-photos.web.app   ← Photos
+https://<project>-drive.web.app    ← Drive
+```
 
-### Dashboard
+Open the dashboard, sign in, and open Photos or Drive from there.
 
-`selfhost/dashboard/index.html` is a single self-contained file: a sign-in page,
-links to your two services, and a live readout of what is healthy. Host it
-anywhere, or just open it from disk. On first load it asks for your API address.
+**Prefer to run them yourself, or deploy elsewhere?** Each app takes its worker
+URL from a build-time variable, and defaults to the operator's host *only* when
+you are not building for self-host — so a self-host build never points at us:
+
+| App | Build with |
+|---|---|
+| Photos (`immich/web`) | `PUBLIC_SELF_HOST=1 PUBLIC_DAEMONCLIENT_WORKER_URL=<your-worker> npm run build` |
+| Drive (`drive`) | `VITE_SELF_HOST=1 VITE_API_BASE=<your-worker> npm run build` |
+| Dashboard (`accounts-portal`) | `VITE_SELF_HOST=1 VITE_API_BASE=<your-worker> VITE_FIREBASE_API_KEY=… VITE_FIREBASE_AUTH_DOMAIN=<project>.firebaseapp.com VITE_FIREBASE_PROJECT_ID=<project> VITE_PHOTOS_URL=… VITE_DRIVE_URL=… npx vite build --mode selfhost` |
+
+Then host the built folders anywhere static (Firebase Hosting, Cloudflare Pages,
+Netlify, your own nginx) and add each address to `ALLOWED_ORIGINS`
+(`daemonclient update`), or the browser blocks its API calls. For local dev,
+`npm run dev` in `immich/web` or `drive` works too — set the same variables.
 
 ---
 

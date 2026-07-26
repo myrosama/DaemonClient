@@ -19,12 +19,16 @@ const COMMANDS = {
     summary: 'Rebuild from the current source and redeploy',
     run: async () => (await import('../src/commands/update.mjs')).runUpdate(),
   },
+  web: {
+    summary: 'Build & deploy all three web apps (dashboard, Photos, Drive) to your Firebase',
+    run: async () => (await import('../src/commands/web.mjs')).runWeb(),
+  },
   dashboard: {
-    summary: 'Build and publish the web dashboard',
+    summary: 'Build & publish only the dashboard hub (to Cloudflare Pages)',
     run: async () => (await import('../src/commands/dashboard.mjs')).runDashboard(),
   },
   processor: {
-    summary: 'Add or change the media processor (HEIC, video thumbnails)',
+    summary: 'Add or change the media processor (HEIC thumbnails)',
     run: async () => (await import('../src/commands/processor.mjs')).runProcessor(),
   },
   doctor: {
