@@ -1,0 +1,577 @@
+# Master plan
+
+**Status: awaiting approval. Nothing here has been implemented.**
+
+## What this achieves
+
+Four things the operator asked for: a self-hostable DaemonClient that depends on
+nothing we run, a mobile app that works, a repository outsiders can contribute
+to, and documentation worth reading — with security intact throughout.
+
+The order is not arbitrary. Phase 1 fixes a bug that is silently storing
+people's photos in plaintext right now; nothing else matters until that stops.
+Phase 2 closes the remaining ways an account can be taken over. Phase 3 makes
+the worker survive its own free-tier budget. Only then do we finish the
+self-hosting path, and only then the documentation that describes it — because
+documenting something still being rewritten wastes the writing.
+
+## How to read this
+
+Phases run in order. Tasks inside a phase may run in any order unless a
+**Depends on** says otherwise.
+
+Every task passes **four gates** before it is committed (see `GATES.md`). Each
+task lists its own verification — the actual command, not "run the tests".
+
+The backlog behind these tasks is `FINDINGS.md`, where every item was confirmed
+against the code with file and line numbers. `PARITY.md` states the requirement
+that hosted and self-hosted stay one product.
+
+---
+
+# Phase 1 — Stop storing photos in plaintext
+
+**Goal:** encryption is either genuinely happening or the upload is refused, and
+no endpoint can claim otherwise.
+
+**Why first:** self-hosted installs are writing unencrypted photos to Telegram
+under their real filenames *and reporting themselves as encrypted*
+(`FINDINGS.md` §1). Every photo uploaded before this lands is already in the
+clear and cannot be retroactively protected. Nothing else in this plan is worth
+doing first.
+
+### Task 1.1 — Make encryption fail closed
+- **What:** when ZKE is enabled but the key material is missing, refuse the
+  upload instead of silently writing plaintext.
+- **Files:** `immich-api-shim/src/assets.ts` (`getEncryptionKey`, ~173-187; the
+  call site at ~1063).
+- **How:** `getEncryptionKey` currently returns `null` for both "encryption is
+  off" and "encryption is on but broken", and the caller treats them the same.
+  Separate them: return `null` only when `zke_mode` is `off`; throw a typed
+  error when `enabled` is true and `password`/`salt` are empty. `handleUpload`
+  turns that into a clear 5xx naming the fix, rather than a successful upload.
+- **Verify:** new `src/zke-failclosed.test.ts` — with `{enabled:1, password:'',
+  salt:''}` the upload path rejects and writes nothing; with real key material
+  it encrypts; with `mode:'off'` it stores plaintext deliberately and says so.
+- **Risk:** medium — a wrong turn here blocks uploads for working installs, so
+  the "off" case must stay working.
+
+### Task 1.2 — Stop `zke-status` claiming encryption that is not happening
+- **What:** derive `enabled` from whether key material actually exists.
+- **Files:** `immich-api-shim/src/assets.ts` (~236).
+- **How:** `enabled: !!(cfg.password && cfg.salt) && cfg.enabled`. One line, but
+  it is the line that made the original bug invisible.
+- **Verify:** same test file — empty key material reports `enabled:false`.
+- **Depends on:** 1.1
+- **Risk:** low
+
+### Task 1.3 — Seed real keys during self-host setup
+- **What:** generate salt and password and write them, matching what the hosted
+  provisioner does.
+- **Files:** `selfhost/src/commands/setup.mjs`, `selfhost/src/deploy.mjs`.
+- **How:** after the schema runs, `SELECT value FROM config WHERE key =
+  'zke_password'`. **Only if empty**, generate 16-byte salt and 32-byte password
+  and UPDATE both. The emptiness check is what stops a re-run from rotating keys
+  and orphaning every existing photo. Do it over REST with bound parameters.
+- **Verify:** `selfhost/test/zke-seed.test.mjs` — a fake D1 with empty keys gets
+  written once; a second run leaves the existing values untouched.
+- **Depends on:** 1.1
+- **Risk:** high — rotating an existing key destroys access to stored photos.
+  The idempotency check gets its own test.
+
+### Task 1.4 — Remove the encryption key that encrypts nothing
+- **What:** delete `ENCRYPTION_MASTER_KEY` from the shim and `STORAGE_KEY` from
+  the CLI, or wire them to something real.
+- **Files:** `immich-api-shim/src/index.ts` (~94), `selfhost/src/config.mjs`,
+  `selfhost/src/deploy.mjs`, `selfhost/src/commands/update.mjs`.
+- **How:** the shim never reads it (grep confirms the declaration is the only
+  hit). The CLI generates it, calls it "File encryption key" to the user, and
+  warns that losing it loses their files. Delete it. The real key material is
+  the `zke_*` config rows from 1.3, and the backup warning must move there.
+- **Verify:** `grep -r ENCRYPTION_MASTER_KEY immich-api-shim/src` returns
+  nothing; CLI tests pass; the warning text names the right thing.
+- **Depends on:** 1.3
+- **Risk:** low
+
+### Task 1.5 — Write the recovery note for anyone already affected
+- **What:** document what to do if photos were uploaded before this fix.
+- **Files:** `docs/SELF_HOSTING.md`.
+- **How:** be honest — those files are in the channel unencrypted under their
+  real names. Options: leave them, or delete and re-upload once encryption is
+  confirmed on. Include the command to check
+  (`/api/assets/zke-status` after 1.2 tells the truth).
+- **Verify:** a reader can determine their own exposure and act on it.
+- **Depends on:** 1.2
+- **Risk:** low
+
+**Exit criteria**
+- An install with broken key material refuses uploads instead of writing plaintext.
+- `zke-status` cannot report encryption that is not happening.
+- A fresh self-host setup produces working encryption, and re-running is safe.
+- No secret is described to users as protecting something it does not protect.
+
+---
+
+# Phase 2 — Close the remaining account-takeover paths
+
+**Goal:** no authenticated user can reach another's data or the install's keys,
+and no unauthenticated user can forge a session anywhere.
+
+**Why here:** these are exploitable today. They come after Phase 1 only because
+plaintext-at-rest is worse and already happening.
+
+### Task 2.1 — Delete `finalize-client-upload`
+- **What:** remove the route and its handler.
+- **Files:** `immich-api-shim/src/assets.ts` (route ~359-361, handler ~1621-1638).
+- **How:** it spreads the raw request body into `savePhoto`, whose column names
+  are string-interpolated into SQL — arbitrary SQL for any authenticated user.
+  It has no caller anywhere in the repo. Deleting is correct; hardening a dead
+  route is not.
+- **Verify:** `grep -rn "finalize-client-upload" --include=*.ts --include=*.js
+  --include=*.dart --include=*.svelte .` returns only the bundled copy and the
+  roadmap mention; suite green.
+- **Risk:** low
+
+### Task 2.2 — Make `savePhoto` reject unknown columns
+- **What:** validate keys against the real column list before building SQL.
+- **Files:** `immich-api-shim/src/d1-adapter.ts` (~100-115).
+- **How:** a `const PHOTO_COLUMNS = new Set([...])` derived from the schema;
+  filter incoming keys and drop unknowns with a warning. Defence in depth — 2.1
+  removes today's route, this removes the class.
+- **Verify:** `src/d1-adapter-columns.test.ts` — a key like `` `id`, x) VALUES
+  (…-- `` is dropped, a legitimate partial update still writes.
+- **Risk:** low
+
+### Task 2.3 — Stop serving key material over HTTP
+- **What:** `/api/server/zke-config` must never return the password or salt;
+  `/api/server/telegram-config` must never return the bot token.
+- **Files:** `immich-api-shim/src/server.ts` (~66-109); any client reading them.
+- **How:** return `{enabled, mode}` and `{configured, channelId, proxyUrl}`. The
+  worker derives its own key; no client needs the raw material for server-mode
+  ZKE. Check the web apps and Drive for readers first — Drive uses its own
+  `drive_zke` path and should be unaffected, but verify rather than assume.
+- **Verify:** `src/server-secrets.test.ts` asserts neither response contains
+  `password`, `salt` or `botToken`; Drive upload still works end to end.
+- **Risk:** medium — a client may depend on a field. Find out before removing.
+
+### Task 2.4 — Add an owner check for single-worker installs
+- **What:** store `owner_uid` at setup and gate config routes on it.
+- **Files:** `selfhost/src/commands/setup.mjs`, `immich-api-shim/src/server.ts`,
+  `immich-api-shim/src/index.ts`.
+- **How:** hosted installs are one worker per user, so this is a no-op there.
+  Self-host is one worker with an open Firebase signup, so any account that can
+  register can currently read the install's config. Write `owner_uid` during
+  setup; when it is set, config-returning routes require `session.uid` to match.
+  Absent (hosted), behave as now.
+- **Verify:** `src/owner-gate.test.ts` — with `owner_uid` set, a different uid
+  gets 403 and the owner gets 200; with it unset, both behave as today.
+- **Depends on:** 2.3
+- **Risk:** medium — must not break hosted, which has no `owner_uid`.
+
+### Task 2.5 — Make sessions revocable
+- **What:** an epoch that logout can bump.
+- **Files:** `immich-api-shim/src/auth.ts`, `immich-api-shim/src/helpers.ts`.
+- **How:** `session_epoch` integer in the config table, stamped into the token
+  at issue, compared at verify. `handleLogout` takes `(request, env)` and
+  increments it. Reduce the TTL from ten years to something bounded and lean on
+  refresh for continuity — which the comment at `auth.ts:5-13` already claims.
+  Self-host has no refresh path (`helpers.ts:94`), so pick a TTL that does not
+  force weekly logins there.
+- **Verify:** `src/session-revocation.test.ts` — a token minted before a bump is
+  rejected after it; a fresh one is accepted; no epoch present behaves as today.
+- **Risk:** medium — every user is logged out once when this ships. Say so.
+
+### Task 2.6 — Close the public-constant signing fallback
+- **What:** force the hosted fleet onto per-install secrets, then delete the
+  `APP_IDENTIFIER` fallback.
+- **Files:** `immich-api-shim/src/selfhost-auth.ts` (~44),
+  `immich-api-shim/src/auth-security.test.ts` (~86-93).
+- **How:** redeploy every hosted worker through `/admin/force-update`, which
+  already threads `sessionSecret`. Confirm each has one. Then delete the
+  fallback and **flip the test** that currently asserts forged tokens are
+  accepted, so it asserts rejection.
+- **Verify:** the flipped test; a forged `APP_IDENTIFIER`-signed token gets 401
+  against a live worker.
+- **Depends on:** operator confirms the fleet is redeployed.
+- **Risk:** high — deleting this before every worker has a secret locks users
+  out. The fleet check gates the deletion.
+
+**Exit criteria**
+- No route returns key material or a bot token.
+- No authenticated account can read another's config.
+- Sessions can be revoked; tokens are bounded.
+- No forged token is accepted anywhere.
+
+---
+
+# Phase 3 — Make the worker survive its own budget
+
+**Goal:** ordinary use stops producing error 1102, which the app reports to
+users as sync and backup failure.
+
+**Why here:** these are the crashes users actually see, and they are cheap to
+fix once the security work has settled the same files.
+
+### Task 3.1 — One shared subrequest counter
+- **What:** replace three hand-maintained budgets with one counter.
+- **Files:** new `immich-api-shim/src/budget.ts`; `assets.ts`, `timeline.ts`,
+  `sync.ts`.
+- **How:** a small object created per invocation and threaded through. Increment
+  **inside** the helpers that make the calls (`tgGetFileUrl`, `tgDownloadFile`,
+  cache reads/writes, D1 queries), never at call sites, so a budget cannot drift
+  from what it counts. Expose `remaining()` and `canAfford(n)`.
+- **Verify:** `src/budget.test.ts` — a fake chunk fetch reports 6 for a cold
+  chunk and 1 for a cached one; `canAfford` refuses past the cap.
+- **Risk:** medium — touches hot paths; the tests must cover cache hits and misses.
+
+### Task 3.2 — Cost the chunk budget correctly
+- **What:** derive `MAX_CHUNKS_PER_RESPONSE` from real cost.
+- **Files:** `immich-api-shim/src/assets.ts` (~2226).
+- **How:** twenty chunks at six subrequests each is 120 against a cap of 50.
+  Compute from the counter: `floor((cap - preamble) / perChunk)`. Also check the
+  body cache **before** resolving the file path, so a warm chunk costs one
+  subrequest instead of six.
+- **Verify:** extend `src/range-stitch.test.ts` — a long video yields an honest
+  shorter 206 at a chunk boundary rather than exceeding the budget; existing
+  byte-exactness cases still pass.
+- **Depends on:** 3.1
+- **Risk:** medium — `range-stitch.test.ts` already proves byte-exactness; keep it green.
+
+### Task 3.3 — Stop copying 19 MB per chunk into `waitUntil`
+- **What:** remove the un-awaited full-size copy.
+- **Files:** `immich-api-shim/src/assets.ts` (~2146).
+- **How:** `data.slice(0)` clones the whole chunk for the cache write, and up to
+  twenty can be in flight. Serialise the writes, or skip caching beyond the
+  first chunk of a large response.
+- **Verify:** a test asserting at most N concurrent cache writes; memory-shaped
+  behaviour observed under a multi-chunk fetch.
+- **Depends on:** 3.1
+- **Risk:** medium
+
+### Task 3.4 — Give the timeline the same one-job rotation sync has
+- **What:** dispatch at most one background job per invocation.
+- **Files:** `immich-api-shim/src/timeline.ts` (~55-69).
+- **How:** `sync.ts:290-302` already does this and documents why. The timeline
+  still fires two backfills whose budgets sum to 64 against a cap of 50. Reuse
+  the same rotation.
+- **Verify:** `src/timeline.test.ts` — one `waitUntil` per call; successive
+  calls rotate through the jobs.
+- **Risk:** low
+
+### Task 3.5 — Backpressure on full-file downloads
+- **What:** convert the no-Range path to a pulling stream.
+- **Files:** `immich-api-shim/src/assets.ts` (~2262-2278).
+- **How:** `start()` enqueues every chunk as fast as Telegram delivers, queuing
+  the whole file. Use `pull(controller)` with an index cursor, or the same
+  `TransformStream` pump the 206 path uses.
+- **Verify:** extend `src/range-stitch.test.ts` — a no-Range fetch of the
+  synthetic three-chunk file is byte-identical, and the stream pulls rather than
+  pushes.
+- **Risk:** medium
+
+### Task 3.6 — Never serve a whole original as a grid thumbnail
+- **What:** extend the 404 guard to any fallback to the original.
+- **Files:** `immich-api-shim/src/assets.ts` (~1910, guard ~1924-1941).
+- **How:** the guard covers video and HEIC; a plain JPEG with no stored thumb
+  still serves its full original, cached immutable for a year. On the grid path,
+  404 for *any* original fallback and let the thumbhash blur stand.
+- **Verify:** `src/thumbnail-guard.test.ts` — plain photo with no thumb returns
+  404 on grid, still serves on `size=preview`.
+- **Risk:** low
+
+### Task 3.7 — Expire Telegram file paths honestly
+- **What:** stop a cached path outliving Telegram's validity, and purge on failure.
+- **Files:** `immich-api-shim/src/assets.ts` (~3108-3144).
+- **How:** an L2 hit re-stamps L1 with a fresh 55 minutes regardless of age, so
+  a path can live 110 minutes against Telegram's ~60. Store `fetchedAt` and
+  derive expiry from it. On a 404/410 download, delete both cache entries and
+  retry once with a forced refresh.
+- **Verify:** `src/filepath-cache.test.ts` — an aged L2 entry does not extend
+  L1; a 404 evicts and retries once.
+- **Risk:** low
+
+### Task 3.8 — Revive early dedup for foreground uploads
+- **What:** make the fast path work for the uploader that actually uses it most.
+- **Files:** `immich-api-shim/src/upload-dedup.ts`, `upload-stream.ts`.
+- **How:** the hint reads a `filename` field the foreground uploader never
+  sends. Use `duration`, which it does send (`0:00:00.000000` for stills).
+  Failing that, defer the check to the `assetData` part header where
+  `part.filename` exists before the body is read.
+- **Verify:** extend `src/upload-dedup.test.ts` with the real foreground field
+  set — the hint resolves and the fast path engages; the live-photo kind check
+  still holds.
+- **Risk:** low
+
+**Exit criteria**
+- No code path can exceed the subrequest cap by construction.
+- Memory stays bounded on the largest file a user can store.
+- The timeline and sync both dispatch at most one background job.
+- A cached Telegram path can never be used past its validity.
+
+---
+
+# Phase 4 — Finish the self-hosting CLI
+
+**Goal:** someone who has never seen this project can go from `git clone` to a
+working private cloud, and get told precisely what is wrong when something is.
+
+**Why here:** the worker it deploys must be correct first, or we would be
+shipping a smooth installer for a broken product.
+
+Design of record: `docs/roadmap/SELFHOST_CLI_DESIGN.md`, verified against how
+wrangler, Vercel and Firebase actually behave.
+
+### Task 4.1 — Delete the dead config modules
+- **What:** remove `state.mjs` and `env.mjs`; `config.mjs` is the only one.
+- **Files:** `selfhost/src/state.mjs`, `selfhost/src/env.mjs`, and every importer.
+- **How:** three live config modules is worse than any one of them. Migrate the
+  commands and `test/selfhost.test.mjs` onto `config.mjs`, then delete.
+- **Verify:** `grep -rn "state.mjs\|env.mjs" selfhost/` returns nothing;
+  `cd selfhost && npm test` green.
+- **Risk:** low
+
+### Task 4.2 — Refuse to run when the environment will sabotage it
+- **What:** detect the two conditions that silently break Cloudflare sign-in.
+- **Files:** `selfhost/src/commands/setup.mjs`, `selfhost/src/config.mjs`.
+- **How:** a `.env` in the repo root or `immich-api-shim/` containing
+  `CLOUDFLARE_API_TOKEN` is read by wrangler and overrides browser sign-in.
+  An ambient `CLOUDFLARE_API_TOKEN` does the same — the operator's own machine
+  has one. Both detectors already exist in `config.mjs`; wire them into
+  preflight and name the file and variable in the message.
+- **Verify:** `selfhost/test/hostile-env.test.mjs` — each condition is detected
+  and the message names the offending file or variable.
+- **Risk:** low
+
+### Task 4.3 — Rewrite setup as probe / repair / verify
+- **What:** one shape per subsystem; re-running is a health check.
+- **Files:** `selfhost/src/commands/setup.mjs`.
+- **How:** no step machine, no `markDone`. For each of Telegram, Cloudflare,
+  Firebase, worker, processor, dashboard: `probe()` reports state, `repair()`
+  prompts and fixes, `verify()` re-probes. Idempotent throughout. The current
+  file also calls functions that no longer exist, so this is a rewrite.
+- **Verify:** `selfhost/test/setup-flow.test.mjs` with fakes — a fully
+  configured install runs clean with zero prompts; a broken value prompts for
+  only that one.
+- **Depends on:** 4.1, 4.2
+- **Risk:** high — the largest single piece. Split if it grows past one review.
+
+### Task 4.4 — `doctor` becomes setup in read-only mode
+- **What:** one code path, two entry points.
+- **Files:** `selfhost/src/commands/doctor.mjs`, `setup.mjs`.
+- **How:** run the same probes with `repair` disabled, then print the redacted
+  report. Two implementations of "is this healthy" would drift.
+- **Verify:** `selfhost/test/doctor.test.mjs` — doctor never prompts and never
+  writes; the report contains no secret.
+- **Depends on:** 4.3
+- **Risk:** low
+
+### Task 4.5 — Firebase automation
+- **What:** automate the four console steps that can be automated.
+- **Files:** new `selfhost/src/api/firebase.mjs`.
+- **How:** `firebase login` for OAuth only (Google's own verified client), then
+  REST directly — project create, `:addFirebase`, enable Email/Password via the
+  Identity Toolkit admin config, register a web app, read the API key, create
+  the user. Do **not** shell out to `firebase projects:create`: it flattens
+  terms, quota and permission failures into one useless string. One step stays
+  manual — accepting the Firebase terms, once per Google account — and it must
+  be detected and explained precisely, not guessed at.
+- **Verify:** `selfhost/test/firebase.test.mjs` against recorded responses,
+  including the terms-not-accepted path.
+- **Depends on:** 4.3
+- **Risk:** high — many external failure modes. Every one needs its own message.
+
+### Task 4.6 — Vercel processor deploy
+- **What:** deploy the HEIC function without the user leaving the terminal.
+- **Files:** new `selfhost/src/api/vercel.mjs`; `selfhost/src/commands/processor.mjs`.
+- **How:** `vercel login` is a real device flow, so it works over SSH where
+  Cloudflare's does not. Runtime environment variables must be set with the
+  documented mechanism — **not** by setting them on the CLI's own process, which
+  does nothing for the deployment. Parse the URL from JSON output. Pin
+  `OWNER_UID` so the instance serves one account.
+- **Verify:** `selfhost/test/vercel.test.mjs` — the command line includes the
+  env flags; a health response lacking `ownerPinned` produces a warning.
+- **Depends on:** 4.3
+- **Risk:** medium
+
+### Task 4.7 — Pre-empt the first-run Cloudflare failures
+- **What:** handle the three things that break on brand-new accounts.
+- **Files:** `selfhost/src/api/cloudflare.mjs`, `setup.mjs`, `dashboard.mjs`.
+- **How:** a fresh account has no `workers.dev` subdomain (deploy hard-fails
+  non-interactively) — detect error 10007 and register one. A Pages project must
+  exist before `pages deploy` — create it first, tolerating "already exists".
+  Multi-account users hit a hard error — resolve the account ourselves and pass
+  it explicitly. All three helpers exist; wire them in.
+- **Verify:** `selfhost/test/first-run.test.mjs` against fakes for each case.
+- **Depends on:** 4.3
+- **Risk:** medium
+
+### Task 4.8 — Headless and busy-port handling
+- **What:** say what is wrong before a 120-second hang.
+- **Files:** `selfhost/src/commands/setup.mjs`.
+- **How:** Cloudflare has no device flow, so a VPS user cannot complete browser
+  sign-in without port forwarding. Detect no-display up front and offer
+  `ssh -L 8976:localhost:8976` or the token path. If 8976 is occupied, say so —
+  wrangler otherwise dies with a raw `EADDRINUSE` stack trace.
+- **Verify:** `selfhost/test/headless.test.mjs` — both conditions produce the
+  guidance, neither reaches the hang.
+- **Depends on:** 4.7
+- **Risk:** low
+
+### Task 4.9 — Pin the toolchain
+- **What:** stop depending on whichever wrangler happens to be nearby.
+- **Files:** `selfhost/package.json`.
+- **How:** we parse wrangler's behaviour in several places, so its version must
+  be a choice rather than an accident of directory layout. Pin it; document
+  `firebase-tools` and `vercel` as invoked via `npx` at a stated version.
+- **Verify:** a clean clone runs setup with no ambient global installs.
+- **Risk:** low
+
+**Exit criteria**
+- One config module, one health implementation.
+- Every credential validated against the real service, with actionable errors.
+- Re-running setup is safe and changes nothing that already works.
+- A brand-new Cloudflare account completes without a manual dashboard visit.
+
+---
+
+# Phase 5 — Prove it end to end
+
+**Goal:** we have watched a real self-hosted install work, rather than inferring
+it from unit tests.
+
+**Why here:** everything it exercises must exist first.
+
+### Task 5.1 — Real setup against throwaway accounts
+- **What:** run the whole flow on fresh accounts and record what happens.
+- **How:** new Telegram bot and channel, new Firebase project, a Cloudflare
+  account, optionally Vercel. Take notes at every point of confusion — those are
+  bugs in the copy, not user error.
+- **Verify:** photo uploads from the mobile app, appears on the web, thumbnail
+  renders, download matches byte for byte.
+- **Risk:** high — the first honest test of the whole thing.
+
+### Task 5.2 — Fix what 5.1 finds
+- **What:** whatever it is.
+- **Verify:** a second clean run needs no manual intervention.
+- **Depends on:** 5.1
+
+### Task 5.3 — Both flavours from one commit, in CI
+- **What:** prove hosted and self-hosted build and pass together.
+- **Files:** `.github/workflows/ci.yml`.
+- **How:** typecheck plus tests for the worker and the CLI, in both modes. Add
+  the guard from `PARITY.md`: fail if the number of hosted/self-host divergence
+  points grows without a note. A self-host-only regression is otherwise
+  invisible until a stranger hits it.
+- **Verify:** CI green; a deliberate divergence fails it.
+- **Risk:** low
+
+### Task 5.4 — One release, both destinations
+- **What:** make it impossible to ship to one flavour and forget the other.
+- **Files:** `.github/workflows/release.yml`, `docs/RELEASING.md`.
+- **How:** from one tag: build, deploy the hosted fleet, publish the GitHub
+  release the self-hosted update check watches. If it cannot do both, it does
+  neither and says why.
+- **Verify:** a dry run shows both steps from one tag.
+- **Depends on:** 5.3
+- **Risk:** medium
+
+**Exit criteria**
+- A stranger's install works, verified by doing it.
+- CI proves both flavours from every commit.
+- One release action reaches both kinds of user.
+
+---
+
+# Phase 6 — Documentation worth reading
+
+**Goal:** someone lands on the repository and understands what it is, how to run
+it, and where the code lives — without asking.
+
+**Why last:** documenting a moving target wastes the writing.
+
+### Task 6.1 — Rewrite the README
+- **What:** the front page.
+- **Files:** `README.md`.
+- **How:** what it is, why it exists, the architecture in one diagram, both ways
+  to run it, honest limitations. Written in a human register — the operator has
+  said plainly that AI-sounding text is not acceptable. Short sentences, real
+  specifics, no marketing cadence, no triads of adjectives.
+- **Verify:** read it aloud. Anything that sounds like a press release gets cut.
+- **Risk:** medium — easy to write, hard to write well.
+
+### Task 6.2 — A documentation site
+- **What:** a browsable docs site, in the shape of Cloudflare's docs.
+- **Files:** new `docs-site/`.
+- **How:** the operator specifically likes the Cloudflare docs layout — a
+  persistent left-hand navigation tree, a page-contents rail on the right, dense
+  and calm typography, code samples with copy buttons, and search. Build it with
+  a static generator that produces plain HTML and deploys to Cloudflare Pages
+  for free. Sections: Getting started, Self-hosting, Architecture, API
+  reference, Contributing, Security. Source of truth stays the markdown in
+  `docs/` — the site renders it, so nothing is written twice.
+- **Verify:** builds clean, deploys, search works, every nav link resolves, and
+  it is legible on a phone.
+- **Depends on:** 6.1
+- **Risk:** medium — scope creep. It ships with real content or not at all.
+
+### Task 6.3 — Rewrite the self-hosting guide for the final flow
+- **What:** match what the CLI actually does.
+- **Files:** `docs/SELF_HOSTING.md`.
+- **How:** the Firebase flow, browser sign-in, the config file location, the
+  processor step, updates, and troubleshooting keyed to the errors the CLI
+  actually prints.
+- **Verify:** followed literally on a clean machine during 5.1, it works.
+- **Depends on:** 5.2
+- **Risk:** low
+
+### Task 6.4 — Architecture and API reference for contributors
+- **What:** what lives where, and what the API does.
+- **Files:** `docs/ARCHITECTURE.md`, `docs/API.md`.
+- **How:** the request path from phone to Telegram and back; why each constraint
+  exists; the endpoint list with shapes. Aim it at someone deciding whether they
+  can fix a bug here.
+- **Verify:** every endpoint in the router appears; a reader can trace an upload
+  end to end.
+- **Depends on:** 6.2
+- **Risk:** low
+
+### Task 6.5 — Finish the repository cleanup
+- **What:** decide the fate of the legacy directories.
+- **Files:** repo root.
+- **How:** **Traps, verified:** `frontend/` is still a live `firebase.json`
+  hosting target, and `daemonclient-proxy` is the live `TELEGRAM_PROXY` for
+  hosted users. Neither can simply be deleted. For the genuinely dead ones
+  (`landing-page`, `photos`, `daemon-cli`, `daemonclient-desktop`,
+  `daemonclient-immich-bridge`, `local-server`), move to an `attic` branch so
+  nothing is lost and the front page is clean.
+- **Verify:** hosted service unaffected after the change; `git ls-files` shows
+  only what a contributor needs.
+- **Risk:** medium — deleting something live breaks production.
+
+**Exit criteria**
+- The README explains the project to a stranger.
+- The docs site is live and navigable.
+- Every top-level directory is either explained or gone.
+
+---
+
+## Risks
+
+| Risk | Mitigation |
+|---|---|
+| Key rotation destroys access to stored photos | 1.3 writes only when empty; its own test |
+| Session changes lock everyone out | 2.6 gated on fleet redeploy; 2.5 logs out once, announced |
+| Budget work regresses byte-exactness | `range-stitch.test.ts` already proves it; keep it green |
+| Setup rewrite is too big for one review | Split at the first sign of it |
+| Docs site becomes a project of its own | Ships with real content or not at all |
+| Removing a `/api/server` field breaks a client | 2.3 audits readers before removing |
+
+## Open questions
+
+1. **Session TTL after 2.5.** Self-host has no refresh path, so a short TTL
+   means frequent logins there. Thirty days, or longer for self-host only?
+2. **Phase 6.5 attic branch** — branch in this repo, or a separate archive repo?
+3. **Docs site generator.** Preference, or shall I choose for the smallest
+   maintenance burden?
+4. **Phase 5.1 throwaway accounts** — will you create them, or should the run be
+   scripted for you to execute?
