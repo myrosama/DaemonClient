@@ -3194,14 +3194,48 @@ export async function backfillChecksumBatch(env: Env, uid: string, idToken: stri
 // file's chunks (or a few quick ops) fire immediately, and tokens refill at the
 // sustained safe rate. Waits are capped so a send never hangs the worker into a
 // 503; overflow falls through to the 429-retry.
+/** A stable, NON-SECRET key for per-bot state.
+ *
+ *  A Telegram token is `<botId>:<secret>`, and the bot id is public — it is the
+ *  bot's own user id. Keying on the whole token meant every per-bot map held a
+ *  live credential as its key. That is fine on a per-user worker, which only
+ *  ever sees one. The SHARED worker sees one per user who uploads through it
+ *  (`handleUploadImpl` is not gated on `env.DB`), and neither map ever evicted,
+ *  so an isolate accumulated other people's bot tokens in memory for its whole
+ *  life. The id alone distinguishes bots just as well and is not a secret.
+ */
+function botKey(botToken: string): string {
+  const id = botToken.split(':')[0];
+  return id && /^\d+$/.test(id) ? id : `anon-${botToken.length}`;
+}
+
+/** Keep a per-bot map from growing without bound on a shared isolate.
+ *  These hold rate-limiter state, so dropping the least recently used entry
+ *  costs at most one unpaced send — far cheaper than an unbounded map. */
+function capPerBotMap(map: Record<string, { last?: number }>, max: number): void {
+  const keys = Object.keys(map);
+  if (keys.length <= max) return;
+  keys
+    .sort((a, b) => (map[a].last ?? 0) - (map[b].last ?? 0))
+    .slice(0, keys.length - max)
+    .forEach((k) => { delete map[k]; });
+}
+
+const MAX_TRACKED_BOTS = 64;
+
 const sendBuckets: Record<string, { tokens: number; last: number }> = {};
 const SEND_INTERVAL_MS = 1500; // sustained refill: 1 token / 1.5s (~20 per 30s)
 const SEND_BURST = 8;          // immediate burst capacity
 const MAX_PACE_WAIT_MS = 4000; // never hang a single send longer than this
 async function paceSend(botToken: string): Promise<void> {
   const now = Date.now();
-  let b = sendBuckets[botToken];
-  if (!b) { b = { tokens: SEND_BURST, last: now }; sendBuckets[botToken] = b; }
+  const key = botKey(botToken);
+  let b = sendBuckets[key];
+  if (!b) {
+    b = { tokens: SEND_BURST, last: now };
+    sendBuckets[key] = b;
+    capPerBotMap(sendBuckets, MAX_TRACKED_BOTS);
+  }
   const refill = Math.floor((now - b.last) / SEND_INTERVAL_MS);
   if (refill > 0) {
     b.tokens = Math.min(SEND_BURST, b.tokens + refill);
@@ -3229,6 +3263,8 @@ function isSendUrl(url: string): boolean {
 //
 // Replace the token, keep everything else, so the line still says which call
 // was rate-limited.
+export { botKey as __botKeyForTests };
+
 export function redactTelegramUrl(url: string): string {
   return url.replace(/\/bot[^/?#]+/g, '/bot<redacted>');
 }
@@ -3402,10 +3438,19 @@ class RequestQueue {
   }
 }
 
-const tgQueues: Record<string, RequestQueue> = {};
+// Keyed by the PUBLIC bot id, not the token — see botKey(). `last` is tracked
+// only so the cap can evict the least recently used queue.
+const tgQueues: Record<string, RequestQueue & { last?: number }> = {};
 function getTgQueue(botToken: string): RequestQueue {
-  if (!tgQueues[botToken]) tgQueues[botToken] = new RequestQueue(10);
-  return tgQueues[botToken];
+  const key = botKey(botToken);
+  let q = tgQueues[key];
+  if (!q) {
+    q = new RequestQueue(10) as RequestQueue & { last?: number };
+    tgQueues[key] = q;
+    capPerBotMap(tgQueues as Record<string, { last?: number }>, MAX_TRACKED_BOTS);
+  }
+  q.last = Date.now();
+  return q;
 }
 
 // --- Live Photo Linking ---
