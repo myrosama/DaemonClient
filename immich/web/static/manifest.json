@@ -1,7 +1,7 @@
 {
   "background_color": "#000000",
   "theme_color": "#6366f1",
-  "description": "DaemonClient Photos — your private, unlimited, end-to-end encrypted photo and video library. Free, self-sovereign, powered by your own storage.",
+  "description": "DaemonClient Photos \u2014 your private, unlimited, end-to-end encrypted photo and video library. Free, self-sovereign, powered by your own storage.",
   "dir": "auto",
   "display": "standalone",
   "icons": [
@@ -41,5 +41,7 @@
       "url": "/map"
     }
   ],
-  "start_url": "/"
+  "start_url": "/photos",
+  "scope": "/",
+  "id": "/photos"
 }
