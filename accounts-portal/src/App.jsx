@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { BrowserRouter, Routes, Route, Navigate, Link, useNavigate, useLocation } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
-import { auth, db } from './config/firebase'
+import { auth, db, IS_SELF_HOST } from './config/firebase'
 import firebase from './config/firebase'
 import { Button } from './components/ui/Button'
 import { Input } from './components/ui/Input'
@@ -2520,6 +2520,15 @@ function useSetupStage(user) {
     let cfReady = false
 
     const recompute = () => {
+      // Self-hosted: the CLI provisioned everything, and configuration lives in
+      // the worker's own D1 rather than Firestore, so there is nothing to
+      // resolve and nothing to gate on.
+      if (IS_SELF_HOST) {
+        stageForUidRef.current = user.uid
+        setStage('complete')
+        setLoading(false)
+        return
+      }
       const telegramComplete = !!(tg && tg.botToken && tg.botUsername && tg.channelId)
       if (!telegramComplete) {
         stageForUidRef.current = user.uid
@@ -2603,6 +2612,12 @@ function useSetupStage(user) {
 // Map stage → route. Defaults to /setup (start of funnel) so a stage=null race
 // never accidentally promotes a brand-new user straight to /dashboard.
 function stageToRoute(stage) {
+  // A self-hosted install has no onboarding funnel to route through. The setup
+  // CLI already created the bot, the channel, the database and the worker
+  // before this portal was ever built, and the steps it would send people to
+  // (our Render setup service, Cloudflare OAuth provisioning) do not exist for
+  // them. So there is exactly one destination.
+  if (IS_SELF_HOST) return '/dashboard'
   switch (stage) {
     case 'telegram': return '/setup'
     case 'ownership': return '/setup/ownership'

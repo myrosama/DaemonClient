@@ -108,8 +108,12 @@ describe('a self-hosted install depends on nothing of ours', () => {
   const update = read('selfhost/src/commands/update.mjs');
 
   test('deploys the operator\'s own Firebase project, never ours', () => {
-    assert.match(setup, /FIREBASE_API_KEY['"],\s*text:\s*state\.firebaseApiKey/);
-    assert.match(setup, /FIREBASE_PROJECT_ID['"],\s*text:\s*state\.firebaseProjectId/);
+    // Both deploy paths, not just setup: update.mjs once shipped empty strings
+    // here, which would have stripped sign-in from a working install.
+    for (const [name, file] of [['setup', setup], ['update', update]]) {
+      assert.match(file, /FIREBASE_API_KEY['"],\s*text:\s*state\.firebaseApiKey/, `${name} carries their API key`);
+      assert.match(file, /FIREBASE_PROJECT_ID['"],\s*text:\s*state\.firebaseProjectId/, `${name} carries their project`);
+    }
     // Our project id must not appear as a value anywhere in the CLI.
     for (const file of [setup, update]) {
       assert.ok(!file.includes('daemonclient-c0625'), 'our Firebase project leaked into the CLI');

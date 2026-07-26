@@ -130,3 +130,26 @@ processor/.venv*/
 # Self-hosted setup state — contains live credentials
 .daemonclient-selfhost.json
 .daemonclient-selfhost.json.corrupt-*
+
+# ── Operator-only material, never part of the open-source project ──────────
+# One-off scripts written against live production data. Several contained real
+# user emails and account paths; none of them are part of the product.
+functions/fix-telegram.js
+functions/find-zke.js
+functions/get-token.js
+functions/backfill-telegram-thumbnails.js
+functions/test-*.js
+functions/*.log
+
+# Production `wrangler tail` captures.
+immich-api-shim/tail_logs*.json
+
+# An abandoned local Immich Docker instance, including real photos.
+immich-docker-backup/
+
+# Superseded root files (the real projects have their own package.json).
+About.md
+wrangler.jsonc.backup
+/package.json
+/package-lock.json
+/.python-version

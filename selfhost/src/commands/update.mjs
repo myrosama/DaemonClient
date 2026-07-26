@@ -20,7 +20,7 @@ const run = promisify(execFile);
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '../../..');
 
-export async function runUpdate() {
+export async function runUpdate({ silent = false } = {}) {
   const state = loadState();
   blank();
 
@@ -36,21 +36,23 @@ export async function runUpdate() {
     head = stdout.trim();
   } catch {}
 
-  panel('Update', [
-    `Worker   ${c.bold(state.workerName)}`,
-    `Source   ${c.bold(head)}`,
-    '',
-    c.gray('This rebuilds the worker from the code currently in this folder and'),
-    c.gray('redeploys it. Your database, files and sign-in are untouched.'),
-  ]);
-  blank();
+  if (!silent) {
+    panel('Update', [
+      `Worker   ${c.bold(state.workerName)}`,
+      `Source   ${c.bold(head)}`,
+      '',
+      c.gray('This rebuilds the worker from the code currently in this folder and'),
+      c.gray('redeploys it. Your database, files and sign-in are untouched.'),
+    ]);
+    blank();
+  }
 
   // Offer to fetch new code, but let the operator decide.
   try {
     const { stdout } = await run('git', ['status', '--porcelain'], { cwd: REPO_ROOT });
     if (stdout.trim()) {
       warn('You have uncommitted changes — they will be included in this build.');
-    } else if (await confirm('Pull the latest code from git first?', true)) {
+    } else if (!silent && await confirm('Pull the latest code from git first?', true)) {
       const s = spinner('git pull');
       try {
         await run('git', ['pull', '--ff-only'], { cwd: REPO_ROOT });
@@ -98,10 +100,14 @@ export async function runUpdate() {
       { type: 'd1', name: 'DB', id: state.databaseId },
       { type: 'plain_text', name: 'SELF_HOST', text: '1' },
       { type: 'plain_text', name: 'APP_IDENTIFIER', text: 'selfhost' },
-      { type: 'plain_text', name: 'FIREBASE_API_KEY', text: '' },
-      { type: 'plain_text', name: 'FIREBASE_PROJECT_ID', text: '' },
+      // Their Firebase project, carried forward from setup. Deploying blanks
+      // here would strip sign-in from a working install on every update.
+      { type: 'plain_text', name: 'FIREBASE_API_KEY', text: state.firebaseApiKey || '' },
+      { type: 'plain_text', name: 'FIREBASE_PROJECT_ID', text: state.firebaseProjectId || '' },
+      // Empty on purpose: the managed value points at a relay worker of ours.
       { type: 'plain_text', name: 'TELEGRAM_PROXY', text: '' },
       { type: 'plain_text', name: 'ALLOWED_ORIGINS', text: state.allowedOrigins || 'http://localhost:5173' },
+      { type: 'plain_text', name: 'EXTERNAL_DOMAIN', text: state.dashboardUrl || '' },
       { type: 'plain_text', name: 'UPDATE_REPO', text: state.updateRepo || 'myrosama/DaemonClient' },
       { type: 'plain_text', name: 'BUILD_VERSION', text: head },
       // Reusing the SAME secrets is essential: a new session secret would sign

@@ -19,6 +19,10 @@ const COMMANDS = {
     summary: 'Rebuild from the current source and redeploy',
     run: async () => (await import('../src/commands/update.mjs')).runUpdate(),
   },
+  dashboard: {
+    summary: 'Build and publish the web dashboard',
+    run: async () => (await import('../src/commands/dashboard.mjs')).runDashboard(),
+  },
   processor: {
     summary: 'Add or change the media processor (HEIC, video thumbnails)',
     run: async () => (await import('../src/commands/processor.mjs')).runProcessor(),

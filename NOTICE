@@ -1,0 +1,25 @@
+DaemonClient
+Copyright (C) 2025-2026 DaemonClient contributors
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU Affero General Public License as published by the Free
+Software Foundation, either version 3 of the License, or (at your option) any
+later version. See LICENSE for the full text.
+
+────────────────────────────────────────────────────────────────────────────
+
+This project contains a fork of Immich (https://github.com/immich-app/immich),
+copyright the Immich contributors, also licensed under AGPL-3.0. The forked
+code lives in immich/ — principally the web client (immich/web) and the mobile
+app (immich/mobile) — and has been modified to talk to a Cloudflare Worker
+backed by Telegram storage instead of the upstream Immich server.
+
+If you want a conventional self-hosted photo server on your own hardware, use
+Immich itself. It is excellent, and this project would not exist without it.
+
+────────────────────────────────────────────────────────────────────────────
+
+DaemonClient is not affiliated with, endorsed by, or sponsored by Telegram,
+Cloudflare, Google, or the Immich project. "Telegram" is a trademark of
+Telegram FZ-LLC; "Cloudflare" of Cloudflare, Inc.; "Firebase" of Google LLC.
+They are named here only to describe what this software interoperates with.
