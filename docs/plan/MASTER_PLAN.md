@@ -65,6 +65,23 @@ doing first.
 - **Depends on:** 1.1
 - **Risk:** low
 
+### Task 1.2b — Unify the schema source
+- **What:** one definition of the database schema, imported by both provisioning
+  paths.
+- **Files:** `deployment-service/src/index.ts`, `selfhost/src/deploy.mjs`,
+  `immich-api-shim/src/migrations.ts`.
+- **How:** the review pointed out that Phase 1 as drafted fixes the symptom
+  rather than the shape. The CLI *regex-scrapes* `MIGRATION_SQL` out of the
+  deployment service's TypeScript, and `migrations.ts` holds a second, unrun
+  copy. That separation is precisely what produced the plaintext bug, and it
+  will produce the next one. Extract the schema to a single module both import.
+  Doing this before 1.3 also stops Task 6.5's directory cleanup from breaking
+  self-host setup, which currently depends on that file's text.
+- **Verify:** `selfhost/test/schema-source.test.mjs` — the CLI and the
+  deployment service produce byte-identical SQL; no regex scraping remains.
+- **Depends on:** none
+- **Risk:** medium — both provisioning paths must keep working.
+
 ### Task 1.3 — Seed real keys during self-host setup
 - **What:** generate salt and password and write them, matching what the hosted
   provisioner does.
@@ -75,7 +92,11 @@ doing first.
   and orphaning every existing photo. Do it over REST with bound parameters.
 - **Verify:** `selfhost/test/zke-seed.test.mjs` — a fake D1 with empty keys gets
   written once; a second run leaves the existing values untouched.
-- **Depends on:** 1.1
+- **Also:** seed from `update` and `doctor`, not just `setup`. Existing
+  self-hosted installs already have empty keys, and after 1.1 their worker will
+  refuse uploads — they need a path to fix it that is not "run setup again from
+  scratch".
+- **Depends on:** 1.1, 1.2b
 - **Risk:** high — rotating an existing key destroys access to stored photos.
   The idempotency check gets its own test.
 
@@ -142,17 +163,26 @@ plaintext-at-rest is worse and already happening.
   (…-- `` is dropped, a legitimate partial update still writes.
 - **Risk:** low
 
-### Task 2.3 — Stop serving key material over HTTP
-- **What:** `/api/server/zke-config` must never return the password or salt;
-  `/api/server/telegram-config` must never return the bot token.
-- **Files:** `immich-api-shim/src/server.ts` (~66-109); any client reading them.
-- **How:** return `{enabled, mode}` and `{configured, channelId, proxyUrl}`. The
-  worker derives its own key; no client needs the raw material for server-mode
-  ZKE. Check the web apps and Drive for readers first — Drive uses its own
-  `drive_zke` path and should be unaffected, but verify rather than assume.
-- **Verify:** `src/server-secrets.test.ts` asserts neither response contains
-  `password`, `salt` or `botToken`; Drive upload still works end to end.
-- **Risk:** medium — a client may depend on a field. Find out before removing.
+### Task 2.3 — Gate the config endpoints instead of gutting them
+- **What:** keep `/api/server/zke-config` and `/api/server/telegram-config`
+  returning what they return, and put an owner check in front of them.
+- **Files:** `immich-api-shim/src/server.ts`.
+- **How:** **This task was reversed by the principles review, and the review is
+  right.** The original plan was to stop returning the bot token and ZKE
+  material. Those fields are load-bearing: `immich/web/src/service-worker/index.ts:46,356-361,373`
+  reads them so the browser can fetch media bytes straight from Telegram, and
+  its own comment (`:19-21`) says that path exists so the worker "can never hit
+  its 128MB/CPU/subrequest limits". Removing them would push every web media
+  byte back through the worker — the exact load Phase 3 spends eight tasks
+  relieving — and make browser uploads fall through to `encryptionMode:'off'`,
+  re-arming the Phase 1 plaintext bug from the client side. It would also delete
+  response fields, which `PARITY.md` forbids.
+  The actual defect is narrower: on a single-worker self-hosted install with an
+  open Firebase signup, *any* account can read them. That is closed by the owner
+  gate alone. Merged into 2.4.
+- **Verify:** covered by 2.4's tests, plus a web upload confirmed still
+  encrypting after the change.
+- **Risk:** low (now a no-op pointing at 2.4)
 
 ### Task 2.4 — Add an owner check for single-worker installs
 - **What:** store `owner_uid` at setup and gate config routes on it.
@@ -161,12 +191,16 @@ plaintext-at-rest is worse and already happening.
 - **How:** hosted installs are one worker per user, so this is a no-op there.
   Self-host is one worker with an open Firebase signup, so any account that can
   register can currently read the install's config. Write `owner_uid` during
-  setup; when it is set, config-returning routes require `session.uid` to match.
-  Absent (hosted), behave as now.
+  setup; config-returning routes require `session.uid` to match.
+  **Fail closed:** the review caught that "no `owner_uid` means allow" is
+  fail-open — a self-hosted install whose config row failed to write would be
+  wide open. So: when `SELF_HOST=1` and `owner_uid` is absent, **refuse** and
+  say to re-run setup. Hosted (no `SELF_HOST`) keeps today's behaviour, because
+  there the worker already belongs to exactly one person.
 - **Verify:** `src/owner-gate.test.ts` — with `owner_uid` set, a different uid
   gets 403 and the owner gets 200; with it unset, both behave as today.
-- **Depends on:** 2.3
-- **Risk:** medium — must not break hosted, which has no `owner_uid`.
+- **Risk:** medium — must not break hosted, which has no `owner_uid`. This is
+  now the whole fix for the config-exposure finding, so its tests carry weight.
 
 ### Task 2.5 — Make sessions revocable
 - **What:** an epoch that logout can bump.
@@ -192,6 +226,10 @@ plaintext-at-rest is worse and already happening.
   accepted, so it asserts rejection.
 - **Verify:** the flipped test; a forged `APP_IDENTIFIER`-signed token gets 401
   against a live worker.
+- **Cutoff:** the review noted that gating a security fix on an operator action
+  can defer it indefinitely. So the fallback also gets a hard date: past it, the
+  branch throws regardless of fleet state. A worker that missed the redeploy
+  then fails loudly instead of staying forgeable forever.
 - **Depends on:** operator confirms the fleet is redeployed.
 - **Risk:** high — deleting this before every worker has a secret locks users
   out. The fleet check gates the deletion.
@@ -211,6 +249,13 @@ users as sync and backup failure.
 
 **Why here:** these are the crashes users actually see, and they are cheap to
 fix once the security work has settled the same files.
+
+**The symptom, in the operator's words:** *"after it gets this problem I reopen
+the app and it's good again for some time, then again problem."* That is state
+accumulating in a reused Worker isolate until it exceeds its limits; a new
+connection lands on a fresh isolate and the cycle restarts. The device log for
+that day shows 60 × 502, every one of them Cloudflare 1102. See `FINDINGS.md`
+§13 — the tasks below are what actually fixes it.
 
 ### Task 3.1 — One shared subrequest counter
 - **What:** replace three hand-maintained budgets with one counter.
@@ -288,6 +333,18 @@ fix once the security work has settled the same files.
   retry once with a forced refresh.
 - **Verify:** `src/filepath-cache.test.ts` — an aged L2 entry does not extend
   L1; a 404 evicts and retries once.
+- **Risk:** low
+
+### Task 3.0 — Bound the file-path cache
+- **What:** stop `filePathCache` growing for the life of the isolate.
+- **Files:** `immich-api-shim/src/assets.ts` (~73, ~3108-3144).
+- **How:** it is a module-level `Map` with `get` and `set` and no `delete`
+  anywhere — expired entries are read, ignored, and left in place. Cloudflare
+  reuses isolates, so it grows until the isolate dies. Evict on read when
+  expired, and cap the size with oldest-out eviction. Folds naturally into 3.7,
+  which is already rewriting this code.
+- **Verify:** `src/filepath-cache.test.ts` — the map never exceeds the cap under
+  a thousand distinct ids; expired entries are removed rather than skipped.
 - **Risk:** low
 
 ### Task 3.8 — Revive early dedup for foreground uploads
@@ -417,6 +474,34 @@ wrangler, Vercel and Firebase actually behave.
 - **Depends on:** 4.7
 - **Risk:** low
 
+### Task 4.8b — De-hardcode the web apps
+- **What:** remove the operator's URLs from the Photos and Drive clients.
+- **Files:** `immich/web/src/service-worker/index.ts` (~26, ~184),
+  `drive/src/api.js` (~14, ~48), `drive/src/App.jsx` (~2088).
+- **How:** the principles review found the plan was missing a third of what
+  `PARITY.md` promises, and something worse: the Photos service worker defaults
+  to `https://api.daemonclient.uz` for pre-login traffic, so **a self-hoster
+  following our own guide posts their password to the operator's worker**. Drive
+  hardcodes `immich-api.sadrikov49.workers.dev` for login and redirects unknown
+  hostnames to `drive.daemonclient.uz`. All three become build-time config, with
+  the operator's values as the hosted default only.
+- **Verify:** `grep` for those hosts in a self-host build output returns
+  nothing; a Drive login on a self-hosted deployment reaches that worker and no
+  other, confirmed in the network panel.
+- **Risk:** medium — touches the login path of both web apps.
+
+### Task 4.8c — Deploy the web apps from the CLI
+- **What:** `daemonclient dashboard` also builds and deploys Photos and Drive.
+- **Files:** `selfhost/src/commands/dashboard.mjs`.
+- **How:** `PARITY.md` says a self-hoster gets the same services. Today the CLI
+  deploys the worker and the portal; Photos and Drive are left as a manual
+  exercise, so most self-hosters would never have them. Same Cloudflare Pages
+  path, one project each, origins added to `ALLOWED_ORIGINS`.
+- **Verify:** after setup, all three URLs load and sign in against the
+  self-hosted worker.
+- **Depends on:** 4.8b
+- **Risk:** medium
+
 ### Task 4.9 — Pin the toolchain
 - **What:** stop depending on whichever wrangler happens to be nearby.
 - **Files:** `selfhost/package.json`.
@@ -462,6 +547,10 @@ it from unit tests.
   the guard from `PARITY.md`: fail if the number of hosted/self-host divergence
   points grows without a note. A self-host-only regression is otherwise
   invisible until a stranger hits it.
+  **Plus the single highest-value check available:** grep every self-host build
+  artifact for `daemonclient.uz`, `sadrikov49`, and the operator's Firebase
+  project, and fail on a hit. That one rule would have caught all three of the
+  P3 violations the principles review found in the web apps.
 - **Verify:** CI green; a deliberate divergence fails it.
 - **Risk:** low
 
@@ -575,3 +664,50 @@ it, and where the code lives — without asking.
    maintenance burden?
 4. **Phase 5.1 throwaway accounts** — will you create them, or should the run be
    scripted for you to execute?
+
+
+---
+
+# What the reviews changed
+
+The plan was drafted, then reviewed for security, principles fit, and better
+alternatives. This is what the reviews altered, so it is visible that they did
+something rather than rubber-stamping.
+
+**Task 2.3 was reversed outright.** As drafted it removed the bot token and ZKE
+material from `/api/server/*`. The principles review found those fields are read
+by `immich/web/src/service-worker/index.ts` so the browser can pull media bytes
+straight from Telegram — the very mechanism that keeps the worker under its
+limits. Removing them would have pushed all web media back through the worker
+while Phase 3 was busy relieving exactly that load, and would have made browser
+uploads fall back to unencrypted, re-arming the Phase 1 bug from the client
+side, in the same plan. Verified in the code before accepting. The narrower real
+defect is closed by the owner gate alone.
+
+**Task 2.4 became fail-closed.** "No `owner_uid` means allow" is fail-open — a
+self-hosted install whose config write failed would have been wide open.
+
+**Two whole tasks were missing (4.8b, 4.8c).** The plan covered the worker and
+the dashboard but not Photos and Drive, which is a third of what `PARITY.md`
+promises. Worse, the review found `DEFAULT_WORKER_URL = 'https://api.daemonclient.uz'`
+in the Photos service worker and a hardcoded operator worker in Drive's **login**
+call — so a self-hoster following our own guide would post their password to the
+operator's infrastructure. That is a P3 violation and a security bug, and
+neither the plan nor `FINDINGS.md` had noticed it.
+
+**Task 1.2b was added.** Phase 1 as drafted fixed the plaintext symptom without
+fixing its shape: the CLI regex-scrapes the schema out of the deployment
+service's source while a second copy sits unused in `migrations.ts`. That
+separation caused the bug and would cause the next one.
+
+**Task 2.6 gained a cutoff.** Gating a security fix on an operator action can
+defer it forever.
+
+**Task 3.0 was added** after the operator's device log and their observation
+about reopening the app: `filePathCache` is unbounded and never evicts.
+
+**One recommendation was declined.** The principles review argued for cutting
+the documentation site (6.2) as scope creep. The operator asked for it
+specifically, including the shape they want it to take, so it stays — but it
+runs last, renders the markdown that already exists rather than duplicating it,
+and ships with real content or not at all.

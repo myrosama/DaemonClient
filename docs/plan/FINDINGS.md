@@ -326,6 +326,47 @@ findings 6 and 7 stay fixed.
 
 ---
 
+## 13. HIGH — worker state accumulates until the isolate dies, then recovers
+
+**Reported symptom (operator, 2026-07-26):** *"after it gets this problem I
+reopen the app and it's good again for some time, then again problem."*
+
+That is the signature of per-isolate state growing until the isolate exceeds its
+limits. Device log from that day: **60 × 502, all of them Cloudflare 1102
+"Worker exceeded resource limits"**, plus 17 × 503 and 3 × Telegram 429.
+
+Cloudflare reuses a Worker isolate across many requests, and module-level state
+lives for the isolate's whole life. Reopening the app makes new connections,
+which can land on a fresh isolate — hence "good again for a while". The old
+isolate is still fat; it just is not serving that client any more.
+
+What accumulates:
+
+- **`filePathCache` never evicts.** `assets.ts:73` is a module-level `Map`, and
+  `grep` finds only `get` and `set` — no `delete`, no size cap. Expired entries
+  are read, ignored, and left in place. Every distinct chunk the user ever
+  touches adds an entry that is never removed.
+- **The 19 MB chunk copies (finding 6).** `assets.ts:2146` does `data.slice(0)`
+  per chunk inside an un-awaited `waitUntil`. Up to twenty can be outstanding at
+  once. This is almost certainly the dominant term.
+- **Budget overruns (findings 6 and 7)** make each failing request cost more
+  than the accounting believes, so an isolate reaches the ceiling sooner than
+  anything in the code expects.
+
+The three compound: an isolate serving a backup session accumulates cache
+entries and pending copies while systematically under-counting its own spend.
+
+**Fix:** findings 6 and 7 remove most of the pressure. Additionally, bound
+`filePathCache` — evict on read when expired, and cap the size with simple
+oldest-out eviction. An unbounded cache in a process with no defined lifetime is
+a leak regardless of what else is happening.
+
+**Verification is not "it feels better".** It needs a sustained upload run
+watched for 1102s across a period long enough for an isolate to be reused —
+which is exactly what Phase 5.1 is for.
+
+---
+
 ## Sources
 
 Two verification agents produced this, each reading the code and reporting
