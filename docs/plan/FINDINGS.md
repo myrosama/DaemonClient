@@ -511,3 +511,48 @@ knowing:
    `remote_asset_entity` row. Empty album selection is surfaced separately by
    the page, so a finished icon with nothing selected is not silent.
 
+
+## 20 — `daemonclient setup` could not run at all · HIGH · **FIXED**
+
+Found while implementing Task 1.3, by an agent that tried to trace what setup
+actually does.
+
+`setup.mjs` and `update.mjs` called four functions that **did not exist**:
+
+| Called | Reality |
+|---|---|
+| `cf.listAccounts` | renamed `memberships` |
+| `cf.getWorkersSubdomain` | renamed `getSubdomain` |
+| `cf.deployWorker` | **never written** |
+| `cf.enableWorkersDev` | **never written** |
+
+The Cloudflare layer was rewritten in `63141e1` and the commands were never
+updated with it. The module still *imported* cleanly — a missing named export on
+a namespace import only fails when you call it — so `daemonclient setup` threw
+`cf.listAccounts is not a function` partway through provisioning, after creating
+the user's database.
+
+So the self-hosting entry point has been non-functional since that commit, and
+nothing caught it because no test drove a real command. Gate 4 for Task 1.3 was
+literally unreachable: the seeding code could not be arrived at.
+
+**Fixed.** The two renames repointed; `deployWorker` and `enableWorkersDev`
+written against the REST API, mirroring the hosted provisioner
+(`deployment-service/src/cloudflare-api.ts:23-59`).
+
+Deliberately REST rather than shelling out to `wrangler deploy`: wrangler needs
+a `wrangler.toml` on disk naming the D1 binding — which would mean writing the
+user's database id to a temp file — and it reads `.env` from the working
+directory on every invocation, which is the documented way a stray
+`CLOUDFLARE_API_TOKEN` silently overrides a browser sign-in.
+
+Adding the function was not enough on its own: `rest()` stringified **every**
+body and forced `application/json`, so a multipart upload would have sent the
+text `[object FormData]` with no boundary. That is the kind of bug that passes
+any test asserting the function merely exists, so the test asserts the request
+shape instead.
+
+**The lesson is the same one from Tasks 1.3/1.4 and 1.2, for the third time:**
+code nothing executes is code nothing verifies. `test/cloudflare-surface.test.mjs`
+now checks every `cf.*` referenced by every command resolves — cheap, and it
+would have caught this the day it was introduced.

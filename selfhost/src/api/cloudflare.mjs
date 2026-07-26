@@ -163,10 +163,18 @@ export function login() {
 // ── REST ────────────────────────────────────────────────────────────────────
 
 async function rest(auth, endpoint, { method = 'GET', body } = {}) {
+  // FormData must go through untouched: stringifying it would send "[object
+  // FormData]", and setting Content-Type by hand would omit the multipart
+  // boundary fetch generates. Uploading a worker script is the only caller that
+  // needs it, and it is exactly the caller that was missing.
+  const isForm = typeof FormData !== 'undefined' && body instanceof FormData;
+  const headers = { Authorization: `Bearer ${auth}` };
+  if (!isForm) headers['Content-Type'] = 'application/json';
+
   const res = await fetch(`${API}${endpoint}`, {
     method,
-    headers: { Authorization: `Bearer ${auth}`, 'Content-Type': 'application/json' },
-    body: body ? JSON.stringify(body) : undefined,
+    headers,
+    body: body === undefined ? undefined : isForm ? body : JSON.stringify(body),
   });
   const data = await res.json().catch(() => null);
   if (!data) throw new Error(`Cloudflare returned ${res.status} with an unreadable body`);
@@ -255,3 +263,67 @@ export async function ensurePagesProject(ctx, name) {
     if (!/already exists/i.test(e.message)) throw e;
   }
 }
+
+// ── Deploying the worker ────────────────────────────────────────────────────
+//
+// These two were called by `setup` and `update` but never existed: the
+// Cloudflare layer was rewritten in 63141e1 and the commands were not updated
+// with it, so `daemonclient setup` threw `cf.deployWorker is not a function`
+// partway through provisioning. Nothing caught it because no test drove the
+// real command — the whole self-host entry point was broken.
+//
+// Deliberately the REST multipart upload rather than shelling out to
+// `wrangler deploy`: wrangler needs a wrangler.toml on disk naming the D1
+// binding, which would mean writing the user's database id into a temp file,
+// and it reads `.env` from the working directory on every invocation — the
+// documented way a stray CLOUDFLARE_API_TOKEN silently overrides the browser
+// sign-in. The same PUT the hosted provisioner uses
+// (deployment-service/src/cloudflare-api.ts:23-59) has neither problem.
+
+/**
+ * Upload a module worker with its bindings.
+ * @param {object} auth   token or OAuth context, as everything else here takes
+ * @param {string} accountId
+ * @param {string} name   worker script name
+ * @param {string} code   the bundled ES module
+ * @param {Array<{type: string, name: string, text?: string, id?: string}>} bindings
+ */
+export async function deployWorker(auth, accountId, name, code, bindings = []) {
+  const form = new FormData();
+  form.append(
+    'worker.js',
+    new Blob([code], { type: 'application/javascript+module' }),
+    'worker.js',
+  );
+  form.append(
+    'metadata',
+    new Blob(
+      [JSON.stringify({
+        main_module: 'worker.js',
+        compatibility_date: '2025-11-25',
+        compatibility_flags: ['nodejs_compat'],
+        bindings: bindings.map((b) =>
+          b.type === 'plain_text' || b.type === 'secret_text'
+            ? { type: b.type, name: b.name, text: b.text }
+            : { type: b.type, name: b.name, id: b.id },
+        ),
+      })],
+      { type: 'application/json' },
+    ),
+  );
+
+  return rest(auth, `/accounts/${accountId}/workers/scripts/${name}`, {
+    method: 'PUT',
+    body: form,
+  });
+}
+
+/** Put the worker on `<name>.<subdomain>.workers.dev`.
+ *
+ *  A freshly uploaded script is not reachable until this is set, so a setup
+ *  that skipped it produced a worker that existed and answered nothing. */
+export const enableWorkersDev = (auth, accountId, name) =>
+  rest(auth, `/accounts/${accountId}/workers/scripts/${name}/subdomain`, {
+    method: 'POST',
+    body: { enabled: true },
+  });

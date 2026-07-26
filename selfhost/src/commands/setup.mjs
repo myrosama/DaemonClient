@@ -210,7 +210,7 @@ async function stepCloudflare(state) {
     const s = spinner('Verifying the token');
     try {
       await cf.verifyToken(token);
-      accounts = await cf.listAccounts(token);
+      accounts = await cf.memberships(token);
       if (!accounts.length) throw new Error('This token cannot see any account — add the "Account Settings · Read" permission.');
       s.succeed('Token verified');
       break;
@@ -271,7 +271,7 @@ async function stepCloudflare(state) {
     process.exit(1);
   }
 
-  const subdomain = await cf.getWorkersSubdomain(token, account.id).catch(() => null);
+  const subdomain = await cf.getSubdomain(token, account.id).catch(() => null);
 
   state.cloudflareToken = token;
   state.cloudflareAccountId = account.id;
