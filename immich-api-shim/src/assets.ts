@@ -3277,8 +3277,9 @@ async function tgFetchWithRetry(url: string, options?: RequestInit, maxRetries =
   });
 }
 
-async function tgGetFileUrl(botToken: string, fileId: string): Promise<{ ok: boolean; url?: string; error?: string }> {
+async function tgGetFileUrl(botToken: string, fileId: string, forceRefresh = false): Promise<{ ok: boolean; url?: string; error?: string }> {
   const now = Date.now();
+  if (forceRefresh) await evictFilePath(fileId);
 
   // L1: module-level in-memory cache (fastest, same isolate lifetime)
   const mem = filePathCache.get(fileId);
@@ -3294,8 +3295,29 @@ async function tgGetFileUrl(botToken: string, fileId: string): Promise<{ ok: boo
   try {
     const cfHit = await edgeCache.match(cfCacheKey);
     if (cfHit) {
-      const path = await cfHit.text();
-      filePathCache.set(fileId, { path, expiresAt: now + FILE_PATH_TTL_MS });
+      // An L2 hit used to re-stamp L1 with a FULL 55 minutes regardless of how
+      // old the L2 entry already was, so a path could live ~110 minutes against
+      // Telegram's ~60 — after which every download 404s. The entry now carries
+      // the absolute expiry it was born with; a plain string is a pre-existing
+      // entry, and gets the conservative treatment of being treated as already
+      // half-spent rather than fresh.
+      const raw = await cfHit.text();
+      let path = raw;
+      let expiresAt = now + FILE_PATH_TTL_MS / 2;
+      try {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed.path === 'string' && typeof parsed.exp === 'number') {
+          path = parsed.path;
+          expiresAt = parsed.exp;
+        }
+      } catch { /* legacy plain-string entry */ }
+
+      if (expiresAt <= now) {
+        // Expired in L2 as well — fall through to Telegram rather than serving
+        // a path that is already dead.
+        throw new Error('stale');
+      }
+      filePathCache.set(fileId, { path, expiresAt });
       pruneFilePathCache(now);
       return { ok: true, url: `https://api.telegram.org/file/bot${botToken}/${path}` };
     }
@@ -3311,7 +3333,7 @@ async function tgGetFileUrl(botToken: string, fileId: string): Promise<{ ok: boo
   pruneFilePathCache(now);
   try {
     // Cache for 55 min at CF edge (well within Telegram's stated ~1 hr validity)
-    edgeCache.put(cfCacheKey, new Response(path, {
+    edgeCache.put(cfCacheKey, new Response(JSON.stringify({ path, exp: now + FILE_PATH_TTL_MS }), {
       headers: { 'Cache-Control': 'public, max-age=3300' },
     }));
   } catch { /* best-effort */ }
@@ -3320,11 +3342,32 @@ async function tgGetFileUrl(botToken: string, fileId: string): Promise<{ ok: boo
 }
 
 async function tgDownloadFile(botToken: string, fileId: string): Promise<{ ok: boolean; data?: ArrayBuffer; error?: string }> {
-  const fileResult = await tgGetFileUrl(botToken, fileId);
-  if (!fileResult.ok) return { ok: false, error: fileResult.error };
-  const imgRes = await tgFetchWithRetry(fileResult.url!);
-  if (!imgRes.ok) return { ok: false, error: `Download failed: ${imgRes.status}` };
-  return { ok: true, data: await imgRes.arrayBuffer() };
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const fileResult = await tgGetFileUrl(botToken, fileId, attempt > 0);
+    if (!fileResult.ok) return { ok: false, error: fileResult.error };
+
+    const imgRes = await tgFetchWithRetry(fileResult.url!);
+    if (imgRes.ok) return { ok: true, data: await imgRes.arrayBuffer() };
+
+    // 404/410 means the cached path has expired on Telegram's side. Both cache
+    // layers are now serving a corpse, and every later request for this chunk
+    // would fail the same way until the TTL ran out. Evict and resolve it once
+    // more from Telegram.
+    if ((imgRes.status === 404 || imgRes.status === 410) && attempt === 0) {
+      await evictFilePath(fileId);
+      continue;
+    }
+    return { ok: false, error: `Download failed: ${imgRes.status}` };
+  }
+  return { ok: false, error: 'Download failed after refreshing the file path' };
+}
+
+/** Remove a Telegram file path from BOTH cache layers. */
+async function evictFilePath(fileId: string): Promise<void> {
+  filePathCache.delete(fileId);
+  try {
+    await ((caches as any).default as Cache).delete(`https://dc-tg-path/${fileId}`);
+  } catch { /* edge cache unavailable */ }
 }
 
 // --- Request Queue Helper with Priority ---
