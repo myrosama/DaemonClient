@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { Input } from './ui/Input'
 import { Check, X, Loader2 } from 'lucide-react'
+import { auth } from '../config/firebase'
 
 const DEPLOYMENT_WORKER = 'https://daemonclient-deployment.sadrikov49.workers.dev'
 
@@ -21,9 +22,22 @@ export function TokenInput({ value, onChange, onValidate }) {
 
       try {
         // Validate via central deployment worker (proxies to Cloudflare API, no CORS issues)
+        // The endpoint is authenticated now — it forwards a Cloudflare
+        // credential upstream, so it must not be usable as an open oracle.
+        // Anyone reaching this step is already signed in.
+        const idToken = await auth.currentUser?.getIdToken()
+        if (!idToken) {
+          setValidationState('invalid')
+          setError('Please sign in again before adding your token.')
+          return
+        }
+
         const response = await fetch(`${DEPLOYMENT_WORKER}/validate-cf-token`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${idToken}`,
+          },
           body: JSON.stringify({ token: value })
         })
 

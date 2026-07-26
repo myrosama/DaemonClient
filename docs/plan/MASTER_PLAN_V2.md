@@ -141,11 +141,19 @@ payload.
 - **Do:** key by a hash, cap the maps, evict on idle.
 - **Risk:** low.
 
-### 2.10 — uid-scope the backfill flags *(new)*
-`exifBackfillComplete`, `heicThumbBackfillComplete`, `checksumBackfillComplete`
-and `livePhotoRepairDone` are global. The first user in an isolate to finish — or
-to simply have no processor configured — suppresses the backfill for **everyone
-else** on that isolate.
+### 2.10 — ~~uid-scope the backfill flags~~ **DROPPED, and here is why**
+- **Who calls it:** nothing that can hit the described failure.
+- The survey flagged `exifBackfillComplete`, `heicThumbBackfillComplete`,
+  `checksumBackfillComplete` and `livePhotoRepairDone` as global rather than
+  uid-scoped, so the first user in an isolate would suppress everyone else's
+  backfill. Checked before building it: **all four return early unless `env.DB`
+  is bound** (`assets.ts:2742`, `:2862`, `:3027`, `link-live-photos.ts:16`).
+  `env.DB` exists only on a per-user worker, which has exactly one D1 and — since
+  2.4 — exactly one owner. Global and per-uid are the same thing there.
+- The shared worker never reaches this code at all.
+- Kept in the plan as a strikethrough rather than deleted, because the reasoning
+  is the point: the fix would have been written, tested against a fake env, and
+  changed nothing. That is the fifth time this shape has come up.
 
 ### 2.11 — Close `/validate-cf-token` *(new)*
 Unauthenticated, `ACAO: *`, forwards an attacker-supplied Cloudflare token to

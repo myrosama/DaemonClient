@@ -600,7 +600,23 @@ async function handleClearAnnouncement(request: Request, env: Env): Promise<Resp
   }
 }
 
+/** Check a pasted Cloudflare token and name the account it belongs to.
+ *
+ *  This used to be UNAUTHENTICATED, with `Access-Control-Allow-Origin: *`. It
+ *  takes a credential from the request body and forwards it to Cloudflare, so
+ *  anyone on the internet could use this worker as a free oracle for "is this
+ *  Cloudflare token live, and whose account is it?" — one outbound request per
+ *  call, billed to us, with no rate limit and no record of who asked.
+ *
+ *  Every legitimate caller already has a Firebase session: the only one is the
+ *  setup wizard (`accounts-portal/src/components/TokenInput.jsx`), reached after
+ *  sign-in. So requiring the same ID token the rest of this worker requires
+ *  costs a real user nothing.
+ */
 async function handleValidateToken(request: Request, env: Env): Promise<Response> {
+  const auth = await validateFirebaseToken(request, env);
+  if (!auth) return corsResponse(JSON.stringify({ valid: false, error: 'Unauthorized' }), { status: 401 });
+
   try {
     const { token } = await request.json() as any;
     const response = await fetch('https://api.cloudflare.com/client/v4/accounts', {
