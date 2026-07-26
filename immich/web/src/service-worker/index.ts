@@ -2,6 +2,7 @@
 /// <reference no-default-lib="true"/>
 /// <reference lib="esnext" />
 /// <reference lib="webworker" />
+import { PUBLIC_DAEMONCLIENT_WORKER_URL } from '$env/static/public';
 import { installMessageListener } from './messaging';
 import { handleCancel } from './request';
 import {
@@ -23,7 +24,10 @@ import {
 // carriers block or degrade *.workers.dev, which made first-visit boot die
 // with a 503 while photos.daemonclient.uz itself loaded fine. Same worker,
 // same zero-cost plan — just reached through the daemonclient.uz zone.
-const DEFAULT_WORKER_URL = 'https://api.daemonclient.uz';
+// Strip any trailing slash so `base + '/api/...'` never produces `//api/...`,
+// which a pathname-matching Worker router would 404. Matches Drive and
+// accounts-portal, which normalise the same way.
+const DEFAULT_WORKER_URL = PUBLIC_DAEMONCLIENT_WORKER_URL.replace(/\/+$/, '');
 const ASSET_BINARY_REGEX = /^\/api\/assets\/[a-f0-9-]+\/(original|thumbnail)/;
 const API_REGEX = /^\/api\//;
 const TOKEN_CACHE_KEY = 'https://dc-internal/auth-token';

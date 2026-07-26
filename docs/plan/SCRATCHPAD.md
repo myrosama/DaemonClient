@@ -3,46 +3,47 @@
 Rewritten after every task. Read `docs/MASTER_PLAN.md` first, then this.
 
 ## State
-Autonomous run 2026-07-27 complete for this session. Branch
-`autonomous/selfhost-vercel-and-cleanup` — **7 commits, NOT pushed** (held for
-operator review). Everything green.
+Autonomous run 2026-07-27, on **main** (branch merged + pushed). Deep into Phase 1
+(self-hosting). Operator away, wants it finished fully + a Cloudflare-docs-style
+docs page + real script tests. Gates: **each of the 4 run as a separate agent**.
 
-## Done this run (each independently gate-reviewed by a separate agent before commit)
-| Commit | Task | What |
-|---|---|---|
-| 77c0d0a | 0.1 | delete dead mock worker `daemonclient-immich-bridge/` + `local-server/` |
-| 5fcd85f | 0.2 | `@types/node` (dev) → `tsc --noEmit` clean; tsconfig types untouched |
-| 03cb81c | 1.1 | processor Render→Vercel; fixed the "leave FIREBASE_PROJECT_ID blank" request-killer; removed false video claims |
-| 04b866c | —  | fresh MASTER_PLAN + this scratchpad |
-| 8705829 | 0.3 | reconcile REPO_MAP/API/FINDINGS/HANDOFF (validate-cf-token authed, daemonclient-auth live, Drive not a fork, §23 takeover downgrade) |
-| 749a138 | 1.1b | processor Edge→Node runtime + `processor/test/handler.test.mjs` (5 tests) |
-| b4d19a8 | 0.4c | delete dead `landing-page/` + `daemonclient-desktop/` |
+## Self-host web architecture (verified this session)
+Three web apps, all deployable to the user's own Firebase Hosting, all pointing at
+the user's own worker — **nothing points at the operator** in a self-host build:
+- **accounts-portal = THE HUB** (main page). Already self-host-aware
+  (`IS_SELF_HOST`, `App.jsx:2620` → `/dashboard`, config from worker D1). Needs the
+  full Firebase web config at build (VITE_FIREBASE_* incl. appId + messagingSenderId).
+- **Photos** (immich/web): uses ONLY the worker (no Firebase SDK). Build with
+  `PUBLIC_DAEMONCLIENT_WORKER_URL=<worker>`.
+- **Drive** (drive/): uses ONLY the worker (no Firebase SDK). Build with
+  `VITE_SELF_HOST=1 VITE_API_BASE=<worker>`.
 
-Self-hosting processor path is now correct end-to-end: right platform (Vercel),
-right runtime (Node, for the CPU-heavy WASM decode), right env var (project id
-required), honest capabilities (HEIC-only), and tested.
+## Done / in flight this run
+- ✅ merged the earlier branch to main (processor Vercel/Node, cleanup, docs).
+- 🔬 **1.2 + 1.3** sever operator links in Photos + Drive — IMPLEMENTED + build-
+  verified (hosted build unchanged; self-host build targets given worker, operator
+  host ABSENT). **4 gate agents running** (security/design/correctness/works-real).
+  Files: drive/src/api.js, immich/web/{svelte.config.js, src/app.d.ts,
+  src/service-worker/index.ts}. NOT committed until gates pass.
 
-## Verified green (whole branch)
-- immich-api-shim: `tsc --noEmit` CLEAN; 261 vitest tests pass.
-- selfhost: 67 node:test pass. processor: 5 node:test pass.
+## Remaining Phase 1 (self-hosting) tasks
+- **1.4a** Setup captures FULL Firebase web config (appId, messagingSenderId —
+  authDomain/storageBucket derive from projectId). Hub needs them; setup only
+  collects apiKey+projectId today.
+- **1.4b** `daemonclient web` command: write per-app env → build all 3 → generate
+  the user's firebase.json (3 hosting sites) → `firebase deploy` (firebase-tools,
+  needs their login) → add deployed origins to worker ALLOWED_ORIGINS. This is the
+  "script sets it up for them / host on Firebase serverless" deliverable.
+- **1.4c** Wire it into `setup` (offer web deploy at the end).
+- **1.5** Real end-to-end test: run the CF provisioning pipeline for real
+  (throwaway worker on the operator's CF acct, verify /api/health, clean up).
+  Full Telegram bot creation can't be automated (no Telegram acct) — test the rest.
 
-## 0.4 secret sweep (no code change — finding)
-No real secrets tracked. Only the public Firebase web key (hardcoded in configs +
-dead trees) and operator infra ids in HANDOFF.md. Blockers = operator decisions:
-rotate the key, templatize configs so forkers don't inherit the operator's
-Firebase project, remove/sanitize HANDOFF.md. Documented in MASTER_PLAN Phase 0.4.
+## Phase 2 additions (from operator)
+- Docs site, styled like Cloudflare docs, "highlight every detail". New deliverable.
+- At the LAST open-source stage: move unneeded stuff to a PRIVATE repo (don't just
+  delete). Operator instruction.
 
-## Not done — needs operator or a live check (documented in MASTER_PLAN)
-- **2.2** retire APP_IDENTIFIER signing fallback — subtle: naive removal breaks
-  login on the secret-less shared worker. Design first, operator deploys.
-- **2.1** refuse telegram-config/zke-config when !env.DB — safe but marginal;
-  won't deploy a live-worker change unsupervised.
-- **1.2** SW `DEFAULT_WORKER_URL='https://api.daemonclient.uz'` self-host
-  independence. Design ready (`import.meta.env`/`$env` gate, default preserved for
-  hosted) but immich/web uses NO `import.meta.env` today — needs a real web build
-  check before touching the SW (SW breakage takes down the whole Photos web app).
-- Deploy of anything above + a real `vercel deploy` of the processor.
-
-## Next-session start
-`git checkout autonomous/selfhost-vercel-and-cleanup`, re-read MASTER_PLAN, then
-continue Phase 1 (1.2) / Phase 2 with the operator for live-auth deploys.
+## Baseline green
+shim tsc clean + 261; selfhost 67; processor 5. Drive + immich/web build OK both
+hosted and self-host.

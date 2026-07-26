@@ -11,7 +11,15 @@
 // side) is kept in localStorage so reloads stay logged in — same model as the
 // Photos (Immich) web client.
 
-const CENTRAL_API = 'https://immich-api.sadrikov49.workers.dev';
+// The worker this app logs in through. Hosted builds use the shared central
+// worker; a self-hosted build points at the operator's OWN worker via
+// VITE_API_BASE (the setup script writes this at build time). Mirrors the
+// convention in accounts-portal/src/config/firebase.js so both apps configure
+// self-hosting the same way — set VITE_SELF_HOST=1 and VITE_API_BASE=<worker>.
+const IS_SELF_HOST = import.meta.env.VITE_SELF_HOST === '1';
+const CENTRAL_API = (
+  import.meta.env.VITE_API_BASE || (IS_SELF_HOST ? '' : 'https://immich-api.sadrikov49.workers.dev')
+).replace(/\/+$/, '');
 const SESSION_KEY = 'dc_drive_session';
 
 let _session = loadSession();
@@ -55,7 +63,12 @@ export async function login(email, password) {
   if (!res.ok) throw new Error(data.message || 'Invalid email or password');
   const session = {
     token: data.accessToken,
-    workerUrl: data.workerUrl || null,
+    // Hosted: the central worker returns the user's per-user workerUrl. Self-host:
+    // there is only ONE worker (the one we just logged into), and it does no
+    // Firestore lookup, so it returns no workerUrl — fall back to CENTRAL_API,
+    // which IS that worker. Never fall back on hosted: CENTRAL_API is the shared
+    // login worker there (no DB), so a null workerUrl must surface as an error.
+    workerUrl: data.workerUrl || (IS_SELF_HOST ? CENTRAL_API : null),
     uid: data.userId,
     email: data.userEmail || email.trim(),
     name: data.name || '',

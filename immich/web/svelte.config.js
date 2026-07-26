@@ -6,6 +6,19 @@ dotenv.config({ quiet: true });
 
 process.env.PUBLIC_IMMICH_BUY_HOST = process.env.PUBLIC_IMMICH_BUY_HOST || 'https://buy.immich.app';
 process.env.PUBLIC_IMMICH_PAY_HOST = process.env.PUBLIC_IMMICH_PAY_HOST || 'https://pay.futo.org';
+// The worker the Photos app talks to before it knows the user's per-user worker
+// URL (pre-login server config, and the login POST itself). Hosted builds use the
+// shared entry point; a self-hosted build sets this to the operator's OWN worker.
+//
+// Fail SAFE, not open: a self-hosted build (PUBLIC_SELF_HOST=1) that forgets to
+// set the URL must NOT silently default to our host — that would send the user's
+// email+password login POST to us. So the hosted default only applies when this is
+// NOT a self-hosted build; a self-hosted build with the URL unset gets '' (same as
+// Drive/accounts-portal), which breaks obviously against its own origin instead of
+// leaking to us. `$env/static/public` still always has a (possibly empty) value.
+process.env.PUBLIC_DAEMONCLIENT_WORKER_URL =
+  process.env.PUBLIC_DAEMONCLIENT_WORKER_URL ||
+  (process.env.PUBLIC_SELF_HOST === '1' ? '' : 'https://api.daemonclient.uz');
 
 /** @type {import('@sveltejs/kit').Config} */
 const config = {
