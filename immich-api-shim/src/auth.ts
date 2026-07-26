@@ -1,12 +1,6 @@
 import type { Env } from './index';
 import { json, firestoreGet } from './helpers';
-import {
-  isSelfHost,
-  sessionScope,
-  verifyLocalCredentials,
-  getLocalUserById,
-  changeLocalPassword,
-} from './selfhost-auth';
+import { isSelfHost, sessionScope } from './selfhost-auth';
 
 // Session lifetime. Was 7 days, which silently logged users out after a week
 // of inactivity — every request then 401'd, so sync stalled and uploads
@@ -47,48 +41,16 @@ export async function handleAuth(request: Request, env: Env, path: string): Prom
   if (path === '/api/auth/status') {
     return handleAuthStatus(request, env);
   }
-  if (path === '/api/auth/change-password' && request.method === 'POST') {
-    return handleChangePassword(request, env);
-  }
   return json({ message: 'Not found' }, 404);
-}
-
-// Self-hosted password change. Requires a valid session AND the current
-// password, so a stolen session cookie alone cannot lock the owner out.
-async function handleChangePassword(request: Request, env: Env): Promise<Response> {
-  if (!isSelfHost(env)) return json({ message: 'Not available on managed accounts' }, 404);
-  if (!env.DB) return json({ message: 'No database bound' }, 500);
-
-  let session;
-  try {
-    const { requireAuth } = await import('./helpers');
-    session = await requireAuth(request, env);
-  } catch {
-    return json({ message: 'Not authenticated' }, 401);
-  }
-
-  const body = await request.json().catch(() => ({})) as any;
-  const result = await changeLocalPassword(
-    env.DB, session.uid, body.currentPassword || body.password || '', body.newPassword || '',
-  );
-  if (!result.ok) return json({ message: result.error }, 400);
-
-  const user = await getLocalUserById(env.DB, session.uid);
-  console.log(`[auth] password changed for ${user?.email || session.uid}`);
-  return json({ success: true });
 }
 
 async function handleLogin(request: Request, env: Env): Promise<Response> {
   const body = await request.json() as any;
   const { email, password } = body.loginCredentialDto || body;
 
-  // Self-hosted: accounts live in this worker's own D1, there is no Firebase.
-  // The response shape is identical to the managed path, so the web apps and
-  // the mobile app authenticate against a self-hosted server unchanged.
-  if (isSelfHost(env)) {
-    return handleSelfHostLogin(env, email, password);
-  }
-
+  // A self-hosted install reaches this exact code: its worker just points
+  // FIREBASE_API_KEY / FIREBASE_PROJECT_ID at the operator's own Firebase
+  // project, so there is no second login implementation to keep in step.
   // Validate against Firebase Auth REST API
   const res = await fetch(
     `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${env.FIREBASE_API_KEY}`,
@@ -182,55 +144,6 @@ function sessionCookieHeaders(sessionToken: string): Headers {
   h.append('Set-Cookie', `__session=${sessionToken}; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=${SESSION_TTL_SECONDS}`);
   h.append('Set-Cookie', `immich_is_authenticated=true; Path=/; SameSite=Lax; Secure; Max-Age=${SESSION_TTL_SECONDS}`);
   return h;
-}
-
-async function handleSelfHostLogin(env: Env, email: string, password: string): Promise<Response> {
-  if (!env.DB) {
-    return json({ message: 'This server has no database bound — setup did not finish.' }, 500);
-  }
-  if (typeof email !== 'string' || typeof password !== 'string' || !email || !password) {
-    return json({ message: 'Email and password are required' }, 400);
-  }
-
-  const user = await verifyLocalCredentials(env.DB, email, password);
-  if (!user) {
-    // One message for both "no such account" and "wrong password" — anything
-    // more specific turns the login form into an account-enumeration oracle.
-    return json({ message: 'Incorrect email or password' }, 401);
-  }
-
-  let scope: string;
-  try {
-    scope = sessionScope(env);
-  } catch (e: any) {
-    console.error('[auth] refusing to issue a session:', e?.message);
-    return json({ message: 'Server misconfigured: session secret missing' }, 500);
-  }
-
-  const sessionToken = await createSignedSessionToken({
-    uid: user.id,
-    email: user.email,
-    // No Firebase tokens in this mode; requireAuth skips the refresh path
-    // entirely for self-hosted installs.
-    idToken: '',
-    refreshToken: '',
-    selfHost: true,
-    exp: Date.now() + SESSION_TTL_SECONDS * 1000,
-  }, scope);
-
-  return new Response(JSON.stringify({
-    accessToken: sessionToken,
-    userId: user.id,
-    userEmail: user.email,
-    name: user.name,
-    isAdmin: user.isAdmin,
-    shouldChangePassword: false,
-    isOnboarded: true,
-    profileImagePath: '',
-    quotaSizeInBytes: null,
-    quotaUsageInBytes: null,
-    workerUrl: null,
-  }), { status: 201, headers: sessionCookieHeaders(sessionToken) });
 }
 
 function handleLogout(): Response {

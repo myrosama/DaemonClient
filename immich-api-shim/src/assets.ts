@@ -11,6 +11,7 @@ import { extractExif, type PhotoExif } from './exif';
 import { StoreZipWriter } from './zip';
 import { toAssetManifest } from './asset-manifest';
 import { earlyDedupDecision, videoHintFromFields } from './upload-dedup';
+import { isSelfHost } from './selfhost-auth';
 import { parseUploadRequest, makeFormDataLike } from './upload-stream';
 
 // --- ZKE Crypto Implementation ---
@@ -19,6 +20,17 @@ const IV_LENGTH = 12;
 const KEY_LENGTH = 256;
 const PBKDF2_ITERATIONS = 100000;
 const CHUNK_SIZE = 19 * 1024 * 1024; // 19 MB
+
+// Where to send a user who needs the web app. A self-hosted install has to
+// name the operator's own address — pointing their users at our site would be
+// both wrong and a link back to infrastructure they deliberately do not use.
+// EXTERNAL_DOMAIN is set by the setup CLI; the request origin is the fallback.
+function webAppOrigin(request: Request, env: Env): string {
+  const configured = (env as any).EXTERNAL_DOMAIN;
+  if (configured) return String(configured).replace(/\/+$/, '');
+  if (isSelfHost(env)) return new URL(request.url).origin;
+  return 'photos.daemonclient.uz';
+}
 
 // The only visibility values the mobile app's strict enum parse accepts.
 // Anything else aborts its entire sync, so writes are filtered against this
@@ -458,10 +470,12 @@ export async function handleAssets(request: Request, env: Env, path: string, url
           type: 'system',
           level: 'warning',
           title: `${parts.join(' and ')} can't be shown in the app`,
+          // No hard-coded address: a self-hosted install must point its own
+          // users at their own web app, never at ours.
           message:
             `HEIC photos and videos don't display directly in this app — but they're safe and they work on the web. ` +
-            `To fix them: open photos.daemonclient.uz in any browser (your phone works too) → Utilities → tap "Fix HEIC", then "Fix Videos". ` +
-            `After that they show everywhere. Advanced: connect your own backend server (e.g. Render) to view them instantly with no fixing — guide on the website.`,
+            `To fix them: open ${webAppOrigin(request, env)} in any browser (your phone works too) → Utilities → tap "Fix HEIC", then "Fix Videos". ` +
+            `After that they show everywhere. Advanced: connect your own media processor to convert them automatically, with no fixing step.`,
           read: false,
           createdAt: new Date().toISOString(),
           readAt: null,

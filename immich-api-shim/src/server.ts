@@ -1,8 +1,9 @@
 import type { Env } from './index';
+import { isSelfHost } from './selfhost-auth';
 import { json } from './helpers';
 
 export async function handleServer(request: Request, env: Env, path: string): Promise<Response> {
-  if (path === '/api/server/config' || path === '/api/server-info/config') return json(serverConfig());
+  if (path === '/api/server/config' || path === '/api/server-info/config') return json(serverConfig(request, env));
   if (path === '/api/server/features') return json(serverFeatures());
   if (path === '/api/server/about') return json(serverAbout());
   if (path === '/api/server/version') return json({ major: 2, minor: 7, patch: 5 });
@@ -107,14 +108,20 @@ async function handleTelegramConfig(request: Request, env: Env): Promise<Respons
   });
 }
 
-function serverConfig() {
+function serverConfig(request: Request, env: Env) {
+  // A self-hosted install must never be told that OUR domain is its external
+  // address — clients build links from this. Prefer an explicitly configured
+  // domain, else the address this very request arrived on, and only fall back
+  // to the hosted site for the managed service.
+  const externalDomain = (env as any).EXTERNAL_DOMAIN
+    || (isSelfHost(env) ? new URL(request.url).origin : 'https://photos.daemonclient.uz');
   return {
     loginPageMessage: '',
     trashDays: 30,
     userDeleteDelay: 7,
     isInitialized: true,
     isOnboarded: true,
-    externalDomain: 'https://photos.daemonclient.uz',
+    externalDomain,
     maintenanceMode: false,
     publicUsers: false,
     mapDarkStyleUrl: '',

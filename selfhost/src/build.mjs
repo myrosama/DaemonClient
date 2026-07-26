@@ -50,22 +50,8 @@ export function readMigrationSql(repoRoot) {
   if (!photos) throw new Error('could not read MIGRATION_SQL from deployment-service');
   const drive = grab('DRIVE_MIGRATION_SQL');
 
-  // The users table exists only in self-hosted installs (managed accounts live
-  // in Firebase), so it is defined here rather than in the shared schema.
-  const users = `
-CREATE TABLE IF NOT EXISTS users (
-  id TEXT PRIMARY KEY,
-  email TEXT NOT NULL UNIQUE,
-  passwordHash TEXT NOT NULL,
-  name TEXT,
-  isAdmin INTEGER DEFAULT 0,
-  createdAt TEXT NOT NULL,
-  updatedAt TEXT
-);
-CREATE TABLE IF NOT EXISTS config (
-  key TEXT PRIMARY KEY,
-  value TEXT
-);`;
-
-  return [photos, drive, users].filter(Boolean).join('\n');
+  // Accounts live in the operator's own Firebase project, exactly as they do
+  // on the hosted service, so there is no users table here — the schema a
+  // self-hosted install creates is identical to a managed one.
+  return [photos, drive].filter(Boolean).join('\n');
 }

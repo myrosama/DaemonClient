@@ -1,0 +1,14 @@
+{
+  "name": "daemonclient-processor",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Serverless HEIC to JPEG converter — one free function per user, no server to run",
+  "dependencies": {
+    "@jsquash/jpeg": "^1.4.0",
+    "libheif-js": "^1.19.8"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

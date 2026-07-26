@@ -63,18 +63,20 @@ export async function runDoctor() {
     const rows = await cf.queryD1(state.cloudflareToken, state.cloudflareAccountId, state.databaseId,
       "SELECT name FROM sqlite_master WHERE type='table'");
     const tables = (rows?.[0]?.results || []).map((r) => r.name);
-    const missing = ['photos', 'users', 'config'].filter((t) => !tables.includes(t));
+    const missing = ['photos', 'config'].filter((t) => !tables.includes(t));
     if (missing.length) {
       s2.fail('Database');
       add('error', `Missing tables: ${missing.join(', ')}`, 'daemonclient update (re-applies the schema)');
     } else {
       s2.succeed(`Database (${tables.length} tables)`);
     }
-    const users = await cf.queryD1(state.cloudflareToken, state.cloudflareAccountId, state.databaseId,
-      'SELECT COUNT(*) AS n FROM users');
-    const count = users?.[0]?.results?.[0]?.n ?? 0;
-    if (count === 0) add('error', 'No accounts exist — nobody can sign in', 'daemonclient password');
-    else ok(`${count} account${count === 1 ? '' : 's'}`);
+    // Accounts live in the operator's Firebase project, not in D1, so the
+    // check that matters here is that the worker was given that project.
+    if (!state.firebaseProjectId) {
+      add('error', 'No Firebase project configured — nobody can sign in', 'daemonclient setup');
+    } else {
+      ok(`Sign-in via Firebase project ${state.firebaseProjectId}`);
+    }
   } catch (e) {
     s2.fail('Database');
     add('error', `Cannot query the database: ${e.message}`, 'Check the token has D1:Edit permission');

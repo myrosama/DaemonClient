@@ -23,10 +23,6 @@ const COMMANDS = {
     summary: 'Add or change the media processor (HEIC, video thumbnails)',
     run: async () => (await import('../src/commands/processor.mjs')).runProcessor(),
   },
-  password: {
-    summary: 'Change your sign-in password',
-    run: async () => (await import('../src/commands/password.mjs')).runPassword(),
-  },
   doctor: {
     summary: 'Diagnose a broken install and print a redacted report',
     run: async () => (await import('../src/commands/doctor.mjs')).runDoctor(),

@@ -21,7 +21,6 @@ import { loadState, saveState, markDone, isDone, checkStatePermissions, statePat
 import * as tg from '../api/telegram.mjs';
 import * as cf from '../api/cloudflare.mjs';
 import { buildWorkerBundle, readMigrationSql } from '../build.mjs';
-import { hashPasswordNode } from '../password.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '../../..');
@@ -59,11 +58,11 @@ function banner() {
     '',
     `  ${symbols.bullet} your Telegram bot and channel  ${c.gray('— stores the files')}`,
     `  ${symbols.bullet} your Cloudflare Worker + D1    ${c.gray('— runs the API')}`,
-    `  ${symbols.bullet} your own account and password  ${c.gray('— nobody else can sign in')}`,
+    `  ${symbols.bullet} your Firebase project          ${c.gray('— your sign-in, your accounts')}`,
     '',
-    c.gray('Nothing is sent to us. Every credential goes only to the service it'),
-    c.gray('belongs to, straight from this machine. Stop any time with Ctrl-C —'),
-    c.gray('progress is saved after each step.'),
+    c.gray('Nothing is sent to us, and nothing you set up depends on us. Every'),
+    c.gray('credential goes only to the service it belongs to, straight from this'),
+    c.gray('machine. Stop any time with Ctrl-C — progress is saved after each step.'),
   ]);
 }
 
@@ -294,58 +293,89 @@ function splitSql(sql) {
 // ── 4. Your account ─────────────────────────────────────────────────────────
 
 async function stepAccount(state) {
-  step(4, TOTAL_STEPS, 'Your sign-in');
+  step(4, TOTAL_STEPS, 'Firebase — your sign-in');
 
   if (isDone(state, 'account')) {
-    ok(`Already created: ${c.bold(state.adminEmail)}`);
-    if (!(await confirm('Create a different account?', false))) return;
+    ok(`Already configured: project ${c.bold(state.firebaseProjectId)}, signing in as ${c.bold(state.adminEmail)}`);
+    if (!(await confirm('Reconfigure Firebase?', false))) return;
   }
 
   line();
-  hint('This is the account you will use in the web apps and the mobile app. It exists only in your own database — there is no signup page and no password reset email, so keep it somewhere safe.');
+  hint('DaemonClient signs you in with Firebase Authentication, the same as the hosted version — you just use your own project instead of ours. It is free, and it is the only account store involved.');
+  blank();
+  line(`  ${c.bold('Create the project')}`);
+  line(`    1. Open ${accent('https://console.firebase.google.com')} and add a project`);
+  line(`       ${c.gray('Analytics is not needed — turn it off to keep setup short')}`);
+  line('    2. Build → Authentication → Get started → enable Email/Password');
+  line('    3. Authentication → Users → Add user — this is your login');
+  line(`    4. Project settings ${c.gray('(gear icon)')} → General → Your apps → Web app`);
+  line(`       ${c.gray('Register one, then copy apiKey and projectId from the config shown')}`);
   blank();
 
-  const email = await ask('Email address', {
-    defaultValue: state.adminEmail || '',
-    validate: (v) => (/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v) ? null : 'That does not look like an email address.'),
+  const projectId = await ask('Firebase project ID', {
+    defaultValue: state.firebaseProjectId || '',
+    validate: (v) => (/^[a-z0-9-]{4,}$/.test(v) ? null : 'Project IDs look like my-cloud-4f21.'),
   });
 
-  let password;
+  let apiKey = state.firebaseApiKey || '';
+  let email = state.adminEmail || '';
   while (true) {
-    password = await askSecret('Choose a password (12+ characters)', {
-      validate: (v) => (v.length >= 12 ? null : 'Please use at least 12 characters.'),
+    if (!apiKey) {
+      apiKey = await ask('Firebase Web API key', {
+        validate: (v) => (v.startsWith('AIza') ? null : 'Web API keys start with AIza.'),
+      });
+    }
+    email = await ask('The email you added as a user', {
+      defaultValue: email,
+      validate: (v) => (/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v) ? null : 'That does not look like an email address.'),
     });
-    const again = await askSecret('Type it again');
-    if (again === password) break;
-    fail('Those did not match — try again.');
+    const password = await askSecret('Its password');
+
+    // Sign in for real: a typo in the key, a project with Email/Password still
+    // disabled, or a user that was never created all fail here rather than at
+    // the user's first login attempt on their phone.
+    const s = spinner('Signing in to check the details');
+    try {
+      const res = await fetch(
+        `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${apiKey}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, password, returnSecureToken: true }),
+        },
+      );
+      const body = await res.json().catch(() => ({}));
+      if (body.error) throw new Error(explainFirebaseError(body.error.message));
+      s.succeed(`Signed in as ${c.bold(email)}`);
+      state.adminUserId = body.localId;
+      break;
+    } catch (e) {
+      s.fail(e.message);
+      if (!(await confirm('Try again?', true))) process.exit(1);
+      if (/API key/i.test(e.message)) apiKey = '';
+    }
   }
 
-  const s = spinner('Creating your account');
-  try {
-    // Hashed here, on this machine, with the same parameters the worker uses to
-    // verify it. The plain password never leaves this process and is never
-    // written to the state file.
-    const passwordHash = await hashPasswordNode(password);
-    const userId = crypto.randomUUID();
-    await cf.queryD1(
-      state.cloudflareToken,
-      state.cloudflareAccountId,
-      state.databaseId,
-      `INSERT INTO users (id, email, passwordHash, name, isAdmin, createdAt)
-       VALUES (?, ?, ?, ?, 1, ?)
-       ON CONFLICT(email) DO UPDATE SET passwordHash = excluded.passwordHash, updatedAt = excluded.createdAt`,
-      [userId, email.toLowerCase(), passwordHash, email.split('@')[0], new Date().toISOString()],
-    );
-    s.succeed(`Account created for ${c.bold(email)}`);
-    state.adminEmail = email.toLowerCase();
-    state.adminUserId = userId;
-  } catch (e) {
-    s.fail(`Could not create the account: ${e.message}`);
-    process.exit(1);
-  }
-
+  state.firebaseProjectId = projectId;
+  state.firebaseApiKey = apiKey;
+  state.adminEmail = email.toLowerCase();
   markDone(state, 'account');
   saveState(state);
+}
+
+/** Firebase error codes are shouty and unhelpful; say what to actually do. */
+function explainFirebaseError(code) {
+  const map = {
+    EMAIL_NOT_FOUND: 'No user with that email in this project. Add one under Authentication → Users.',
+    INVALID_PASSWORD: 'Wrong password for that user.',
+    INVALID_LOGIN_CREDENTIALS: 'That email and password combination was rejected. Check both, and that the user exists.',
+    OPERATION_NOT_ALLOWED: 'Email/Password sign-in is not enabled. Turn it on under Authentication → Sign-in method.',
+    USER_DISABLED: 'That user is disabled in the Firebase console.',
+    API_KEY_INVALID: 'That Web API key is not valid for this project.',
+    INVALID_EMAIL: 'That email address is not valid.',
+  };
+  for (const [k, v] of Object.entries(map)) if (String(code).includes(k)) return v;
+  return String(code);
 }
 
 // ── 5. Deploy ───────────────────────────────────────────────────────────────
@@ -376,9 +406,14 @@ async function stepDeployWorker(state) {
       { type: 'd1', name: 'DB', id: state.databaseId },
       { type: 'plain_text', name: 'SELF_HOST', text: '1' },
       { type: 'plain_text', name: 'APP_IDENTIFIER', text: 'selfhost' },
-      { type: 'plain_text', name: 'FIREBASE_API_KEY', text: '' },
-      { type: 'plain_text', name: 'FIREBASE_PROJECT_ID', text: '' },
+      // Their Firebase project, never ours.
+      { type: 'plain_text', name: 'FIREBASE_API_KEY', text: state.firebaseApiKey || '' },
+      { type: 'plain_text', name: 'FIREBASE_PROJECT_ID', text: state.firebaseProjectId || '' },
+      // Empty on purpose: the managed value points at OUR relay worker. With
+      // D1 bound, the worker proxies through itself instead.
       { type: 'plain_text', name: 'TELEGRAM_PROXY', text: '' },
+      // So the worker never hands their users an address of ours.
+      { type: 'plain_text', name: 'EXTERNAL_DOMAIN', text: state.dashboardUrl || '' },
       { type: 'plain_text', name: 'ALLOWED_ORIGINS', text: state.allowedOrigins || 'http://localhost:5173' },
       { type: 'plain_text', name: 'UPDATE_REPO', text: state.updateRepo || 'myrosama/DaemonClient' },
       { type: 'plain_text', name: 'BUILD_VERSION', text: readVersion(REPO_ROOT) },
