@@ -36,10 +36,15 @@ against a cap of 50; sync had already been fixed the same way. Now rotates one
 per request. All four gates passed, tests fail without the change, deployed to
 the deployment service, the central worker, and `dc-ozkv3fuz`, verified live.
 
-**This is one of three causes of the 1102s.** The other two — the 19 MB
-per-chunk copies queued in `waitUntil`, and the chunk budget being wrong by 3x —
-are Tasks 3.2 and 3.3 and are NOT yet fixed. Expect 1102s to continue, less
-often.
+**This was one of the causes of the 1102s, not the only one.** The 19 MB
+per-chunk copies queued in `waitUntil` (Task 3.3) are still there and are
+probably the dominant term. Expect 1102s to continue, less often.
+
+The "chunk budget is wrong by 3x" line that used to sit here was **wrong**, and
+the alternatives review caught it: the body cache already short-circuits a warm
+chunk (`assets.ts:2131-2134`, shipped April), and D1 was never on the
+50-subrequest budget in the first place. See Task 3.2, which is now mostly
+"do not do this".
 
 ### Shipped early — two live vulnerabilities (shim `34ccd3fa9a39`, commit `0311248`)
 Found by the security review, exploitable while the plan was being written, so
@@ -71,7 +76,7 @@ re-arms the public-constant signing fallback for that worker.
 
 | File | What it is |
 |---|---|
-| `MASTER_PLAN.md` | the phased plan of record — 6 phases, 42 tasks |
+| `MASTER_PLAN.md` | the phased plan of record — 6 phases, 43 tasks |
 | `PHASE_1.md` … `PHASE_6.md` | working docs: gate checklist per task, notes as you go |
 | `GATES.md` | the four gates every task passes before commit |
 | `FINDINGS.md` | the verified backlog — every item confirmed at file:line |
@@ -93,7 +98,7 @@ re-arms the public-constant signing fallback for that worker.
 
 ## Already shipped this session (deployed — do not re-plan)
 
-Worker shim went `1533a4952213` → `ea08d9704ab2`.
+Worker shim went `1533a4952213` → **`34ccd3fa9a39`**.
 
 | What | Commit |
 |---|---|

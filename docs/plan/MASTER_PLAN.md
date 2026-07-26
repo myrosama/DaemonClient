@@ -383,24 +383,48 @@ that day shows 60 × 502, every one of them Cloudflare 1102. See `FINDINGS.md`
   `sync.ts`.
 - **How:** a small object created per invocation and threaded through. Increment
   **inside** the helpers that make the calls (`tgGetFileUrl`, `tgDownloadFile`,
-  cache reads/writes, D1 queries), never at call sites, so a budget cannot drift
-  from what it counts. Expose `remaining()` and `canAfford(n)`.
-- **Verify:** `src/budget.test.ts` — a fake chunk fetch reports 6 for a cold
-  chunk and 1 for a cached one; `canAfford` refuses past the cap.
+  cache reads/writes), never at call sites, so a budget cannot drift from what it
+  counts. Expose `remaining()` and `canAfford(n)`.
+- **Count external and internal separately.** The alternatives review caught that
+  the plan lumped D1 into the 50. It is not there. Cloudflare's limits page and
+  the 2026-02-11 changelog both state it: free-plan Workers get **50 external
+  subrequests *and* 1,000 subrequests to Cloudflare services** per invocation —
+  verified against the current docs, not assumed. D1, KV, R2 and the Cache API
+  are on the 1,000. Counting a D1 query against the 50 makes the worker refuse
+  work it can comfortably afford, which is a self-inflicted version of the bug
+  this phase exists to fix. Two counters, or one with two dimensions.
+- **Verify:** `src/budget.test.ts` — a fake chunk fetch reports the right
+  external cost for a cold chunk and for a cached one; a D1 query moves the
+  internal counter and leaves the external one alone; `canAfford` refuses past
+  the right cap.
 - **Risk:** medium — touches hot paths; the tests must cover cache hits and misses.
 
 ### Task 3.2 — Cost the chunk budget correctly
-- **What:** derive `MAX_CHUNKS_PER_RESPONSE` from real cost.
+- **What:** ~~derive `MAX_CHUNKS_PER_RESPONSE` from real cost~~ — **mostly
+  dropped. Read this before doing anything.**
 - **Files:** `immich-api-shim/src/assets.ts` (~2226).
-- **How:** twenty chunks at six subrequests each is 120 against a cap of 50.
-  Compute from the counter: `floor((cap - preamble) / perChunk)`. Also check the
-  body cache **before** resolving the file path, so a warm chunk costs one
-  subrequest instead of six.
-- **Verify:** extend `src/range-stitch.test.ts` — a long video yields an honest
-  shorter 206 at a chunk boundary rather than exceeding the budget; existing
-  byte-exactness cases still pass.
+- **The first half is already done.** `getChunk` checks the chunk **body** cache
+  at `assets.ts:2131-2134`, before any file-path resolution — shipped
+  2026-04-27 in `4b40008`. A warm chunk already costs one subrequest, not six.
+  Verified. Nothing to do.
+- **The second half would reintroduce a bug the code says was fixed.** Deriving
+  `MAX_CHUNKS_PER_RESPONSE` from a 50-subrequest cap gives about 7 chunks, i.e.
+  a truncated 206. The comment at `assets.ts:2186-2195` records what that costs:
+  native players (ExoPlayer, AVPlayer) open playback with `bytes=0-` and treat a
+  short 206 as end-of-file, so multi-chunk videos played their first window and
+  froze — while browsers, which re-request politely, looked fine. That is the
+  mobile video bug, and shortening the 206 is how you get it back. The streaming
+  path holds ~2 chunks in memory, so the 128 MB cap that motivated the old
+  truncation does not bind.
+- **What remains:** with 3.1's corrected accounting, confirm a long multi-chunk
+  range actually stays inside the **external** budget. If it does, this task is
+  closed as already-fixed. If it does not, the lever is concurrency (3.3), not
+  response length.
+- **Verify:** `src/range-stitch.test.ts` stays green unchanged — that suite is
+  the regression test for the freeze, and any change here that needs it edited
+  is the wrong change.
 - **Depends on:** 3.1
-- **Risk:** medium — `range-stitch.test.ts` already proves byte-exactness; keep it green.
+- **Risk:** was medium; now low, because the answer is mostly "do not".
 
 ### Task 3.3 — Stop copying 19 MB per chunk into `waitUntil`
 - **What:** remove the un-awaited full-size copy.
@@ -498,13 +522,45 @@ shipping a smooth installer for a broken product.
 Design of record: `docs/roadmap/SELFHOST_CLI_DESIGN.md`, verified against how
 wrangler, Vercel and Firebase actually behave.
 
+### Task 4.0 — Make the config write atomic
+- **What:** stop `config.mjs:save()` being able to destroy the one
+  unrecoverable value it stores.
+- **Files:** `selfhost/src/config.mjs` (~183-187), `.gitignore`.
+- **Why:** `fs.openSync(file, 'w', 0o600)` **truncates in place**, then writes,
+  with no temp file and no `fsync`. A crash, a full disk, or a killed terminal
+  between those two steps leaves an empty file — and the file's own header says
+  `STORAGE_KEY` is the only thing that can decrypt what is already in the user's
+  Telegram channel. The failure mode is "self-hoster loses every file they have
+  stored", from an interrupted save. `'w'` also follows symlinks, so a
+  pre-existing symlink at that path redirects the credentials elsewhere.
+  Found by the alternatives review; verified in the code.
+- **How:** write to `config.env.tmp` in the same directory with `wx` and mode
+  0600, `fsync`, then `rename` over the target — rename is atomic within a
+  filesystem, so the file is either the old contents or the new one, never
+  empty. `wx` on the temp file refuses to follow a symlink. Keep the existing
+  0600-from-creation behaviour, which is already right.
+- **Also:** add `config.env` and `config.env.tmp` to `.gitignore`. The default
+  location is `~/.config/daemonclient/`, so this is a backstop rather than the
+  main protection — but this repository has committed a `.env` before
+  (`6468388`, still in its history), which is exactly why the backstop is worth
+  the one line.
+- **Verify:** `selfhost/test/config-atomic.test.mjs` — a save interrupted after
+  the temp write leaves the original file intact and readable; a symlink at the
+  config path does not get followed; permissions are still 0600 afterwards.
+- **Risk:** low, and it removes a high-severity one.
+
 ### Task 4.1 — Delete the dead config modules
-- **What:** remove `state.mjs` and `env.mjs`; `config.mjs` is the only one.
-- **Files:** `selfhost/src/state.mjs`, `selfhost/src/env.mjs`, and every importer.
+- **What:** remove `state.mjs`, `env.mjs` **and `deploy.mjs`**; `config.mjs` is
+  the only config module and `build.mjs` the only build path.
+- **Files:** `selfhost/src/state.mjs`, `selfhost/src/env.mjs`,
+  `selfhost/src/deploy.mjs`, and every importer.
 - **How:** three live config modules is worse than any one of them. Migrate the
   commands and `test/selfhost.test.mjs` onto `config.mjs`, then delete.
-- **Verify:** `grep -rn "state.mjs\|env.mjs" selfhost/` returns nothing;
-  `cd selfhost && npm test` green.
+  `deploy.mjs` has zero importers and is a byte-identical stale copy of logic
+  that lives in `build.mjs` — it is what two Phase 1 tasks were mistakenly
+  aimed at. Deleting it is how that mistake stops being possible.
+- **Verify:** `grep -rn "state.mjs\|env.mjs\|deploy.mjs" selfhost/` returns
+  nothing; `cd selfhost && npm test` green.
 - **Risk:** low
 
 ### Task 4.2 — Refuse to run when the environment will sabotage it
@@ -879,3 +935,35 @@ written. Shipped and verified live — see `FINDINGS.md` §14-16 and commit
 - `/api/drive/config` — analysed rather than patched. It is contained on hosted
   by the per-worker `SESSION_SECRET`; it is not contained on multi-user
   self-host, which has not shipped. Folded into Task 2.4 instead of rushed.
+
+---
+
+## The alternatives review changed Phase 3 and added a task
+
+It looked for work already done and dependencies not worth their cost. Five of
+its findings were corrections rather than suggestions; all five were verified
+before being accepted.
+
+**Task 3.2 shrank to almost nothing.** Half of it shipped in April — `getChunk`
+already checks the chunk *body* cache before resolving a file path
+(`assets.ts:2131-2134`, commit `4b40008`). The other half was actively
+dangerous: capping `MAX_CHUNKS_PER_RESPONSE` against a 50-subrequest budget
+means a truncated 206, and `assets.ts:2186-2195` records that native players
+treat a short 206 as end-of-file — that is the mobile video freeze, and the plan
+was about to reintroduce it.
+
+**Task 3.1 was counting the wrong budget.** Free-plan Workers get 50 *external*
+subrequests **and** 1,000 to Cloudflare services; D1 is on the second. Checked
+against Cloudflare's current limits page and the 2026-02-11 changelog rather
+than assumed. Counting D1 into the 50 would have made the worker refuse work it
+could afford — the same class of bug Phase 3 exists to remove.
+
+**Task 4.0 was added.** `config.mjs:save()` truncates the config file in place
+with no temp file and no fsync, and `STORAGE_KEY` is the one value in it that
+cannot be regenerated. An interrupted save loses every file the self-hoster has
+stored.
+
+**It independently reached the same conclusion as the principles review on Task
+2.3** — that removing `botToken` and the ZKE material from `/api/server/*` would
+collapse the browser byte path onto the worker. Two reviews arriving at that
+separately is why 2.3 is reversed rather than merely questioned.
