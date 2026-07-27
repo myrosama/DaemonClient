@@ -46,6 +46,12 @@ const firebaseConfig = {
   measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID || (IS_SELF_HOST ? undefined : HOSTED_DEFAULTS.measurementId),
 }
 
+// The Firebase project id this portal signs in against. The HEIC processor a
+// user deploys must be pinned to THIS project (FIREBASE_PROJECT_ID) so it only
+// trusts tokens minted here — the onboarding step shows it to the user to paste
+// into their Vercel deploy.
+export const FIREBASE_PROJECT_ID = firebaseConfig.projectId
+
 // The API this portal talks to. Hosted builds use the shared entry point;
 // a self-hosted build points at the operator's own worker.
 export const API_BASE = (

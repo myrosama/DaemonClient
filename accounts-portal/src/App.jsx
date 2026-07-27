@@ -8,6 +8,7 @@ import { Input } from './components/ui/Input'
 import { Card } from './components/ui/Card'
 import { toast } from './components/ui/Toast'
 import { SetupWorker } from './pages/SetupWorker'
+import { SetupProcessor } from './pages/SetupProcessor'
 import { consumeOAuthState, CF_OAUTH_REDIRECT_URI, DEPLOYMENT_WORKER } from './config/cloudflareOauth'
 import { thumbHashToDataURL } from 'thumbhash'
 
@@ -2685,7 +2686,9 @@ function CloudflareCallback() {
         if (!res.ok || !data.success) throw new Error(data.error || 'Setup failed. Please try again.')
         if (cancelled) return
         setStatus('Your private cloud is ready! Redirecting…')
-        setTimeout(() => navigate('/dashboard', { replace: true }), 900)
+        // Offer the optional HEIC-processor step before the dashboard. It is
+        // skippable, so it never blocks a user from finishing setup.
+        setTimeout(() => navigate('/setup/processor', { replace: true }), 900)
       } catch (e) {
         if (!cancelled) setError(e.message || 'Something went wrong finishing setup.')
       }
@@ -2885,6 +2888,10 @@ function App() {
         />
         {/* OAuth return URL — not AuthOnly (it would stage-bounce); guards itself */}
         <Route path="/setup/cloudflare/callback" element={<CloudflareCallback />} />
+        {/* Optional processor step, shown AFTER the worker exists (so setup is
+            already 'complete'); NOT AuthOnly, which would bounce it to the
+            dashboard. Self-guards for auth, and is skippable. */}
+        <Route path="/setup/processor" element={<SetupProcessor />} />
 
         {/* Protected routes (auth + setup required, with sidebar) */}
         <Route

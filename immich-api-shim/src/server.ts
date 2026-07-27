@@ -3,6 +3,7 @@ import { isSelfHost } from './selfhost-auth';
 import { json, requireAuth } from './helpers';
 import { D1Adapter } from './d1-adapter';
 import { getCachedConfig } from './cached-config';
+import { resetHeicThumbBackfill } from './assets';
 
 export async function handleServer(request: Request, env: Env, path: string): Promise<Response> {
   if (path === '/api/server/config' || path === '/api/server-info/config') return json(serverConfig(request, env));
@@ -308,6 +309,13 @@ async function handleProcessor(request: Request, env: Env): Promise<Response> {
   const db = new D1Adapter(env.DB);
   const existing = (await db.getJsonConfig<any>('telegram')) || {};
   await db.setJsonConfig('telegram', { ...existing, heicConvertUrl: `${base}/convertHeicThumbnail` });
+
+  // Re-arm the lazy HEIC backfill in this isolate. Without this, a user who had
+  // been running without a processor (so the backfill marked itself permanently
+  // "complete" for the isolate) would see their existing thumb-less HEIC rows
+  // stay unhealed until a fresh isolate happened to serve them. Now the next
+  // sync/timeline request heals them against the processor just attached.
+  resetHeicThumbBackfill();
 
   return json({ url: `${base}/convertHeicThumbnail`, configured: true, ok: health.ok === true });
 }

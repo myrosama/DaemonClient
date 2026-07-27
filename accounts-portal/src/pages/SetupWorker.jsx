@@ -56,7 +56,8 @@ export function SetupWorker() {
   const handleDeploy = async () => {
     try {
       await startDeployment()
-      setTimeout(() => navigate('/dashboard'), 2000)
+      // Offer the optional HEIC-processor step next (skippable → dashboard).
+      setTimeout(() => navigate('/setup/processor'), 2000)
     } catch (err) {
       console.error('Deployment error:', err)
     }
