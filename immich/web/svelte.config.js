@@ -19,6 +19,13 @@ process.env.PUBLIC_IMMICH_PAY_HOST = process.env.PUBLIC_IMMICH_PAY_HOST || 'http
 process.env.PUBLIC_DAEMONCLIENT_WORKER_URL =
   process.env.PUBLIC_DAEMONCLIENT_WORKER_URL ||
   (process.env.PUBLIC_SELF_HOST === '1' ? '' : 'https://api.daemonclient.uz');
+// The Firebase project this install authenticates against — shown in the HEIC
+// processor setup so the user sets FIREBASE_PROJECT_ID on their own processor to
+// match (the processor verifies each token's `aud` against it). Public, not a
+// secret. Hosted = the managed project; a self-host build sets its own.
+process.env.PUBLIC_DAEMONCLIENT_FIREBASE_PROJECT_ID =
+  process.env.PUBLIC_DAEMONCLIENT_FIREBASE_PROJECT_ID ||
+  (process.env.PUBLIC_SELF_HOST === '1' ? '' : 'daemonclient-c0625');
 
 /** @type {import('@sveltejs/kit').Config} */
 const config = {

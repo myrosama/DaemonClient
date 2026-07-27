@@ -2,10 +2,12 @@
   import AppDownloadModal from '$lib/modals/AppDownloadModal.svelte';
   import FixThumbnailsModal from '$lib/modals/FixThumbnailsModal.svelte';
   import FixVideoThumbnailsModal from '$lib/modals/FixVideoThumbnailsModal.svelte';
+  import SetupProcessorModal from '$lib/modals/SetupProcessorModal.svelte';
   import ObtainiumConfigModal from '$lib/modals/ObtainiumConfigModal.svelte';
   import { Route } from '$lib/route';
   import { Icon, modalManager, Text } from '@immich/ui';
   import {
+    mdiAutoFix,
     mdiCellphoneArrowDownVariant,
     mdiContentDuplicate,
     mdiCrosshairsGps,
@@ -50,6 +52,15 @@
   >
     <span><Icon icon={mdiVideoOutline} class="text-primary" size="24" /></span>
     Fix video thumbnails
+  </button>
+
+  <button
+    type="button"
+    onclick={() => modalManager.show(SetupProcessorModal, {})}
+    class="w-full hover:bg-gray-100 dark:hover:bg-immich-dark-gray flex items-center gap-4 p-4 text-start"
+  >
+    <span><Icon icon={mdiAutoFix} class="text-primary" size="24" /></span>
+    Automatic HEIC thumbnails
   </button>
 </div>
 <br />

@@ -25,6 +25,7 @@ declare module '$env/static/public' {
   export const PUBLIC_IMMICH_PAY_HOST: string;
   export const PUBLIC_IMMICH_BUY_HOST: string;
   export const PUBLIC_DAEMONCLIENT_WORKER_URL: string;
+  export const PUBLIC_DAEMONCLIENT_FIREBASE_PROJECT_ID: string;
 }
 
 interface Element {

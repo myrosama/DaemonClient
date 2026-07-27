@@ -17,8 +17,8 @@ const CF_TOKEN_TEMPLATE_URL =
   '&name=DaemonClient'
 
 const FEATURES = [
-  { icon: Zap,        label: '100,000 requests/day' },
-  { icon: Database,   label: '5 GB database storage' },
+  { icon: Zap,        label: 'Your own backend, runs for you' },
+  { icon: Database,   label: 'Unlimited storage' },
   { icon: Shield,     label: 'Fully private & yours' },
   { icon: RefreshCw,  label: 'Automatic updates' },
 ]
@@ -56,8 +56,10 @@ export function SetupWorker() {
   const handleDeploy = async () => {
     try {
       await startDeployment()
-      // Offer the optional HEIC-processor step next (skippable → dashboard).
-      setTimeout(() => navigate('/setup/processor'), 2000)
+      // Straight to the dashboard. Automatic HEIC thumbnails are set up later from
+      // Photos → Utilities (works for new and existing users alike, and calls the
+      // worker directly), so signup is not interrupted by a processor step.
+      setTimeout(() => navigate('/dashboard'), 2000)
     } catch (err) {
       console.error('Deployment error:', err)
     }
@@ -120,7 +122,8 @@ export function SetupWorker() {
                 Set Up Your Backend
               </h1>
               <p className="text-[13px] text-linear-text-secondary">
-                Connect your free Cloudflare account — takes about 2 minutes.
+                Your files live in your own Telegram channel — this is the free backend
+                that talks to it on your behalf. Connect Cloudflare — about 2 minutes.
               </p>
             </div>
 

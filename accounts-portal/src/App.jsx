@@ -2686,9 +2686,9 @@ function CloudflareCallback() {
         if (!res.ok || !data.success) throw new Error(data.error || 'Setup failed. Please try again.')
         if (cancelled) return
         setStatus('Your private cloud is ready! Redirecting…')
-        // Offer the optional HEIC-processor step before the dashboard. It is
-        // skippable, so it never blocks a user from finishing setup.
-        setTimeout(() => navigate('/setup/processor', { replace: true }), 900)
+        // Straight to the dashboard — HEIC thumbnails are set up later from
+        // Photos → Utilities (universal, worker-direct), not during signup.
+        setTimeout(() => navigate('/dashboard', { replace: true }), 900)
       } catch (e) {
         if (!cancelled) setError(e.message || 'Something went wrong finishing setup.')
       }
