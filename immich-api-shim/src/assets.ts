@@ -314,9 +314,19 @@ export async function handleAssets(request: Request, env: Env, path: string, url
     // older low-quality previews to the current quality. Default only returns
     // what's actually missing (HEIC without preview, or image without thumbhash).
     const all = qp.get('all') === '1';
+    // The third clause is the fix for "some photos won't open even though they
+    // have a thumbhash and aren't flagged": a non-HEIC image with a blur but NO
+    // real thumbnail (no telegramThumbId AND no telegramPreviewId). The grid then
+    // falls back to fetching the FULL original per tile, which storms Telegram
+    // into 429s and shows a broken tile. Flagging them lets the browser fixer
+    // generate a small real thumbnail so they load fast. (HEIC is handled by the
+    // first clause + the server-side processor, so it is excluded here.)
+    const noRealThumb = `((isHeic IS NULL OR isHeic = 0) AND mimeType NOT LIKE '%hei%'`
+      + ` AND (telegramThumbId IS NULL OR telegramThumbId = '')`
+      + ` AND (telegramPreviewId IS NULL OR telegramPreviewId = ''))`;
     const where = all
-      ? `(isHeic = 1 OR mimeType LIKE '%hei%') OR thumbhash IS NULL OR thumbhash = ''`
-      : `((isHeic = 1 OR mimeType LIKE '%hei%') AND (telegramPreviewId IS NULL OR telegramPreviewId = '')) OR thumbhash IS NULL OR thumbhash = ''`;
+      ? `(isHeic = 1 OR mimeType LIKE '%hei%') OR thumbhash IS NULL OR thumbhash = '' OR ${noRealThumb}`
+      : `((isHeic = 1 OR mimeType LIKE '%hei%') AND (telegramPreviewId IS NULL OR telegramPreviewId = '')) OR thumbhash IS NULL OR thumbhash = '' OR ${noRealThumb}`;
     const rows = await env.DB.prepare(
       `SELECT id FROM photos
          WHERE ownerId = ? AND (isTrashed = 0 OR isTrashed IS NULL) AND mimeType LIKE 'image/%'
