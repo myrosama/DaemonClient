@@ -430,6 +430,20 @@ async function handleOAuthExchange(request: Request, env: Env): Promise<Response
 }
 
 // ── Attach a HEIC processor to the user's own worker ─────────────────────────
+// Pin a stored workerUrl to the exact shape the provisioner produces
+// (`https://<name>.<subdomain>.workers.dev`, see provisionWorker). config/cloudflare
+// is USER-WRITABLE (firestore.rules grant the owner write on their own docs), and
+// handleAttachProcessor fetches this URL server-side — so without this a user could
+// point it at an arbitrary host and use this service as a confused-deputy fetcher.
+// new URL() normalises the hostname (a homograph becomes xn--…, which won't end in
+// .workers.dev), and we require https on the default port.
+function isProvisionedWorkerUrl(u: string): boolean {
+  try {
+    const url = new URL(u);
+    return url.protocol === 'https:' && url.port === '' && url.hostname.endsWith('.workers.dev');
+  } catch { return false; }
+}
+
 // The hosted onboarding cannot call the worker's POST /api/server/processor
 // directly: the browser only ever holds a Firebase ID token, and the worker
 // authenticates with its own signed session (minted from email+password at
@@ -460,6 +474,10 @@ export async function handleAttachProcessor(request: Request, env: Env): Promise
     const sessionSecret = cfg?.sessionSecret;
     if (!workerUrl) {
       return corsResponse(JSON.stringify({ message: 'No worker is set up for your account yet. Finish the Cloudflare step first.' }), { status: 400 });
+    }
+    // Refuse to server-side-fetch anything but a real provisioned worker URL.
+    if (!isProvisionedWorkerUrl(workerUrl)) {
+      return corsResponse(JSON.stringify({ message: 'Your worker address looks wrong. Open your dashboard to re-provision, then try again.' }), { status: 400 });
     }
     if (!sessionSecret || sessionSecret.length < 32) {
       // No per-worker secret → we cannot mint a token this worker will verify.

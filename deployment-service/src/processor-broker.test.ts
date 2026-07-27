@@ -139,6 +139,24 @@ describe('POST /processor broker', () => {
     expect(capturedWorkerReq).toBeNull();
   });
 
+  it('refuses to server-side-fetch a workerUrl that is not a provisioned .workers.dev host (SSRF pin)', async () => {
+    // config/cloudflare is user-writable, so a hostile workerUrl must be rejected
+    // BEFORE any server-side fetch to it — never forwarded to. Only
+    // https://<name>.<subdomain>.workers.dev on the default port is allowed.
+    for (const bad of [
+      'https://169.254.169.254/api',          // cloud metadata IP
+      'https://attacker.example.com',         // arbitrary host
+      'http://dc-abc.someone.workers.dev',    // not https
+      'https://dc-abc.someone.workers.dev:8080', // non-default port
+    ]) {
+      stub({ user: { localId: 'u', email: 'e' }, config: { workerUrl: bad, sessionSecret: SECRET } });
+      const res = await handleAttachProcessor(req({ url: 'https://p.vercel.app' }), env);
+      expect(res.status, bad).toBe(400);
+      expect(capturedWorkerReq, bad).toBeNull(); // never fetched the hostile host
+      fetchSpy?.mockRestore();
+    }
+  });
+
   it('mintWorkerSession is deterministic and worker-shaped', async () => {
     const t = await mintWorkerSession({ uid: 'x', exp: 123 }, SECRET);
     const [p, s] = t.split('.');
