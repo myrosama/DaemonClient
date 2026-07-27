@@ -5,17 +5,25 @@
 // in DaemonClient is serverless and free, so this is too: a single stateless
 // function on a free tier, no container, no server, nothing to keep running.
 //
-// It is pure WASM (libheif-js) plus a JPEG encoder, so the same file runs
-// unchanged on Vercel, Netlify, Cloudflare Pages Functions, or Firebase
-// Functions — anywhere that speaks the standard Request/Response handler.
+// It is pure JavaScript — the asm.js libheif build plus the jpeg-js encoder,
+// NO WebAssembly — so it runs unchanged on Vercel, Netlify, Cloudflare Pages
+// Functions, or Firebase Functions, anywhere that speaks the standard
+// Request/Response handler. (The wasm builds silently failed to load their
+// .wasm on Vercel's serverless runtime, which broke every conversion.)
 //
 // PRIVACY: every user runs their OWN instance. A worker only ever calls the URL
 // stored in its own config, and the request is verified against that user's own
 // Firebase project. Nothing is written to disk; bytes arrive, are converted in
 // memory, and leave in the response.
 
-import libheif from 'libheif-js/wasm-bundle.js';
-import { encode as encodeJpeg } from '@jsquash/jpeg';
+// Fully WASM-FREE on purpose. The wasm builds (libheif-js/wasm-bundle.js +
+// @jsquash/jpeg) fail to load their .wasm on Vercel's serverless runtime
+// ("fetch failed" / instantiateAsync throws), which silently broke every
+// conversion. The asm.js libheif build and the pure-JS jpeg-js encoder need no
+// .wasm to fetch or instantiate, so they run identically in local Node and on
+// Vercel. A 12 MP HEIC decode+encode is ~2s — well inside the function timeout.
+import libheif from 'libheif-js';
+import jpegjs from 'jpeg-js';
 
 const THUMB_EDGE = Number(process.env.THUMB_EDGE || 720);
 const MAX_BYTES = Number(process.env.MAX_UPLOAD_BYTES || 32 * 1024 * 1024);
@@ -184,10 +192,11 @@ export async function handleConvert(request) {
     });
 
     const small = downscale(rgba, width, height, THUMB_EDGE);
-    const jpeg = await encodeJpeg(
-      { data: small.data, width: small.width, height: small.height },
-      { quality: 80 },
-    );
+    // jpeg-js: RGBA Buffer in, { data: Buffer } JPEG out, synchronous, quality 0-100.
+    const jpeg = jpegjs.encode(
+      { data: Buffer.from(small.data), width: small.width, height: small.height },
+      80,
+    ).data;
 
     return new Response(jpeg, {
       status: 200,
@@ -229,10 +238,10 @@ export async function handler(request) {
   return handleConvert(request);
 }
 
-// Runs on Vercel's NODE.js runtime, NOT Edge. Decoding HEIC through the libheif
-// WASM is computationally intense — and Vercel documents the Node.js runtime as
-// the one "suited to computationally intense or large functions", with far more
-// generous CPU, memory and bundle limits than an Edge Function on the free plan.
+// Runs on Vercel's NODE.js runtime, NOT Edge. Decoding a HEIC with the asm.js
+// libheif build is computationally intense (~2s for a 12 MP image) — and Vercel
+// documents the Node.js runtime as the one "suited to computationally intense or
+// large functions", with far more CPU/memory headroom than an Edge Function.
 // The Node runtime serves the same Web `Request`/`Response` handler via the
 // `{ fetch }` export, so the handler above is reused unchanged.
 // Do NOT re-add `export const config = { runtime: 'edge' }` — its absence is

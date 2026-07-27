@@ -8,7 +8,7 @@
     "test": "node --test test/*.test.mjs"
   },
   "dependencies": {
-    "@jsquash/jpeg": "^1.4.0",
+    "jpeg-js": "^0.4.4",
     "libheif-js": "^1.19.8"
   },
   "engines": {
