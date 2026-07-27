@@ -24,6 +24,7 @@
 // Vercel. A 12 MP HEIC decode+encode is ~2s — well inside the function timeout.
 import libheif from 'libheif-js';
 import jpegjs from 'jpeg-js';
+import { PNG } from 'pngjs';
 
 const THUMB_EDGE = Number(process.env.THUMB_EDGE || 720);
 const MAX_BYTES = Number(process.env.MAX_UPLOAD_BYTES || 32 * 1024 * 1024);
@@ -178,19 +179,7 @@ export async function handleConvert(request) {
   if (bytes.length > MAX_BYTES) return json({ error: `body exceeds ${MAX_BYTES} bytes` }, 413);
 
   try {
-    const decoder = new libheif.HeifDecoder();
-    const images = decoder.decode(bytes);
-    if (!images || !images.length) return json({ error: 'no image found in this file' }, 422);
-
-    const image = images[0];
-    const width = image.get_width();
-    const height = image.get_height();
-
-    const rgba = new Uint8ClampedArray(width * height * 4);
-    await new Promise((resolve, reject) => {
-      image.display({ data: rgba, width, height }, (out) => (out ? resolve(out) : reject(new Error('decode failed'))));
-    });
-
+    const { rgba, width, height } = await decodeToRgba(bytes);
     const small = downscale(rgba, width, height, THUMB_EDGE);
     // jpeg-js: RGBA Buffer in, { data: Buffer } JPEG out, synchronous, quality 0-100.
     const jpeg = jpegjs.encode(
@@ -203,8 +192,41 @@ export async function handleConvert(request) {
       headers: { 'Content-Type': 'image/jpeg', 'Cache-Control': 'no-store' },
     });
   } catch (e) {
-    return json({ error: `HEIC decode failed: ${e.message}` }, 422);
+    return json({ error: `could not make a thumbnail: ${e.message}` }, 422);
   }
+}
+
+// Decode ANY still image the worker sends us to raw RGBA, so this is the one
+// place that fixes a missing thumbnail regardless of format — HEIC (the format
+// Telegram can't thumbnail), and also JPEG/PNG that somehow arrived without one.
+// Detected by magic bytes, all decoded by pure-JS libraries (no WASM).
+function detectFormat(b) {
+  if (b.length > 12 && b[4] === 0x66 && b[5] === 0x74 && b[6] === 0x79 && b[7] === 0x70) return 'heic'; // 'ftyp'
+  if (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return 'jpeg';
+  if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return 'png';
+  return 'heic'; // default to the heif decoder — it also handles avif/heix/mif1 brands
+}
+
+async function decodeToRgba(bytes) {
+  const fmt = detectFormat(bytes);
+  if (fmt === 'jpeg') {
+    const { data, width, height } = jpegjs.decode(Buffer.from(bytes), { useTArray: true });
+    return { rgba: data, width, height };
+  }
+  if (fmt === 'png') {
+    const png = PNG.sync.read(Buffer.from(bytes));
+    return { rgba: png.data, width: png.width, height: png.height };
+  }
+  const images = new libheif.HeifDecoder().decode(bytes);
+  if (!images || !images.length) throw new Error('no image found in this file');
+  const image = images[0];
+  const width = image.get_width();
+  const height = image.get_height();
+  const rgba = new Uint8ClampedArray(width * height * 4);
+  await new Promise((resolve, reject) => {
+    image.display({ data: rgba, width, height }, (out) => (out ? resolve(out) : reject(new Error('decode failed'))));
+  });
+  return { rgba, width, height };
 }
 
 export function handleHealth() {
@@ -220,7 +242,7 @@ export function handleHealth() {
     service: 'daemonclient-processor',
     version: '2.0.0',
     runtime: 'serverless',
-    capabilities: { heicThumbnail: true },
+    capabilities: { heicThumbnail: true, imageThumbnail: true },
     ownerPinned: !!OWNER_UID,
     // Reachability is what the caller is testing; a missing OWNER_UID is a
     // warning, not a failure, so it must not make health checks fail the deploy.

@@ -9,7 +9,8 @@
   },
   "dependencies": {
     "jpeg-js": "^0.4.4",
-    "libheif-js": "^1.19.8"
+    "libheif-js": "^1.19.8",
+    "pngjs": "^7.0.0"
   },
   "engines": {
     "node": ">=18"
