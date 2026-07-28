@@ -36,32 +36,40 @@
     </a>
   {/each}
 
-  <button
-    type="button"
-    onclick={() => modalManager.show(FixThumbnailsModal, {})}
-    class="w-full hover:bg-gray-100 dark:hover:bg-immich-dark-gray flex items-center gap-4 p-4 text-start"
-  >
-    <span><Icon icon={mdiImageBrokenVariant} class="text-primary" size="24" /></span>
-    Fix HEIC &amp; missing thumbnails
-  </button>
+  {#snippet automate()}
+    <button
+      type="button"
+      title="Set it up once and these get generated automatically — no more manual fixing"
+      onclick={() => modalManager.show(SetupProcessorModal, {})}
+      class="mr-4 shrink-0 flex items-center gap-1.5 rounded-full border border-primary/50 text-primary px-3 py-1.5 text-xs font-medium hover:bg-primary/10"
+    >
+      <Icon icon={mdiAutoFix} size="16" /> Automate
+    </button>
+  {/snippet}
 
-  <button
-    type="button"
-    onclick={() => modalManager.show(FixVideoThumbnailsModal, {})}
-    class="w-full hover:bg-gray-100 dark:hover:bg-immich-dark-gray flex items-center gap-4 p-4 text-start"
-  >
-    <span><Icon icon={mdiVideoOutline} class="text-primary" size="24" /></span>
-    Fix video thumbnails
-  </button>
+  <div class="w-full flex items-center hover:bg-gray-100 dark:hover:bg-immich-dark-gray">
+    <button
+      type="button"
+      onclick={() => modalManager.show(FixThumbnailsModal, {})}
+      class="flex-1 min-w-0 flex items-center gap-4 p-4 text-start"
+    >
+      <span><Icon icon={mdiImageBrokenVariant} class="text-primary" size="24" /></span>
+      Fix HEIC &amp; missing thumbnails
+    </button>
+    {@render automate()}
+  </div>
 
-  <button
-    type="button"
-    onclick={() => modalManager.show(SetupProcessorModal, {})}
-    class="w-full hover:bg-gray-100 dark:hover:bg-immich-dark-gray flex items-center gap-4 p-4 text-start"
-  >
-    <span><Icon icon={mdiAutoFix} class="text-primary" size="24" /></span>
-    Automatic HEIC thumbnails
-  </button>
+  <div class="w-full flex items-center hover:bg-gray-100 dark:hover:bg-immich-dark-gray">
+    <button
+      type="button"
+      onclick={() => modalManager.show(FixVideoThumbnailsModal, {})}
+      class="flex-1 min-w-0 flex items-center gap-4 p-4 text-start"
+    >
+      <span><Icon icon={mdiVideoOutline} class="text-primary" size="24" /></span>
+      Fix video thumbnails
+    </button>
+    {@render automate()}
+  </div>
 </div>
 <br />
 <div class="border border-gray-300 dark:border-immich-dark-gray rounded-3xl pt-1 pb-6 dark:text-white">

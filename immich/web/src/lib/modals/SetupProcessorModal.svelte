@@ -86,7 +86,7 @@
   }
 </script>
 
-<Modal title="Automatic HEIC thumbnails" size="small" {onClose}>
+<Modal title="Automatic thumbnails" size="small" {onClose}>
   <ModalBody>
     {#if phase === 'loading'}
       <Text color="muted" size="small">Checking your setup…</Text>
