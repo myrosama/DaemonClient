@@ -28,6 +28,11 @@ import { PNG } from 'pngjs';
 
 const THUMB_EDGE = Number(process.env.THUMB_EDGE || 720);
 const MAX_BYTES = Number(process.env.MAX_UPLOAD_BYTES || 32 * 1024 * 1024);
+// Decompression-bomb guard: a tiny compressed file can declare enormous
+// dimensions and blow up as width*height*4 bytes of RGBA (OOM). Cap the decoded
+// pixel count BEFORE allocating. 40 MP covers any real phone photo (a 40 MP
+// image is 160 MB of RGBA); anything larger is refused.
+const MAX_PIXELS = Number(process.env.MAX_PIXELS || 40_000_000);
 const PROJECT_ID = (process.env.FIREBASE_PROJECT_ID || '').trim();
 const OWNER_UID = (process.env.OWNER_UID || '').trim();
 
@@ -207,13 +212,37 @@ function detectFormat(b) {
   return 'heic'; // default to the heif decoder — it also handles avif/heix/mif1 brands
 }
 
+function tooBig(width, height) {
+  if (!(width > 0) || !(height > 0) || width * height > MAX_PIXELS) {
+    throw new Error(`image dimensions out of range (${width}x${height})`);
+  }
+}
+
+// Read PNG width/height straight from the IHDR chunk (bytes 16-23, big-endian)
+// so we can reject a bomb BEFORE pngjs allocates the full bitmap.
+function pngDimensions(b) {
+  if (b.length < 24) return { w: 0, h: 0 };
+  return {
+    w: ((b[16] << 24) | (b[17] << 16) | (b[18] << 8) | b[19]) >>> 0,
+    h: ((b[20] << 24) | (b[21] << 16) | (b[22] << 8) | b[23]) >>> 0,
+  };
+}
+
 async function decodeToRgba(bytes) {
   const fmt = detectFormat(bytes);
   if (fmt === 'jpeg') {
-    const { data, width, height } = jpegjs.decode(Buffer.from(bytes), { useTArray: true });
+    // jpeg-js checks maxResolutionInMP itself before allocating, and we re-check.
+    const { data, width, height } = jpegjs.decode(Buffer.from(bytes), {
+      useTArray: true,
+      maxResolutionInMP: MAX_PIXELS / 1_000_000,
+      maxMemoryUsageInMB: Math.ceil((MAX_PIXELS * 4) / (1024 * 1024)) + 64,
+    });
+    tooBig(width, height);
     return { rgba: data, width, height };
   }
   if (fmt === 'png') {
+    const { w, h } = pngDimensions(bytes);
+    tooBig(w, h);
     const png = PNG.sync.read(Buffer.from(bytes));
     return { rgba: png.data, width: png.width, height: png.height };
   }
@@ -222,6 +251,7 @@ async function decodeToRgba(bytes) {
   const image = images[0];
   const width = image.get_width();
   const height = image.get_height();
+  tooBig(width, height);
   const rgba = new Uint8ClampedArray(width * height * 4);
   await new Promise((resolve, reject) => {
     image.display({ data: rgba, width, height }, (out) => (out ? resolve(out) : reject(new Error('decode failed'))));
