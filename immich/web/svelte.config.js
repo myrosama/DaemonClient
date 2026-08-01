@@ -41,6 +41,16 @@ const config = {
     paths: {
       relative: false,
     },
+    // Registered manually in +layout.ts instead — SvelteKit's default only
+    // calls register() on the `window load` event, which fires after our root
+    // load() has already made its first API calls. On a browser's very first
+    // visit (no service worker installed yet), those calls raced ahead of the
+    // worker and went straight to the origin instead of being routed to the
+    // per-user Cloudflare Worker, surfacing as a connection error right after
+    // signup. See ensureServiceWorkerReady in $lib/utils/service-worker.ts.
+    serviceWorker: {
+      register: false,
+    },
     adapter: adapter({
       fallback: 'app.html',
       precompress: true,
