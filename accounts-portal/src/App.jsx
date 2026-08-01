@@ -80,6 +80,19 @@ function configPath(uid) {
   return `artifacts/${APP_ID}/users/${uid}/config`
 }
 
+// The telegram config doc is "complete" once the backend has written all
+// four fields. channelId lands via an early checkpoint write; invite_link is
+// generated afterward (a real Telegram API round-trip: EditAdminRequest,
+// ExportChatInviteRequest) and written later — so a doc can briefly have
+// botToken/botUsername/channelId with invite_link still missing. Four
+// separate places in this file gate navigation on this doc; if any one of
+// them treats that in-between window as "complete" it renders/routes off an
+// undefined invite_link (a dead "join channel" link) or disagrees with the
+// others and fights over the route. Keep all four checks calling this.
+function isTelegramConfigComplete(data) {
+  return !!(data && data.botToken && data.botUsername && data.channelId && data.invite_link)
+}
+
 // ============================================================================
 // HELPER: Session management
 // ============================================================================
@@ -850,7 +863,7 @@ function SetupPage() {
       while (Date.now() < deadline) {
         const docSnap = await configDocRef.get({ source: 'server' }).catch(() => null)
         const d = docSnap && docSnap.exists ? docSnap.data() : null
-        if (d && d.botToken && d.botUsername && d.channelId) {
+        if (isTelegramConfigComplete(d)) {
           localStorage.removeItem(inflightKey)
           if (ticker) clearInterval(ticker)
           setStatusMessage('Your private storage is ready! Continuing…')
@@ -923,7 +936,7 @@ function SetupPage() {
         const startedAt = data?.setup_started_at?.toDate ? data.setup_started_at.toDate().getTime() : 0
         const lockFresh = !!startedAt && Date.now() - startedAt < 240000
         setDocExists(!!(data && (data.botToken || lockFresh)))
-        const complete = !!(data && data.botToken && data.botUsername && data.channelId)
+        const complete = isTelegramConfigComplete(data)
         if (!complete) return
         setAlreadyConfigured(true)
         const transferred = data.ownership_transferred || data.ownershipTransferred
@@ -1244,7 +1257,7 @@ function OwnershipPage() {
           .doc('telegram')
         const docSnap = await configDocRef.get()
         const data = docSnap.exists ? docSnap.data() : null
-        const complete = !!(data && data.botToken && data.botUsername && data.channelId)
+        const complete = isTelegramConfigComplete(data)
         if (!complete) {
           navigate('/setup', { replace: true })
           return
@@ -2539,7 +2552,7 @@ function useSetupStage(user) {
         setLoading(false)
         return
       }
-      const telegramComplete = !!(tg && tg.botToken && tg.botUsername && tg.channelId)
+      const telegramComplete = isTelegramConfigComplete(tg)
       if (!telegramComplete) {
         stageForUidRef.current = user.uid
         setStage('telegram')
