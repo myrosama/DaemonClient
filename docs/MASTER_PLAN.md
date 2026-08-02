@@ -173,24 +173,46 @@ Depends on A1's evidence. **Do not guess before A1 reports.**
 - [ ] Verify a 50-item backup completes unattended on both platforms
 - [ ] Gates, commit
 
-### ☐ A3 — Videos under 100 MB are unplayable
-Distinct from the known >100 MB Cloudflare body-cap issue. A sub-100 MB video
-uploads but will not play → the stored bytes or the served range are wrong,
-not a size limit. Suspects: the chunk-stitch path in `assets.ts`, a mismatch
-between encrypted chunk boundaries and the `Content-Range` served, or a
-truncated upload losing `moov`.
+### ✅/⏸ A3 — Videos over 19 MB unplayable on mobile — **ALREADY FIXED, NEEDS FLEET DEPLOY**
 
-**Files:** `immich-api-shim/src/assets.ts`, `upload-stream.ts`, mobile upload services
+**Measured 2026-08-02, not assumed.** The multi-chunk fix already exists in
+git as `611cffc` ("stream full 206 ranges — mobile multi-chunk playback"),
+whose own message says *(NOT deployed)*. It reached `dc-ozkv3fuz` with the
+2026-08-01 deploy. Verified live against that worker:
 
-- [ ] Upload a known-good sub-100 MB video; byte-compare what Telegram stores
-      against the source
-- [ ] From the diff, determine whether corruption is on write or on read
-- [ ] Failing test at that layer, fix, verify playback on both platforms
-- [ ] Gates, commit
+- `Range: bytes=0-` on a 101 MB / **6-chunk** `.MOV` returns
+  `206`, `content-range: bytes 0-101356527/101356528`
+- Streaming it end to end delivers **101,356,528 bytes — byte-exact**
+
+So the "19 MB ceiling" was **never an Immich-mobile protocol limit**. It was
+our own truncated-206 bug: native players open with `bytes=0-` and treat a
+short 206 as EOF, so single-chunk videos played and multi-chunk froze. No
+Immich fork, upstream PR, or new app is required for this.
+
+- [ ] Retest on a real device against a worker carrying `611cffc`
+- [ ] **Deploy fleet-wide** — this is Task E4, and it is the highest-value
+      action available: real users are still on bundles without this fix
+
+### ☐ A4 — Codec check (do this before assuming playback is solved)
+467 of 489 videos are `video/quicktime` (iPhone HEVC) and **zero have an
+H.264 rendition** — the `telegramPlaybackChunks` path has produced none. If
+sub-19 MB `.MOV` files already play on the operator's device, that device
+decodes HEVC and codec is not the blocker; confirm rather than assume.
+
+- [ ] Confirm HEVC playback on both target devices post-deploy
+- [ ] Only if it fails: revive the H.264 rendition path
 
 ═══════════════════════════════════════════════════════════════════════════════
 
 ## PHASE B — Auto-fixer: video + HEIC, inside the free tier
+
+> **Reframed 2026-08-02 after measuring the library.** 220 of 489 videos
+> (45%) have no thumbnail — Telegram thumbnails the other 55% for free. The
+> decision below is that **the client generates the poster at upload** (we
+> already own the `immich/mobile` fork and build our own APK in CI, so this
+> needs no upstream PR and no new app), and **Vercel is repair-only** for the
+> 220 already-uploaded ones. That inverts the earlier framing: range-pull and
+> ffmpeg are a one-time backfill tool, not the steady-state path.
 
 ### ☐ B1 — Spike: can we extract a poster frame from a byte range?
 **A spike, not a feature.** Output is a decision; it may kill range-pull. Timebox.
