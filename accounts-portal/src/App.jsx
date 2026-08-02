@@ -1696,6 +1696,16 @@ const PHOTO_GRADIENTS = [
   'linear-gradient(140deg,#1A1B2B,#262740)',
 ]
 
+// What the user actually pastes into a client (the mobile app, an API tool):
+// the worker's API base, not its bare origin. Stored as an origin, so append
+// /api here — tolerating a stored trailing slash, and a URL that already ends
+// in /api, so this never yields `//api` or `/api/api`.
+function backendApiUrl(workerUrl) {
+  if (!workerUrl) return null
+  const base = workerUrl.replace(/\/+$/, '')
+  return /\/api$/.test(base) ? base : `${base}/api`
+}
+
 function DashboardPage() {
   const [services, setServices] = useState({ photos: null, drive: null })
   const [backend, setBackend] = useState(null)
@@ -2024,8 +2034,8 @@ function DashboardPage() {
                         <div className="w-2 h-2 rounded-full bg-daemon-green" />
                         <span className="text-[14px] font-semibold text-white">Active</span>
                       </div>
-                      <p className="font-mono text-[11px] text-white/40 mb-2 truncate">{backend.workerUrl}</p>
-                      <button onClick={() => copyToClipboard(backend.workerUrl, 'Worker URL')} className="text-[11px] text-white/35 hover:text-white/60 transition-colors flex items-center gap-1">
+                      <p className="font-mono text-[11px] text-white/40 mb-2 truncate">{backendApiUrl(backend.workerUrl)}</p>
+                      <button onClick={() => copyToClipboard(backendApiUrl(backend.workerUrl), 'Worker URL')} className="text-[11px] text-white/35 hover:text-white/60 transition-colors flex items-center gap-1">
                         <Copy size={11} /> Copy URL
                       </button>
                     </>
