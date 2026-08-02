@@ -59,3 +59,34 @@ describe('toAssetManifest', () => {
     expect(toAssetManifest({ mimeType: 'image/heif' }).isHeic).toBe(true);
   });
 });
+
+describe('playback rendition exposure (gate finding: repaired videos regressed)', () => {
+  it('exposes the H.264 rendition so /video/playback can prefer it', () => {
+    const m = toAssetManifest({
+      mimeType: 'video/quicktime',
+      fileSize: 500,
+      telegramChunks: JSON.stringify([{ index: 0, file_id: 'HEVC0' }]),
+      telegramPlaybackChunks: JSON.stringify({ size: 400, chunks: [{ index: 0, file_id: 'H264_0' }] }),
+    });
+    expect(m.playbackChunks).toEqual([{ index: 0, file_id: 'H264_0' }]);
+    expect(m.playbackSize).toBe(400);
+    expect(m.chunks).toEqual([{ index: 0, file_id: 'HEVC0' }]); // original untouched
+  });
+
+  it('omits the rendition fields when no rendition exists (today: every asset)', () => {
+    const m = toAssetManifest({ mimeType: 'video/mp4', fileSize: 10, telegramChunks: '[]' });
+    expect(m.playbackChunks).toBeUndefined();
+    expect(m.playbackSize).toBeUndefined();
+  });
+
+  it('falls back to the original when the rendition is malformed', () => {
+    const m = toAssetManifest({
+      mimeType: 'video/mp4',
+      fileSize: 10,
+      telegramChunks: JSON.stringify([{ index: 0, file_id: 'A' }]),
+      telegramPlaybackChunks: 'not json at all',
+    });
+    expect(m.playbackChunks).toBeUndefined();
+    expect(m.chunks).toEqual([{ index: 0, file_id: 'A' }]);
+  });
+});

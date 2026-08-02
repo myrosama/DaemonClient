@@ -6,6 +6,7 @@ import { PUBLIC_DAEMONCLIENT_WORKER_URL } from '$env/static/public';
 import { installMessageListener } from './messaging';
 import { handleCancel } from './request';
 import {
+  type AssetBinaryKind,
   type AssetManifest,
   buildDownloadUrl,
   buildGetFileUrl,
@@ -13,7 +14,9 @@ import {
   deriveKey,
   isEncrypted,
   parseAssetBinaryPath,
+  planVideoRange,
   selectFileIds,
+  VIDEO_CHUNK_SIZE,
 } from './telegram-media';
 
 // Fallback for pre-login traffic (server config, auth) — the endpoints the SW
@@ -28,7 +31,10 @@ import {
 // which a pathname-matching Worker router would 404. Matches Drive and
 // accounts-portal, which normalise the same way.
 const DEFAULT_WORKER_URL = PUBLIC_DAEMONCLIENT_WORKER_URL.replace(/\/+$/, '');
-const ASSET_BINARY_REGEX = /^\/api\/assets\/[a-f0-9-]+\/(original|thumbnail)/;
+// Must stay in step with ASSET_BINARY_RE in ./telegram-media. `video/playback`
+// is included so video takes the client-direct ranged path instead of being
+// stitched inside the Worker (error 1102 — see the note there).
+const ASSET_BINARY_REGEX = /^\/api\/assets\/[a-f0-9-]+\/(original|thumbnail|video\/playback)/;
 const API_REGEX = /^\/api\//;
 const TOKEN_CACHE_KEY = 'https://dc-internal/auth-token';
 const WORKER_URL_CACHE_KEY = 'https://dc-internal/worker-url';
@@ -426,14 +432,131 @@ async function downloadOneFile(
   return key ? decryptBytes(bytes, key) : bytes;
 }
 
+// Serve a video straight from Telegram, one stored chunk per response.
+//
+// Peak memory is a single chunk regardless of file size, so a 1 GB video costs
+// the same as a 20 MB one — this is why it replaces the Worker path rather than
+// merely relieving it. Returning fewer bytes than requested is legal for a 206
+// and browsers just ask for the next range. Drive's sw.js has served video this
+// way for a long time; this is the same shape, reading chunk ids from the
+// per-asset manifest instead of a pre-registered map.
+//
+// Returns null to fall back to the Worker rather than fail the request.
+async function fetchVideoDirect(
+  request: Request,
+  manifest: AssetManifest,
+  kind: AssetBinaryKind,
+  tg: { botToken: string; proxyUrl: string },
+  key: CryptoKey | null,
+): Promise<Response | null> {
+  // /video/playback prefers the H.264 rendition when one exists — same swap the
+  // Worker's handleOriginal performs. Without this a repaired video would fall
+  // back to its HEVC source and stop playing in non-Apple browsers.
+  const usePlayback = kind === 'playback' && !!manifest.playbackChunks?.length;
+  const chunks = [...(usePlayback ? manifest.playbackChunks! : manifest.chunks)].sort((a, b) => a.index - b.index);
+  const totalSize = (usePlayback && manifest.playbackSize) || manifest.fileSize;
+  if (chunks.length === 0 || !totalSize) return null;
+
+  // Address by the chunk's DECLARED index rather than array position: a manifest
+  // missing an entry would otherwise shift every later chunk and serve correct
+  // bytes at the wrong offsets, silently corrupting playback.
+  const byIndex = new Map(chunks.map((c) => [c.index, c]));
+
+  const headers: Record<string, string> = {
+    'Content-Type': manifest.mimeType || 'video/mp4',
+    'Accept-Ranges': 'bytes',
+    'Cache-Control': 'private, max-age=3600',
+  };
+
+  const plan = planVideoRange(request.headers.get('range'), totalSize, VIDEO_CHUNK_SIZE, chunks.length);
+
+  if (plan.kind === 'unsatisfiable') {
+    return new Response(null, {
+      status: 416,
+      headers: { ...headers, 'Content-Range': `bytes */${plan.totalSize}` },
+    });
+  }
+
+  if (plan.kind === 'full') {
+    // No Range header (a direct download, say). Stream chunks in order; `pull`
+    // is only called when the consumer has drained, so memory stays at one
+    // chunk instead of buffering the whole file.
+    let next = 0;
+    const stream = new ReadableStream({
+      async pull(controller) {
+        if (next >= chunks.length) {
+          controller.close();
+          return;
+        }
+        const c = byIndex.get(next++);
+        if (!c) { controller.error(new Error('manifest gap')); return; }
+        const bytes = await downloadOneFile(tg, c.file_id, key);
+        controller.enqueue(new Uint8Array(bytes));
+      },
+      cancel() {
+        next = chunks.length;
+      },
+    });
+    return new Response(stream, { status: 200, headers: { ...headers, 'Content-Length': String(totalSize) } });
+  }
+
+  const wanted = byIndex.get(plan.chunkIndex);
+  if (!wanted) return null; // gap in the manifest → let the Worker answer
+  const plaintext = await downloadOneFile(tg, wanted.file_id, key);
+  const chunkStart = plan.chunkIndex * VIDEO_CHUNK_SIZE;
+  const localStart = plan.start - chunkStart;
+  const localEnd = Math.min(plan.end - chunkStart, plaintext.byteLength - 1);
+  // A chunk shorter than the manifest implies means the two disagree; the
+  // Worker still has the authoritative view, so defer to it rather than serve
+  // bytes we can't place.
+  if (localStart < 0 || localStart >= plaintext.byteLength || localEnd < localStart) return null;
+
+  const sliced = plaintext.slice(localStart, localEnd + 1);
+  return new Response(sliced, {
+    status: 206,
+    headers: {
+      ...headers,
+      'Content-Length': String(sliced.byteLength),
+      'Content-Range': `bytes ${plan.start}-${chunkStart + localEnd}/${totalSize}`,
+    },
+  });
+}
+
 // Read an asset's thumbnail/original straight from Telegram + decrypt locally.
-// Returns null to signal "fall back to the worker path" (video, missing file
-// id, encrypted-but-no-key, or any failure) so we never regress an image.
+// Returns null to signal "fall back to the worker path" (missing file id,
+// encrypted-but-no-key, or any failure) so we never regress an image.
 async function fetchAssetDirect(request: Request, pathname: string): Promise<Response | null> {
   const parsed = parseAssetBinaryPath(pathname);
   if (!parsed) return null;
   const { assetId, kind } = parsed;
   const size = (new URL(request.url).searchParams.get('size') || '').toLowerCase();
+
+  // Video bytes go to the ranged, chunk-at-a-time path — before the media
+  // cache, because a partial 206 must never be cached and replayed as if it
+  // were the whole asset. Thumbnails of videos are images and fall through.
+  if (kind === 'original' || kind === 'playback') {
+    const manifest = await getManifest(request, assetId).catch(() => null);
+    // Trust the request kind over the stored mime: /video/playback is video by
+    // definition, and containers like .3gp/.mts are often stored as a generic
+    // octet-stream. Any multi-chunk asset goes here too — concatenating one is
+    // exactly the blow-up this path exists to avoid.
+    const looksLikeVideo =
+      kind === 'playback' ||
+      !!manifest?.mimeType?.startsWith('video/') ||
+      (manifest?.chunks?.length ?? 0) > 1;
+    if (manifest && looksLikeVideo) {
+      try {
+        const tg = await getTgConfig(request);
+        const needsKey = isEncrypted(manifest.encryptionMode);
+        const key = needsKey ? await getMediaKey(request) : null;
+        if (needsKey && !key) return null;
+        return await fetchVideoDirect(request, manifest, kind, tg, key);
+      } catch (err: any) {
+        console.warn('[SW] client-direct video failed, falling back to worker:', err?.message);
+        return null;
+      }
+    }
+  }
 
   const mediaKeyUrl = `https://dc-media/${assetId}/${kind}/${size || '_'}`;
   const mediaCache = await caches.open(MEDIA_CACHE);
@@ -462,9 +585,12 @@ async function fetchAssetDirect(request: Request, pathname: string): Promise<Res
   const work = (async (): Promise<{ buffer: ArrayBuffer; contentType: string }> => {
     const manifest = await getManifest(request, assetId);
 
-    // Videos keep using the worker's range-streaming path — concatenating a
-    // whole video in the browser would blow memory and breaks seeking.
-    if (manifest.mimeType.startsWith('video/') && kind === 'original') {
+    // Video bytes never take this path: it concatenates every file id into one
+    // buffer, which is fine for an image and ruinous for a 1 GB video.
+    // fetchVideoDirect (above) serves those a chunk at a time, and the caller
+    // routes to it before reaching here. A video *thumbnail* is an image and
+    // continues through normally.
+    if (manifest.mimeType.startsWith('video/') && kind !== 'thumbnail') {
       throw new Error('FALLBACK');
     }
 
@@ -525,13 +651,16 @@ const handleFetch = (event: FetchEvent): void => {
   if (!API_REGEX.test(url.pathname)) return;
 
   if (event.request.method === 'GET' || event.request.method === 'HEAD') {
-    const cacheable = ASSET_BINARY_REGEX.test(url.pathname) && event.request.method === 'GET';
+    // A ranged request must never be cached or deduped by URL alone: Cache.put
+    // rejects a 206, and a cached 200 would be replayed for every later range.
+    const hasRange = !!event.request.headers.get('range');
+    const cacheable = ASSET_BINARY_REGEX.test(url.pathname) && event.request.method === 'GET' && !hasRange;
     // Asset binaries: read straight from Telegram in the browser; fall back to
     // the worker proxy path only when that can't serve it.
-    if (cacheable) {
+    if (ASSET_BINARY_REGEX.test(url.pathname) && event.request.method === 'GET') {
       event.respondWith(
         fetchAssetDirect(event.request, url.pathname).then(
-          (res) => res ?? directWorkerFetch(event.request, true, url.pathname),
+          (res) => res ?? directWorkerFetch(event.request, cacheable, url.pathname),
         ),
       );
       return;

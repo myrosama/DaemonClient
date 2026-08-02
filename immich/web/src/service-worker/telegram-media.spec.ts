@@ -4,8 +4,69 @@ import {
   decryptBytes,
   deriveKey,
   parseAssetBinaryPath,
+  planVideoRange,
   selectFileIds,
+  VIDEO_CHUNK_SIZE,
 } from './telegram-media';
+
+// Range planning for client-direct video. Small chunk size keeps the
+// arithmetic readable; production uses 19 MB.
+describe('planVideoRange', () => {
+  const CS = 100; // chunk size
+  const TOTAL = 250; // 3 chunks: [0..99] [100..199] [200..249]
+  const COUNT = 3;
+  const plan = (h: string | null) => planVideoRange(h, TOTAL, CS, COUNT);
+
+  it('no Range header asks for the whole file', () => {
+    expect(plan(null)).toEqual({ kind: 'full', totalSize: 250 });
+  });
+
+  it('bytes=0- starts at chunk 0 and stops at that chunk boundary', () => {
+    // Deliberately NOT the whole file: one chunk per response is what keeps
+    // browser memory flat on a 1 GB video. The player re-requests the rest.
+    expect(plan('bytes=0-')).toEqual({ kind: 'range', start: 0, end: 99, chunkIndex: 0 });
+  });
+
+  it('a mid-file seek resolves to the chunk containing it', () => {
+    expect(plan('bytes=150-')).toEqual({ kind: 'range', start: 150, end: 199, chunkIndex: 1 });
+  });
+
+  it('an explicit short range inside one chunk is served exactly', () => {
+    expect(plan('bytes=120-140')).toEqual({ kind: 'range', start: 120, end: 140, chunkIndex: 1 });
+  });
+
+  it('a range spanning chunks is truncated at the first chunk boundary', () => {
+    expect(plan('bytes=50-250')).toEqual({ kind: 'range', start: 50, end: 99, chunkIndex: 0 });
+  });
+
+  it('a suffix range (bytes=-N) reads the END of the file, not the start', () => {
+    // MP4s from iPhones put the moov atom last; players probe with a suffix
+    // range. Coercing the empty prefix to 0 would serve the wrong bytes and
+    // the video would never start.
+    expect(plan('bytes=-50')).toEqual({ kind: 'range', start: 200, end: 249, chunkIndex: 2 });
+  });
+
+  it('a suffix larger than the file clamps to the whole file', () => {
+    expect(plan('bytes=-9999')).toEqual({ kind: 'range', start: 0, end: 99, chunkIndex: 0 });
+  });
+
+  it('an end past EOF is clamped rather than rejected', () => {
+    expect(plan('bytes=200-9999')).toEqual({ kind: 'range', start: 200, end: 249, chunkIndex: 2 });
+  });
+
+  it('a start at or past EOF is unsatisfiable', () => {
+    expect(plan('bytes=250-')).toEqual({ kind: 'unsatisfiable', totalSize: 250 });
+    expect(plan('bytes=9999-')).toEqual({ kind: 'unsatisfiable', totalSize: 250 });
+  });
+
+  it('a chunk index beyond the manifest is unsatisfiable', () => {
+    expect(planVideoRange('bytes=240-', 250, 100, 2)).toEqual({ kind: 'unsatisfiable', totalSize: 250 });
+  });
+
+  it('a garbled Range header falls back to the whole file', () => {
+    expect(plan('bytes=abc-def')).toEqual({ kind: 'full', totalSize: 250 });
+  });
+});
 
 describe('parseAssetBinaryPath', () => {
   it('extracts id and thumbnail kind', () => {
@@ -111,5 +172,50 @@ describe('deriveKey + decryptBytes', () => {
     const decrypted = await decryptBytes(encrypted, key);
 
     expect(new Uint8Array(decrypted)).toEqual(new Uint8Array(original));
+  });
+});
+
+describe('real file: 101,356,528 bytes across 6 chunks (IMG_7517.MOV)', () => {
+  const TOTAL = 101_356_528;
+  const COUNT = 6;
+
+  it('chunk count matches what is stored in D1', () => {
+    expect(Math.ceil(TOTAL / VIDEO_CHUNK_SIZE)).toBe(COUNT);
+  });
+
+  it('sequential playback tiles the file exactly, with no gaps or overlaps', () => {
+    let cursor = 0;
+    let responses = 0;
+    while (cursor < TOTAL) {
+      const plan = planVideoRange(`bytes=${cursor}-`, TOTAL, VIDEO_CHUNK_SIZE, COUNT);
+      expect(plan.kind).toBe('range');
+      if (plan.kind !== 'range') break;
+      expect(plan.start).toBe(cursor);      // no gap
+      expect(plan.end).toBeGreaterThanOrEqual(plan.start);
+      cursor = plan.end + 1;                // no overlap
+      responses++;
+      expect(responses).toBeLessThan(50);   // must terminate
+    }
+    expect(cursor).toBe(TOTAL);             // covered the whole file
+    expect(responses).toBe(COUNT);          // one response per chunk
+  });
+
+  it('a seek to the middle lands in the right chunk', () => {
+    const mid = Math.floor(TOTAL / 2);
+    const plan = planVideoRange(`bytes=${mid}-`, TOTAL, VIDEO_CHUNK_SIZE, COUNT);
+    expect(plan).toMatchObject({ kind: 'range', start: mid, chunkIndex: 2 });
+  });
+
+  it('the moov probe at the tail reads the LAST chunk', () => {
+    const plan = planVideoRange('bytes=-262144', TOTAL, VIDEO_CHUNK_SIZE, COUNT);
+    expect(plan).toMatchObject({ kind: 'range', chunkIndex: 5, end: TOTAL - 1 });
+  });
+
+  it('never asks for more than one chunk of memory', () => {
+    for (let c = 0; c < COUNT; c++) {
+      const plan = planVideoRange(`bytes=${c * VIDEO_CHUNK_SIZE}-`, TOTAL, VIDEO_CHUNK_SIZE, COUNT);
+      if (plan.kind !== 'range') throw new Error('expected range');
+      expect(plan.end - plan.start + 1).toBeLessThanOrEqual(VIDEO_CHUNK_SIZE);
+    }
   });
 });
