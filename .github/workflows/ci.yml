@@ -1,0 +1,151 @@
+# Continuous integration for the JS/TS parts of DaemonClient.
+#
+# The mobile app (Flutter) has its own workflow (mobile-build.yml). Each job
+# here is path-filtered so a push that only touches, say, the worker never
+# spends minutes rebuilding the web apps. Every job runs the exact commands
+# that pass locally, so a red run means a real regression, not CI drift.
+name: ci
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches: [main]
+
+# A newer push to the same branch/PR supersedes an in-flight run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Which areas changed — every downstream job gates on these so unrelated
+  # pushes stay free.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      shim: ${{ steps.filter.outputs.shim }}
+      deployment: ${{ steps.filter.outputs.deployment }}
+      processor: ${{ steps.filter.outputs.processor }}
+      accounts: ${{ steps.filter.outputs.accounts }}
+      drive: ${{ steps.filter.outputs.drive }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            shim:
+              - 'immich-api-shim/**'
+              - '.github/workflows/ci.yml'
+            deployment:
+              - 'deployment-service/**'
+              - '.github/workflows/ci.yml'
+            processor:
+              - 'processor/**'
+              - '.github/workflows/ci.yml'
+            accounts:
+              - 'accounts-portal/**'
+              - '.github/workflows/ci.yml'
+            drive:
+              - 'drive/**'
+              - '.github/workflows/ci.yml'
+
+  # The security-critical core: the per-user worker (263 tests) validates auth,
+  # ownership, media stitching, sync and Drive.
+  api-shim:
+    needs: changes
+    if: needs.changes.outputs.shim == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: immich-api-shim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: immich-api-shim/package-lock.json
+      - run: npm ci
+      - run: npm test
+
+  # The provisioning broker: mints scoped worker sessions, attaches processors,
+  # runs auto-updates. Typecheck first, then its unit + SSRF-pin tests.
+  deployment-service:
+    needs: changes
+    if: needs.changes.outputs.deployment == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: deployment-service
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: deployment-service/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+
+  # The owner-pinned image thumbnailer that runs on each user's own Vercel.
+  processor:
+    needs: changes
+    if: needs.changes.outputs.processor == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: processor
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: processor/package-lock.json
+      - run: npm ci
+      - run: npm test
+
+  # The account hub / signup + setup wizard. A build catches broken imports,
+  # bad JSX and dead references before they reach Firebase Hosting.
+  accounts-portal:
+    needs: changes
+    if: needs.changes.outputs.accounts == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: accounts-portal
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: accounts-portal/package-lock.json
+      - run: npm ci
+      - run: npm run build
+
+  # The Drive app. (No lint gate yet — the committed eslint config currently
+  # reports pre-existing violations; a build still catches real breakage.)
+  drive:
+    needs: changes
+    if: needs.changes.outputs.drive == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: drive
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: drive/package-lock.json
+      - run: npm ci
+      - run: npm run build
