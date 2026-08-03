@@ -1,5 +1,6 @@
 import type { Env } from './index';
-import { json, firestoreGet } from './helpers';
+import { json, firestoreGet, requireAuth, getSessionToken } from './helpers';
+import { looksLikeFirebaseIdToken } from './firebase-token';
 import { isSelfHost, sessionScope } from './selfhost-auth';
 
 // Session lifetime. Was 7 days, which silently logged users out after a week
@@ -34,6 +35,9 @@ async function createSignedSessionToken(data: Record<string, unknown>, scope: st
 export async function handleAuth(request: Request, env: Env, path: string): Promise<Response> {
   if (path === '/api/auth/login' && request.method === 'POST') {
     return handleLogin(request, env);
+  }
+  if (path === '/api/auth/exchange' && request.method === 'POST') {
+    return handleExchange(request, env);
   }
   if (path === '/api/auth/logout' && request.method === 'POST') {
     return handleLogout();
@@ -135,6 +139,72 @@ async function handleLogin(request: Request, env: Env): Promise<Response> {
     `immich_is_authenticated=true; Path=/; SameSite=Lax; Secure; Max-Age=${SESSION_TTL_SECONDS}`
   );
   return new Response(response.body, { status: 201, headers: newHeaders });
+}
+
+// Turn a Firebase ID token into this worker's own session token.
+//
+// This is what makes one sign-in serve all three apps. Signing in at the
+// accounts dashboard leaves a Firebase session on THAT origin only — browsers
+// scope Firebase's persistence per origin, so Photos and Drive saw a signed-out
+// user and asked again. They now hand their (already authenticated) Firebase ID
+// token here and receive the same session token `/api/auth/login` issues, so the
+// rest of the app is unchanged.
+//
+// It grants nothing a password login would not: the caller already holds a
+// verified credential for this account, and `requireAuth` puts the ID token
+// through the same RS256/aud/iss/exp checks. `mayClaim` stays false there, so
+// this can never take ownership of an install that has no owner yet.
+async function handleExchange(request: Request, env: Env): Promise<Response> {
+  let session;
+  try {
+    session = await requireAuth(request, env);
+  } catch {
+    return json({ message: 'Invalid credentials' }, 401);
+  }
+
+  // Only a Firebase ID token may be exchanged. Re-exchanging a session token
+  // would let an old session mint an endlessly renewed one, outliving any
+  // revocation.
+  if (!looksLikeFirebaseIdToken(getSessionToken(request) || '')) {
+    return json({ message: 'Expected a Firebase ID token' }, 400);
+  }
+
+  let workerUrl: string | null = null;
+  let userSessionSecret: string | null = null;
+  try {
+    const cfConfig = await firestoreGet(env, session.uid, 'config/cloudflare', session.idToken);
+    if (cfConfig?.workerUrl) workerUrl = cfConfig.workerUrl;
+    if (typeof cfConfig?.sessionSecret === 'string' && cfConfig.sessionSecret.length >= 32) {
+      userSessionSecret = cfConfig.sessionSecret;
+    }
+  } catch { /* self-host reads nothing from Firestore; fall through */ }
+
+  // The exchanged session carries no refreshToken: the caller can always come
+  // back with a fresh ID token, and minting one here would hand out a stronger
+  // credential than the one presented.
+  const sessionToken = await createSignedSessionToken({
+    uid: session.uid,
+    email: session.email,
+    idToken: session.idToken,
+    refreshToken: '',
+    workerUrl,
+    exp: Date.now() + SESSION_TTL_SECONDS * 1000,
+  }, userSessionSecret || env.APP_IDENTIFIER || 'default');
+
+  const body = {
+    accessToken: sessionToken,
+    userId: session.uid,
+    userEmail: session.email,
+    name: session.email.split('@')[0],
+    isAdmin: true,
+    shouldChangePassword: false,
+    isOnboarded: true,
+    profileImagePath: '',
+    quotaSizeInBytes: null,
+    quotaUsageInBytes: null,
+    workerUrl,
+  };
+  return new Response(JSON.stringify(body), { status: 200, headers: sessionCookieHeaders(sessionToken) });
 }
 
 // Shared cookie set for both auth modes.
