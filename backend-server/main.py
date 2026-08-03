@@ -8,6 +8,7 @@ import hashlib
 import threading
 from functools import wraps
 
+import requests as http_requests
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import firebase_admin
@@ -537,9 +538,55 @@ def convert_heic_thumbnail():
         traceback.print_exc()
         return jsonify({'error': f'HEIC decode failed: {str(e)}'}), 500
 
+def verify_turnstile(token, client_ip):
+    """Canonical Cloudflare Turnstile siteverify.
+
+    Fails CLOSED: a missing secret, missing token, network error, non-2xx or
+    non-JSON body all deny the request. The whole point is to refuse traffic we
+    cannot prove is human, so an unconfigured or unreachable check must never
+    silently allow everything through.
+    """
+    secret = os.environ.get("TURNSTILE_SECRET", "")
+    if not secret or not token:
+        return False
+    try:
+        payload = {"secret": secret, "response": token}
+        if client_ip:
+            payload["remoteip"] = client_ip
+        resp = http_requests.post(
+            "https://challenges.cloudflare.com/turnstile/v0/siteverify",
+            data=payload,
+            timeout=10,
+        )
+        if not resp.ok:
+            return False
+        return resp.json().get("success") is True
+    except Exception as e:
+        print(f"[turnstile] siteverify failed: {e}")
+        return False
+
+
+def client_ip_from(req):
+    """Cloudflare puts the real client IP in CF-Connecting-IP; X-Forwarded-For
+    is the fallback and its first entry is the original client."""
+    return (
+        req.headers.get("CF-Connecting-IP")
+        or (req.headers.get("X-Forwarded-For") or "").split(",")[0].strip()
+        or None
+    )
+
+
 @app.route("/startSetup", methods=["POST"])
 @check_auth
 def start_setup_endpoint():
+    # Turnstile first. This endpoint draws from a FINITE pool of userbot
+    # sessions and creates a real Telegram bot and channel per call, so it is
+    # the most expensive thing an automated signup could reach. Checking before
+    # the lock claim means a bot cannot even consume the idempotency slot.
+    body = request.get_json(silent=True) or {}
+    if not verify_turnstile(body.get("cf-turnstile-response", ""), client_ip_from(request)):
+        return jsonify({"error": {"message": "Verification failed. Please try again."}}), 403
+
     # uid/email come from the VERIFIED Firebase token. The old body-supplied
     # uid meant ANY caller could trigger bot/channel creation — or poison the
     # config doc — for an arbitrary victim uid, with no authentication at all.

@@ -2,6 +2,32 @@ export interface Env {
   SESSION_SECRET: string
   FIREBASE_API_KEY: string
   FIREBASE_PROJECT_ID: string
+  /** Cloudflare Turnstile secret. Set with `wrangler secret put TURNSTILE_SECRET`. */
+  TURNSTILE_SECRET: string
+}
+
+/**
+ * Canonical Turnstile siteverify. Fails CLOSED: a network error, a non-2xx, a
+ * non-JSON body or `success !== true` all deny the request, because the point
+ * is to refuse traffic we cannot prove is human.
+ */
+async function verifyTurnstile(token: string, clientIp: string | null, secret: string): Promise<boolean> {
+  if (!secret) return false // unconfigured server must not silently allow everything
+  if (!token) return false
+  try {
+    const body = new URLSearchParams({ secret, response: token })
+    if (clientIp) body.set('remoteip', clientIp)
+    const res = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body,
+    })
+    if (!res.ok) return false
+    const result = await res.json() as { success?: boolean }
+    return result.success === true
+  } catch {
+    return false
+  }
 }
 
 interface SessionData {
@@ -112,7 +138,24 @@ export default {
     // Create session endpoint
     if (url.pathname === '/create-session' && request.method === 'POST') {
       try {
-        const body = await request.json() as { idToken: string; refreshToken: string; returnUrl: string }
+        const body = await request.json() as {
+          idToken: string; refreshToken: string; returnUrl: string; 'cf-turnstile-response'?: string
+        }
+
+        // Prove a human is here before minting a session that is valid across
+        // every *.daemonclient.uz app. Runs first so a bot burns no Firebase
+        // lookup quota getting rejected.
+        const human = await verifyTurnstile(
+          body['cf-turnstile-response'] || '',
+          request.headers.get('CF-Connecting-IP'),
+          env.TURNSTILE_SECRET,
+        )
+        if (!human) {
+          return new Response(JSON.stringify({ error: 'Verification failed' }), {
+            status: 403,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          })
+        }
 
         // Verify Firebase token
         const user = await verifyFirebaseToken(body.idToken, env.FIREBASE_API_KEY)

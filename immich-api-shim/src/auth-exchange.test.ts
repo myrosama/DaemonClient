@@ -18,7 +18,7 @@ describe('POST /api/auth/exchange', () => {
     // Otherwise an old session could mint an endlessly renewed one and outlive
     // any revocation. Only a freshly verified Firebase ID token qualifies.
     const env = testAuthEnv();
-    const token = await testSessionToken({ uid: 'u1', email: 'u1@example.com' }, env as any);
+    const token = await testSessionToken('u1', 'u1@example.com');
     const res = await handleAuth(
       post({ Authorization: `Bearer ${token}` }),
       env as any,

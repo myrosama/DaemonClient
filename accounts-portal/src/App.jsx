@@ -6,6 +6,7 @@ import firebase from './config/firebase'
 import { Button } from './components/ui/Button'
 import { Input } from './components/ui/Input'
 import { Card } from './components/ui/Card'
+import Turnstile from './components/Turnstile'
 import { toast } from './components/ui/Toast'
 import { SetupWorker } from './pages/SetupWorker'
 import { SetupProcessor } from './pages/SetupProcessor'
@@ -97,7 +98,7 @@ function isTelegramConfigComplete(data) {
 // HELPER: Session management
 // ============================================================================
 
-async function createSession(idToken, refreshToken, returnUrl = '/dashboard') {
+async function createSession(idToken, refreshToken, returnUrl = '/dashboard', turnstileToken = '') {
   // Hosted-only. This is the cross-subdomain cookie broker that lets one login on
   // accounts.daemonclient.uz carry across photos./drive./daemonclient.uz. A
   // self-hosted install has none of that — and it must NEVER send the user's own
@@ -110,7 +111,7 @@ async function createSession(idToken, refreshToken, returnUrl = '/dashboard') {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     credentials: 'include',
-    body: JSON.stringify({ idToken, refreshToken, returnUrl }),
+    body: JSON.stringify({ idToken, refreshToken, returnUrl, 'cf-turnstile-response': turnstileToken }),
   })
   return res
 }
@@ -391,11 +392,18 @@ function LoginPage() {
   const [showPassword, setShowPassword] = useState(false)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  // Turnstile proves a human is here before the server mints a session.
+  const [turnstileToken, setTurnstileToken] = useState('')
+  const turnstileReset = useRef(null)
   const navigate = useNavigate()
 
   const handleLogin = async (e) => {
     e.preventDefault()
     setError('')
+    if (!turnstileToken) {
+      setError('Please complete the verification below.')
+      return
+    }
     setLoading(true)
 
     try {
@@ -408,7 +416,7 @@ function LoginPage() {
 
       // Create cross-domain session (non-blocking — Firebase Auth handles core auth)
       try {
-        const res = await createSession(idToken, refreshToken, returnUrl)
+        const res = await createSession(idToken, refreshToken, returnUrl, turnstileToken)
         if (res.ok) {
           const data = await res.json()
           if (data.redirectUrl && data.redirectUrl.startsWith('http')) {
@@ -434,6 +442,9 @@ function LoginPage() {
         : err.message || 'Sign in failed'
       setError(msg)
       setLoading(false)
+      // The token is single-use; a retry with the same one is rejected as
+      // timeout-or-duplicate, so fetch a fresh one.
+      turnstileReset.current?.()
     }
   }
 
@@ -504,6 +515,10 @@ function LoginPage() {
                 <p className="text-[13px] text-linear-error">{error}</p>
               )}
 
+              <div className="flex justify-center pt-1">
+                <Turnstile onToken={setTurnstileToken} resetRef={turnstileReset} />
+              </div>
+
               <button
                 type="submit"
                 disabled={loading}
@@ -570,6 +585,10 @@ function SignupPage() {
   const [showPassword, setShowPassword] = useState(false)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  // Turnstile gates the expensive half of signup: /startSetup draws from a
+  // finite pool of userbots and creates a real Telegram bot and channel.
+  const [turnstileToken, setTurnstileToken] = useState('')
+  const turnstileReset = useRef(null)
   const navigate = useNavigate()
 
   const handleSignup = async (e) => {
@@ -578,6 +597,10 @@ function SignupPage() {
 
     if (password.length < 6) {
       setError('Password must be at least 6 characters')
+      return
+    }
+    if (!turnstileToken) {
+      setError('Please complete the verification below.')
       return
     }
 
@@ -605,7 +628,10 @@ function SignupPage() {
         fetch(`${RENDER_BACKEND}/startSetup`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${idToken}` },
-          body: JSON.stringify({ data: { uid: user.uid, email: user.email } }),
+          body: JSON.stringify({
+            data: { uid: user.uid, email: user.email },
+            'cf-turnstile-response': turnstileToken,
+          }),
           keepalive: true,
         }).catch(() => {
           // Request never reached the server → release so /setup can retry now.
@@ -618,7 +644,7 @@ function SignupPage() {
       // Create session (non-blocking — cross-domain cookie is nice-to-have)
       try {
         const refreshToken = user.refreshToken
-        await createSession(idToken, refreshToken, '/setup')
+        await createSession(idToken, refreshToken, '/setup', turnstileToken)
       } catch (sessionErr) {
         console.warn('Session creation failed (non-critical):', sessionErr)
       }
@@ -646,6 +672,8 @@ function SignupPage() {
         : err.message || 'Sign up failed'
       setError(msg)
       setLoading(false)
+      // Single-use token: a retry needs a fresh one.
+      turnstileReset.current?.()
     }
   }
 
@@ -727,6 +755,10 @@ function SignupPage() {
               {error && (
                 <p className="text-[13px] text-linear-error">{error}</p>
               )}
+
+              <div className="flex justify-center pt-1">
+                <Turnstile onToken={setTurnstileToken} resetRef={turnstileReset} />
+              </div>
 
               <button
                 type="submit"

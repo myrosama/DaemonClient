@@ -48,9 +48,46 @@ export async function handleAuth(request: Request, env: Env, path: string): Prom
   return json({ message: 'Not found' }, 404);
 }
 
+/**
+ * Canonical Turnstile siteverify. Fails CLOSED — a missing secret, missing
+ * token, network error, non-2xx or non-JSON body all deny, because a check we
+ * cannot complete must never silently admit traffic.
+ */
+async function verifyTurnstile(token: string, clientIp: string | null, secret?: string): Promise<boolean> {
+  if (!secret || !token) return false;
+  try {
+    const form = new URLSearchParams({ secret, response: token });
+    if (clientIp) form.set('remoteip', clientIp);
+    const res = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: form,
+    });
+    if (!res.ok) return false;
+    const result = await res.json() as { success?: boolean };
+    return result.success === true;
+  } catch {
+    return false;
+  }
+}
+
 async function handleLogin(request: Request, env: Env): Promise<Response> {
   const body = await request.json() as any;
   const { email, password } = body.loginCredentialDto || body;
+
+  // Password login is the one brute-forceable surface here, so gate it on
+  // Turnstile before spending a Firebase Identity Toolkit call. Only enforced
+  // when TURNSTILE_SECRET is bound: the mobile app and existing integrations
+  // post no token, and silently locking them out would be worse than the risk
+  // this removes. Once every client sends one, drop the conditional.
+  if (env.TURNSTILE_SECRET) {
+    const human = await verifyTurnstile(
+      body['cf-turnstile-response'] || '',
+      request.headers.get('CF-Connecting-IP'),
+      env.TURNSTILE_SECRET,
+    );
+    if (!human) return json({ message: 'Verification failed' }, 403);
+  }
 
   // A self-hosted install reaches this exact code: its worker just points
   // FIREBASE_API_KEY / FIREBASE_PROJECT_ID at the operator's own Firebase
