@@ -2806,6 +2806,27 @@ function ProtectedRoute({ children }) {
     return () => unsubscribe()
   }, [])
 
+  // Make sure the shared *.daemonclient.uz session exists for anyone who is
+  // ALREADY signed in. createSession only ran at login and signup, so every
+  // existing session had no shared cookie and Photos/Drive still asked for a
+  // password — the sign-in predated the shared session entirely. Repairing it
+  // here avoids forcing everyone to log out and back in.
+  useEffect(() => {
+    if (IS_SELF_HOST || !user) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const res = await fetch(`${AUTH_WORKER}/check-session`, { credentials: 'include' })
+        const data = await res.json().catch(() => null)
+        if (cancelled || data?.loggedIn) return
+        const idToken = await user.getIdToken()
+        if (cancelled || !idToken || !user.refreshToken) return
+        await createSession(idToken, user.refreshToken, '/dashboard')
+      } catch { /* SSO is an optimisation; the dashboard works regardless */ }
+    })()
+    return () => { cancelled = true }
+  }, [user?.uid])
+
   const { stage, loading: stageLoading } = useSetupStage(user)
 
   if (authLoading || stageLoading) {
