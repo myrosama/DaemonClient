@@ -1804,8 +1804,8 @@ function DashboardPage() {
   const avatarBg = AVATAR_COLORS[avatarColorIndex]
 
   const apps = [
-    { label: 'Drive',   href: 'https://app.daemonclient.uz',    bg: 'linear-gradient(145deg,#1A3B90,#2D5DC8)', icon: <FolderOpen size={27} className="text-white" strokeWidth={1.5}/> },
-    { label: 'Photos',  href: 'https://photos.daemonclient.uz', bg: 'linear-gradient(145deg,#0A4520,#15803D)', icon: <Image      size={27} className="text-green-300" strokeWidth={1.5}/> },
+    { label: 'Drive',   href: 'https://drive.daemonclient.uz/login', bg: 'linear-gradient(145deg,#1A3B90,#2D5DC8)', icon: <FolderOpen size={27} className="text-white" strokeWidth={1.5}/> },
+    { label: 'Photos',  href: 'https://photos.daemonclient.uz/auth/login', bg: 'linear-gradient(145deg,#0A4520,#15803D)', icon: <Image      size={27} className="text-green-300" strokeWidth={1.5}/> },
     { label: 'Hosting', disabled: true, bg: 'linear-gradient(145deg,#1A0A30,#2D1550)', icon: <Server  size={27} className="text-purple-400" strokeWidth={1.5}/> },
     { label: 'Movies',  disabled: true, bg: 'linear-gradient(145deg,#300808,#501212)', icon: <Monitor size={27} className="text-red-400"    strokeWidth={1.5}/> },
     { label: 'API',     disabled: true, bg: 'linear-gradient(145deg,#082028,#103040)', icon: <Hash    size={27} className="text-cyan-400"   strokeWidth={1.5}/> },
@@ -1865,7 +1865,7 @@ function DashboardPage() {
                             <span className="text-[11px] text-white/20 font-medium text-center">{app.label}</span>
                           </div>
                         ) : (
-                          <a key={app.label} href={app.href} className="flex flex-col items-center gap-2 group">
+                          <a key={app.label} href={app.href} target="_blank" rel="noopener noreferrer" className="flex flex-col items-center gap-2 group">
                             <div className="w-[58px] h-[58px] sm:w-[62px] sm:h-[62px] rounded-[14px] flex items-center justify-center group-hover:scale-[1.07] transition-transform duration-150 shadow-lg" style={{ background: app.bg }}>
                               {app.icon}
                             </div>
@@ -1901,7 +1901,7 @@ function DashboardPage() {
                       <div className="flex-1 flex flex-col items-center justify-center gap-2 py-10 bg-black/20 min-h-[150px]">
                         <FolderOpen size={26} className="text-white/15" strokeWidth={1.5}/>
                         <p className="text-[12px] text-white/30">No files yet</p>
-                        <a href="https://drive.daemonclient.uz" className="text-[11px] text-blue-300/70 hover:text-blue-300">Upload to Drive →</a>
+                        <a href="https://drive.daemonclient.uz/login" target="_blank" rel="noopener noreferrer" className="text-[11px] text-blue-300/70 hover:text-blue-300">Upload to Drive →</a>
                       </div>
                     ) : (
                       <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 divide-y sm:divide-y-0 sm:divide-x divide-white/[0.06] bg-black/20">
@@ -1910,7 +1910,9 @@ function DashboardPage() {
                             {col.map((f, fi) => (
                               <a
                                 key={`${f.name}-${fi}`}
-                                href="https://drive.daemonclient.uz"
+                                href="https://drive.daemonclient.uz/login"
+                                target="_blank"
+                                rel="noopener noreferrer"
                                 className="flex items-center gap-3 px-4 py-3 hover:bg-white/[0.05] transition-colors group"
                               >
                                 <FileBadge type={f.type}/>
@@ -1928,7 +1930,7 @@ function DashboardPage() {
                     {/* footer */}
                     <div className="px-4 py-2.5 border-t border-white/[0.06] flex items-center justify-between">
                       <span className="text-white/25 text-[18px] leading-none tracking-[3px]">···</span>
-                      <a href="https://app.daemonclient.uz" className="text-[11px] text-white/30 hover:text-white/60 transition-colors">
+                      <a href="https://drive.daemonclient.uz/login" target="_blank" rel="noopener noreferrer" className="text-[11px] text-white/30 hover:text-white/60 transition-colors">
                         Open Drive →
                       </a>
                     </div>
@@ -1951,7 +1953,7 @@ function DashboardPage() {
                     </div>
 
                     {/* 2×2 grid — real recent photos via thumbhash previews */}
-                    <a href="https://photos.daemonclient.uz" className="flex-1 grid grid-cols-2 grid-rows-2 gap-px bg-white/[0.04] min-h-[160px]">
+                    <a href="https://photos.daemonclient.uz/auth/login" target="_blank" rel="noopener noreferrer" className="flex-1 grid grid-cols-2 grid-rows-2 gap-px bg-white/[0.04] min-h-[160px]">
                       {[0, 1, 2, 3].map((i) => {
                         const tile = photoTiles[i]
                         const url = tile ? thumbhashToUrl(tile.thumbhash) : null
@@ -1979,7 +1981,7 @@ function DashboardPage() {
                     {/* footer */}
                     <div className="px-4 py-2.5 border-t border-white/[0.06] flex items-center justify-between">
                       <span className="text-white/25 text-[18px] leading-none tracking-[3px]">···</span>
-                      <a href="https://photos.daemonclient.uz" className="text-[11px] text-white/30 hover:text-white/60 transition-colors">
+                      <a href="https://photos.daemonclient.uz/auth/login" target="_blank" rel="noopener noreferrer" className="text-[11px] text-white/30 hover:text-white/60 transition-colors">
                         Open Photos →
                       </a>
                     </div>

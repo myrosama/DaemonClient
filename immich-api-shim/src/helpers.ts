@@ -1,6 +1,7 @@
 import type { Env } from './index';
 import { isSelfHost, sessionScope } from './selfhost-auth';
 import { requireOwner } from './owner-gate';
+import { looksLikeFirebaseIdToken, verifyFirebaseIdToken } from './firebase-token';
 
 /** Shared helpers for Firestore REST and auth token extraction */
 
@@ -90,6 +91,35 @@ export async function requireAuth(request: Request, env?: Env): Promise<SessionD
   // account takeover. There is no unsigned token left in circulation to
   // support: every issuer in this codebase signs.
   if (!token.includes('.')) throw new Error('Session expired');
+
+  // Two credentials are accepted, told apart by shape and never confused:
+  //   3 parts → a Firebase ID token, verified against Google's public certs
+  //   2 parts → one of our own HMAC session tokens from /api/auth/login
+  //
+  // The Firebase branch exists because the dashboard, Drive and Photos all sign
+  // in with the Firebase SDK and hold an ID token, not a session token. Without
+  // it every one of their calls answered 401 and the dashboard silently showed
+  // zeros. It is also what lets a single sign-in serve all three apps.
+  if (looksLikeFirebaseIdToken(token)) {
+    if (!env?.FIREBASE_PROJECT_ID) throw new Error('Session expired');
+    let identity;
+    try {
+      identity = await verifyFirebaseIdToken(token, env.FIREBASE_PROJECT_ID);
+    } catch {
+      // Deliberately the same message a bad session token produces: telling a
+      // prober which credential shape was recognised is free reconnaissance.
+      throw new Error('Session expired');
+    }
+    // No refreshToken: the token was just proven unexpired, so the refresh path
+    // below cannot fire, and we must never fabricate a refresh credential.
+    session = { uid: identity.uid, email: identity.email, idToken: token, refreshToken: '', exp: identity.exp };
+    // mayClaim=false: this credential verifies on EVERY install (one Firebase
+    // project serves the whole fleet), so it must never be able to claim an
+    // install that has no owner recorded yet.
+    if (env) await requireOwner(env, session.uid, false);
+    return session;
+  }
+
   session = await verifySignedSessionToken(token, sessionScope(env || ({} as Env)));
   if (!session) throw new Error('Session expired');
 

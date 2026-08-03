@@ -71,7 +71,7 @@ async function claimOwner(env: Env, uid: string): Promise<void> {
  * Called for every authenticated request on a worker that has its own database,
  * so a route added next year is covered without anyone remembering to cover it.
  */
-export async function requireOwner(env: Env, uid: string): Promise<void> {
+export async function requireOwner(env: Env, uid: string, mayClaim = true): Promise<void> {
   // The central worker has no database of its own and holds nobody's photos —
   // it authenticates and proxies. Nothing to own.
   if (!env.DB) return;
@@ -87,6 +87,13 @@ export async function requireOwner(env: Env, uid: string): Promise<void> {
   }
 
   if (owner === null) {
+    // `mayClaim` is false for credentials that do NOT prove this install is
+    // yours. A Firebase ID token is minted by a project shared with every other
+    // install, so it verifies everywhere — letting one claim an unowned worker
+    // would hand the first stranger to arrive the ZKE key, the bot token and
+    // every photo, permanently. Only a session token signed with THIS worker's
+    // own secret proves rightful possession, so only that may claim.
+    if (!mayClaim) throw new Error('Not authenticated');
     await claimOwner(env, uid);
     return;
   }

@@ -126,3 +126,25 @@ describe('it is enforced for EVERY authenticated request, not per route', () => 
     expect(session.uid).toBe(OWNER);
   });
 });
+
+describe('mayClaim=false — a fleet-wide credential must never claim an install', () => {
+  // A Firebase ID token verifies on EVERY worker, because one Firebase project
+  // serves the whole fleet. If such a token could claim an unowned install, the
+  // first stranger to find the URL would permanently own someone's photos,
+  // ZKE key and bot token. Only a session token signed with THIS worker's own
+  // secret proves rightful possession, so only that may claim.
+  it('refuses an unowned install rather than claiming it', async () => {
+    __resetOwnerCache();
+    await expect(requireOwner({ DB: db(null) } as any, 'stranger-uid', false)).rejects.toThrow('Not authenticated');
+  });
+
+  it('still lets the recorded owner through', async () => {
+    __resetOwnerCache();
+    await expect(requireOwner({ DB: db(OWNER) } as any, OWNER, false)).resolves.toBeUndefined();
+  });
+
+  it('still rejects a different account on a claimed install', async () => {
+    __resetOwnerCache();
+    await expect(requireOwner({ DB: db(OWNER) } as any, 'stranger', false)).rejects.toThrow('Not authenticated');
+  });
+});
