@@ -193,6 +193,62 @@ export default {
       }
     }
 
+    // Hand an allowlisted app a FRESH Firebase ID token for the shared session.
+    //
+    // This is what makes one sign-in serve all three apps. Firebase persists its
+    // session per origin, so signing in on accounts.daemonclient.uz leaves
+    // Photos and Drive looking signed-out. They call this instead, then trade
+    // the ID token for their own session at their per-user worker
+    // (POST /api/auth/exchange).
+    //
+    // The refresh token stays in the HttpOnly cookie and is NEVER returned —
+    // only the short-lived (1 hour) ID token crosses into JavaScript, which is
+    // exactly what the Firebase SDK would hold anyway. Reading this requires
+    // credentials plus an allowlisted Origin, so a third-party page cannot.
+    if (url.pathname === '/session-token' && request.method === 'GET') {
+      const respond = (body: object, status = 200) =>
+        new Response(JSON.stringify(body), {
+          status,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }
+        })
+      try {
+        const cookie = request.headers.get('Cookie') || ''
+        const match = cookie.match(/(?:^|;\s*)__session=([^;]+)/)
+        if (!match) return respond({ loggedIn: false }, 401)
+
+        const [payloadB64, signature] = match[1].split('.')
+        if (!payloadB64 || !signature) return respond({ loggedIn: false }, 401)
+        const expected = await hmacSign(payloadB64, env.SESSION_SECRET)
+        if (expected !== signature) return respond({ loggedIn: false }, 401)
+
+        const session = JSON.parse(atob(payloadB64)) as SessionData
+        if (!session.exp || session.exp < Date.now()) return respond({ loggedIn: false }, 401)
+        if (!session.refreshToken) return respond({ loggedIn: false }, 401)
+
+        // Always mint a fresh one. The ID token stored at sign-in expires after
+        // an hour, while the shared session is long-lived, so returning the
+        // stored copy would work for an hour and then silently stop.
+        const res = await fetch(`https://securetoken.googleapis.com/v1/token?key=${env.FIREBASE_API_KEY}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: `grant_type=refresh_token&refresh_token=${encodeURIComponent(session.refreshToken)}`
+        })
+        if (!res.ok) {
+          // A revoked or rotated refresh token means the shared session is dead.
+          // Clear it so the apps stop retrying and ask for a real sign-in.
+          const headers = new Headers({ ...corsHeaders, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' })
+          headers.set('Set-Cookie', `__session=; Domain=.daemonclient.uz; Path=/; Max-Age=0`)
+          return new Response(JSON.stringify({ loggedIn: false }), { status: 401, headers })
+        }
+        const data = await res.json() as any
+        if (!data.id_token) return respond({ loggedIn: false }, 401)
+
+        return respond({ loggedIn: true, idToken: data.id_token, email: session.email })
+      } catch {
+        return respond({ loggedIn: false }, 401)
+      }
+    }
+
     // Logout endpoint
     if (url.pathname === '/logout') {
       const headers = new Headers(corsHeaders)
