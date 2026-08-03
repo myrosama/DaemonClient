@@ -7,6 +7,7 @@
   import { Route } from '$lib/route';
   import { oauth } from '$lib/utils';
   import { getServerErrorMessage, handleError } from '$lib/utils/handle-error';
+  import { persistSession, trySharedSignIn } from '$lib/utils/sso';
   import { login, type LoginResponseDto } from '@immich/sdk';
   import { Alert, Button, Field, Input, PasswordInput, Stack } from '@immich/ui';
   import { onMount } from 'svelte';
@@ -37,6 +38,17 @@
   const onOnboarding = () => goto(Route.onboarding());
 
   onMount(async () => {
+    // Already signed in on another DaemonClient app? Adopt that session instead
+    // of asking for the password again. Runs before the OAuth branch so it
+    // applies whether or not OAuth is enabled, and silently falls through to
+    // the normal form when there is no shared session.
+    const shared = await trySharedSignIn();
+    if (shared) {
+      persistSession(shared);
+      await goto(data.continueUrl, { invalidateAll: true });
+      return;
+    }
+
     if (!featureFlagsManager.value.oauth) {
       oauthLoading = false;
       return;

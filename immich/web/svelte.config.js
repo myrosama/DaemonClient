@@ -26,6 +26,13 @@ process.env.PUBLIC_DAEMONCLIENT_WORKER_URL =
 process.env.PUBLIC_DAEMONCLIENT_FIREBASE_PROJECT_ID =
   process.env.PUBLIC_DAEMONCLIENT_FIREBASE_PROJECT_ID ||
   (process.env.PUBLIC_SELF_HOST === '1' ? '' : 'daemonclient-c0625');
+// The shared sign-in hub. Holds one session cookie for *.daemonclient.uz so a
+// single sign-in serves the dashboard, Photos and Drive. Empty on a self-hosted
+// build: a self-hoster's apps share an origin (one site, path-based routing),
+// so they need no hub — and must never be pointed at ours.
+process.env.PUBLIC_DAEMONCLIENT_AUTH_URL =
+  process.env.PUBLIC_DAEMONCLIENT_AUTH_URL ||
+  (process.env.PUBLIC_SELF_HOST === '1' ? '' : 'https://auth.daemonclient.uz');
 
 /** @type {import('@sveltejs/kit').Config} */
 const config = {

@@ -11,6 +11,7 @@ import { goto } from '$app/navigation';
 import { page } from '$app/state';
 import { eventManager } from '$lib/managers/event-manager.svelte';
 import { Route } from '$lib/route';
+import { endSharedSession } from '$lib/utils/sso';
 import { isSharedLinkRoute } from '$lib/utils/navigation';
 
 class AuthManager {
@@ -91,6 +92,11 @@ class AuthManager {
 
   async logout() {
     let redirectUri = Route.login();
+
+    // End the shared *.daemonclient.uz session too, so signing out of Photos
+    // signs you out of the dashboard and Drive. Without this the shared cookie
+    // survives and the next visit silently signs straight back in.
+    await endSharedSession();
 
     try {
       const response = await logout();
