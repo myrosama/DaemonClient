@@ -2564,10 +2564,16 @@ export async function handleDashboardSummary(request: Request, env: Env): Promis
     ).bind(uid, uid).first<{ n: number }>();
     out.photos.count = countRow?.n || 0;
 
+    // Only assets that can actually be drawn. The newest upload is often the
+    // one whose thumbnail failed, and a preview strip of grey placeholders
+    // reads as "your library is empty" rather than "these four are broken".
+    // The count above still reports every asset, so nothing is hidden.
     const recent = await env.DB.prepare(
       `SELECT id, thumbhash, mimeType FROM photos
        WHERE ownerId = ? AND (isTrashed = 0 OR isTrashed IS NULL)
          AND id NOT IN (SELECT livePhotoVideoId FROM photos WHERE livePhotoVideoId IS NOT NULL AND ownerId = ?)
+         AND ((telegramThumbId IS NOT NULL AND telegramThumbId != '')
+           OR (telegramPreviewId IS NOT NULL AND telegramPreviewId != ''))
        ORDER BY fileCreatedAt DESC LIMIT 4`
     ).bind(uid, uid).all<{ id: string; thumbhash: string | null; mimeType: string | null }>();
     out.photos.recent = (recent.results || []).map(r => ({

@@ -1793,6 +1793,40 @@ function DashboardPage() {
   const driveFiles = (summary?.drive?.recent || []).slice(0, 6).map(f => ({ name: f.fileName, type: f.ext || 'FILE' }))
   const photoTiles = (summary?.photos?.recent || []).slice(0, 4)
 
+  // Real thumbnails, not just the thumbhash blur. The endpoint needs an
+  // Authorization header and <img src> cannot send one, so fetch each tile and
+  // hand the <img> an object URL instead. The thumbhash still renders first, so
+  // the strip is never empty while these load.
+  const [tileUrls, setTileUrls] = useState({})
+  const tileIds = photoTiles.map(t => t.id).join(',')
+  useEffect(() => {
+    const base = backend?.workerUrl?.replace(/\/+$/, '')
+    if (!base || !tileIds) return
+    let cancelled = false
+    const created = []
+    ;(async () => {
+      const idToken = await auth.currentUser?.getIdToken().catch(() => null)
+      if (!idToken || cancelled) return
+      for (const id of tileIds.split(',')) {
+        if (cancelled) return
+        try {
+          const res = await fetch(`${base}/api/assets/${id}/thumbnail`, {
+            headers: { Authorization: `Bearer ${idToken}` },
+          })
+          if (!res.ok || cancelled) continue
+          const objectUrl = URL.createObjectURL(await res.blob())
+          if (cancelled) { URL.revokeObjectURL(objectUrl); return }
+          created.push(objectUrl)
+          setTileUrls(prev => ({ ...prev, [id]: objectUrl }))
+        } catch { /* leave the thumbhash placeholder in place */ }
+      }
+    })()
+    return () => {
+      cancelled = true
+      created.forEach(URL.revokeObjectURL)
+    }
+  }, [backend?.workerUrl, tileIds])
+
   const handleBgPreset = id => { setBgPreset(id); localStorage.setItem('dc-bg-preset', id) }
   const copyToClipboard = (text, label) =>
     navigator.clipboard.writeText(text).then(() => toast.success(`${label} copied`), () => toast.error('Copy failed'))
@@ -1956,7 +1990,8 @@ function DashboardPage() {
                     <a href="https://photos.daemonclient.uz/auth/login" target="_blank" rel="noopener noreferrer" className="flex-1 grid grid-cols-2 grid-rows-2 gap-px bg-white/[0.04] min-h-[160px]">
                       {[0, 1, 2, 3].map((i) => {
                         const tile = photoTiles[i]
-                        const url = tile ? thumbhashToUrl(tile.thumbhash) : null
+                        // Real thumbnail once fetched; thumbhash blur until then.
+                        const url = tile ? (tileUrls[tile.id] || thumbhashToUrl(tile.thumbhash)) : null
                         return (
                           <div
                             key={i}
