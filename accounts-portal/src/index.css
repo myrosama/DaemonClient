@@ -50,3 +50,46 @@ body {
 .grain-overlay {
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.45'/%3E%3C/svg%3E");
 }
+
+/* ── Material system ─────────────────────────────────────────────────────────
+   Taken from Apple's own resolved dark tokens. The load-bearing detail is that
+   fills are NEUTRAL GREY WITH ALPHA — rgba(118,118,128,a), a hair blue — not
+   white alpha. White alpha picks up whatever is behind it and reads as tinted
+   glass; grey alpha reads as material sitting on top of the page, which is the
+   entire difference in feel. Separator and label values are Apple's too:
+   labels step 0.98 → 0.66 → 0.42, so hierarchy comes from the ramp rather than
+   from size or weight.                                                        */
+:root {
+  --dc-fill:       rgba(118, 118, 128, 0.24);
+  --dc-fill-hover: rgba(118, 118, 128, 0.34);
+  --dc-fill-inset: rgba(118, 118, 128, 0.14);
+  --dc-separator:  rgba(255, 255, 255, 0.09);
+  --dc-label:      rgba(255, 255, 255, 0.98);
+  --dc-label-2:    rgba(255, 255, 255, 0.66);
+  --dc-label-3:    rgba(255, 255, 255, 0.42);
+}
+
+.dc-card {
+  background-color: var(--dc-fill);
+  border: 1px solid var(--dc-separator);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  /* Two shadows, not one: a tight contact shadow to seat the card, and a wide
+     soft one for depth. A single large shadow just looks like a drop shadow. */
+  box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.28), 0 18px 44px -16px rgba(0, 0, 0, 0.62);
+}
+
+.dc-card-hover:hover {
+  background-color: var(--dc-fill-hover);
+  border-color: rgba(255, 255, 255, 0.14);
+}
+
+.dc-inset {
+  background-color: var(--dc-fill-inset);
+  border-bottom: 1px solid var(--dc-separator);
+}
+
+/* Respect the system setting rather than animating regardless. */
+@media (prefers-reduced-motion: reduce) {
+  .dc-card, .dc-card-hover { transition: none !important; }
+}

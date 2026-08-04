@@ -1624,6 +1624,17 @@ function OwnershipPage() {
 // ── iCloud-style gradient background presets ──────────────────────────────────
 const BG_PRESETS = [
   {
+    // Apple's dark canvas: hsl(240, 3.4%, 11.4%) — near-black, a hair cool, and
+    // completely unsaturated. Every surface above it is neutral grey with alpha,
+    // which is what stops the glass reading as tinted. No facets: the restraint
+    // IS the design.
+    id: 'graphite',
+    name: 'Graphite',
+    swatch: ['#2C2C2E', '#3A3A3C'],
+    bg: 'linear-gradient(180deg, #1C1C1E 0%, #161618 100%)',
+    shapes: [],
+  },
+  {
     id: 'ocean',
     name: 'Ocean',
     swatch: ['#0A1628', '#1A4AAF'],
@@ -1744,7 +1755,7 @@ function DashboardPage() {
   const [summary, setSummary] = useState(null) // real { photos:{count,recent}, drive:{count,recent} }
   const [loading, setLoading] = useState(true)
   const [bgPreset, setBgPreset] = useState(
-    () => localStorage.getItem('dc-bg-preset') || 'ocean'
+    () => localStorage.getItem('dc-bg-preset') || 'graphite'
   )
 
   useEffect(() => {
@@ -1864,7 +1875,8 @@ function DashboardPage() {
     navigator.clipboard.writeText(text).then(() => toast.success(`${label} copied`), () => toast.error('Copy failed'))
 
   const user = auth.currentUser
-  const displayName = user?.displayName || user?.email?.split('@')[0] || 'User'
+  const rawName = user?.displayName || ''
+  const displayName = (rawName && !rawName.includes('@') ? rawName : user?.email?.split('@')[0]) || 'User'
   const initials = displayName.charAt(0).toUpperCase()
   const avatarColorIndex = user?.uid ? parseInt(user.uid.slice(0, 6), 16) % AVATAR_COLORS.length : 0
   const avatarBg = AVATAR_COLORS[avatarColorIndex]
@@ -1899,7 +1911,7 @@ function DashboardPage() {
                   {/* Profile card — clickable → /profile */}
                   <Link
                     to="/profile"
-                    className="md:w-[248px] shrink-0 bg-white/[0.07] hover:bg-white/[0.11] backdrop-blur-2xl border border-white/[0.1] hover:border-white/[0.2] rounded-3xl p-6 transition-all duration-300 group shadow-[0_24px_60px_-20px_rgba(0,0,0,0.6)]"
+                    className="md:w-[248px] shrink-0 dc-card dc-card-hover rounded-[18px] p-6 transition-all duration-300 group"
                   >
                     <div
                       className="w-[70px] h-[70px] rounded-full flex items-center justify-center text-white text-2xl font-bold mb-5 shadow-lg ring-2 ring-white/10 group-hover:ring-white/25 transition-all duration-200"
@@ -1908,7 +1920,7 @@ function DashboardPage() {
                       {initials}
                     </div>
                     <h2 className="font-display text-[22px] font-bold text-white leading-tight mb-0.5 truncate">{displayName}</h2>
-                    <p className="text-[12px] text-white/45 mb-4 truncate">{user?.email}</p>
+                    <p className="text-[12px] text-[rgba(255,255,255,0.5)] mb-4 truncate">{user?.email}</p>
                     <div className="flex items-center gap-2">
                       <img src="/logo.png" className="w-4 h-4 object-contain opacity-75" alt="" />
                       <span className="text-[12px] font-semibold text-white/60">DaemonClient</span>
@@ -1919,8 +1931,8 @@ function DashboardPage() {
                   </Link>
 
                   {/* App grid — clickable card header routes to /dashboard */}
-                  <div className="flex-1 bg-white/[0.07] backdrop-blur-2xl border border-white/[0.1] rounded-3xl p-5 sm:p-6 shadow-[0_24px_60px_-20px_rgba(0,0,0,0.6)]">
-                    <p className="text-[11px] text-white/30 font-medium uppercase tracking-widest mb-4">Services</p>
+                  <div className="flex-1 dc-card rounded-[18px] p-5 sm:p-6 flex flex-col justify-center">
+                    <p className="text-[11px] text-[rgba(255,255,255,0.42)] font-medium uppercase tracking-widest mb-4">Services</p>
                     <div className="grid grid-cols-3 sm:grid-cols-6 gap-4 sm:gap-5">
                       {apps.map(app =>
                         app.disabled ? (
@@ -1947,9 +1959,9 @@ function DashboardPage() {
                 <div className="grid grid-cols-1 md:grid-cols-[3fr_2fr] gap-4">
 
                   {/* ── Drive card ── */}
-                  <div className="bg-white/[0.07] backdrop-blur-2xl border border-white/[0.1] rounded-3xl overflow-hidden flex flex-col shadow-[0_24px_60px_-20px_rgba(0,0,0,0.6)]">
+                  <div className="dc-card rounded-[18px] overflow-hidden flex flex-col">
                     {/* header */}
-                    <div className="flex items-center gap-3 px-5 py-4 bg-white/[0.04]">
+                    <div className="flex items-center gap-3 px-5 py-4 dc-inset">
                       <div className="w-11 h-11 rounded-[12px] flex items-center justify-center shadow-lg" style={{ background: 'linear-gradient(145deg,#1A3B90,#2D5DC8)' }}>
                         <FolderOpen size={20} className="text-white" strokeWidth={1.5}/>
                       </div>
@@ -1979,7 +1991,7 @@ function DashboardPage() {
                                 href="https://drive.daemonclient.uz/login"
                                 target="_blank"
                                 rel="noopener noreferrer"
-                                className="flex items-center gap-3 px-4 py-3 hover:bg-white/[0.05] transition-colors group"
+                                className="flex items-center gap-3 px-4 py-3 hover:bg-[rgba(118,118,128,0.16)] transition-colors group"
                               >
                                 <FileBadge type={f.type}/>
                                 <div className="min-w-0">
@@ -1995,17 +2007,17 @@ function DashboardPage() {
 
                     {/* footer */}
                     <div className="px-4 py-2.5 border-t border-white/[0.06] flex items-center justify-between">
-                      <span className="text-white/25 text-[18px] leading-none tracking-[3px]">···</span>
-                      <a href="https://drive.daemonclient.uz/login" target="_blank" rel="noopener noreferrer" className="text-[11px] text-white/30 hover:text-white/60 transition-colors">
+                      <span className="text-[rgba(255,255,255,0.42)] text-[18px] leading-none tracking-[3px]">···</span>
+                      <a href="https://drive.daemonclient.uz/login" target="_blank" rel="noopener noreferrer" className="text-[11px] text-[rgba(255,255,255,0.42)] hover:text-[rgba(255,255,255,0.66)] transition-colors">
                         Open Drive →
                       </a>
                     </div>
                   </div>
 
                   {/* ── Photos card ── */}
-                  <div className="bg-white/[0.07] backdrop-blur-2xl border border-white/[0.1] rounded-3xl overflow-hidden flex flex-col shadow-[0_24px_60px_-20px_rgba(0,0,0,0.6)]">
+                  <div className="dc-card rounded-[18px] overflow-hidden flex flex-col">
                     {/* header */}
-                    <div className="flex items-center gap-3 px-5 py-4 bg-white/[0.04]">
+                    <div className="flex items-center gap-3 px-5 py-4 dc-inset">
                       <div className="w-11 h-11 rounded-[12px] flex items-center justify-center shadow-lg" style={{ background: 'linear-gradient(145deg,#0A4520,#15803D)' }}>
                         <Image size={20} className="text-green-300" strokeWidth={1.5}/>
                       </div>
@@ -2019,7 +2031,7 @@ function DashboardPage() {
                     </div>
 
                     {/* 2×2 grid — real recent photos via thumbhash previews */}
-                    <a href="https://photos.daemonclient.uz/auth/login" target="_blank" rel="noopener noreferrer" className="flex-1 grid grid-cols-2 grid-rows-2 gap-px bg-white/[0.04] min-h-[160px]">
+                    <a href="https://photos.daemonclient.uz/auth/login" target="_blank" rel="noopener noreferrer" className="flex-1 grid grid-cols-2 grid-rows-2 gap-px dc-inset min-h-[160px]">
                       {[0, 1, 2, 3].map((i) => {
                         const tile = photoTiles[i]
                         // Real thumbnail once fetched; thumbhash blur until then.
@@ -2047,8 +2059,8 @@ function DashboardPage() {
 
                     {/* footer */}
                     <div className="px-4 py-2.5 border-t border-white/[0.06] flex items-center justify-between">
-                      <span className="text-white/25 text-[18px] leading-none tracking-[3px]">···</span>
-                      <a href="https://photos.daemonclient.uz/auth/login" target="_blank" rel="noopener noreferrer" className="text-[11px] text-white/30 hover:text-white/60 transition-colors">
+                      <span className="text-[rgba(255,255,255,0.42)] text-[18px] leading-none tracking-[3px]">···</span>
+                      <a href="https://photos.daemonclient.uz/auth/login" target="_blank" rel="noopener noreferrer" className="text-[11px] text-[rgba(255,255,255,0.42)] hover:text-[rgba(255,255,255,0.66)] transition-colors">
                         Open Photos →
                       </a>
                     </div>
@@ -2057,7 +2069,7 @@ function DashboardPage() {
 
                 {/* Theme picker */}
                 <div className="flex justify-center pb-1">
-                  <div className="inline-flex items-center gap-3 bg-black/30 backdrop-blur-xl border border-white/[0.08] rounded-full px-5 py-2.5">
+                  <div className="inline-flex items-center gap-3 dc-card rounded-full px-5 py-2.5">
                     <Palette size={13} className="text-white/35"/>
                     <span className="text-[11px] text-white/35 font-medium">Theme</span>
                     <div className="flex gap-2">
@@ -2103,8 +2115,8 @@ function DashboardPage() {
                         <div className="w-2 h-2 rounded-full bg-daemon-green" />
                         <span className="text-[14px] font-semibold text-white">Active</span>
                       </div>
-                      <p className="font-mono text-[11px] text-white/40 mb-2 truncate">{backendApiUrl(backend.workerUrl)}</p>
-                      <button onClick={() => copyToClipboard(backendApiUrl(backend.workerUrl), 'Worker URL')} className="text-[11px] text-white/35 hover:text-white/60 transition-colors flex items-center gap-1">
+                      <p className="font-mono text-[11px] text-[rgba(255,255,255,0.5)] mb-2 truncate">{backendApiUrl(backend.workerUrl)}</p>
+                      <button onClick={() => copyToClipboard(backendApiUrl(backend.workerUrl), 'Worker URL')} className="text-[11px] text-[rgba(255,255,255,0.42)] hover:text-[rgba(255,255,255,0.66)] transition-colors flex items-center gap-1">
                         <Copy size={11} /> Copy URL
                       </button>
                     </>
@@ -2141,9 +2153,9 @@ function DashboardPage() {
               <div className="border-t border-white/[0.04] px-4 sm:px-8 lg:px-12 py-4">
                 <div className="max-w-[1020px] mx-auto flex flex-col sm:flex-row items-center justify-between gap-2 text-[11px] text-white/20">
                   <div className="flex gap-5">
-                    <a href="https://daemonclient.uz/help" className="hover:text-white/40 transition-colors">Help</a>
-                    <a href="https://daemonclient.uz/terms" className="hover:text-white/40 transition-colors">Terms & Conditions</a>
-                    <a href="https://daemonclient.uz/privacy" className="hover:text-white/40 transition-colors">Privacy Policy</a>
+                    <a href="https://daemonclient.uz/help" className="hover:text-[rgba(255,255,255,0.5)] transition-colors">Help</a>
+                    <a href="https://daemonclient.uz/terms" className="hover:text-[rgba(255,255,255,0.5)] transition-colors">Terms & Conditions</a>
+                    <a href="https://daemonclient.uz/privacy" className="hover:text-[rgba(255,255,255,0.5)] transition-colors">Privacy Policy</a>
                   </div>
                   <span>© 2026 DaemonClient · All rights reserved</span>
                 </div>
