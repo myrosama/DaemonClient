@@ -20,6 +20,8 @@ describe('toAlbumDto', () => {
     expect(dto.owner.avatarColor).toBe('primary');
     expect(dto.owner.profileImagePath).toBe('');
     expect(dto.order).toBe('desc');
+    expect(dto.albumUsers).toHaveLength(1);
+    expect(dto.albumUsers[0]).toEqual({ role: 'owner', user: dto.owner });
   });
 
   it('still produces ownerId when only a partial owner is given', () => {

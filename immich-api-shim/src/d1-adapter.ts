@@ -272,10 +272,16 @@ export class D1Adapter {
     return result.results?.map(r => r.assetId) || [];
   }
 
-  async listAlbums(): Promise<Album[]> {
-    const result = await this.db.prepare(
-      'SELECT * FROM albums ORDER BY updatedAt DESC'
-    ).all<Album>();
+  async listAlbums(assetId?: string): Promise<Album[]> {
+    const statement = assetId
+      ? this.db.prepare(
+        `SELECT albums.* FROM albums
+         INNER JOIN album_assets ON album_assets.albumId = albums.id
+         WHERE album_assets.assetId = ?
+         ORDER BY albums.updatedAt DESC`
+      ).bind(assetId)
+      : this.db.prepare('SELECT * FROM albums ORDER BY updatedAt DESC');
+    const result = await statement.all<Album>();
     return result.results || [];
   }
 
