@@ -6,6 +6,7 @@ import firebase from './config/firebase'
 import { Button } from './components/ui/Button'
 import { Input } from './components/ui/Input'
 import { Card } from './components/ui/Card'
+import { WALLPAPER_URL } from './assets/wallpaper'
 import Turnstile from './components/Turnstile'
 import { toast } from './components/ui/Toast'
 import { SetupWorker } from './pages/SetupWorker'
@@ -1623,94 +1624,19 @@ function OwnershipPage() {
 
 // ── iCloud-style gradient background presets ──────────────────────────────────
 const BG_PRESETS = [
-  {
-    // Apple's dark canvas: hsl(240, 3.4%, 11.4%) — near-black, a hair cool, and
-    // completely unsaturated. Every surface above it is neutral grey with alpha,
-    // which is what stops the glass reading as tinted. No facets: the restraint
-    // IS the design.
-    id: 'graphite',
-    name: 'Graphite',
-    swatch: ['#2C2C2E', '#3A3A3C'],
-    bg: 'linear-gradient(180deg, #1C1C1E 0%, #161618 100%)',
-    shapes: [],
-  },
-  {
-    id: 'ocean',
-    name: 'Ocean',
-    swatch: ['#0A1628', '#1A4AAF'],
-    bg: 'linear-gradient(160deg, #050D22 0%, #0C1E50 42%, #1A4AAF 72%, #091840 100%)',
-    shapes: [
-      { color: 'rgba(18,56,168,0.52)', clip: 'polygon(0 0, 78% 0, 58% 100%, 0 68%)' },
-      { color: 'rgba(8,30,110,0.38)', clip: 'polygon(32% 100%, 100% 28%, 100% 100%)' },
-      { color: 'rgba(26,74,200,0.20)', clip: 'polygon(58% 0, 100% 0, 100% 58%, 68% 100%, 38% 100%)' },
-    ],
-  },
-  {
-    id: 'space',
-    name: 'Space',
-    swatch: ['#080818', '#201C70'],
-    bg: 'linear-gradient(160deg, #06060F 0%, #101038 42%, #201C70 72%, #080818 100%)',
-    shapes: [
-      { color: 'rgba(44,36,155,0.42)', clip: 'polygon(0 0, 78% 0, 58% 100%, 0 68%)' },
-      { color: 'rgba(22,18,105,0.30)', clip: 'polygon(32% 100%, 100% 28%, 100% 100%)' },
-      { color: 'rgba(58,48,195,0.18)', clip: 'polygon(58% 0, 100% 0, 100% 58%, 68% 100%, 38% 100%)' },
-    ],
-  },
-  {
-    id: 'aurora',
-    name: 'Aurora',
-    swatch: ['#061208', '#12602C'],
-    bg: 'linear-gradient(160deg, #040A05 0%, #0A2410 42%, #125828 72%, #071508 100%)',
-    shapes: [
-      { color: 'rgba(14,105,42,0.46)', clip: 'polygon(0 0, 78% 0, 58% 100%, 0 68%)' },
-      { color: 'rgba(7,62,22,0.33)', clip: 'polygon(32% 100%, 100% 28%, 100% 100%)' },
-    ],
-  },
-  {
-    id: 'nebula',
-    name: 'Nebula',
-    swatch: ['#100620', '#601065'],
-    bg: 'linear-gradient(160deg, #090410 0%, #200830 42%, #601065 72%, #180522 100%)',
-    shapes: [
-      { color: 'rgba(105,18,135,0.44)', clip: 'polygon(0 0, 78% 0, 58% 100%, 0 68%)' },
-      { color: 'rgba(62,10,95,0.33)', clip: 'polygon(32% 100%, 100% 28%, 100% 100%)' },
-    ],
-  },
-  {
-    id: 'midnight',
-    name: 'Midnight',
-    swatch: ['#0B0C10', '#1A1C2E'],
-    bg: 'linear-gradient(160deg, #090A0D 0%, #111220 42%, #1A1C2E 72%, #0C0D12 100%)',
-    shapes: [
-      { color: 'rgba(50,55,105,0.20)', clip: 'polygon(0 0, 78% 0, 58% 100%, 0 68%)' },
-      { color: 'rgba(30,33,72,0.16)', clip: 'polygon(32% 100%, 100% 28%, 100% 100%)' },
-    ],
-  },
+  { id: 'blue',   name: 'Blue',   swatch: ['#00355f', '#02006c'] },
+  { id: 'purple', name: 'Purple', swatch: ['#1f0943', '#210056'] },
+  { id: 'green',  name: 'Green',  swatch: ['#032700', '#0d2a00'] },
+  { id: 'orange', name: 'Orange', swatch: ['#711d00', '#742c03'] },
+  { id: 'red',    name: 'Red',    swatch: ['#360200', '#5c0303'] },
+  { id: 'yellow', name: 'Yellow', swatch: ['#482a00', '#854300'] },
 ]
 
 function DashboardBackground({ preset }) {
-  const bg = BG_PRESETS.find(p => p.id === preset) || BG_PRESETS[0]
-  const [c1, c2] = bg.swatch
+  const theme = BG_PRESETS.find(p => p.id === preset) ? preset : 'blue'
   return (
-    <div className="fixed inset-0 -z-10 overflow-hidden" style={{ background: bg.bg }}>
-      {/* Soft aurora blobs — the premium atmosphere (replaces flat clip shapes) */}
-      <div
-        className="absolute -top-[20%] -left-[12%] w-[62vw] h-[62vw] rounded-full blur-[130px] opacity-[0.55]"
-        style={{ background: `radial-gradient(circle, ${c2}, transparent 70%)` }}
-      />
-      <div
-        className="absolute top-[28%] -right-[8%] w-[48vw] h-[48vw] rounded-full blur-[130px] opacity-40"
-        style={{ background: `radial-gradient(circle, ${c1}, transparent 70%)` }}
-      />
-      {/* Faint geometric facets from the preset, dialed way back */}
-      {bg.shapes.map((s, i) => (
-        <div key={i} className="absolute inset-0 opacity-[0.35]" style={{ background: s.color, clipPath: s.clip }} />
-      ))}
-      {/* Top sheen + bottom vignette → depth */}
-      <div className="absolute inset-0" style={{ background: 'radial-gradient(120% 80% at 50% -10%, rgba(255,255,255,0.07), transparent 58%)' }} />
-      <div className="absolute inset-0" style={{ background: 'radial-gradient(100% 100% at 50% 118%, rgba(0,0,0,0.55), transparent 52%)' }} />
-      {/* Fine film grain */}
-      <div className="absolute inset-0 grain-overlay opacity-[0.05] mix-blend-overlay" />
+    <div className="fixed inset-0 -z-10 overflow-hidden" style={{ background: '#1c1c1e' }}>
+      <div className={`dc-wallpaper ${theme}`} style={{ backgroundImage: WALLPAPER_URL }} />
     </div>
   )
 }
@@ -1755,7 +1681,7 @@ function DashboardPage() {
   const [summary, setSummary] = useState(null) // real { photos:{count,recent}, drive:{count,recent} }
   const [loading, setLoading] = useState(true)
   const [bgPreset, setBgPreset] = useState(
-    () => localStorage.getItem('dc-bg-preset') || 'graphite'
+    () => localStorage.getItem('dc-bg-preset') || 'blue'
   )
 
   useEffect(() => {
@@ -1911,7 +1837,7 @@ function DashboardPage() {
                   {/* Profile card — clickable → /profile */}
                   <Link
                     to="/profile"
-                    className="md:w-[248px] shrink-0 dc-card dc-card-hover rounded-[18px] p-6 transition-all duration-300 group"
+                    className="md:w-[248px] shrink-0 dc-card dc-card-hover rounded-[11px] p-6 transition-all duration-300 group"
                   >
                     <div
                       className="w-[70px] h-[70px] rounded-full flex items-center justify-center text-white text-2xl font-bold mb-5 shadow-lg ring-2 ring-white/10 group-hover:ring-white/25 transition-all duration-200"
@@ -1931,7 +1857,7 @@ function DashboardPage() {
                   </Link>
 
                   {/* App grid — clickable card header routes to /dashboard */}
-                  <div className="flex-1 dc-card rounded-[18px] p-5 sm:p-6 flex flex-col justify-center">
+                  <div className="flex-1 dc-card rounded-[16px] p-5 sm:p-6 flex flex-col justify-center">
                     <p className="text-[11px] text-[rgba(255,255,255,0.42)] font-medium uppercase tracking-widest mb-4">Services</p>
                     <div className="grid grid-cols-3 sm:grid-cols-6 gap-4 sm:gap-5">
                       {apps.map(app =>
@@ -1959,7 +1885,7 @@ function DashboardPage() {
                 <div className="grid grid-cols-1 md:grid-cols-[3fr_2fr] gap-4">
 
                   {/* ── Drive card ── */}
-                  <div className="dc-card rounded-[18px] overflow-hidden flex flex-col">
+                  <div className="dc-card rounded-[16px] overflow-hidden flex flex-col">
                     {/* header */}
                     <div className="flex items-center gap-3 px-5 py-4 dc-inset">
                       <div className="w-11 h-11 rounded-[12px] flex items-center justify-center shadow-lg" style={{ background: 'linear-gradient(145deg,#1A3B90,#2D5DC8)' }}>
@@ -2015,7 +1941,7 @@ function DashboardPage() {
                   </div>
 
                   {/* ── Photos card ── */}
-                  <div className="dc-card rounded-[18px] overflow-hidden flex flex-col">
+                  <div className="dc-card rounded-[16px] overflow-hidden flex flex-col">
                     {/* header */}
                     <div className="flex items-center gap-3 px-5 py-4 dc-inset">
                       <div className="w-11 h-11 rounded-[12px] flex items-center justify-center shadow-lg" style={{ background: 'linear-gradient(145deg,#0A4520,#15803D)' }}>

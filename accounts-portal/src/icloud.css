@@ -1,0 +1,63 @@
+/* ─────────────────────────────────────────────────────────────────────────────
+   Card + wallpaper system copied verbatim from the reference stylesheet.
+
+   Two things here are not obvious and are the reason hand-rolled attempts look
+   flat:
+
+   1. The wallpaper is a layered SVG of soft diagonal bands with a colour
+      gradient composited over it in `mix-blend-mode: hard-light`. A plain CSS
+      linear-gradient cannot produce those bands, and without hard-light the
+      colour sits dead on top instead of lighting the bands from within.
+
+   2. The cards are DARKER than the wallpaper, not lighter. Contrast comes from
+      dark translucent black over a bright field. Light-grey cards on a dark
+      page have no contrast at all, which is exactly why that reads as flat.
+
+   The radial origin is off-centre (97% 3.3%) so the top-right corner catches a
+   sheen; a flat rgba(0,0,0,.5) looks dead beside it.
+   ───────────────────────────────────────────────────────────────────────────*/
+
+.dc-wallpaper {
+  position: absolute;
+  inset: 0;
+  background-position: 50%;
+  background-size: cover;
+}
+
+.dc-wallpaper::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  mix-blend-mode: hard-light;
+}
+
+/* Dark-mode gradients, one per theme. */
+.dc-wallpaper.blue::after   { background: linear-gradient(64deg, #00355f, #002f6c 44.5%, #02006c); }
+.dc-wallpaper.purple::after { background: linear-gradient(64deg, #1f0943, #351574 48%,   #210056); }
+.dc-wallpaper.green::after  { background: linear-gradient(64deg, #032700, #0b3300 45%,   #0d2a00); }
+.dc-wallpaper.orange::after { background: linear-gradient(64deg, #711d00, #9d2e00 44%,   #742c03); }
+.dc-wallpaper.red::after    { background: linear-gradient(64deg, #360200, #6e1515 46%,   #5c0303); }
+.dc-wallpaper.yellow::after { background: linear-gradient(64deg, #482a00, #ae5f00 46%,   #854300); }
+
+/* .tile.profile-card / .app-library */
+.dc-card {
+  background: radial-gradient(circle at 97% 3.3%, rgba(0, 0, 0, 0.35) 0, rgba(0, 0, 0, 0.6) 164%);
+  -webkit-backdrop-filter: blur(24px);
+  backdrop-filter: blur(24px);
+  border: none;
+}
+
+/* .tile.profile-card:hover */
+.dc-card-hover:hover {
+  box-shadow: 20px 20px 41px rgba(0, 0, 0, 0.32);
+}
+
+/* Rows sit ON the dark card, so they lighten rather than darken. */
+.dc-inset {
+  background-color: rgba(255, 255, 255, 0.05);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dc-card, .dc-card-hover { transition: none !important; }
+}
