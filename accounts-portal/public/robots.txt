@@ -1,0 +1,5 @@
+User-agent: *
+Allow: /
+# /login and /signup are client routes that canonicalize to / — no need to crawl them.
+
+Sitemap: https://accounts.daemonclient.uz/sitemap.xml

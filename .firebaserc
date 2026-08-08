@@ -19,6 +19,9 @@
         ],
         "drive": [
           "daemonclient-drive"
+        ],
+        "docs": [
+          "daemonclient-docs"
         ]
       }
     }

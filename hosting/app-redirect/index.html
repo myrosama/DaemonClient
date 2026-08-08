@@ -1,0 +1,31 @@
+<!doctype html>
+<!--
+  app.daemonclient.uz is the address of a retired app. Every path on this host
+  301s to Drive via the `redirects` rule in firebase.json, so this file is
+  normally never served — Firebase Hosting just requires the target to have a
+  public directory.
+
+  It exists as a fallback: if the redirect rule is ever removed by accident, a
+  visitor lands here rather than on a Firebase 404 page.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="refresh" content="0; url=https://drive.daemonclient.uz/">
+<link rel="canonical" href="https://drive.daemonclient.uz/">
+<title>Moved to DaemonClient Drive</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+         display: grid; place-items: center; min-height: 100vh; margin: 0;
+         background: #0b0e14; color: #e6e8eb; text-align: center; padding: 24px; }
+  a { color: #60a5fa; }
+</style>
+</head>
+<body>
+  <main>
+    <h1>This app moved</h1>
+    <p>DaemonClient Drive now lives at <a href="https://drive.daemonclient.uz/">drive.daemonclient.uz</a>.</p>
+  </main>
+</body>
+</html>
