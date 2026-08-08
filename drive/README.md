@@ -1,16 +1,53 @@
-# React + Vite
+# drive — the Drive web app
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Deployed to `drive.daemonclient.uz`. React + Vite + Tailwind. Not a fork —
+unlike Photos, this is ours from scratch.
 
-Currently, two official plugins are available:
+General file storage on top of the same per-user Telegram channel Photos uses:
+folders, uploads of any size, previews, search, and a WebDAV endpoint that lets
+the whole thing mount as a normal drive in Windows Explorer, macOS Finder, or
+any file manager.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+## What is different about Drive
 
-## React Compiler
+**Drive is genuinely zero-knowledge.** The AES-256-GCM key is derived in the
+browser from a password the user sets, and it never leaves. The worker stores
+metadata and ciphertext, and cannot read a file even in principle.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+Photos, by contrast, encrypts on the user's own worker — which is what lets it
+generate thumbnails, extract EXIF, and deduplicate. The two use **separate key
+material**: Drive's lives under `drive_zke`, Photos' under `zke_password`.
 
-## Expanding the ESLint configuration
+The one exception is WebDAV. A file manager cannot decrypt, so the worker
+decrypts on the way out for that path only.
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+## Layout
+
+| File | What it is |
+|---|---|
+| `src/App.jsx` | the application — file tree, uploads, previews, sharing |
+| `src/LandingPage.jsx` | the marketing page shown to signed-out visitors |
+| `src/crypto.js` | PBKDF2 + AES-GCM in the browser |
+| `src/manifest-sync.js` | keeps the local chunk manifest in step with the worker |
+| `src/idb-store.js` | IndexedDB cache |
+| `src/api.js` | worker client; `VITE_API_BASE` overrides the endpoint for self-host builds |
+| `public/sw.js` | service worker — fetches chunks straight from Telegram and decrypts locally |
+
+## Running it
+
+```bash
+npm install
+npm run dev
+npm run build     # what CI runs
+```
+
+Self-host build: `VITE_SELF_HOST=1 VITE_API_BASE=<their worker> npm run build`.
+
+## Known duplication
+
+`src/crypto.js` and the chunking in `src/App.jsx` are independent
+reimplementations of what the worker and the Photos app also do — the storage
+primitive exists four times across this repository, and `19 * 1024 * 1024`
+appears twice in `App.jsx` alone. A bug in chunking has to be fixed in every
+copy. Consolidating this is the most valuable refactor available; see
+[../docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md#known-sharp-edges).

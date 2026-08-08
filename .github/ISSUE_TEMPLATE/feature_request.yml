@@ -1,0 +1,39 @@
+name: Feature request
+description: Suggest something
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please skim [the roadmap](https://github.com/myrosama/DaemonClient/blob/main/docs/ROADMAP.md)
+        first — it lists what is planned, and what is deliberately not, with
+        reasons.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve
+      description: |
+        The problem, not the solution. "I can't find photos from a trip" leads
+        somewhere better than "add tag support", because the second one has
+        already picked an answer.
+    validations: { required: true }
+
+  - type: textarea
+    id: idea
+    attributes:
+      label: What you have in mind
+    validations: { required: true }
+
+  - type: checkboxes
+    id: constraints
+    attributes:
+      label: Does it fit the constraints
+      description: |
+        These are hard. A feature that needs any of them is not something this
+        project can take, however good the idea is.
+      options:
+        - label: It does not need storage outside the user's own Telegram channel
+        - label: It does not need a container, a VPS, or any long-running process
+        - label: It works within the Cloudflare Workers free tier (10 ms CPU, 128 MB, 50 subrequests) — or the heavy part can run in `processor/`, which each user deploys themselves
+        - label: It does not make a self-hosted install depend on infrastructure the operator runs

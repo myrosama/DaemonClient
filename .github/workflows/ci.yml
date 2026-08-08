@@ -28,6 +28,7 @@ jobs:
       processor: ${{ steps.filter.outputs.processor }}
       accounts: ${{ steps.filter.outputs.accounts }}
       drive: ${{ steps.filter.outputs.drive }}
+      selfhost: ${{ steps.filter.outputs.selfhost }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -39,6 +40,11 @@ jobs:
               - '.github/workflows/ci.yml'
             deployment:
               - 'deployment-service/**'
+              - 'schema/**'
+              - '.github/workflows/ci.yml'
+            selfhost:
+              - 'selfhost/**'
+              - 'schema/**'
               - '.github/workflows/ci.yml'
             processor:
               - 'processor/**'
@@ -90,6 +96,36 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
+
+  # The self-hosting CLI. Untested regressions here strand strangers who have
+  # no way to tell our bug apart from their own misconfiguration, and it is what
+  # the README now points every new user at.
+  #
+  # No `npm ci` step: this package has no dependencies, on purpose — it must run
+  # from a fresh clone with nothing installed. If a lockfile install ever
+  # becomes necessary here, that is itself the regression.
+  selfhost:
+    needs: changes
+    if: needs.changes.outputs.selfhost == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: selfhost
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm test
+      - name: no dependencies
+        run: |
+          node -e '
+            const p = require("./package.json");
+            const n = Object.keys(p.dependencies ?? {}).length
+                    + Object.keys(p.devDependencies ?? {}).length;
+            if (n) { console.error(`selfhost gained ${n} dependencies; it must run from a bare clone`); process.exit(1); }
+          '
 
   # The owner-pinned image thumbnailer that runs on each user's own Vercel.
   processor:

@@ -1,43 +1,39 @@
 # Documentation
 
-## If you want to run DaemonClient yourself
-
-- **[SELF_HOSTING.md](SELF_HOSTING.md)** — set up your own instance on your own
-  Telegram, Cloudflare and Firebase accounts. Start here.
-
-## If you use the hosted service
-
-- **[SETUP_GUIDE.md](SETUP_GUIDE.md)** — signing up and connecting your storage
-  at daemonclient.uz.
-
-## If you want to work on the code
-
-- **[../CONTRIBUTING.md](../CONTRIBUTING.md)** — where things live, and the four
-  hard constraints that explain most of the odd-looking code.
-- **[../SECURITY.md](../SECURITY.md)** — reporting a vulnerability, and the
-  security model.
-
-## Design and planning
-
-Current work:
+## Running it
 
 | | |
 |---|---|
-| [plan/MASTER_PLAN.md](plan/MASTER_PLAN.md) | the phased plan of record |
-| [plan/SCRATCHPAD.md](plan/SCRATCHPAD.md) | what is done and what is next, updated continuously |
-| [plan/ALTERNATIVES.md](plan/ALTERNATIVES.md) | research into other ways of building each piece |
-| [roadmap/SELFHOST_CLI_DESIGN.md](roadmap/SELFHOST_CLI_DESIGN.md) | **authoritative** design for the setup CLI, verified against real tool behaviour |
+| **[SELF_HOSTING.md](SELF_HOSTING.md)** | Set up your own instance on your own Telegram, Cloudflare and Firebase accounts. **Start here** if you want to run this yourself. |
+| [SETUP_GUIDE.md](SETUP_GUIDE.md) | Signing up and connecting your storage on the hosted service at daemonclient.uz. |
 
-Background and history:
+## Understanding it
 
 | | |
 |---|---|
-| [roadmap/SELFHOST_PIVOT.md](roadmap/SELFHOST_PIVOT.md) | the original brief for going open-source and self-hostable |
-| [roadmap/SELFHOST_DESIGN.md](roadmap/SELFHOST_DESIGN.md) | first architecture pass; superseded in places by the CLI design above |
-| [roadmap/PROGRAM.md](roadmap/PROGRAM.md) | the multi-product picture: Photos, Drive, accounts |
-| [roadmap/MOBILE_APP.md](roadmap/MOBILE_APP.md) | the mobile fork's history and constraints |
-| [roadmap/CLOUDFLARE_OAUTH.md](roadmap/CLOUDFLARE_OAUTH.md) | the hosted service's one-click Cloudflare flow. **Not** used by self-hosting — that path uses `wrangler login`, which is Cloudflare's own OAuth app rather than ours. |
-| [seo/PLAN.md](seo/PLAN.md) | search strategy for the public site |
+| **[ARCHITECTURE.md](ARCHITECTURE.md)** | How everything works: the storage primitive, encryption, auth, the database, and the constraints that explain the odd-looking code. **Read this before changing anything.** |
+| [API.md](API.md) | Every route, its auth, and which callers actually exercise it — verified by grep, not by inference. |
+| [openapi.yaml](openapi.yaml) | The same contract, machine-readable. Load it into any OpenAPI tool. |
+| [PARITY.md](PARITY.md) | One codebase, two ways to run it — and the five places where behaviour legitimately diverges. A sixth is a bug. |
 
-When a document stops being true, fix it or delete it. A stale design doc is
+## Contributing
+
+| | |
+|---|---|
+| [../CONTRIBUTING.md](../CONTRIBUTING.md) | Where things live, house style, and the four hard constraints. |
+| [../SECURITY.md](../SECURITY.md) | Reporting a vulnerability, and the security model. |
+| [../immich/FORK.md](../immich/FORK.md) | What our Immich fork changed, and what to know before pulling upstream. |
+
+## What is coming
+
+| | |
+|---|---|
+| [ROADMAP.md](ROADMAP.md) | What is being worked on, what is deliberately not, and what is finished. |
+
+---
+
+Every component directory also has its own README covering what it is, how to
+run it, and how it relates to the rest.
+
+**When a document stops being true, fix it or delete it.** A stale design doc is
 worse than none, because someone will follow it.

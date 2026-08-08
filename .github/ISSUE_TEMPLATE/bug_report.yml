@@ -1,0 +1,73 @@
+name: Bug report
+description: Something is broken
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Do not report a security vulnerability here.** Use
+        [Security → Report a vulnerability](https://github.com/myrosama/DaemonClient/security/advisories/new)
+        instead — see [SECURITY.md](https://github.com/myrosama/DaemonClient/blob/main/SECURITY.md).
+
+  - type: dropdown
+    id: install
+    attributes:
+      label: Which install
+      options:
+        - Hosted (daemonclient.uz)
+        - Self-hosted
+    validations: { required: true }
+
+  - type: dropdown
+    id: app
+    attributes:
+      label: Where
+      options: [Photos (web), Drive (web), Accounts dashboard, WebDAV mount, Mobile app, The CLI, Not sure]
+    validations: { required: true }
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: '`daemonclient status`, or open `/api/health` on your worker.'
+      placeholder: '1.2.0'
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations: { required: true }
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. …
+        2. …
+        3. …
+
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Diagnostics
+      description: |
+        **Self-hosted:** paste `daemonclient doctor`. It redacts every secret,
+        which makes it the single most useful thing you can attach.
+
+        **Anything:** the browser console and network tab often say more than a
+        screenshot. If you see a CORS error on a media request, check for a 502
+        or 1102 first — Cloudflare kills an over-budget worker and returns an
+        error page with no CORS headers, so the browser blames CORS.
+      render: shell
+
+  - type: checkboxes
+    id: known
+    attributes:
+      label: Already known?
+      description: These are documented limitations, not bugs — please check before filing.
+      options:
+        - label: This is not a video over 100 MB failing to upload from the mobile app
+        - label: This is not a HEIC photo with a blank thumbnail and no processor deployed
+        - label: This is not face recognition, smart search, or places, which are not implemented

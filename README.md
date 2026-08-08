@@ -5,8 +5,8 @@
 <h1 align="center">DaemonClient</h1>
 
 <p align="center">
-  <strong>Free. Unlimited. Encrypted.</strong><br>
-  <em>Your own private cloud — built on infrastructure you own, at $0/month.</em>
+  <strong>Your own private cloud. Unlimited. Encrypted. $0/month.</strong><br>
+  <em>Photos and Drive, running entirely on free tiers you control.</em>
 </p>
 
 <p align="center">
@@ -17,9 +17,10 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/cost-%240%2Fmonth-34D399" alt="Zero cost">
-  <img src="https://img.shields.io/badge/storage-unlimited-3B82F6" alt="Unlimited storage">
+  <img src="https://img.shields.io/badge/self--hosting-available-34D399" alt="Self-hosting available">
   <img src="https://img.shields.io/badge/compute-Cloudflare%20Workers-F38020?logo=cloudflare&logoColor=white" alt="Cloudflare Workers">
-  <img src="https://img.shields.io/badge/storage%20layer-Telegram-26A5E4?logo=telegram&logoColor=white" alt="Telegram">
+  <img src="https://img.shields.io/badge/storage-Telegram-26A5E4?logo=telegram&logoColor=white" alt="Telegram">
+  <img src="https://img.shields.io/badge/licence-AGPL--3.0-blue" alt="AGPL-3.0">
   <img src="https://img.shields.io/badge/status-beta-orange" alt="Beta">
 </p>
 
@@ -29,34 +30,36 @@
 
 ---
 
-## What is DaemonClient?
+## What this is
 
-Cloud storage is expensive, and you don't own any of it. DaemonClient flips that: it combines two services with famously generous free tiers — **Telegram** (unlimited file storage through bots and channels) and **Cloudflare Workers** (serverless compute + D1 database) — into a personal cloud platform where **every single user gets their own isolated stack**:
+Cloud storage is expensive and you don't own any of it. DaemonClient combines
+two services with unusually generous free tiers — **Telegram** (unlimited file
+storage through bots and channels) and **Cloudflare Workers** (serverless
+compute plus a D1 database) — into a personal cloud where **every user gets
+their own isolated stack**:
 
-- **your own** Telegram bot and private storage channel — ownership is *actually transferred to you*
+- **your own** Telegram bot and private channel — ownership actually transferred to you
 - **your own** Cloudflare Worker and D1 database — your API, your index, nobody else's traffic
-- **your own** encryption — files are encrypted before they ever reach Telegram
+- **your own** encryption keys — files are encrypted before they ever reach Telegram
 
-There is no shared file server. There is no operator database holding everyone's photos. When you upload a photo, it travels to *your* worker, gets encrypted, and lands in *your* Telegram channel as chunks that only your stack can read back.
+There is no shared file server and no operator database holding everyone's
+photos. A photo you upload travels to *your* worker, gets encrypted, and lands
+in *your* Telegram channel as chunks only your stack can read back.
 
-| Principle | How it's real, not marketing |
-|---|---|
-| 🆓 **Zero cost** | Telegram stores the bytes, Cloudflare runs the compute, Firebase's free tier handles auth. There is nothing to pay for and no premium tier. |
-| ♾️ **Unlimited** | Telegram channels have no storage cap. Files are chunked at 19 MB (the Bot API's download limit) and stitched back together on the fly. |
-| 🔐 **Encrypted** | AES-256-GCM. Drive encrypts **in your browser** (true zero-knowledge — the server never sees plaintext). Photos encrypts on **your own isolated worker** before anything touches Telegram. |
-| 🔑 **Owned** | The setup flow creates your bot and channel, then transfers ownership of both **to your Telegram account** via BotFather. Verify it yourself: open BotFather — the bot is listed as yours. |
-| 🧱 **Isolated** | One worker + one database + one bot per user. A bug, outage, or rate limit in one user's stack cannot touch another's. |
+**You can run the whole thing yourself.** One command builds a complete install
+on your own Telegram, Cloudflare and Firebase accounts, with nothing pointing
+back at us — see [Self-hosting](#self-hosting).
 
 ---
 
-## The products
+## Try it
 
-| Product | URL | What it is |
+| | | |
 |---|---|---|
-| 📸 **DaemonClient Photos** | [photos.daemonclient.uz](https://photos.daemonclient.uz) | A full Google-Photos-style gallery — timeline, albums, favorites, EXIF + map view, live photos, videos, trash, zip downloads. Works with the mobile app for automatic camera backup. |
-| 📁 **DaemonClient Drive** | [drive.daemonclient.uz](https://drive.daemonclient.uz) | General file storage with folders, previews, and true client-side encryption — plus a **WebDAV endpoint**, so your cloud mounts as a real drive in Windows Explorer, macOS Finder, or any file manager. |
-| 👤 **Accounts** | [accounts.daemonclient.uz](https://accounts.daemonclient.uz) | One account for everything: the guided setup that builds your bot, channel, and worker, plus your dashboard, profile, and security controls. |
-| 🌐 **Landing** | [daemonclient.uz](https://daemonclient.uz) | The front door. |
+| 📸 **Photos** | [photos.daemonclient.uz](https://photos.daemonclient.uz) | Timeline, albums, favourites, EXIF and map view, live photos, video, trash, zip downloads |
+| 📁 **Drive** | [drive.daemonclient.uz](https://drive.daemonclient.uz) | Folders, previews, client-side encryption, and a WebDAV mount |
+| 👤 **Accounts** | [accounts.daemonclient.uz](https://accounts.daemonclient.uz) | One account for both, plus the guided setup and your dashboard |
+| 📖 **Docs** | [docs/](docs/) | Architecture, API, self-hosting |
 
 <p align="center">
   <img src="daemonclient-site/uploads/immich-screenshot.webp" alt="DaemonClient Photos" width="100%">
@@ -68,134 +71,178 @@ There is no shared file server. There is no operator database holding everyone's
 
 ```mermaid
 flowchart LR
-    subgraph Clients["📱 Your devices"]
-        WEB["Photos & Drive web apps"]
-        APP["Mobile app<br/>(auto camera backup)"]
+    subgraph Clients["Your devices"]
+        WEB["Photos & Drive<br/>web apps"]
         DAV["Any file manager<br/>(WebDAV mount)"]
     end
 
-    subgraph Stack["☁️ YOUR isolated stack — nobody else's"]
+    subgraph Stack["YOUR isolated stack"]
         W["Your Cloudflare Worker<br/><i>API · encryption · auth</i>"]
         D1[("Your D1 database<br/><i>metadata index</i>")]
         BOT["Your Telegram bot"]
         CH[("Your private channel<br/><i>encrypted 19 MB chunks</i>")]
     end
 
-    WEB --> W
-    APP --> W
+    WEB -->|metadata| W
     DAV --> W
     W <--> D1
     W <--> BOT
+    WEB -.->|file bytes, direct| CH
     BOT <--> CH
 ```
 
-Every user's data path is fully vertical: device → your worker → your bot → your channel. The only shared components are the **control plane** — the accounts portal, the login service, and the deployment service that provisions per-user workers and ships them code updates. None of them sit in the path of your file bytes.
+Note the dotted line: **on the web, file bytes never touch the worker.** The
+browser chunks and encrypts a file itself and sends it straight to Telegram,
+and a service worker reads it back the same way. The worker only ever handles
+the index. That is what keeps a photo library inside a free tier that allows
+100,000 requests a day.
 
-### Onboarding: from zero to your own cloud in minutes
+The only shared components are the control plane — the accounts portal, the
+login endpoint, and the service that provisions per-user workers. None of them
+sit in the path of your bytes.
 
-```mermaid
-sequenceDiagram
-    autonumber
-    participant U as You
-    participant P as Accounts portal
-    participant S as Setup service
-    participant TG as Telegram
-    participant CF as Cloudflare
+**Three numbers explain most of the design:**
 
-    U->>P: Sign up
-    P->>S: Start automated setup
-    S->>TG: Create your bot + private channel<br/>(resumable, checkpointed)
-    U->>TG: Tap START on your new bot,<br/>join your channel
-    S->>TG: Transfer bot + channel<br/>ownership to YOU
-    P->>CF: Provision your worker + D1,<br/>run migrations
-    P-->>U: Done — your cloud is live
+| | | |
+|---|---|---|
+| **19 MB** | Telegram won't let a bot *download* a file bigger than 20 MB — uploads can be larger, which is a trap. Files are chunked below the cap and never merged. |
+| **10 ms** | The CPU a free Cloudflare Worker gets per request. No image decoding, no transcoding, no big buffers. |
+| **50** | External subrequests per invocation. A 50-chunk file is already at the ceiling, so background jobs run one at a time. |
+
+The full explanation is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+---
+
+## Self-hosting
+
+```bash
+git clone https://github.com/myrosama/DaemonClient.git
+cd DaemonClient/immich-api-shim && npm install && cd ..
+node selfhost/bin/daemonclient.mjs setup
 ```
 
-The setup is fully automated but ends with **you owning everything**. Prefer manual control? The portal also accepts a bot token and channel ID you created yourself.
+About ten minutes, most of it you clicking around in Telegram and Cloudflare.
+Then `daemonclient web` builds and deploys the three web apps to your own
+Firebase Hosting.
+
+**A self-hosted install depends on nothing we run.** Not your files, not your
+credentials, not a telemetry ping. The single outbound call to anything of ours
+is an anonymous check of the public GitHub releases feed, which sends nothing
+about your install and can be turned off. If this project disappears tomorrow,
+your install keeps working: the files are in your Telegram channel, the index is
+in your D1 database, and the code is in your clone under AGPL-3.0.
+
+Full guide: **[docs/SELF_HOSTING.md](docs/SELF_HOSTING.md)**.
 
 ---
 
-## Feature highlights
+## What works, and what doesn't
 
-### 📸 Photos
-- Timeline with month buckets, thumbhash blur placeholders, favorites, archive, trash
-- Albums, EXIF metadata (camera, lens, exposure) and a **map view** from GPS data
-- **Live Photos** — the still and its motion video pair up just like on your phone
-- Video playback with on-the-fly multi-chunk stitching and HTTP range support
-- Mobile app with automatic background camera backup (an [Immich](https://github.com/immich-app/immich) fork)
-- Server-side SHA-1 checksums so re-installs and re-uploads **deduplicate instead of duplicating**
-- Zip archive downloads of any selection
-- Self-healing background jobs: missing checksums, missing EXIF, and broken thumbnails repair themselves quietly while you use the app
+Honesty is more useful than a feature list, so both columns:
 
-### 📁 Drive
-- Folders, uploads of any size (19 MB chunking), previews, search
-- **True zero-knowledge encryption**: AES-256-GCM keys derived in your browser — the worker only ever stores ciphertext
-- **WebDAV**: mount your encrypted cloud as a normal drive on desktop; the worker decrypts transparently on the way out
-- Direct-from-Telegram downloads in the browser via a service worker — on supported paths, file bytes skip the server entirely
+### Working
 
-### 🛠 Platform
-- Long-lived sessions (no weekly re-logins); token refresh handled server-side
-- Per-user workers **auto-update**: when a fix ships, your worker pulls the new build on your next login or dashboard visit — a fleet of single-tenant APIs that stays current with zero user effort
-- Free-tier engineering throughout: request queues with byte budgets, subrequest-bounded background jobs, edge caching of decrypted chunks, and streamed responses that never hold more than ~2 chunks in memory
+**Photos** — timeline with month buckets and thumbhash placeholders, albums,
+favourites, archive, trash, EXIF (camera, lens, exposure) with a map view from
+GPS, live photos, video playback with range-aware multi-chunk streaming,
+server-side SHA-1 so re-installs deduplicate instead of duplicating, zip
+downloads, and background jobs that quietly repair missing checksums, EXIF and
+thumbnails while you use the app.
+
+**Drive** — folders, uploads of any size, previews, search, true zero-knowledge
+encryption (keys derived in your browser; the worker only ever holds
+ciphertext), and **WebDAV**, so your cloud mounts as a normal drive in Windows
+Explorer, macOS Finder or any file manager.
+
+**Platform** — long-lived sessions, one sign-in across all three apps, and
+per-user workers that auto-update on your next login.
+
+### Not working, or not there
+
+| | |
+|---|---|
+| **Mobile apps** | A fork of the Immich app exists in `immich/mobile/` and is **not released**. It is not currently being worked on — the web comes first. See [Roadmap](docs/ROADMAP.md). |
+| **Videos over 100 MB from mobile** | Cloudflare's request-body cap. Needs chunked upload in the app. Web uploads are unaffected — they bypass the worker entirely. |
+| **HEIC thumbnails** | Blank unless you deploy the optional [`processor/`](processor). Workers cannot decode HEIC and Telegram won't thumbnail it. Every other format, video included, is fine. |
+| **Face recognition, smart search, places** | Not implemented. They need ML this architecture has nowhere to run. The routes return correctly-shaped empty results rather than errors. |
+| **Sharing between users** | Built and held pending a security review. One install, one owner, for now. |
+| **`POST /api/sync/ack`** | Not implemented — every ack the mobile client sends is a no-op. |
+
+More detail, including the four-times-duplicated storage code, is under
+[known sharp edges](docs/ARCHITECTURE.md#known-sharp-edges).
 
 ---
 
-## Security model, honestly
+## Security
 
-- **Drive files** are encrypted *client-side* in your browser before upload. Zero-knowledge: neither the worker nor Telegram ever sees plaintext.
-- **Photos** are encrypted on *your own* single-tenant worker before reaching Telegram — this is what enables server features like thumbnails, EXIF extraction, and deduplication. The tradeoff is deliberate, documented, and confined to infrastructure that serves only you. A fully client-side mode exists for the web uploader.
-- **Your bytes never transit shared machines.** This is a hard rule enforced in code: optional heavy-compute features (like HEIC conversion) run only against a *per-user* processor URL from your own config — never a shared operator box.
-- **Setup endpoints are authenticated** with your Firebase identity; per-user Firestore rules isolate every user's configuration; the bot token that controls your channel lives in *your* config, readable only by you.
-- Found something? Security reports are very welcome — open an issue or contact the maintainer.
+- **Drive** is encrypted *client-side* in your browser. Zero-knowledge — neither the worker nor Telegram sees plaintext.
+- **Photos** is encrypted on *your own* single-tenant worker, which is what makes thumbnails, EXIF and deduplication possible. A deliberate trade, confined to infrastructure serving one person.
+- **Your bytes never transit shared machines.** Enforced in code: optional heavy compute (HEIC conversion) only ever calls a *per-user* processor URL from your own config.
+- **One install, one owner**, enforced at the single authentication chokepoint rather than per route.
+
+Found something? **Please report it privately** — see [SECURITY.md](SECURITY.md).
+Past issues are listed there too, because they are the shape of thing worth
+looking for.
 
 ---
 
 ## Repository map
 
-This is a monorepo containing the whole platform:
-
 | Directory | What lives there |
 |---|---|
-| `immich-api-shim/` | ⭐ The per-user worker: the entire Photos + Drive API — encryption, Telegram chunk I/O, D1 access, background heal jobs |
-| `deployment-service/` | Provisions per-user workers + D1, embeds the worker bundle, powers fleet auto-update |
-| `accounts-portal/` | React portal: signup, guided Telegram/Cloudflare setup, dashboard |
-| `auth-worker/` | Cross-domain session service (`auth.daemonclient.uz`) |
-| `backend-server/` | Setup automation (creates + transfers your bot/channel) for the managed flavor |
-| `immich/` | The Immich fork: Photos web app (`web/`) + mobile app (`mobile/`) |
-| `drive/` | The Drive web app |
-| `daemonclient-site/` | The landing page |
-| `docs/` | Architecture notes and roadmaps — start with `docs/roadmap/` |
+| [`immich-api-shim/`](immich-api-shim) | ⭐ The per-user worker: the entire Photos + Drive API — encryption, Telegram chunk I/O, D1, background repair |
+| [`selfhost/`](selfhost) | The self-hosting CLI. Dependency-free, runs from a fresh clone |
+| [`deployment-service/`](deployment-service) | Provisions per-user workers for the managed service and ships them updates |
+| [`accounts-portal/`](accounts-portal) | Sign-up, the guided setup wizard, the dashboard |
+| [`auth-worker/`](auth-worker) | Cross-subdomain session broker (managed service only) |
+| [`immich/`](immich/FORK.md) | The Immich fork: Photos web app (`web/`) and the unreleased mobile app (`mobile/`) |
+| [`drive/`](drive) | The Drive web app — not a fork |
+| [`processor/`](processor) | Optional HEIC thumbnailer, deployed to each user's own Vercel |
+| [`daemonclient-proxy/`](daemonclient-proxy) | CORS relay for the Telegram Bot API |
+| [`schema/`](schema) | The D1 schema, defined once for both provisioners |
+| [`daemonclient-site/`](daemonclient-site) | The landing page |
+| [`docs-site/`](docs-site) | The documentation site |
+| [`docs/`](docs) | Architecture, API reference, self-hosting guide |
 
-*(A few other directories are earlier experiments queued for cleanup — see the roadmap.)*
+Every directory has its own README explaining what it is and how to run it.
+
+---
+
+## Contributing
+
+Start with [CONTRIBUTING.md](CONTRIBUTING.md) — it covers where things live, the
+four hard constraints that explain most of the odd-looking code, and the
+mistakes already made so you don't have to repeat them.
+
+```bash
+cd immich-api-shim
+npm install
+npm test          # 294 tests
+npx tsc --noEmit
+```
+
+Please don't test against anyone else's deployment, including ours. Self-hosting
+builds you a full stack in about ten minutes on free tiers; test there.
 
 ---
 
 ## Built on the shoulders of
 
-- [**Immich**](https://github.com/immich-app/immich) — the outstanding self-hosted photo platform our Photos apps are forked from. If you want a traditional self-hosted gallery on your own hardware, go star it.
-- **Telegram Bot API** — the storage layer. DaemonClient is an independent project, not affiliated with or endorsed by Telegram.
-- **Cloudflare Workers + D1** — the compute layer that makes one-stack-per-user architecture free.
+- [**Immich**](https://github.com/immich-app/immich) — the excellent self-hosted photo platform our Photos apps are forked from. If you want a conventional gallery on your own hardware, go star it. See [immich/FORK.md](immich/FORK.md) for exactly what we changed.
+- **Telegram Bot API** — the storage layer.
+- **Cloudflare Workers + D1** — the compute layer that makes one-stack-per-user free.
 
 ## Fair warnings
 
-- DaemonClient is in **beta**. It's used daily and treated with production care, but expect rough edges.
+- DaemonClient is in **beta**. It is used daily and treated with production care, but expect rough edges.
 - Your storage lives in your Telegram channel and is subject to Telegram's Terms of Service. Keep the bot in the channel and don't touch the channel's messages — they *are* your data.
-- Very large videos (>100 MB) can't yet be uploaded from mobile (a Cloudflare request-size limit; on the roadmap).
+- Losing your encryption key means losing access to files already stored. There is no recovery path, by design.
 
----
+## Licence
 
-<h2 align="center">🚀 Open-source self-hosting — coming soon</h2>
-
-<p align="center">
-Everything above runs today as a managed service. The next chapter is the one we're most excited about:<br/>
-a fully <strong>self-hostable</strong> DaemonClient — clone the repo, run <strong>one script</strong>, and the entire ecosystem<br/>
-(worker, database, bot, web apps, media processor) deploys onto <strong>your own accounts</strong>,<br/>
-with built-in update notifications when new versions ship.
-</p>
-
-<p align="center">
-<strong>Star ⭐ and watch 👁 the repo to catch the release.</strong>
-</p>
+[AGPL-3.0-or-later](LICENSE). See [NOTICE](NOTICE) for attribution and
+trademarks. DaemonClient is not affiliated with or endorsed by Telegram,
+Cloudflare, Google, or the Immich project.
 
 <p align="center">
   <sub>Your files. Your cloud. Your control.</sub>

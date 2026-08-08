@@ -1,0 +1,735 @@
+openapi: 3.1.0
+
+# The DaemonClient worker API.
+#
+# Written against immich-api-shim/src, route by route. It documents what the
+# worker ACTUALLY serves, which is a subset of the Immich API surface plus a
+# handful of endpoints Immich does not have (dc-manifest, drive, selfhost).
+#
+# Routes that exist only as shaped-empty stubs are listed under the `stubs` tag
+# rather than omitted, because a client calling one gets 200 and an empty body,
+# not a 404 — and knowing that is the difference between "unimplemented" and
+# "broken".
+#
+# Where this disagrees with the code, one of them is a bug. See docs/API.md for
+# the prose version, including which callers exercise each route.
+
+info:
+  title: DaemonClient API
+  version: 1.2.0
+  description: |
+    One worker per user. Files live in that user's own Telegram channel as
+    19 MB AES-256-GCM chunks; this API is the index and the control plane.
+
+    **The same code is deployed twice.** With a `DB` binding it is a complete
+    API for one person (`dc-<id>`). Without one it is the shared login endpoint
+    (`immich-api`) that validates credentials and returns the caller's
+    `workerUrl`, and every data route is unavailable. A self-hosted install is
+    the same worker again with `SELF_HOST=1`.
+
+    **One install, one owner.** The first authenticated caller claims the
+    install; everyone else is rejected regardless of credential validity.
+  license:
+    name: AGPL-3.0-or-later
+    url: https://www.gnu.org/licenses/agpl-3.0.html
+  contact:
+    name: DaemonClient
+    url: https://github.com/myrosama/DaemonClient
+
+servers:
+  - url: https://dc-{installId}.{subdomain}.workers.dev
+    description: A per-user worker. Every user has their own.
+    variables:
+      installId:
+        default: example
+      subdomain:
+        default: example
+  - url: https://api.daemonclient.uz
+    description: |
+      The shared managed-service worker. Login and worker discovery only —
+      it has no database and serves no data routes.
+
+tags:
+  - name: auth
+    description: Sessions. Three credential shapes; see `securitySchemes`.
+  - name: server
+    description: Capability discovery, and the secrets clients need to read bytes directly.
+  - name: assets
+    description: Upload, media delivery, trash, EXIF, live photos.
+  - name: timeline
+    description: Month buckets for the photo grid.
+  - name: sync
+    description: The mobile delta stream. The most fragile contract here.
+  - name: albums
+  - name: users
+  - name: search
+  - name: drive
+    description: File storage. Separate key material from Photos, and truly zero-knowledge.
+  - name: infrastructure
+    description: Health, the Telegram relay, update status.
+  - name: stubs
+    description: Immich routes answered with shaped empty data so clients do not crash.
+
+security:
+  - sessionToken: []
+
+components:
+  securitySchemes:
+    sessionToken:
+      type: http
+      scheme: bearer
+      description: |
+        `base64(payload).hmac` — issued by `/api/auth/login` or
+        `/api/auth/exchange` and signed with this install's own
+        `SESSION_SECRET`, so a session minted for one worker does not verify on
+        another. The payload is signed, **not encrypted**.
+
+        Also accepted as the `immich_access_token` or `__session` cookie.
+    firebaseIdToken:
+      type: http
+      scheme: bearer
+      description: |
+        A Firebase ID token, verified RS256 against Google's public certs with
+        `aud`, `iss` and `exp` pinned. Told apart from a session token by
+        counting dots: three parts means Firebase, two means a session.
+
+        This credential verifies on *every* worker in the managed fleet, so it
+        can never claim an install that has no owner recorded yet.
+
+  parameters:
+    assetId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+
+  responses:
+    Unauthorized:
+      description: |
+        No credential, a bad signature, an expired token, or a valid credential
+        for someone who does not own this install. Deliberately one message for
+        all of them — telling a prober which credential shape was recognised is
+        free reconnaissance.
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              message: { type: string, example: Not authenticated }
+    NoDatabase:
+      description: The shared worker has no database; this route needs one.
+
+  schemas:
+    Asset:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        ownerId: { type: string }
+        originalFileName: { type: string }
+        fileCreatedAt: { type: string, format: date-time }
+        fileModifiedAt: { type: string, format: date-time }
+        type: { type: string, enum: [IMAGE, VIDEO] }
+        checksum:
+          type: string
+          description: |
+            `base64(SHA-1(plaintext))`. The worker computes this itself when the
+            client sends none. Load-bearing: without it `bulk-upload-check`
+            never matches and the app re-uploads the entire library on every
+            restart.
+        isFavorite:
+          type: boolean
+          description: |
+            Must be a JSON boolean. An integer `1` here throws in the mobile
+            client's strict isolate and aborts all sync permanently.
+        isTrashed: { type: boolean }
+        visibility: { type: string, enum: [timeline, archive, hidden, locked] }
+        duration: { type: string, nullable: true }
+        livePhotoVideoId: { type: string, nullable: true }
+        thumbhash:
+          type: string
+          nullable: true
+          description: ~25 bytes. The blur placeholder painted before any network request.
+        exifInfo:
+          type: object
+          nullable: true
+
+    AssetManifest:
+      type: object
+      description: |
+        The chunk list the browser needs to fetch an asset's bytes straight from
+        Telegram and decrypt them locally, bypassing the worker entirely. This
+        is what keeps the deployment inside the Cloudflare free tier: bytes cost
+        a Telegram request, not a worker request.
+      required: [chunks, encryptionMode, mimeType, fileSize]
+      properties:
+        thumbId: { type: string }
+        previewId: { type: string }
+        originalId: { type: string }
+        chunks:
+          type: array
+          items:
+            type: object
+            properties:
+              index: { type: integer }
+              file_id: { type: string }
+        playbackChunks:
+          type: array
+          nullable: true
+          description: An H.264 rendition, when one exists. Served for `/video/playback` instead of a possibly-HEVC original.
+          items:
+            type: object
+            properties:
+              index: { type: integer }
+              file_id: { type: string }
+        playbackSize: { type: integer, nullable: true }
+        encryptionMode: { type: string, enum: [server, client, off] }
+        mimeType: { type: string }
+        fileSize: { type: integer }
+        isHeic: { type: boolean }
+
+    Session:
+      type: object
+      properties:
+        accessToken: { type: string }
+        userId: { type: string }
+        userEmail: { type: string, format: email }
+        name: { type: string }
+        isAdmin: { type: boolean }
+        workerUrl:
+          type: string
+          nullable: true
+          description: |
+            Baked into the token at login so later requests need no lookup. This
+            is how the shared worker hands a client off to its own.
+
+paths:
+  # ── auth ────────────────────────────────────────────────────────────────
+  /api/auth/login:
+    post:
+      tags: [auth]
+      summary: Sign in with email and password
+      security: []
+      description: |
+        Validates against Firebase, reads the caller's `workerUrl` and
+        per-install signing secret, and returns a session token with the worker
+        URL baked in.
+
+        Gated by Cloudflare Turnstile **only when `TURNSTILE_SECRET` is bound**.
+        The conditional exists because the mobile app and existing integrations
+        send no token, and locking them out would be worse than the risk it
+        removes.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, format: password }
+                cf-turnstile-response: { type: string }
+      responses:
+        '201':
+          description: Signed in. Also sets `immich_access_token`, `__session` and `immich_is_authenticated` cookies.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Session' }
+        '401': { description: Invalid credentials }
+        '403': { description: Turnstile verification failed }
+
+  /api/auth/exchange:
+    post:
+      tags: [auth]
+      summary: Trade a Firebase ID token for this worker's session token
+      security:
+        - firebaseIdToken: []
+      description: |
+        What makes one sign-in serve all three apps. Firebase persists its
+        session per origin, so signing in on the accounts portal leaves Photos
+        and Drive looking signed-out; they present their already-verified ID
+        token here instead.
+
+        Grants nothing a password login would not — the caller already holds a
+        verified credential. Only a Firebase ID token may be exchanged: allowing
+        a session token to be re-exchanged would let an old session mint an
+        endlessly renewed one, outliving any revocation.
+
+        The returned session carries **no refresh token**.
+      responses:
+        '200':
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Session' }
+        '400': { description: Presented credential was not a Firebase ID token }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/auth/logout:
+    post:
+      tags: [auth]
+      security: []
+      responses:
+        '200': { description: Cookies cleared }
+
+  /api/auth/status:
+    get:
+      tags: [auth]
+      summary: Is this credential valid
+      responses:
+        '200': { description: Authenticated }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  # ── server ──────────────────────────────────────────────────────────────
+  /api/server/config:
+    get:
+      tags: [server]
+      security: []
+      summary: Server capabilities
+      description: '`externalDomain` is the install''s own address — a self-hosted install is never handed ours.'
+      responses:
+        '200': { description: OK }
+
+  /api/server/features:
+    get: { tags: [server], security: [], responses: { '200': { description: OK } } }
+  /api/server/version:
+    get: { tags: [server], security: [], responses: { '200': { description: OK } } }
+  /api/server/ping:
+    get: { tags: [server], security: [], responses: { '200': { description: OK } } }
+  /api/server/storage:
+    get: { tags: [server], responses: { '200': { description: OK } } }
+
+  /api/server/telegram-config:
+    get:
+      tags: [server]
+      summary: The caller's own Telegram bot token and channel id
+      description: |
+        **Returns real secrets, deliberately.** The browser fetches media bytes
+        straight from Telegram and decrypts locally, which is what keeps the
+        worker inside its free-tier limits; removing these fields would push
+        every byte back through the worker.
+
+        Protected by the owner gate, not by obscurity. Refused outright on a
+        worker with no database — the shared worker has no business serving it.
+      responses:
+        '200': { description: OK }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/server/zke-config:
+    get:
+      tags: [server]
+      summary: The caller's own encryption key material
+      description: Same reasoning as `telegram-config`. Owner-gated.
+      responses:
+        '200': { description: OK }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/server/processor:
+    get:
+      tags: [server]
+      summary: The attached HEIC media processor
+      responses: { '200': { description: OK } }
+    post:
+      tags: [server]
+      summary: Attach a HEIC media processor
+      description: |
+        Refuses anything that is not https, is an internal address, is not a
+        DaemonClient processor, has no `OWNER_UID` — or, the check that matters,
+        does not accept **this user's** token. Plaintext must only ever reach
+        the user's own infrastructure.
+      responses:
+        '200': { description: Attached }
+        '400': { description: Rejected by one of the checks above }
+    delete:
+      tags: [server]
+      responses: { '200': { description: Detached } }
+
+  # ── assets ──────────────────────────────────────────────────────────────
+  /api/assets:
+    post:
+      tags: [assets]
+      summary: Upload an asset
+      description: |
+        Two shapes, chosen by the client:
+
+        **Client-direct (web).** The browser has already chunked, encrypted and
+        sent the bytes to Telegram; this request carries `clientUpload=true` and
+        the resulting `file_id` list as `telegramChunks`. No bytes cross the
+        worker.
+
+        **Server-side (mobile).** The whole file is posted here and the worker
+        does the chunking, encryption and Telegram upload itself. Capped by
+        Cloudflare's 100 MB request body limit, which is why a >100 MB video
+        cannot be uploaded from the app today.
+
+        Refuses with **503 `encryption_unavailable`** when encryption is
+        configured but the key material is missing, rather than silently
+        storing plaintext.
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [deviceAssetId, deviceId, fileCreatedAt, fileModifiedAt]
+              properties:
+                assetData: { type: string, format: binary }
+                deviceAssetId: { type: string }
+                deviceId: { type: string }
+                fileCreatedAt: { type: string, format: date-time }
+                fileModifiedAt: { type: string, format: date-time }
+                isFavorite: { type: boolean }
+                duration: { type: string }
+                livePhotoVideoId: { type: string }
+                clientUpload: { type: string, enum: ['true'] }
+                telegramChunks:
+                  type: string
+                  description: JSON array of `{index, message_id, file_id}` — client-direct uploads only.
+                thumbData_base64:
+                  type: string
+                  description: iOS background upload only.
+      responses:
+        '201': { description: Stored }
+        '200': { description: Duplicate — matched an existing checksum }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '413': { description: Body exceeded Cloudflare's 100 MB limit }
+        '503': { description: '`encryption_unavailable` — configured to encrypt, no key present' }
+    delete:
+      tags: [assets]
+      summary: Trash or permanently delete assets
+      responses: { '204': { description: Done } }
+    put:
+      tags: [assets]
+      summary: Bulk update
+      responses: { '204': { description: Done } }
+
+  /api/assets/bulk-upload-check:
+    post:
+      tags: [assets]
+      summary: Which of these checksums do you already have
+      description: The client's defence against re-uploading its whole library. Matches on `checksum`, ignoring soft-deleted rows.
+      responses: { '200': { description: OK } }
+
+  /api/assets/{id}:
+    get:
+      tags: [assets]
+      parameters: [{ $ref: '#/components/parameters/assetId' }]
+      responses:
+        '200':
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Asset' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    put:
+      tags: [assets]
+      parameters: [{ $ref: '#/components/parameters/assetId' }]
+      responses: { '200': { description: Updated } }
+
+  /api/assets/{id}/original:
+    get:
+      tags: [assets]
+      summary: The full file
+      description: |
+        Supports HTTP `Range`. An open-ended `bytes=0-` streams the whole file:
+        native players treat a truncated 206 as EOF.
+
+        In the browser this request is normally intercepted by the service
+        worker and served from Telegram directly — it only reaches the worker
+        from clients with no service worker.
+      parameters: [{ $ref: '#/components/parameters/assetId' }]
+      responses:
+        '200': { description: Full body }
+        '206': { description: Partial }
+        '416': { description: Range out of bounds }
+
+  /api/assets/{id}/thumbnail:
+    parameters: [{ $ref: '#/components/parameters/assetId' }]
+    get:
+      tags: [assets]
+      responses: { '200': { description: Image bytes } }
+    post:
+      tags: [assets]
+      summary: Attach a client-generated thumbnail
+      description: |
+        Used by the web backfill and by the iOS background uploader — the only
+        mobile path that sends a thumbnail at all. Android, and every foreground
+        or manual upload, sends no thumbnail field.
+      responses: { '200': { description: Stored } }
+
+  /api/assets/{id}/video/playback:
+    get:
+      tags: [assets]
+      summary: Video stream
+      description: Serves an H.264 rendition when one exists, otherwise the original. Range-aware, chunk-bounded.
+      parameters: [{ $ref: '#/components/parameters/assetId' }]
+      responses:
+        '200': { description: Full body }
+        '206': { description: Partial }
+
+  /api/assets/{id}/dc-manifest:
+    get:
+      tags: [assets]
+      summary: The chunk list for client-direct reads
+      description: |
+        Not an Immich route. Deliberately tiny and pure — no bytes, no Telegram
+        round-trips — so it stays well inside the worker's 10 ms CPU budget.
+      parameters: [{ $ref: '#/components/parameters/assetId' }]
+      responses:
+        '200':
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AssetManifest' }
+
+  /api/assets/zke-status:
+    get:
+      tags: [assets]
+      summary: Is encryption configured and usable
+      responses: { '200': { description: OK } }
+
+  /api/dashboard/summary:
+    get:
+      tags: [assets]
+      summary: Counts and recent asset ids for the accounts dashboard
+      responses:
+        '200': { description: OK }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/trash/empty:
+    post:
+      tags: [assets]
+      responses: { '204': { description: Emptied } }
+
+  /api/trash/restore/assets:
+    post:
+      tags: [assets]
+      responses: { '204': { description: Restored } }
+
+  /api/map/markers:
+    get:
+      tags: [assets]
+      summary: GPS points for the map view
+      responses: { '200': { description: OK } }
+
+  /api/download/info:
+    post:
+      tags: [assets]
+      responses: { '200': { description: OK } }
+
+  /api/download/archive:
+    post:
+      tags: [assets]
+      summary: Zip a selection
+      responses: { '200': { description: A zip stream } }
+
+  # ── timeline ────────────────────────────────────────────────────────────
+  /api/timeline/buckets:
+    get:
+      tags: [timeline]
+      summary: Month buckets and their counts
+      description: |
+        Accepts `albumId`. `personId` and `tagId` are accepted and return
+        **empty** rather than the whole library — there are no people or tags in
+        the isolated per-user model, and returning everything would be worse
+        than returning nothing.
+
+        Each request also dispatches exactly **one** background repair job,
+        round-robin. Two would exceed the 50-subrequest budget and kill the
+        invocation with error 1102.
+      responses: { '200': { description: OK } }
+
+  /api/timeline/bucket:
+    get:
+      tags: [timeline]
+      responses: { '200': { description: OK } }
+
+  # ── sync ────────────────────────────────────────────────────────────────
+  /api/sync/stream:
+    post:
+      tags: [sync]
+      summary: Newline-delimited delta stream (mobile only)
+      description: |
+        Emits, in order: `UserV1` → dedup-loser `AssetDeleteV1`s → `AssetV1`s →
+        tombstone `AssetDeleteV1`s → `SyncCompleteV1`.
+
+        **The most fragile contract in the product.** The client parses this in
+        a strict Dart isolate: one value of the wrong type throws, the batch is
+        never acked, and the server replays the same record forever. Backup is
+        gated on sync succeeding at five separate call sites, so a single bad
+        value stops backup permanently, on every trigger.
+
+        Types that must never drift: `isFavorite`/`isEdited` boolean,
+        `visibility`/`type` a known enum member, `checksum`/`id`/`ownerId`/
+        `originalFileName` string, `profileChangedAt` a parseable date,
+        `quotaUsageInBytes`/`sequence`/`imageWidth`/`imageHeight` integer — a
+        JSON float throws.
+
+        The server may **add** a field. It may never remove one or change a
+        type: one app build talks to servers of many ages.
+
+        Never emitted, though the client asks for them: `AlbumV1`, `PartnerV1`,
+        `MemoryV1`, `StackV1`, `PersonV1`, `AssetFaceV1`, `UserMetadataV1`,
+        `AssetExifV1`.
+      responses:
+        '200':
+          content:
+            application/jsonlines: {}
+
+  /api/sync/ack:
+    post:
+      tags: [sync]
+      summary: Acknowledge a batch — NOT IMPLEMENTED
+      description: |
+        Falls through to the catch-all stub and returns `{}`. Every ack the
+        client sends is a no-op. Documented rather than hidden because the
+        client's retry behaviour only makes sense once you know this.
+      deprecated: true
+      responses: { '200': { description: '`{}` — the request had no effect' } }
+
+  # ── albums ──────────────────────────────────────────────────────────────
+  /api/albums:
+    get: { tags: [albums], responses: { '200': { description: OK } } }
+    post: { tags: [albums], responses: { '201': { description: Created } } }
+  /api/albums/{id}:
+    get: { tags: [albums], parameters: [{ $ref: '#/components/parameters/assetId' }], responses: { '200': { description: OK } } }
+    patch: { tags: [albums], parameters: [{ $ref: '#/components/parameters/assetId' }], responses: { '200': { description: Updated } } }
+    delete: { tags: [albums], parameters: [{ $ref: '#/components/parameters/assetId' }], responses: { '204': { description: Deleted } } }
+  /api/albums/{id}/assets:
+    put: { tags: [albums], parameters: [{ $ref: '#/components/parameters/assetId' }], responses: { '200': { description: Added } } }
+    delete: { tags: [albums], parameters: [{ $ref: '#/components/parameters/assetId' }], responses: { '200': { description: Removed } } }
+
+  # ── users ───────────────────────────────────────────────────────────────
+  /api/users/me:
+    get: { tags: [users], responses: { '200': { description: OK } } }
+    put: { tags: [users], responses: { '200': { description: Updated } } }
+  /api/users/me/preferences:
+    get: { tags: [users], responses: { '200': { description: OK } } }
+    put: { tags: [users], responses: { '200': { description: Updated } } }
+
+  # ── search ──────────────────────────────────────────────────────────────
+  /api/search/metadata:
+    post:
+      tags: [search]
+      summary: Filename and metadata search
+      description: The only search backed by real data.
+      responses: { '200': { description: Results from D1 } }
+
+  /api/search/smart:
+    post:
+      tags: [search, stubs]
+      security: []
+      summary: Semantic search — not implemented
+      description: |
+        Returns an empty **assets envelope**, not a 404 and not an error body. A
+        client handed an error body crashes on `.length`. There is no ML in the
+        per-user model.
+      responses: { '200': { description: Empty envelope } }
+
+  # ── drive ───────────────────────────────────────────────────────────────
+  /api/drive/files:
+    get:
+      tags: [drive]
+      summary: List a folder
+      description: Requires a database; unavailable on the shared worker.
+      responses:
+        '200': { description: OK }
+        '404': { $ref: '#/components/responses/NoDatabase' }
+    post:
+      tags: [drive]
+      summary: Record an uploaded file
+      description: |
+        Metadata only. Drive encrypts **in the browser** under its own
+        `drive_zke` key — separate from Photos' — and the worker never sees
+        plaintext. The one exception is WebDAV, where it must decrypt to serve a
+        file manager that cannot.
+      responses: { '201': { description: Recorded } }
+
+  /api/drive/files/{id}:
+    patch: { tags: [drive], parameters: [{ $ref: '#/components/parameters/assetId' }], responses: { '200': { description: Updated } } }
+    delete: { tags: [drive], parameters: [{ $ref: '#/components/parameters/assetId' }], responses: { '204': { description: Deleted } } }
+
+  /api/drive/zke:
+    get: { tags: [drive], responses: { '200': { description: OK } } }
+    post: { tags: [drive], responses: { '200': { description: Set } } }
+
+  /api/drive/dav:
+    get:
+      tags: [drive]
+      summary: Manage WebDAV credentials
+      description: |
+        The mount itself lives at `/dav` and `/dav/*`, outside `/api`, and uses
+        HTTP Basic against a **hashed** token so any file manager can speak to
+        it. `OPTIONS /dav` is unauthenticated so clients can discover the
+        endpoint.
+      responses: { '200': { description: OK } }
+
+  # ── infrastructure ──────────────────────────────────────────────────────
+  /api/health:
+    get:
+      tags: [infrastructure]
+      security: []
+      summary: Version and database status
+      description: Used by the CLI. `database` is `connected` or `not_configured` — the latter identifies the shared worker.
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  version: { type: string, example: 1.2.0 }
+                  timestamp: { type: integer }
+                  database: { type: string, enum: [connected, not_configured] }
+
+  /proxy:
+    get:
+      tags: [infrastructure]
+      security: []
+      summary: Relay to api.telegram.org, and nothing else
+      description: |
+        Exists because the Telegram Bot API sends no CORS headers, and the
+        browser talking to Telegram directly is the whole design.
+
+        Locked to **one exact host**. A suffix allowlist is not enough:
+        `аpi.telegram.org` with a Cyrillic **а** normalises to
+        `xn--pi-6kc.telegram.org`, a real subdomain of the real zone, and would
+        pass `endsWith('.telegram.org')`.
+
+        Bodies stream through rather than being buffered — a buffered 19 MB
+        chunk risks the 10 ms CPU limit. Redirects are not followed: a 3xx from
+        the target would steer the request to a host the allowlist just refused.
+      parameters:
+        - name: url
+          in: query
+          required: true
+          schema: { type: string, format: uri }
+      responses:
+        '200': { description: Relayed }
+        '400': { description: Missing url }
+        '403': { description: Target is not api.telegram.org over https on the default port }
+
+  /api/selfhost/status:
+    get:
+      tags: [infrastructure]
+      summary: What the self-hosted dashboard renders
+      description: |
+        Whether each moving part is configured and reachable, and whether a
+        newer release exists. Authenticated — a server's Telegram and processor
+        topology is not public — and never includes the bot token or any other
+        secret.
+      responses:
+        '200': { description: OK }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  # ── stubs ───────────────────────────────────────────────────────────────
+  /api/people:
+    get:
+      tags: [stubs]
+      summary: Shaped empty response
+      description: |
+        Face recognition needs ML this architecture has nowhere to run. Along
+        with tags, partners, shared links, sessions, api-keys, jobs, libraries,
+        memories, duplicates, stacks, workflows, plugins, backups, audit and
+        reports, this returns the right **shape** with no contents.
+
+        The rule is: never 404 something a client calls, and never return an
+        error body where a client expects an array. `/api/admin*` returns 403,
+        and the catch-all returns `{}` with 200.
+      responses: { '200': { description: Empty, correctly shaped } }

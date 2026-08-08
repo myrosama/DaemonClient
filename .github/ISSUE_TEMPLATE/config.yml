@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/myrosama/DaemonClient/security/advisories/new
+    about: Report privately, never in a public issue. See SECURITY.md.
+  - name: Self-hosting help
+    url: https://github.com/myrosama/DaemonClient/blob/main/docs/SELF_HOSTING.md
+    about: Setup, updates and troubleshooting. Run `daemonclient doctor` first — it usually says what is wrong.
+  - name: How it works
+    url: https://github.com/myrosama/DaemonClient/blob/main/docs/ARCHITECTURE.md
+    about: The storage model, encryption, auth, and the limits that shape the design.
