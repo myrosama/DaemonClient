@@ -1,0 +1,136 @@
+# Master plan — making self-hosting real
+
+Every phase, top to bottom. The current phase is detailed separately; this file
+is the shape of the whole thing and does not change often.
+
+**Read `../../EXECUTION_STATUS.md` first.** It says where we actually are.
+
+---
+
+## The goal, stated as a test
+
+> A stranger with no connection to us clones this repository, runs one command,
+> answers some questions, and ends with a working private photo and file cloud
+> on their own accounts. When we fix something, they find out and can apply it
+> with one more command. If we disappear, nothing they have stops working.
+
+Every phase below exists because some part of that sentence is not true yet.
+
+## What is already true
+
+Verified by reading the code on 2026-08-11, not assumed:
+
+| | Evidence |
+|---|---|
+| The CLI is dependency-free and runs from a bare clone | `selfhost/package.json` has no deps; CI asserts it |
+| 68 tests pass, covering schema replay, key seeding, the no-operator guard | `selfhost/test/` |
+| Schema application is correct and **fails loudly** | `setup.mjs:262-272` — only `already exists`/`duplicate column` are swallowed, everything else exits 1 |
+| Encryption keys are seeded, and setup **aborts** if it cannot | `setup.mjs:456-469` |
+| Telegram config is written into the user's own D1, not a config service | `setup.mjs:431-451` |
+| A self-host web build cannot contain an operator address | `web.mjs assertNoOperator`, plus `selfhost.test.mjs:128` |
+| Setup is resumable — it saves after every step | `markDone` / `saveState` throughout |
+
+This is a good foundation. The plan is not a rewrite.
+
+## What is not true yet
+
+| # | Problem | Evidence | Phase |
+|---|---|---|---|
+| 1 | The docs describe a `daemonclient password` command that **does not exist**, and an account model (local database accounts) that is not how auth works — it is Firebase | `docs/SELF_HOSTING.md:129,306` vs `bin/daemonclient.mjs:9` (7 commands, no `password`) | 0 |
+| 2 | `BUILD_VERSION` is unusable, so the update banner never fires after the first `update` | `setup.mjs:412` reads a **gitignored** root `package.json` → `0.0.0`; `update.mjs:133` writes a git SHA, which `isNewerVersion` either cannot parse or reads as a huge major version | 1 |
+| 3 | No GitHub release has ever been published, so the feed the update check polls is empty | `gh release list` → nothing; one dangling `v2.0.0` tag | 1 |
+| 4 | A fresh Cloudflare account has no `workers.dev` subdomain and setup never claims one — the install "succeeds" with no URL | `registerSubdomain` is exported at `cloudflare.mjs:254` and **called nowhere**; `setup.mjs:274` only reads it and falls back to `null` | 2 |
+| 5 | `enableWorkersDev` failure is swallowed silently | `setup.mjs:417` — `.catch(() => {})` | 2 |
+| 6 | **Nobody has ever run this end to end** | no staging environment exists | 3 |
+| 7 | Self-hosting requires the user to create a Firebase project by hand | `selfhost-auth.ts` — login goes through Firebase Identity Toolkit | 4 |
+| 8 | `daemonclient web` builds three apps including a full SvelteKit build; unverified that it completes | `web.mjs:35-37` | 5 |
+| 9 | No `curl … | sh` bootstrap | nothing in the tree | 6 |
+
+---
+
+## Phases
+
+Ordered by dependency, not by size. Each is shippable on its own.
+
+### Phase 0 — Truth
+Make every claim in the documentation match the code, and stand up the planning
+and status files this process needs. Small, and it comes first because
+everything after it is planned against those documents.
+
+**Done when:** no documented command or behaviour is absent from the code, and a
+cold agent can resume from `EXECUTION_STATUS.md` in two minutes.
+
+### Phase 1 — The update path
+Fix `BUILD_VERSION` at both ends, then cut the first real release.
+
+This is first among the real work because it is the **delivery channel**. Until
+it works, nothing else we fix reaches a self-hoster — they will run an install
+that believes it is current, forever.
+
+**Done when:** a worker deployed by `setup` and one deployed by `update` both
+report the same semver; a published release makes an older install show the
+banner; and a test asserts a git SHA can never be stamped as a version again.
+
+### Phase 2 — Setup completeness
+Claim a `workers.dev` subdomain when the account has none. Stop swallowing the
+failures that leave a user with no URL. Audit every `.catch(() => {})` and
+`|| null` in the setup path for the same class of silent success.
+
+**Done when:** setup either produces a reachable URL or fails with a message
+saying exactly what to do — never a green summary with a blank address.
+
+### Phase 3 — Prove it end to end
+Create throwaway Telegram, Cloudflare and Firebase accounts and run the whole
+thing as a stranger would: clone, setup, upload a photo, view it, deploy the web
+apps, take an update.
+
+This is the phase that converts inference into evidence. **It needs a human** —
+Telegram bot creation cannot be automated, and it must not be, since doing it
+for the user is precisely what the managed service does and self-hosting exists
+to avoid.
+
+**Done when:** a written transcript of a complete run exists, every defect it
+surfaced is either fixed or filed, and the run has been repeated cleanly.
+
+### Phase 4 — Accounts and sign-in
+Resolve the Firebase question (see `QUESTIONS.md` Q1), then make the account
+model match whatever is decided — including a real `password` command or the
+removal of every reference to one.
+
+**Done when:** adding and changing an account on a self-hosted install is one
+documented command that exists.
+
+### Phase 5 — The web apps
+Verify `daemonclient web` end to end, on the evidence from Phase 3. Confirm all
+three builds complete on a normal machine, that `assertNoOperator` holds, and
+that `ALLOWED_ORIGINS` is set correctly for the sites it creates.
+
+**Done when:** the three URLs it prints all serve a working app that talks to
+the user's own worker.
+
+### Phase 6 — Bootstrap and polish
+A `curl … | sh` entry point, a first-run experience worth showing someone, and
+the release cadence documented so cutting one is not a thing to remember.
+
+**Done when:** the quickstart in the README is genuinely one line.
+
+---
+
+## What is explicitly out of scope
+
+Written down so it does not get relitigated every phase.
+
+- **Mobile apps.** Parked behind the web, deliberately.
+- **Multi-user tenancy.** One install, one owner. Family accounts are a
+  different question (Q3) and much smaller.
+- **Anything that makes a self-hosted install depend on infrastructure we run.**
+  This is the premise, not a preference.
+- **Object storage.** Telegram is the storage layer.
+- **The managed service's own bugs.** Tracked separately in the private repo;
+  they only enter this plan where the same code serves both.
+
+## The rule this plan is held to
+
+> **Before implementing anything, grep for its callers and write down who calls
+> it.** If nothing calls it, fixing it changes nothing and no test will tell
+> you. `registerSubdomain` is in this plan precisely because that grep was run.

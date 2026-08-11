@@ -30,6 +30,19 @@
 |---|---|
 | [ROADMAP.md](ROADMAP.md) | What is being worked on, what is deliberately not, and what is finished. |
 
+## Current work
+
+The self-hosting feature is being finished phase by phase. Start at the top:
+
+| | |
+|---|---|
+| **[../EXECUTION_STATUS.md](../EXECUTION_STATUS.md)** | Where we actually are. **Read this first** — it is written so a cold start can resume in two minutes. |
+| [plan/MASTER_PLAN.md](plan/MASTER_PLAN.md) | Every phase, what is already true, and what is not true yet — each with the evidence. |
+| [plan/PHASE_0.md](plan/PHASE_0.md) | The current phase in detail. |
+| [plan/GATES.md](plan/GATES.md) | The four gates every task passes, and why each one exists. |
+| [plan/QUESTIONS.md](plan/QUESTIONS.md) | Open decisions for the operator, with recommendations. |
+| [plan/DESIGN_NOTES.md](plan/DESIGN_NOTES.md) | Per-task record of what was decided and why. Append-only. |
+
 ---
 
 Every component directory also has its own README covering what it is, how to
