@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>DaemonClient — Self-hosting docs</title>
-<meta name="description" content="Run your own private, unlimited, encrypted photo and file cloud on infrastructure you own — Telegram, Cloudflare, Firebase. Free, serverless, nothing on us." />
+<title>DaemonClient — Documentation</title>
+<meta name="description" content="How DaemonClient works and how to run it yourself: architecture, the storage model, encryption, the API reference, and a complete self-hosting guide. Free, serverless, nothing on us." />
 <style>
   :root{
     --bg:#ffffff; --fg:#1c1e21; --muted:#5b616e; --line:#e5e7eb; --sidebar:#f7f8fa;
@@ -101,14 +101,19 @@
 
   <nav class="side">
     <div class="group">
-      <h4>Get started</h4>
-      <a href="#overview">Overview</a>
+      <h4>Understand it</h4>
+      <a href="#overview">What this is</a>
       <a href="#architecture">How it works</a>
-      <a href="#prerequisites">What you need</a>
-      <a href="#quickstart">Quick start</a>
+      <a href="#storage">The storage model</a>
+      <a href="#encryption">Encryption</a>
+      <a href="#auth">Accounts &amp; sign-in</a>
+      <a href="#limits">The limits behind it</a>
+      <a href="#components">What's in the repo</a>
     </div>
     <div class="group">
-      <h4>Setup, step by step</h4>
+      <h4>Self-host it</h4>
+      <a href="#prerequisites">What you need</a>
+      <a href="#quickstart">Quick start</a>
       <a href="#telegram">1 · Telegram</a>
       <a href="#cloudflare">2 · Cloudflare</a>
       <a href="#firebase">3 · Firebase</a>
@@ -122,22 +127,35 @@
       <a href="#updating">Updating</a>
       <a href="#security">Security model</a>
       <a href="#troubleshooting">Troubleshooting</a>
+    </div>
+    <div class="group">
+      <h4>Reference</h4>
+      <a href="#api">The API</a>
+      <a href="#limitations">What doesn't work</a>
       <a href="#faq">FAQ</a>
     </div>
   </nav>
 
   <main>
    <div class="inner">
-    <div class="crumbs">Docs / Self-hosting</div>
-    <h1 id="overview">Self-host DaemonClient</h1>
-    <p class="lede">Run your own private, unlimited, end-to-end encrypted photo and file cloud — on
-    infrastructure you own, for <strong>$0/month</strong>. Nothing touches our servers: not your files,
-    not your credentials, not a telemetry ping. If this project vanished tomorrow, your install keeps working.</p>
+    <div class="crumbs">Docs</div>
+    <h1 id="overview">DaemonClient</h1>
+    <p class="lede">A private, unlimited, encrypted photo and file cloud that runs entirely on free tiers you
+    control — <strong>$0/month</strong>, no server, no hardware. This page covers how it works and how to run
+    it yourself.</p>
+
+    <p>Cloud storage is expensive and you don't own any of it. DaemonClient combines two services with
+    unusually generous free tiers — <strong>Telegram</strong> (unlimited file storage through bots and
+    channels) and <strong>Cloudflare Workers</strong> (serverless compute plus a D1 database) — so that
+    <strong>every user gets their own isolated stack</strong>: their own bot and private channel, their own
+    worker and database, their own encryption keys.</p>
 
     <div class="callout tip"><p><span class="tag">The promise</span></p>
-    <p>Every piece runs on <em>your</em> accounts. Your files live as encrypted chunks in <em>your</em>
-    Telegram channel; the API is <em>your</em> Cloudflare Worker; sign-in is <em>your</em> Firebase project.
-    A self-hosted build of every web app is verified to contain <strong>no operator address</strong>.</p></div>
+    <p>A self-hosted install depends on <strong>nothing we run</strong> — not your files, not your
+    credentials, not a telemetry ping. A self-hosted build of every web app is verified at build time to
+    contain no operator address. If this project vanished tomorrow, your install keeps working: the files are
+    in your Telegram channel, the index is in your D1 database, and the code is in your clone under
+    AGPL-3.0.</p></div>
 
     <h2 id="architecture">How it works</h2>
     <p>One vertical data path per user: your device → your worker → your Telegram channel. There is no shared
@@ -150,10 +168,112 @@
                     ▼
       your Telegram bot  ─────────► your private channel
                                     (AES-256-GCM encrypted 19 MB chunks)</div>
-    <p>Files are chunked at 19 MB — Telegram's Bot API download cap is 20 MB, so chunks are never merged —
-    and encrypted with AES-256-GCM before they ever reach Telegram. <strong>Drive</strong> encrypts in your
-    browser (true zero-knowledge — even your own worker never sees plaintext). <strong>Photos</strong>
-    encrypts on your own worker, which is what makes server-side thumbnails, EXIF and deduplication possible.</p>
+
+    <p>That diagram is true, and it hides the most interesting part. <strong>On the web, file bytes never
+    touch the worker at all.</strong> The browser chunks and encrypts a file itself and sends it straight to
+    Telegram; a service worker reads it back the same way, fetching only the chunks a given byte range needs.
+    The worker sees the index and nothing else.</p>
+
+    <div class="diagram">  UPLOAD                                    READ
+  browser                                   browser
+    │ slice at 19 MB                          │ GET /api/assets/{id}/dc-manifest
+    │ encrypt each chunk                      │   ← tiny JSON: the chunk file_ids
+    ├──── bytes ────► Telegram                ├──── fetch chunks ────► Telegram
+    │        ← file_id                        │ decrypt locally
+    └── metadata + file_ids ──► worker        └── paint</div>
+
+    <p>This is why a photo library fits in a free tier that allows 100,000 worker requests a day: thumbnails
+    and downloads cost a <em>Telegram</em> request, not a worker one.</p>
+
+    <h2 id="storage">The storage model</h2>
+    <p>Telegram's Bot API will not let a bot <strong>download</strong> a file larger than 20 MB. Uploads can
+    be bigger, which is a trap — you can happily send a 60 MB document and then discover you can never fetch
+    it back. So everything is split at <strong>19 MB of plaintext</strong>, and chunks are never merged.</p>
+
+    <p>A single photo becomes up to four stored artefacts, which surprises people:</p>
+    <table><thead><tr><th>Artefact</th><th>Where</th><th>Why</th></tr></thead><tbody>
+      <tr><td><code>thumbhash</code></td><td>a column in D1</td><td>~25 bytes. The blurred placeholder the grid paints instantly, before any network request.</td></tr>
+      <tr><td>thumbnail</td><td>one Telegram message</td><td>The small thumbnail Telegram generates for you, free.</td></tr>
+      <tr><td>preview</td><td>one Telegram message</td><td>A larger preview for the detail view.</td></tr>
+      <tr><td>chunks</td><td>N Telegram messages</td><td>The actual file, recorded as a list of <code>file_id</code>s.</td></tr>
+    </tbody></table>
+    <p>The reason for the first three is CPU, not storage: generating a thumbnail from a 40 MB original inside
+    a worker is not possible on the free plan. So either the browser does it before upload, or Telegram does
+    it as a side effect of accepting the file.</p>
+
+    <div class="callout"><p><span class="tag">Deduplication</span> Every asset carries
+    <code>base64(SHA-1(plaintext))</code>, computed by the worker when the client sends none. Without it the
+    "do you already have these?" check never matches and an app re-uploads your entire library every time it
+    restarts.</p></div>
+
+    <h2 id="encryption">Encryption</h2>
+    <p>Three modes, protecting against different things. Being clear about which is which matters more than
+    the marketing line.</p>
+    <table><thead><tr><th>Mode</th><th>Where the key lives</th><th>Who can read plaintext</th><th>Used by</th></tr></thead><tbody>
+      <tr><td><strong>Client-side</strong></td><td>derived in your browser, never transmitted</td><td>only your browser</td><td>Drive, and web uploads to Photos</td></tr>
+      <tr><td><strong>Server-side</strong></td><td>in <em>your own</em> D1 database</td><td>your own worker, transiently</td><td>mobile uploads to Photos</td></tr>
+      <tr><td><strong>Off</strong></td><td>—</td><td>anyone with the channel</td><td>never, by default</td></tr>
+    </tbody></table>
+    <p>AES-256-GCM throughout, with keys derived by PBKDF2-SHA256 at 100,000 iterations and a fresh 12-byte
+    IV per chunk.</p>
+    <p><strong>Server-side mode is a deliberate trade.</strong> It is what lets the worker compute a checksum,
+    extract EXIF and generate a thumbnail — things a zero-knowledge server cannot do by definition. The
+    mitigation is that "the server" is a worker serving exactly one person, on that person's own Cloudflare
+    account. On a self-hosted install it is not our machine in any sense.</p>
+    <div class="callout warn"><p><span class="tag">Fails closed</span> An install configured to encrypt but
+    missing its key material <strong>refuses uploads</strong> rather than silently storing plaintext. This was
+    not always true — installs created before 27 July 2026 should read the migration note in the repository's
+    self-hosting guide.</p></div>
+
+    <h2 id="auth">Accounts &amp; sign-in</h2>
+    <p><strong>One install, one owner.</strong> The first account to sign in claims the install; every
+    authenticated route is gated on that owner, so a second account in your Firebase project cannot read your
+    data. The check lives at the single authentication chokepoint rather than being repeated per route, so a
+    route added later is covered by default.</p>
+    <p>Two credential shapes are accepted, told apart by counting dots: a <strong>Firebase ID token</strong>
+    (three parts, verified RS256 against Google's public certs with <code>aud</code>, <code>iss</code> and
+    <code>exp</code> pinned) or a <strong>session token</strong> (two parts,
+    <code>base64(payload).hmac</code>, signed with that install's own secret so a session minted for one
+    worker does not verify on another).</p>
+    <p>On the hosted service, one sign-in serves all three apps: a cookie on the parent domain lets Photos and
+    Drive ask for a fresh ID token and trade it for their own session. The refresh token stays in an HttpOnly
+    cookie and never crosses into JavaScript. A self-hosted install skips all of this and signs in against its
+    own Firebase project directly.</p>
+
+    <h2 id="limits">The limits behind the design</h2>
+    <p>Almost everything that looks over-engineered is one of these. Figures are the Cloudflare Workers
+    <strong>free</strong> plan.</p>
+    <table><thead><tr><th>Limit</th><th>Value</th><th>What it forces</th></tr></thead><tbody>
+      <tr><td>CPU time</td><td><strong>10 ms</strong> / request</td><td>No image decoding, no transcoding, no large buffers. HEIC goes to a separate function.</td></tr>
+      <tr><td>Memory</td><td>128 MB</td><td>Responses stream; never more than about two chunks held at once.</td></tr>
+      <tr><td>Subrequests</td><td><strong>50</strong> external / request</td><td>A 50-chunk file is already at the ceiling, so background repair jobs run one per request.</td></tr>
+      <tr><td>Requests</td><td>100,000 / day</td><td>Why bytes go browser↔Telegram directly.</td></tr>
+      <tr><td>Request body</td><td>100 MB</td><td>Why a &gt;100 MB video can't be uploaded from the mobile app.</td></tr>
+      <tr><td>Telegram download</td><td>20 MB</td><td>Where 19 MB chunking comes from.</td></tr>
+    </tbody></table>
+    <div class="callout warn"><p><span class="tag">Error 1102</span> Exceeding CPU or memory doesn't degrade —
+    Cloudflare kills the invocation and returns an error page with <em>no CORS headers</em>, so the browser
+    reports a CORS failure. If you're staring at an inexplicable CORS error on a media request, check for 1102
+    first.</p></div>
+
+    <h2 id="components">What's in the repository</h2>
+    <table><thead><tr><th>Directory</th><th>What it is</th></tr></thead><tbody>
+      <tr><td><code>immich-api-shim/</code></td><td>The per-user worker — the entire Photos + Drive API. Deployed once per user.</td></tr>
+      <tr><td><code>selfhost/</code></td><td>The self-hosting CLI. Dependency-free, runs from a fresh clone.</td></tr>
+      <tr><td><code>deployment-service/</code></td><td>Provisions workers for the hosted service. Not used when self-hosting.</td></tr>
+      <tr><td><code>accounts-portal/</code></td><td>Sign-up, the setup wizard, the dashboard.</td></tr>
+      <tr><td><code>immich/web/</code></td><td>The Photos app — a fork of Immich's frontend. The upstream server is not used at all.</td></tr>
+      <tr><td><code>drive/</code></td><td>The Drive app. Not a fork.</td></tr>
+      <tr><td><code>processor/</code></td><td>Optional HEIC thumbnailer, deployed to your own Vercel.</td></tr>
+      <tr><td><code>schema/</code></td><td>The database schema, defined once for both provisioners.</td></tr>
+    </tbody></table>
+    <p>Every directory has its own README. The full technical write-up is
+    <a href="https://github.com/myrosama/DaemonClient/blob/main/docs/ARCHITECTURE.md">docs/ARCHITECTURE.md</a>.</p>
+
+    <hr>
+    <h1 id="selfhost-top">Self-host it</h1>
+    <p class="lede">Run the whole thing on accounts you own. About ten minutes, most of it clicking around in
+    Telegram and Cloudflare.</p>
 
     <h2 id="prerequisites">What you need</h2>
     <div class="grid3">
@@ -329,6 +449,47 @@ daemonclient update</code></pre>
       <tr><td>Everything worked, then stopped</td><td>Check Cloudflare's free-tier limits (100k worker requests/day; D1 has its own allowances). A big library browsed hard can reach them.</td></tr>
     </tbody></table>
 
+    <hr>
+    <h1 id="api-top">Reference</h1>
+
+    <h2 id="api">The API</h2>
+    <p>Your worker <em>is</em> the API. It impersonates an Immich server closely enough that a stock Immich
+    client works against it, while storing everything in your own Telegram channel.</p>
+    <p>The full contract is published two ways:
+    <a href="https://github.com/myrosama/DaemonClient/blob/main/docs/API.md">docs/API.md</a> in prose, with
+    the callers of each route recorded, and
+    <a href="https://github.com/myrosama/DaemonClient/blob/main/docs/openapi.yaml">docs/openapi.yaml</a> as an
+    OpenAPI 3.1 document you can load into any tool. What follows is the shape of it.</p>
+
+    <table><thead><tr><th>Area</th><th>Routes</th><th>Notes</th></tr></thead><tbody>
+      <tr><td>Auth</td><td><code>/api/auth/login</code>, <code>/logout</code>, <code>/status</code>, <code>/exchange</code></td><td><code>exchange</code> trades a Firebase ID token for a session — this is what makes one sign-in serve all three apps.</td></tr>
+      <tr><td>Server</td><td><code>/api/server/config</code>, <code>/features</code>, <code>/telegram-config</code>, <code>/zke-config</code>, <code>/processor</code></td><td>The last three return <em>your own</em> secrets, deliberately: the browser needs them to read bytes from Telegram directly. Owner-gated.</td></tr>
+      <tr><td>Assets</td><td><code>/api/assets</code> and its media paths</td><td>Upload, originals, thumbnails, video playback, trash, EXIF, the map. Range requests supported.</td></tr>
+      <tr><td>Manifest</td><td><code>/api/assets/{id}/dc-manifest</code></td><td>Not an Immich route. The chunk list the browser uses to bypass the worker entirely.</td></tr>
+      <tr><td>Timeline</td><td><code>/api/timeline/buckets</code>, <code>/bucket</code></td><td>Month buckets for the grid. Each request also dispatches exactly one background repair job.</td></tr>
+      <tr><td>Sync</td><td><code>/api/sync/stream</code></td><td>Mobile only. Newline-delimited JSON.</td></tr>
+      <tr><td>Albums, users, search</td><td><code>/api/albums</code>, <code>/api/users</code>, <code>/api/search</code></td><td>Only <code>search/metadata</code> is backed by real data.</td></tr>
+      <tr><td>Drive</td><td><code>/api/drive/*</code>, and <code>/dav</code> for the mount</td><td>Separate key material from Photos. WebDAV uses HTTP Basic against a hashed token.</td></tr>
+      <tr><td>Infrastructure</td><td><code>/api/health</code>, <code>/proxy</code>, <code>/api/selfhost/status</code></td><td><code>/proxy</code> relays to <code>api.telegram.org</code> and nothing else.</td></tr>
+    </tbody></table>
+
+    <div class="callout"><p><span class="tag">Empty, not missing</span> Immich features this architecture
+    doesn't implement — people, tags, partners, shared links, jobs, memories, stacks — return a correctly
+    <em>shaped</em> empty response rather than a 404. A client handed an error body where it expects an array
+    crashes on <code>.length</code>. So "returns 200 with nothing in it" means unimplemented, not
+    broken.</p></div>
+
+    <h2 id="limitations">What doesn't work</h2>
+    <p>Honesty is more useful than a feature list.</p>
+    <table><thead><tr><th>Thing</th><th>Why</th></tr></thead><tbody>
+      <tr><td><strong>Mobile apps</strong></td><td>A fork of the Immich app exists in the repository and is <strong>not released</strong>. It is not currently being worked on — the web comes first.</td></tr>
+      <tr><td><strong>Videos over 100 MB from mobile</strong></td><td>Cloudflare's request-body cap. Needs chunked upload in the app. Web uploads are unaffected, since they bypass the worker.</td></tr>
+      <tr><td><strong>HEIC thumbnails</strong></td><td>Blank unless you deploy the optional processor. Workers can't decode HEIC and Telegram won't thumbnail it. Every other format, video included, is fine.</td></tr>
+      <tr><td><strong>Face recognition, smart search, places</strong></td><td>They need ML this architecture has nowhere to run.</td></tr>
+      <tr><td><strong>Sharing between users</strong></td><td>Built and held pending a security review. One install, one owner, for now.</td></tr>
+      <tr><td><strong>Multi-user installs</strong></td><td>Not being built. Add family accounts to your own Firebase project if you want them.</td></tr>
+    </tbody></table>
+
     <h2 id="faq">FAQ</h2>
     <h3>Can other people use my server?</h3>
     <p>Only accounts in your Firebase project can sign in, and the only way to create one is you. Add family
@@ -342,6 +503,22 @@ daemonclient update</code></pre>
     <h3>What if this project disappears?</h3>
     <p>You keep everything. Your files are in your Telegram channel, your index in your D1 database, and the
     code is in your clone under an open licence. Nothing here can be switched off remotely.</p>
+    <h3>Is the hosted service different from self-hosting?</h3>
+    <p>Same code. Five places in the whole worker behave differently and all five are plumbing — whose
+    Firebase to call, whose domain to put in a link, which label to report. Every feature is identical. The
+    one real asymmetry is delivery: we can push an update to a hosted install because we hold its credentials,
+    and we deliberately cannot push to yours.</p>
+    <h3>Why Telegram? Isn't that fragile?</h3>
+    <p>It is the only free unlimited store of its kind, and it is the entire premise — object storage was
+    considered and rejected, because paying for storage would end the project. The honest trade-off: your
+    files live in a private channel you control, subject to Telegram's terms. Keep the bot in the channel and
+    don't delete its messages — they <em>are</em> your data.</p>
+    <h3>Can I contribute?</h3>
+    <p>Yes. Start with
+    <a href="https://github.com/myrosama/DaemonClient/blob/main/CONTRIBUTING.md">CONTRIBUTING.md</a> — it
+    covers where things live and the four hard constraints that explain most of the odd-looking code. Please
+    don't test against anyone else's deployment, including ours; self-hosting builds you a full stack in ten
+    minutes.</p>
 
     <hr>
     <p style="color:var(--muted);font-size:14px">Your files. Your cloud. Your control. ·
