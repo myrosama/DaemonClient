@@ -42,7 +42,7 @@ This is a good foundation. The plan is not a rewrite.
 | 4 | A fresh Cloudflare account has no `workers.dev` subdomain and setup never claims one — the install "succeeds" with no URL | `registerSubdomain` is exported at `cloudflare.mjs:254` and **called nowhere**; `setup.mjs:274` only reads it and falls back to `null` | 2 |
 | 5 | `enableWorkersDev` failure is swallowed silently | `setup.mjs:417` — `.catch(() => {})` | 2 |
 | 6 | **Nobody has ever run this end to end** | no staging environment exists | 3 |
-| 7 | Self-hosting requires the user to create a Firebase project by hand | `selfhost-auth.ts` — login goes through Firebase Identity Toolkit | 4 |
+| 7 | Self-hosting makes the user create a Firebase project by hand — register a project, register an app, copy eight config values, enable a provider, add a user | `selfhost-auth.ts`; login goes through Firebase Identity Toolkit | 4 |
 | 8 | `daemonclient web` builds three apps including a full SvelteKit build; unverified that it completes | `web.mjs:35-37` | 5 |
 | 9 | No `curl … | sh` bootstrap | nothing in the tree | 6 |
 
@@ -92,13 +92,33 @@ to avoid.
 **Done when:** a written transcript of a complete run exists, every defect it
 surfaced is either fixed or filed, and the run has been repeated cleanly.
 
-### Phase 4 — Accounts and sign-in
-Resolve the Firebase question (see `QUESTIONS.md` Q1), then make the account
-model match whatever is decided — including a real `password` command or the
-removal of every reference to one.
+### Phase 4 — The script creates their Firebase project
+**Decided (Q1):** Firebase stays, and setup provisions the project itself.
+Clicking through the Firebase console is not an acceptable setup step. The user
+runs `firebase login` — OAuth against *their* Google account, in *their*
+browser, nothing reaching us — and the CLI does the rest.
 
-**Done when:** adding and changing an account on a self-hosted install is one
-documented command that exists.
+Four of the five steps are confirmed to exist in `firebase-tools`:
+`projects:create`, `apps:create WEB`, `apps:sdkconfig WEB`, and login itself.
+The fifth — **enabling the Email/Password provider** — has no CLI command, and
+`firebase auth` offers only import/export. It needs the Identity Toolkit Admin
+API with a `cloud-platform`-scoped OAuth token.
+
+So the phase **opens with a spike**: can we get that token from the credentials
+`firebase login` already stores, without adding a `gcloud` dependency? Until
+that is answered, nothing else in the phase is planned in detail — planning past
+an unverified premise is the failure this project keeps repeating.
+
+- **If the spike succeeds:** setup provisions the project end to end.
+- **If it fails:** automate the four steps that work and reduce the manual part
+  to *one toggle on one console page*. That is the floor, not the target.
+
+Either way, the phase also settles the account model in code: no `password`
+command unless there is something for it to do, and the owner gate untouched
+(Q3 — one person per install).
+
+**Done when:** a stranger reaches a working sign-in without being asked to copy
+a config object out of a web console.
 
 ### Phase 5 — The web apps
 Verify `daemonclient web` end to end, on the evidence from Phase 3. Confirm all
@@ -121,8 +141,9 @@ the release cadence documented so cutting one is not a thing to remember.
 Written down so it does not get relitigated every phase.
 
 - **Mobile apps.** Parked behind the web, deliberately.
-- **Multi-user tenancy.** One install, one owner. Family accounts are a
-  different question (Q3) and much smaller.
+- **Multi-user tenancy.** One install, one owner — confirmed by the operator
+  (Q3): *"it's not meant for family (yet); every user will host an independent
+  system."* The owner gate is not being opened.
 - **Anything that makes a self-hosted install depend on infrastructure we run.**
   This is the premise, not a preference.
 - **Object storage.** Telegram is the storage layer.

@@ -90,3 +90,49 @@ something more visible.
 
 **Gate evidence:** G1 n/a (no code) · G2 n/a, stated rather than claimed ·
 G3 pending · G4 pending.
+
+---
+
+## 0.6 — Operator answers, and what they changed            2026-08-11
+
+**Planned:** get five questions answered.
+
+**Did:** all five answered. Two changed the plan; one was a question I should
+not have asked.
+
+**Decisions:**
+
+- **Q1 reframed the phase entirely.** The answer was not "keep Firebase" or
+  "drop Firebase" — it was *"keep Firebase, and the script creates the project
+  for them."* Clicking through the Firebase console is not an acceptable setup
+  step. Phase 4 was rewritten from "resolve a fork" to "provision their project
+  end to end", which is more work and better work.
+
+  Verified before planning it, per the manual: `firebase projects:create`,
+  `apps:create WEB` and `apps:sdkconfig WEB` all exist. Enabling the
+  Email/Password provider does **not** — `firebase auth` offers only
+  `auth:export` / `auth:import`. That step needs the Identity Toolkit Admin API
+  and a `cloud-platform`-scoped OAuth token, and whether we can get one from the
+  credentials `firebase login` already stores is unproven. So Phase 4 opens with
+  a spike rather than a plan built on an assumption.
+
+- **Q4 was a bad question.** The operator called it dumb and was right: version
+  numbering has an obvious default and I spent their attention on it. The manual
+  is explicit — *"escalate genuine forks; decide everything else yourself"*.
+  Decided `v2.1.0`, continuing the existing tag rather than inventing a third
+  scheme next to it and `WORKER_VERSION`.
+
+  The lesson is recorded rather than just the outcome: a question is only worth
+  asking if a wrong answer costs a rewrite. A version number does not.
+
+- **Q3 removes documentation rather than correcting it.** Family accounts are
+  out of scope, so `SELF_HOSTING.md:305-306` gets deleted. Correcting it would
+  still imply the model exists.
+
+**Restated constraint** the whole plan is now checked against, in the operator's
+words: *"self-hosting means self-hosting — in no way tied to our central system.
+The only thing that touches us is the update check."*
+
+**Security:** none — no product code changed.
+
+**Gate evidence:** G1 n/a · G2 n/a · G3 pending · G4 this commit.

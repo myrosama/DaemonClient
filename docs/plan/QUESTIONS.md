@@ -31,16 +31,62 @@ project" is a strange sentence.
 | Managed service | unaffected | now two auth implementations to keep in step |
 | Mobile app | works unchanged | needs the new path too |
 
-**My recommendation: keep Firebase for now, and revisit after Phase 3.**
-Writing our own authentication is the single easiest way to introduce a serious
-vulnerability into this project, and it would create the exact second
-implementation that `PARITY.md` exists to prevent. The setup friction is real
-but it is a documentation problem before it is an architecture problem.
+**My recommendation was:** keep Firebase for now, revisit after Phase 3.
 
-If you disagree, this is worth doing *properly and early* rather than
-half-done later — so say so now.
+**ANSWERED — 2026-08-11.** Keep Firebase, but **the script creates the project
+for them.** The user signs in to their own Google account (`firebase login`,
+OAuth in their browser, nothing reaches us) and the CLI provisions everything
+from there. Clicking through the Firebase console is not an acceptable setup
+step.
 
-**Answer:**
+Restated principle from the same answer: *"self-hosting means self-hosting —
+in no way tied to our central system. The only thing that touches us is the
+update check."* The Firebase project must be theirs, under their Google
+account, created by them via our script.
+
+### What that requires, and what is verified
+
+Checked against `firebase-tools` on 2026-08-11:
+
+| Step | Command | Verified |
+|---|---|---|
+| Sign in to their Google account | `firebase login` | ✅ already required by `daemonclient web` |
+| Create the project | `firebase projects:create <id>` | ✅ exists |
+| Register a web app | `firebase apps:create WEB "<name>"` | ✅ exists |
+| Read the SDK config (apiKey, authDomain…) | `firebase apps:sdkconfig WEB <appId>` | ✅ exists |
+| **Enable the Email/Password provider** | — | ❌ **no CLI command exists** |
+| Create the first user | Identity Toolkit `signUp` REST | ⚠️ fails with `OPERATION_NOT_ALLOWED` until the step above is done |
+
+`firebase auth` offers only `auth:export` and `auth:import`. Enabling the
+provider means calling the Identity Toolkit Admin API directly:
+
+```
+PATCH https://identitytoolkit.googleapis.com/admin/v2/projects/{project}/config
+{ "signIn": { "email": { "enabled": true, "passwordRequired": true } } }
+```
+
+which needs a Google OAuth access token with the `cloud-platform` scope. Whether
+we can obtain one from the credentials `firebase login` already stores — without
+adding a `gcloud` dependency — is **unproven**. Phase 4 opens with a spike to
+settle it.
+
+Two other risks worth knowing before the phase starts:
+
+- **Project quota.** A Google account can create a limited number of projects
+  (commonly ~12–30, and brand-new accounts are sometimes restricted pending
+  billing verification). `projects:create` can fail for reasons we cannot fix,
+  so the flow must degrade to "here is the one console page to open" rather
+  than dead-end.
+- **API enablement.** `identitytoolkit.googleapis.com` may need enabling on a
+  fresh project before the call above works. `web.mjs:153` already handles this
+  class of error for Hosting, so there is a pattern to copy.
+
+**If the spike fails**, the fallback is: automate the four steps that work, and
+reduce the manual part from "register a project, register an app, copy eight
+config values, enable a provider, add a user" to **one toggle in one console
+page**. That is still a large improvement and it is the floor, not the target.
+
+**Answer: keep Firebase; automate project creation. Phase 4 rewritten.**
 
 ---
 
@@ -65,7 +111,10 @@ Options:
 **My recommendation: option 2.** Option 3 cannot catch the class of bug we
 already know is there.
 
-**Answer:**
+**ANSWERED — 2026-08-11: option 2.** The operator will help with testing.
+Phase 3 is unblocked; it needs scheduling, not a decision. They create the
+throwaway Telegram, Cloudflare and Firebase accounts and do the console steps
+when prompted; I drive the rest and keep the transcript.
 
 ---
 
@@ -79,11 +128,16 @@ So the honest options are: document that it is one person per install, or open
 the owner gate to a small allowlist. The second is a real security change to
 the boundary that currently makes the isolation guarantee true.
 
-**My recommendation: one person per install, documented plainly.** A second
-person can run their own — that is the entire point of the architecture, and it
-costs them a free Cloudflare account.
+**My recommendation: one person per install, documented plainly.**
 
-**Answer:**
+**ANSWERED — 2026-08-11: one person per install.** In the operator's words,
+*"it's not meant for family (yet) — every user will host an independent
+system."* The owner gate stays exactly as it is.
+
+Consequence for Phase 0: `docs/SELF_HOSTING.md:305-306` currently invites the
+reader to *"add family accounts that way if you want them"*, via a command that
+does not exist, describing a model we are not building. That paragraph gets
+removed, not corrected.
 
 ---
 
@@ -95,12 +149,17 @@ I have decided the mechanism (a tracked `VERSION` file, read by both `setup` and
 The one existing tag is `v2.0.0`, never published as a release. Options: carry
 on from there with `v2.1.0`, or restart at `v0.1.0` to signal beta honestly.
 
-**My recommendation: `v0.1.0`.** Nothing has ever been released, self-hosting is
-unproven, and a `2.x` version number on software nobody has successfully
-installed sets an expectation the software cannot meet. Version numbers are a
-promise about stability.
+**WITHDRAWN — 2026-08-11.** The operator called this a dumb question, and they
+are right: it has an obvious default and I should have taken it rather than
+spending their attention. Recorded here only so the reasoning is not
+re-derived.
 
-**Answer:**
+**Decided: `v2.1.0`.** It continues the existing `v2.0.0` tag rather than
+inventing a third numbering scheme alongside it and `WORKER_VERSION` (1.2.0),
+and it avoids a published version that sorts *below* a tag already in the
+repository. Beta status is communicated by the README badge and by
+`docs/ROADMAP.md`, which is where it belongs — a version number is a poor place
+to put a caveat.
 
 ---
 
@@ -113,11 +172,9 @@ stays in the private repo by pointer.
 The cost: the "what is not true yet" table is a public list of the project's
 current weaknesses.
 
-**My recommendation: keep them public.** Every item in that table is already
-visible to anyone who reads the code, and publishing the plan alongside it reads
-as confidence rather than exposure.
+**My recommendation: keep them public.**
 
-**Answer:**
+**ANSWERED — 2026-08-11: public.** Confirmed.
 
 ---
 

@@ -52,6 +52,10 @@ Sweep the rest of the self-hosting documentation for the same class of problem.
 Known candidates, to be verified one by one rather than assumed:
 
 - `docs/SELF_HOSTING.md:63` — "It exists only in your own database."
+- `docs/SELF_HOSTING.md:305-306` — invites the reader to "add family accounts
+  that way if you want them". Confirmed out of scope by the operator (Q3):
+  every user hosts an independent system. This paragraph is **removed**, not
+  corrected — correcting it would still imply the model exists.
 - Any command in the docs-site (`docs-site/index.html`) command table.
 - `CONTRIBUTING.md` — references `daemonclient status` and `daemonclient doctor`
   for bug reports; both exist, so this is expected to pass.
@@ -76,12 +80,13 @@ private repo and is referenced by pointer only — never summarised inline.
 | 0.1 | Correct or remove every reference to `daemonclient password` | light |
 | 0.2 | Rewrite the account-model section and FAQ to describe Firebase accurately, including how a self-hoster actually adds a second account today | light |
 | 0.3 | Sweep every other self-hosting doc claim against the code; fix what is wrong | light |
-| 0.4 | Land the planning and status files | light |
+| 0.4 | Land the planning and status files | ✅ done |
+| 0.5 | Remove the family-accounts paragraph (Q3: one person per install) | light |
 
-**Deliberately not in this phase:** *building* the `password` command. Whether
-it should exist at all depends on Q1 (Firebase vs local accounts), so building
-it now risks building the wrong thing. Phase 0 makes the docs honest about what
-exists today; Phase 4 decides what should exist.
+**Deliberately not in this phase:** *building* the `password` command. Q1 is now
+answered — Firebase stays and setup will provision the project — so whether a
+`password` command has anything left to do is a Phase 4 question. Phase 0 makes
+the docs honest about what exists **today**; Phase 4 decides what should exist.
 
 ## Gates for this phase
 
