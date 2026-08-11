@@ -5,7 +5,11 @@ is the shape of the whole thing and does not change often.
 
 **Read in this order:** `../../EXECUTION_STATUS.md` (where we are) →
 `PRODUCT_SPEC.md` (what we are building, as the user experiences it) →
-`INSTALLER_STACK.md` (how it is built and delivered) → this file.
+`BUILD_ORDER.md` (**the parts to build, and the order to wire them** — work
+from this) → `INSTALLER_STACK.md` (how it is delivered) → this file.
+
+This file groups work by *problem to fix*. `BUILD_ORDER.md` groups the same
+work by *part to build*, which is the more useful view when actually building.
 
 `PRODUCT_SPEC.md` is the boss. Where a phase here disagrees with it, it wins.
 

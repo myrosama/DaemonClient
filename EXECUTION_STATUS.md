@@ -1,8 +1,9 @@
 # Execution status
 
 **Read this first after any context reset.** Then `docs/plan/PRODUCT_SPEC.md`
-(what we are building), `docs/plan/MASTER_PLAN.md`, the current phase document,
-then `git log --oneline`.
+(what we are building), `docs/plan/BUILD_ORDER.md` (the parts and their wiring
+order — this is what to work from), `docs/plan/MASTER_PLAN.md`, then
+`git log --oneline`.
 
 > **Two different things share the brand.** The **installer** is what this plan
 > builds — an interactive setup script, run once. The **DaemonClient CLI** is a
@@ -15,7 +16,7 @@ then `git log --oneline`.
 | **Phase** | 0 — Truth (make the docs match the code) |
 | **Just finished** | Repo cleanup + docs rebuild. Readiness investigation (`PHASE_0.md`). Product spec and installer-stack research written from the operator's description of the user journey. |
 | **Working on now** | Nothing — awaiting a go-ahead to start Phase 0. |
-| **Next up** | Phase 0 (docs match code), then Phase 1 (the update path — `install.sh` pins to a release tag, so it is blocked on this). |
+| **Next up** | `BUILD_ORDER.md` wiring step 1: **P11's version fix**, then cut the first release so P3 has a tag to pin to. |
 | **Blocked on** | Nothing. All five questions in `docs/plan/QUESTIONS.md` are answered. Phase 3 needs the operator present to create throwaway accounts, but that is scheduling, not a blocker. |
 | **Staging** | None exists yet. Phase 3 creates one — throwaway Telegram + Cloudflare + Firebase accounts. Until then no self-host change has been proven on real infrastructure. |
 
