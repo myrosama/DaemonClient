@@ -13,11 +13,10 @@ setup output is hand-rolled ANSI escapes in `ui.mjs` (299 lines of them).
 
 **The one-line installer removes that constraint.**
 
-If the entry point is `npm create daemonclient@latest`, the package is fetched
-from the npm registry with its dependency tree resolved. There is no bare clone
-to protect. The no-dependency rule was solving "a stranger has only git and
-node" — and the new entry point means a stranger has npm, which is the thing
-that makes dependencies free.
+`install.sh` fetches the source and runs `npm ci` *before* the wizard starts, so
+by the time any of our code executes, its dependency tree is already installed.
+The no-dependency rule was solving "a stranger has only git and node" — and the
+bootstrap script's whole job is to make that no longer the starting position.
 
 This is worth stating plainly because it is easy to carry an old constraint
 into a new design and conclude that a good interface is impossible here. It
@@ -25,15 +24,14 @@ isn't. It was impossible under the old distribution model.
 
 | | Old model | New model |
 |---|---|---|
-| Entry | `git clone` then `node selfhost/bin/daemonclient.mjs setup` | `npm create daemonclient@latest` |
-| Dependencies | forbidden | fine |
+| Entry | `git clone`, `npm install`, `node selfhost/bin/daemonclient.mjs setup` | `curl -fsSL https://get.daemonclient.uz \| sh` |
+| Dependencies | forbidden | installed by the bootstrap before we run |
 | Interface ceiling | hand-rolled ANSI | anything |
-| Source of truth | the clone | the published package |
+| Node | assumed present | installed locally if missing |
 
 **What still has to be true:** the installer builds the worker from *source*, so
-it needs the repository regardless. The package therefore clones the repo itself
-(or downloads a release tarball) rather than the user doing it first. That is a
-better first experience anyway — one command, not three.
+the repository is fetched either way — by the bootstrap script rather than by
+the user. One command instead of three.
 
 ---
 
@@ -90,41 +88,73 @@ instead of it. This is a re-skin plus a distribution change, not a rewrite.
 
 ## Delivery
 
-**Entry point:** `npm create daemonclient@latest`
+**Entry point:** `curl -fsSL https://get.daemonclient.uz | sh`
 
-Verified available on npm: `create-daemonclient`, `daemonclient-setup`,
-`daemonclient-installer`, and `daemonclient` itself. **`daemonclient` stays
-reserved for the Drive CLI** — the separate product for automating Drive from a
-terminal, which is not what this is.
+One line, as specified. The script does everything in order and hands over to
+the installer.
 
-**Why `npm create` over `curl … | sh`:**
+### What `install.sh` does
 
-- Node is already a hard requirement — the installer builds the worker bundle.
-  A curl script would spend most of its length detecting and installing Node,
-  and would be a second thing to maintain and sign.
-- `npm create` is a pattern users already recognise from `npm create vite`,
-  `npm create astro`, and everything else in that family.
-- Piping a remote script into a shell is the exact habit security people ask
-  people to break. A project whose pitch is "your data, your infrastructure"
-  should not open with it.
+| # | Step | Detail |
+|---|---|---|
+| 1 | Detect platform | linux/darwin × x64/arm64. Anything else exits with a clear message rather than half-working. |
+| 2 | Require `git` | Needed so `daemonclient update` can pull later. Missing → the one command to install it, per platform. |
+| 3 | Node ≥18 | If a good enough Node is on `PATH`, use it. If not, fetch the official LTS tarball into `~/.daemonclient/node` — **no sudo, nothing system-wide**. Verified against `SHASUMS256.txt` from nodejs.org before extracting. |
+| 4 | Fetch the source | `git clone --depth 1 --branch <latest release tag>` into `~/.daemonclient/src`. Pinned to a **release**, never `main`. |
+| 5 | Install dependencies | `npm ci` inside the installer package. |
+| 6 | Hand over | `exec` the installer. From here it is the wizard in `PRODUCT_SPEC.md`. |
 
-A `curl -fsSL https://get.daemonclient.uz | sh` shim can exist later as a
-convenience that checks for Node and then calls `npm create`. It is not the
-primary path, and it is not needed for the product to be finished.
+Everything lands under `~/.daemonclient`. Uninstall is `rm -rf ~/.daemonclient`,
+and the script says so.
 
-**Website integration:** `daemonclient.uz` shows the one line with a copy
-button. That is the whole of the landing page's job in this flow.
+**Verified before writing this down (2026-08-11):** the Node dist index and
+per-release `SHASUMS256.txt` are fetchable, current LTS is v24 (Krypton), and
+tarballs exist for the four platform pairs above. GitHub's codeload tarball
+endpoint answers 200.
 
----
+### Step 4 depends on Phase 1
+
+`install.sh` pins to the latest **release tag**, and there are currently no
+releases. Until Phase 1 publishes one, the installer has nothing to pin to.
+That is a real ordering dependency between phases, not a detail — the release
+work is load-bearing for installs, not only for updates.
+
+### On piping a script into a shell
+
+This was raised as a concern and the operator chose curl. Fair — it is what
+users expect, and refusing it costs more in adoption than it buys in safety.
+What it does mean is that the script has to earn the trust it is asking for:
+
+- **Short and readable.** Someone should be able to `curl … | less` and
+  understand the whole thing in a minute. The website says so next to the
+  command.
+- **No `sudo`, ever.** Nothing is installed system-wide. If the script cannot
+  do something without root, it prints the command and stops.
+- **Checksummed downloads.** The Node tarball is verified against the official
+  `SHASUMS256.txt`, not trusted because it came over TLS.
+- **Pinned, not floating.** A release tag, so two people running the same
+  command on the same day get the same bytes.
+- **Idempotent.** Running it twice is safe and resumes rather than restarting.
+
+### Also published to npm
+
+`create-daemonclient`, so `npm create daemonclient@latest` works for anyone who
+already has Node and would rather not pipe a script. Same installer, second
+door. `daemonclient` on npm stays reserved for the Drive CLI.
 
 ## Open spikes
 
-Neither is planned as certain, because neither is verified.
+One remains, and it is not planned as certain because it is not verified.
 
 | Spike | Question | Fallback if it fails |
 |---|---|---|
 | **Cloudflare pre-scoped token link** | The dashboard supports token templates, but the URL parameters that pre-select permissions are undocumented. Does a link land on the token screen with Workers Scripts · Edit, D1 · Edit and Account Settings · Read already ticked? | The current behaviour — a plain link and an exact list of three permissions. |
-| **Firebase email provider** | Enabling Email/Password has no CLI command. Can we call the Identity Toolkit Admin API with a token derived from what `firebase login` already stores, without adding a `gcloud` dependency? | Automate the other four steps; leave one toggle on one console page. |
 
-Both are checked with a real browser and a real account before the phase that
-depends on them is planned in detail.
+Checked with a real browser before the phase that depends on it is planned in
+detail.
+
+**Closed by the operator, 2026-08-11:** the Firebase email-provider spike. We
+are not calling the Identity Toolkit Admin API. The script opens the console's
+provider page and the user flips one switch — see `PRODUCT_SPEC.md` §3. The
+API route was undocumented, fragile across `firebase-tools` versions, and would
+have saved exactly one click.

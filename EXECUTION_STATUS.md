@@ -15,7 +15,7 @@ then `git log --oneline`.
 | **Phase** | 0 — Truth (make the docs match the code) |
 | **Just finished** | Repo cleanup + docs rebuild. Readiness investigation (`PHASE_0.md`). Product spec and installer-stack research written from the operator's description of the user journey. |
 | **Working on now** | Nothing — awaiting a go-ahead to start Phase 0. |
-| **Next up** | Phase 0 (docs match code), then Phase 1 (the update path). |
+| **Next up** | Phase 0 (docs match code), then Phase 1 (the update path — `install.sh` pins to a release tag, so it is blocked on this). |
 | **Blocked on** | Nothing. All five questions in `docs/plan/QUESTIONS.md` are answered. Phase 3 needs the operator present to create throwaway accounts, but that is scheduling, not a blocker. |
 | **Staging** | None exists yet. Phase 3 creates one — throwaway Telegram + Cloudflare + Firebase accounts. Until then no self-host change has been proven on real infrastructure. |
 
@@ -36,7 +36,10 @@ All five open questions are answered — full reasoning in `docs/plan/QUESTIONS.
 | Tenancy | **One person per install.** Not a family product. The owner gate is not being opened. |
 | Version | **`v2.1.0`**, continuing the existing tag rather than inventing a third numbering scheme. |
 | Plan docs | **Public.** |
-| Installer entry point | **`npm create daemonclient@latest`** (package `create-daemonclient`, verified free on npm). Not `curl \| sh` — Node is already required, and piping a remote script to a shell is a bad opening for a privacy product. |
+| Entry point | **`curl -fsSL https://get.daemonclient.uz \| sh`** — install.sh checks git, installs a local no-sudo Node if missing (checksummed), clones the latest release tag, runs `npm ci`, hands over. `npm create daemonclient@latest` published as a second door. |
+| Firebase email sign-in | **The user flips the toggle themselves**; we open the console page and wait. Spike closed — no Identity Toolkit Admin API. |
+| Credential order | **Email/password asked LAST**, after Firebase exists. Never touches disk. |
+| Post-setup management | **Deferred to Phase 7.** Named later; cannot be `daemonclient`. |
 | Interface | **`@clack/prompts`** (4 deps, built for wizards, real Ctrl-C handling) + **`listr2`** for the multi-minute deploy. Not Ink — 25 deps and built for persistent dynamic UIs, not linear wizards. |
 | Dependencies in `selfhost/` | **No longer forbidden.** The rule existed because it ran from a bare clone; publishing to npm removes the reason. |
 | `daemonclient` npm name | **Reserved for the Drive CLI.** The installer must not take it. |

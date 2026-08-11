@@ -27,10 +27,14 @@ wins.
 ```
   daemonclient.uz  →  copy one line  →  paste into a terminal
                                               │
-   1 ─ email + password        held in memory, account created at the end
-   2 ─ Telegram                bot token, then channel id — each verified before accepting
-   3 ─ Cloudflare              open a pre-scoped link, paste a token — verified before accepting
-   4 ─ Firebase                sign in to their Google account; the script does the rest
+   0 ─ bootstrap               install.sh: check git, get a local Node if needed,
+                               fetch the source, install deps, hand over
+   1 ─ Telegram                bot token, then channel id — each verified before accepting
+   2 ─ Cloudflare              open a pre-scoped link, paste a token — verified before accepting
+   3 ─ Firebase                sign in to their Google account; the script creates the
+                               project, then opens one console page for them to switch
+                               email sign-in on
+   4 ─ email + password        asked LAST, once somewhere exists to create the account
                                               │
                                     ONE URL, printed once
                                               │
@@ -58,23 +62,12 @@ and an explanation. **One URL, and they are in.**
 
 ## Step by step, with what each one must actually do
 
-### 1 · Email and password
+### 0 · Bootstrap
 
-Asked first, because it is the only thing the user already knows the answer to,
-and starting a setup with a question you cannot fail is good design.
+`curl -fsSL https://get.daemonclient.uz | sh` — see `INSTALLER_STACK.md` for
+what that script does and why it is allowed to be a curl pipe.
 
-**The ordering problem, stated plainly.** Accounts live in Firebase, and
-Firebase is not configured until step 4. So the credentials are held in memory
-through the run and the account is created at the very end, once the project
-exists. Two consequences that must be designed for, not discovered:
-
-- The password sits in process memory for the length of the setup. It must
-  never be written to `.daemonclient-selfhost.json`, never logged, and never
-  echoed at the prompt.
-- If the run is interrupted after step 1, resuming cannot recover the password —
-  the resume path has to ask for it again rather than proceeding with a blank.
-
-### 2 · Telegram
+### 1 · Telegram
 
 Two values, asked one at a time, each **verified against the live API before
 the wizard moves on**.
@@ -94,7 +87,7 @@ The user creates the bot themselves via BotFather. We do not do it for them —
 that is precisely what the managed service does, and self-hosting exists so
 that nobody but them ever holds those credentials.
 
-### 3 · Cloudflare
+### 2 · Cloudflare
 
 Open a link, create a token, paste it back. Verified before accepting.
 
@@ -110,16 +103,41 @@ Verification must check the token *can do the things we need* — not merely tha
 it authenticates. The existing `REQUIRED_TOKEN_PERMISSIONS` probe already works
 this way and stays.
 
-### 4 · Firebase
+### 3 · Firebase
 
 `firebase login` opens their browser, they sign in to their own Google account,
 and the script provisions the project: create it, register a web app, read the
-config, enable email sign-in, create the account from step 1.
+config back.
 
-Four of those five are confirmed available in `firebase-tools`. Enabling the
-email provider has no CLI command and needs the Identity Toolkit Admin API —
-see `MASTER_PLAN.md` Phase 4. The floor, if that proves impossible, is one
-toggle on one page rather than the current eight-value copy-paste.
+**Enabling email sign-in is theirs to do, deliberately.** There is no CLI
+command for it, and rather than reach for the Identity Toolkit Admin API we
+open one console page and wait:
+
+```
+https://console.firebase.google.com/project/<their-project>/authentication/providers
+```
+
+They flip one switch and press Enter. That is the whole manual portion of
+Firebase, down from *register a project, register an app, copy eight config
+values, enable a provider, add a user*.
+
+This decision closed a spike rather than scheduling one. The Admin API route
+would have needed a `cloud-platform`-scoped OAuth token pulled out of whatever
+`firebase login` happens to store, which is undocumented, fragile across
+`firebase-tools` versions, and saves the user exactly one click.
+
+### 4 · Email and password
+
+**Asked last, on purpose.** Accounts live in Firebase, so there is nowhere to
+create one until step 3 has finished. Asking earlier would mean carrying a
+password in process memory across three network-heavy steps for no benefit.
+
+Asked here, it is used within seconds: create the account against their own
+Firebase, confirm the sign-in works, move on.
+
+It still never touches disk — not `.daemonclient-selfhost.json`, not a log, not
+the terminal echo. And because it is the last question, an interrupted run
+never has a password to fail to recover.
 
 ### 5 · The URL
 

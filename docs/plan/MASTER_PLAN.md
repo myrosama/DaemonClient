@@ -156,6 +156,31 @@ clone first, so the whole thing is genuinely one command.
 **Done when:** a stranger runs one line from the website and reaches a working
 sign-in, and `daemonclient` is still free on npm for the Drive CLI.
 
+### Phase 7 — Managing an install after setup **(later — not now)**
+Raised by the operator 2026-08-11, explicitly deferred: *"after the user does
+the setup, to manage everything — they write something to their CLI and it
+shows the status and settings for the whole self-hosted stuff."*
+
+The commands mostly exist already — `status`, `update`, `doctor`, `processor`,
+`web` — so this is largely about making them reachable and coherent rather than
+writing them. Three things need deciding when we get here, recorded now so they
+are not rediscovered:
+
+- **The name.** It cannot be `daemonclient`, which is reserved for the Drive
+  CLI. The installer leaves the source in `~/.daemonclient/src`, so a shim on
+  `PATH` is easy; what it is *called* is the open question.
+- **Where settings live.** Some are worker bindings, some are D1 `config` rows,
+  some are in `.daemonclient-selfhost.json`. A settings command has to present
+  one surface over three stores, or be honest about which is which.
+- **Overlap with the dashboard.** `/api/selfhost/status` already exists and the
+  dashboard already renders it. A terminal tool that duplicates it is worse
+  than one that does the things a browser cannot — rotating a token, changing
+  the channel, taking an update.
+
+**Not started, and not blocking anything.** The installer has to be good first;
+a management tool for an install nobody has successfully created is worth
+nothing.
+
 ---
 
 ## What is explicitly out of scope
