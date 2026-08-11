@@ -59,7 +59,7 @@ back at us — see [Self-hosting](#self-hosting).
 | 📸 **Photos** | [photos.daemonclient.uz](https://photos.daemonclient.uz) | Timeline, albums, favourites, EXIF and map view, live photos, video, trash, zip downloads |
 | 📁 **Drive** | [drive.daemonclient.uz](https://drive.daemonclient.uz) | Folders, previews, client-side encryption, and a WebDAV mount |
 | 👤 **Accounts** | [accounts.daemonclient.uz](https://accounts.daemonclient.uz) | One account for both, plus the guided setup and your dashboard |
-| 📖 **Docs** | [docs/](docs/) | Architecture, API, self-hosting |
+| 📖 **Docs** | [docs.daemonclient.uz](https://docs.daemonclient.uz) | Architecture, the storage model, encryption, API reference, self-hosting |
 
 <p align="center">
   <img src="daemonclient-site/uploads/immich-screenshot.webp" alt="DaemonClient Photos" width="100%">

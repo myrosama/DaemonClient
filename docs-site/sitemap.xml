@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  One page, one entry. The docs are a single document with in-page anchors, and
+  search engines index pages rather than fragments — listing #storage, #api and
+  the rest would add noise, not coverage. If this ever becomes several pages,
+  add them here.
+-->
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url>
+    <loc>https://docs.daemonclient.uz/</loc>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+  </url>
+</urlset>
