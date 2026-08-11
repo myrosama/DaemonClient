@@ -38,11 +38,22 @@ Notable changes, newest first. Format loosely follows
   lost theirs. Now `/*.txt`, and both files are tracked again.
 
 ### Security
-- A live Telegram `API_ID` and `API_HASH` were found hardcoded in
+- A Telegram `API_ID` and `API_HASH` were hardcoded in
   `backend-server/generate_session.py` and published in this repository's
   history. The file has moved and now reads them from the environment.
-  **Removing a file does not unpublish it — these credentials need revoking at
-  [my.telegram.org](https://my.telegram.org).**
+
+  Scope, stated precisely: these identify an *application*, not an account.
+  Holding them does not let anyone sign in as anyone — that still needs a phone
+  number and a login code. What they do allow is a third party presenting
+  themselves to Telegram as this app, and abuse attributed to it can get the app
+  restricted, which would break managed bot creation. Telegram does not offer
+  rotation for an `api_hash`, so there is nothing to revoke; the practical
+  answer is to watch for the app being flagged and register a fresh one if it
+  is.
+
+  The credential that *would* be account-level access is the Telethon session
+  string. Those live in Firestore, are read at runtime, and have never been in
+  git.
 - The Firebase web API key remains in tracked source. It is a public
   identifier rather than a secret, but a fork inherits the operator's project,
   so it should be restricted by referrer and templated out.
