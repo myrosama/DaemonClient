@@ -1,13 +1,19 @@
 # Execution status
 
-**Read this first after any context reset.** Then `docs/plan/MASTER_PLAN.md`,
-then the current phase document, then `git log --oneline`.
+**Read this first after any context reset.** Then `docs/plan/PRODUCT_SPEC.md`
+(what we are building), `docs/plan/MASTER_PLAN.md`, the current phase document,
+then `git log --oneline`.
+
+> **Two different things share the brand.** The **installer** is what this plan
+> builds — an interactive setup script, run once. The **DaemonClient CLI** is a
+> separate product for automating Drive from a terminal; it is parked in the
+> private ops repo and comes back later.
 
 | | |
 |---|---|
 | **Date** | 2026-08-11 |
 | **Phase** | 0 — Truth (make the docs match the code) |
-| **Just finished** | Repo cleanup + documentation rebuild (3 commits). Self-hosting readiness investigation — findings in `PHASE_0.md`. |
+| **Just finished** | Repo cleanup + docs rebuild. Readiness investigation (`PHASE_0.md`). Product spec and installer-stack research written from the operator's description of the user journey. |
 | **Working on now** | Nothing — awaiting a go-ahead to start Phase 0. |
 | **Next up** | Phase 0 (docs match code), then Phase 1 (the update path). |
 | **Blocked on** | Nothing. All five questions in `docs/plan/QUESTIONS.md` are answered. Phase 3 needs the operator present to create throwaway accounts, but that is scheduling, not a blocker. |
@@ -30,6 +36,10 @@ All five open questions are answered — full reasoning in `docs/plan/QUESTIONS.
 | Tenancy | **One person per install.** Not a family product. The owner gate is not being opened. |
 | Version | **`v2.1.0`**, continuing the existing tag rather than inventing a third numbering scheme. |
 | Plan docs | **Public.** |
+| Installer entry point | **`npm create daemonclient@latest`** (package `create-daemonclient`, verified free on npm). Not `curl \| sh` — Node is already required, and piping a remote script to a shell is a bad opening for a privacy product. |
+| Interface | **`@clack/prompts`** (4 deps, built for wizards, real Ctrl-C handling) + **`listr2`** for the multi-minute deploy. Not Ink — 25 deps and built for persistent dynamic UIs, not linear wizards. |
+| Dependencies in `selfhost/` | **No longer forbidden.** The rule existed because it ran from a bare clone; publishing to npm removes the reason. |
+| `daemonclient` npm name | **Reserved for the Drive CLI.** The installer must not take it. |
 | E2E testing | Operator will create throwaway accounts and do the console steps; I drive the rest. |
 
 The principle everything is checked against, in the operator's words:

@@ -1,9 +1,17 @@
-# Master plan — making self-hosting real
+# Master plan — the installer
 
 Every phase, top to bottom. The current phase is detailed separately; this file
 is the shape of the whole thing and does not change often.
 
-**Read `../../EXECUTION_STATUS.md` first.** It says where we actually are.
+**Read in this order:** `../../EXECUTION_STATUS.md` (where we are) →
+`PRODUCT_SPEC.md` (what we are building, as the user experiences it) →
+`INSTALLER_STACK.md` (how it is built and delivered) → this file.
+
+`PRODUCT_SPEC.md` is the boss. Where a phase here disagrees with it, it wins.
+
+> **Not to be confused with the DaemonClient CLI** — the separate product for
+> automating Drive from a terminal. That is parked in the private ops repo and
+> comes back later. This plan is about the **installer**.
 
 ---
 
@@ -128,11 +136,25 @@ that `ALLOWED_ORIGINS` is set correctly for the sites it creates.
 **Done when:** the three URLs it prints all serve a working app that talks to
 the user's own worker.
 
-### Phase 6 — Bootstrap and polish
-A `curl … | sh` entry point, a first-run experience worth showing someone, and
-the release cadence documented so cutting one is not a thing to remember.
+### Phase 6 — The installer people actually run
+The re-skin and the distribution change, together, because neither is worth
+much alone.
 
-**Done when:** the quickstart in the README is genuinely one line.
+Publish as **`create-daemonclient`** so the entry point is
+`npm create daemonclient@latest`. That single change removes the no-dependency
+constraint — see `INSTALLER_STACK.md` — which is what makes a good interface
+possible at all. Rebuild the prompts on `@clack/prompts` (4 deps, built for
+wizards, first-class Ctrl-C handling) and the deploy phase on `listr2`, so
+several minutes of work reads as progress rather than a hang.
+
+The logic is kept: the Telegram write-check, the Cloudflare permission probe,
+key seeding, resumable state. Only `ui.mjs` is replaced.
+
+The installer fetches the repository itself rather than asking the user to
+clone first, so the whole thing is genuinely one command.
+
+**Done when:** a stranger runs one line from the website and reaches a working
+sign-in, and `daemonclient` is still free on npm for the Drive CLI.
 
 ---
 
