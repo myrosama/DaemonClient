@@ -144,14 +144,48 @@ door. `daemonclient` on npm stays reserved for the Drive CLI.
 
 ## Open spikes
 
-One remains, and it is not planned as certain because it is not verified.
+### Cloudflare pre-scoped token link — mostly answered by existing code
 
-| Spike | Question | Fallback if it fails |
-|---|---|---|
-| **Cloudflare pre-scoped token link** | The dashboard supports token templates, but the URL parameters that pre-select permissions are undocumented. Does a link land on the token screen with Workers Scripts · Edit, D1 · Edit and Account Settings · Read already ticked? | The current behaviour — a plain link and an exact list of three permissions. |
+It turns out the hosted signup flow already does this, and the installer simply
+never got it. `accounts-portal/src/pages/SetupWorker.jsx:12` builds:
 
-Checked with a real browser before the phase that depends on it is planned in
-detail.
+```
+https://dash.cloudflare.com/profile/api-tokens
+  ?permissionGroupKeys=[{"key":"workers_scripts","type":"edit"},
+                        {"key":"d1","type":"edit"},
+                        {"key":"account","type":"read"}]
+  &name=DaemonClient
+```
+
+(URL-encoded in the source.) So the parameter shape is
+`permissionGroupKeys` — a JSON array of `{key, type}` — plus `name`.
+
+**Verified 2026-08-12:** Cloudflare carries the query string through its login
+redirect, re-encoded into `redirect_uri`. That matters more than it sounds: a
+self-hoster clicking this link will usually *not* be signed in yet, and the
+pre-fill still has to survive the round trip. It does.
+
+**Not verified:** whether the permissions actually render pre-ticked on the
+token screen. That needs a signed-in session and I stopped rather than sign in
+to the operator's live account. It is a ten-second check for the operator —
+open the URL above while logged in and see whether the three rows are already
+selected.
+
+Evidence that it works is decent but not conclusive: it is in production and
+used by real users in the hosted flow. This project has, however, repeatedly
+turned up plausible code that never runs (`registerSubdomain` is complete and
+called nowhere; `daemonclient password` is documented and does not exist), so
+"it is written and deployed" is not the same as "it works".
+
+**Discrepancy to resolve when wiring this into the installer:** the URL
+pre-fills **three** permissions, while `REQUIRED_TOKEN_PERMISSIONS`
+(`selfhost/src/api/cloudflare.mjs:33`) lists **four** — the fourth being
+`Cloudflare Pages · Edit`, needed only for the optional dashboard. Either the
+link gains a fourth key or the installer stops asking for Pages. Decide when
+P8 is built; do not paper over it.
+
+**Fallback if the pre-fill does not render:** the current behaviour — a plain
+link plus an exact list of the permissions.
 
 **Closed by the operator, 2026-08-11:** the Firebase email-provider spike. We
 are not calling the Identity Toolkit Admin API. The script opens the console's
