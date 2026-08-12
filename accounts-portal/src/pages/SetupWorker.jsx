@@ -8,12 +8,27 @@ import { useWorkerSetup } from '../hooks/useWorkerSetup'
 import { startCloudflareOAuth } from '../config/cloudflareOauth'
 import { ExternalLink, Check, Loader2, ArrowRight, Zap, Database, Shield, RefreshCw } from 'lucide-react'
 
-// Pre-filled Cloudflare token creator — permissions already set, user just clicks Create
+// Pre-filled Cloudflare token creator — permissions already set, user just clicks Create.
+//
+// The keys below are `permissionGroupKeys`, an undocumented dashboard
+// parameter: a JSON array of {key, type}. Cloudflare **silently ignores a key
+// it does not recognise** — no error, no warning, the row simply does not
+// appear — so a typo here is invisible unless someone opens the link and
+// counts the rows.
+//
+// That is exactly what happened. This asked for `account`, which is not a
+// permission group, so only two of the three rows rendered and the token came
+// out without **Account Settings · Read**. Every downstream call then failed
+// the way `verifyToken` describes: "This token cannot see any account."
+//
+// Verified in the real dashboard on 2026-08-12: `account` renders 2 rows,
+// `account_settings` renders 3. If you change these keys, open the link and
+// count the rows — there is no other way to find out you were wrong.
 const CF_TOKEN_TEMPLATE_URL =
   'https://dash.cloudflare.com/profile/api-tokens' +
   '?permissionGroupKeys=%5B%7B%22key%22%3A%22workers_scripts%22%2C%22type%22%3A%22edit%22%7D' +
   '%2C%7B%22key%22%3A%22d1%22%2C%22type%22%3A%22edit%22%7D' +
-  '%2C%7B%22key%22%3A%22account%22%2C%22type%22%3A%22read%22%7D%5D' +
+  '%2C%7B%22key%22%3A%22account_settings%22%2C%22type%22%3A%22read%22%7D%5D' +
   '&name=DaemonClient'
 
 const FEATURES = [
