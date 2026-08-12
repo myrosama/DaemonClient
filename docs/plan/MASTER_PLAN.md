@@ -35,7 +35,7 @@ Verified by reading the code on 2026-08-11, not assumed:
 | | Evidence |
 |---|---|
 | The CLI is dependency-free and runs from a bare clone | `selfhost/package.json` has no deps; CI asserts it |
-| 68 tests pass, covering schema replay, key seeding, the no-operator guard | `selfhost/test/` |
+| 82 tests pass, covering schema replay, key seeding, the no-operator guard, and the version stamp | `selfhost/test/` |
 | Schema application is correct and **fails loudly** | `setup.mjs:262-272` — only `already exists`/`duplicate column` are swallowed, everything else exits 1 |
 | Encryption keys are seeded, and setup **aborts** if it cannot | `setup.mjs:456-469` |
 | Telegram config is written into the user's own D1, not a config service | `setup.mjs:431-451` |
@@ -176,10 +176,13 @@ are not rediscovered:
 - **Where settings live.** Some are worker bindings, some are D1 `config` rows,
   some are in `.daemonclient-selfhost.json`. A settings command has to present
   one surface over three stores, or be honest about which is which.
-- **Overlap with the dashboard.** `/api/selfhost/status` already exists and the
-  dashboard already renders it. A terminal tool that duplicates it is worse
-  than one that does the things a browser cannot — rotating a token, changing
-  the channel, taking an update.
+- **Overlap with the dashboard.** `/api/selfhost/status` exists, but **nothing
+  renders it** — a Gate 3 review checked every `.jsx/.js/.svelte/.ts/.html`
+  outside `immich/` and found the only consumer is `daemonclient status`
+  (`selfhost/src/commands/status.mjs:71`). An earlier draft of this file said
+  the dashboard already showed it; that was wrong. So the question is not how
+  to avoid duplicating the dashboard, it is whether the dashboard should show
+  this at all, or whether it stays a terminal concern.
 
 **Not started, and not blocking anything.** The installer has to be good first;
 a management tool for an install nobody has successfully created is worth

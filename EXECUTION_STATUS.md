@@ -15,9 +15,9 @@ order — this is what to work from), `docs/plan/MASTER_PLAN.md`, then
 | **Date** | 2026-08-11 |
 | **Phase** | Building — `BUILD_ORDER.md` wiring step 1 (P11) |
 | **Just finished** | Repo cleanup + docs rebuild. Readiness investigation (`PHASE_0.md`). Product spec and installer-stack research written from the operator's description of the user journey. |
-| **Working on now** | **P11 is written and UNCOMMITTED, sitting in the working tree.** Gate 1 passed (77 tests, up from 68). Gate 3 did not run — both review agents hit an API session limit. Nothing ships unreviewed. |
-| **Next up** | Re-run the two Gate 3 agents on P11. If clean: commit, then cut `v2.1.0` (wiring step 2), which unblocks `install.sh` pinning a release tag. |
-| **Blocked on** | Gate 3 for P11 — agents terminated by an API session limit, needs re-running. Follow-up filed: `selfhost/src/deploy.mjs` and `env.mjs` are dead code holding a third `BUILD_VERSION` writer; delete them so future greps stop lying. |
+| **Working on now** | P11 complete — all four gates passed. 82 tests. |
+| **Next up** | Two follow-ups **must land before `v2.1.0` is tagged** — see below. Then cut the release (wiring step 2), which unblocks `install.sh` pinning a tag. |
+| **Blocked on** | Nothing. |
 | **Staging** | None exists yet. Phase 3 creates one — throwaway Telegram + Cloudflare + Firebase accounts. Until then no self-host change has been proven on real infrastructure. |
 
 ## The single most important fact
@@ -57,7 +57,7 @@ Update these numbers when they change; a drop means silently skipped tests.
 | Suite | Count | Command |
 |---|---|---|
 | `immich-api-shim` | 294 | `npm test` |
-| `selfhost` | 68 | `npm test` |
+| `selfhost` | 82 | `npm test` |
 | `deployment-service` | 8 | `npm test` |
 | `processor` | 5 | `npm test` |
 
@@ -70,3 +70,28 @@ Typecheck clean: `immich-api-shim`, `deployment-service`.
 | Public repo | `myrosama/DaemonClient` — the product |
 | Private repo | `myrosama/daemonclient-ops` — managed-service code, audits, security findings |
 | Open security findings | `daemonclient-ops/docs/AUDIT_FINDINGS_2026-08-06.md` — **not** in this repo, and deliberately not summarised here |
+
+## Must land before `v2.1.0` is tagged
+
+Both were raised by the Gate 3 spec review of P11. Both are currently latent and
+become live the moment a release is published — cutting the tag is what
+activates them.
+
+| # | Problem | Evidence |
+|---|---|---|
+| A | **The managed path sets no `BUILD_VERSION` at all.** `buildShimBindings` emits neither it nor `UPDATE_REPO`, so every hosted worker reports `build: null` and `currentVersion: '0.0.0'`. Once `v2.1.0` exists, `updateAvailable` computes **true, permanently, for every hosted user** — telling them to run a CLI they do not have. | `deployment-service/src/index.ts:106-123`, used by all three deploy paths (`:324`, `:599`, `:655`); `immich-api-shim/src/update-check.ts:82,119` |
+| B | **`VERSION` is bumped ahead of its release, and nothing enforces the rule.** `VERSION` is `2.1.0`; the newest tag is `v2.0.0`. Anyone cloning `main` today stamps `2.1.0`, so when `v2.1.0` is cut — carrying commits they do not have — `isNewerVersion('v2.1.0','2.1.0')` is false and they never see it. The rule "bump VERSION *at* release, never ahead of it" exists only as a comment. | `VERSION:1` vs `git tag -l`; `version.mjs:24-26` |
+
+`docs/PARITY.md:104` already names A as an unbuilt gap ("both flavours report
+the same version string, from the same source"). This is what closing it costs.
+
+## Follow-ups, tracked not dropped
+
+- Delete `selfhost/src/deploy.mjs` and `selfhost/src/env.mjs`. Both have **zero
+  importers** — independently verified in the Gate 3 review, including dynamic
+  imports and tests — and `deploy.mjs:32` holds a third `BUILD_VERSION` writer
+  that bypasses `version.mjs`. Dead code that mentions a symbol makes future
+  greps lie, which is how this project has repeatedly fixed things that never
+  run. `selfhost/README.md` no longer lists them.
+- `selfhost/package.json:3` still declares `"version": "1.0.0"` — a third
+  version number in a change whose thesis is "one tracked file".

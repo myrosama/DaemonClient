@@ -236,7 +236,7 @@ stamped as a version.
 **Contract:** keys present after it runs, existing keys never overwritten.
 
 Exists, reads before writing, and setup already aborts if it fails — which is
-correct, because an install whose key state is unknown cannot upload. 68 tests
+correct, because an install whose key state is unknown cannot upload. 82 tests
 cover this area. Nothing to do but call it.
 
 ## P13 · Web apps — `web.mjs` **harden**

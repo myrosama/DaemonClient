@@ -32,6 +32,17 @@ Notable changes, newest first. Format loosely follows
 - `CODE_OF_CONDUCT.md`, issue templates, and a pull request template.
 
 ### Fixed
+- **Self-hosted installs stopped reporting updates after the first `update`.**
+  `BUILD_VERSION` — the value the daily release check compares against — was
+  read by `setup` from the **gitignored** root `package.json` (which has no
+  `version` key, so every install stamped `0.0.0`) and written by `update` as
+  the **git short SHA**. The worker parses versions with
+  `/^(\d+)(?:\.(\d+))?(?:\.(\d+))?/`, so a SHA either fails to parse or reads
+  as an enormous major version; either way the banner never appeared again.
+  Both paths now read a tracked root `VERSION` file through one shared module.
+
+  This matters more than a normal bug: the releases feed is the only channel by
+  which a self-hoster learns a security fix exists.
 - A `.gitignore` rule of `*.txt` was silently ignoring every `robots.txt` and
   `requirements.txt` in the tree; the ones that survived did so only because
   they predated the rule. `accounts-portal` and `daemonclient-site` had both

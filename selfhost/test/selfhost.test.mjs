@@ -19,6 +19,7 @@ import {
   checkStatePermissions, markDone, isDone,
 } from '../src/state.mjs';
 import { wrap, width } from '../src/ui.mjs';
+import { workerBindings } from '../src/bindings.mjs';
 
 const REPO = path.join(import.meta.dirname, '..', '..');
 const read = (p) => fs.readFileSync(path.join(REPO, p), 'utf8');
@@ -108,23 +109,45 @@ describe('a self-hosted install depends on nothing of ours', () => {
   const update = read('selfhost/src/commands/update.mjs');
 
   test('deploys the operator\'s own Firebase project, never ours', () => {
-    // Both deploy paths, not just setup: update.mjs once shipped empty strings
-    // here, which would have stripped sign-in from a working install.
+    // update.mjs once shipped empty strings here, which would have stripped
+    // sign-in from a working install. Both paths now build the same bindings,
+    // so assert the VALUES carry through rather than grepping two files.
+    const bindings = workerBindings({
+      databaseId: 'db', firebaseApiKey: 'their-key', firebaseProjectId: 'their-project',
+      sessionSecret: 'x'.repeat(32),
+    });
+    const byName = (n) => bindings.find((b) => b.name === n).text;
+    assert.equal(byName('FIREBASE_API_KEY'), 'their-key', 'carries their API key');
+    assert.equal(byName('FIREBASE_PROJECT_ID'), 'their-project', 'carries their project');
+
+    // And our project id must not appear anywhere in the CLI source.
     for (const [name, file] of [['setup', setup], ['update', update]]) {
-      assert.match(file, /FIREBASE_API_KEY['"],\s*text:\s*state\.firebaseApiKey/, `${name} carries their API key`);
-      assert.match(file, /FIREBASE_PROJECT_ID['"],\s*text:\s*state\.firebaseProjectId/, `${name} carries their project`);
-    }
-    // Our project id must not appear as a value anywhere in the CLI.
-    for (const file of [setup, update]) {
-      assert.ok(!file.includes('daemonclient-c0625'), 'our Firebase project leaked into the CLI');
+      assert.ok(!file.includes('daemonclient-c0625'), `our Firebase project leaked into ${name}`);
     }
   });
 
   test('never points a self-hosted worker at our relay or deployment service', () => {
+    // Asserted on the VALUES now, not on the source text. These used to grep
+    // setup.mjs and update.mjs, which silently stopped covering anything the
+    // moment the bindings moved into their own module — a text assertion only
+    // guards the file it happens to be pointed at.
+    const bindings = workerBindings({
+      databaseId: 'db', firebaseApiKey: 'k', firebaseProjectId: 'p',
+      dashboardUrl: '', allowedOrigins: '', sessionSecret: 'x'.repeat(32),
+    });
+    const byName = (n) => bindings.find((b) => b.name === n);
+
+    // TELEGRAM_PROXY must be blank: the managed value is a worker of ours.
+    assert.equal(byName('TELEGRAM_PROXY').text, '', 'TELEGRAM_PROXY is empty');
+    assert.equal(byName('DEPLOYMENT_SERVICE_URL'), undefined, 'must not bind DEPLOYMENT_SERVICE_URL');
+    for (const b of bindings) {
+      if (typeof b.text !== 'string') continue;
+      assert.ok(!b.text.includes('sadrikov49'), `${b.name} references our Cloudflare account`);
+      assert.ok(!b.text.includes('daemonclient.uz'), `${b.name} references our domain`);
+    }
+
+    // The command files themselves must still be clean of operator strings.
     for (const [name, file] of [['setup', setup], ['update', update]]) {
-      // TELEGRAM_PROXY must be blank: the managed value is a worker of ours.
-      assert.match(file, /TELEGRAM_PROXY['"],\s*text:\s*['"]['"]/, `${name} sets an empty TELEGRAM_PROXY`);
-      assert.ok(!/DEPLOYMENT_SERVICE_URL/.test(file), `${name} must not bind DEPLOYMENT_SERVICE_URL`);
       assert.ok(!file.includes('sadrikov49'), `${name} references our Cloudflare account`);
       assert.ok(!file.includes('daemonclient.uz'), `${name} references our domain`);
     }
@@ -148,8 +171,11 @@ describe('a self-hosted install depends on nothing of ours', () => {
   });
 
   test('setup generates a per-install session secret rather than reusing a constant', () => {
-    assert.match(setup, /SESSION_SECRET['"],\s*text:\s*state\.sessionSecret/);
-    assert.match(setup, /randomSecret\(/);
+    const b = workerBindings({ databaseId: 'db', sessionSecret: 'per-install-value' })
+      .find((x) => x.name === 'SESSION_SECRET');
+    assert.equal(b.text, 'per-install-value', 'the secret comes from state, not a constant');
+    assert.equal(b.type, 'secret_text', 'and is hidden from the dashboard listing');
+    assert.match(setup, /randomSecret\(/, 'setup still generates one');
   });
 });
 

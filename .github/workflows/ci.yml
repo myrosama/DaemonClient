@@ -45,6 +45,11 @@ jobs:
             selfhost:
               - 'selfhost/**'
               - 'schema/**'
+              # Cutting a release is a commit that touches ONLY this file. Without
+              # it here that commit triggers no jobs at all, and a malformed or
+              # deleted VERSION ships green — past the very tests written to
+              # catch it.
+              - 'VERSION'
               - '.github/workflows/ci.yml'
             processor:
               - 'processor/**'

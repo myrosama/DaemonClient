@@ -21,6 +21,8 @@ import { loadState, saveState, markDone, isDone, checkStatePermissions, statePat
 import * as tg from '../api/telegram.mjs';
 import * as cf from '../api/cloudflare.mjs';
 import { buildWorkerBundle } from '../build.mjs';
+import { workerBindings } from '../bindings.mjs';
+import { buildVersion, versionWarning } from '../version.mjs';
 import { ensureEncryptionKeys } from '../zke.mjs';
 import { MIGRATION_SQL, splitStatements } from '../../../schema/schema.mjs';
 
@@ -393,26 +395,12 @@ async function stepDeployWorker(state) {
     process.exit(1);
   }
 
+  const vWarn = versionWarning(REPO_ROOT);
+  if (vWarn) warn(vWarn);
+
   const s2 = spinner('Uploading to Cloudflare');
   try {
-    const bindings = [
-      { type: 'd1', name: 'DB', id: state.databaseId },
-      { type: 'plain_text', name: 'SELF_HOST', text: '1' },
-      { type: 'plain_text', name: 'APP_IDENTIFIER', text: 'selfhost' },
-      // Their Firebase project, never ours.
-      { type: 'plain_text', name: 'FIREBASE_API_KEY', text: state.firebaseApiKey || '' },
-      { type: 'plain_text', name: 'FIREBASE_PROJECT_ID', text: state.firebaseProjectId || '' },
-      // Empty on purpose: the managed value points at OUR relay worker. With
-      // D1 bound, the worker proxies through itself instead.
-      { type: 'plain_text', name: 'TELEGRAM_PROXY', text: '' },
-      // So the worker never hands their users an address of ours.
-      { type: 'plain_text', name: 'EXTERNAL_DOMAIN', text: state.dashboardUrl || '' },
-      { type: 'plain_text', name: 'ALLOWED_ORIGINS', text: state.allowedOrigins || 'http://localhost:5173' },
-      { type: 'plain_text', name: 'UPDATE_REPO', text: state.updateRepo || 'myrosama/DaemonClient' },
-      { type: 'plain_text', name: 'BUILD_VERSION', text: readVersion(REPO_ROOT) },
-      // secret_text keeps these out of the dashboard's plain-text env listing.
-      { type: 'secret_text', name: 'SESSION_SECRET', text: state.sessionSecret },
-    ];
+    const bindings = workerBindings(state, { repoRoot: REPO_ROOT });
     await cf.deployWorker(state.cloudflareToken, state.cloudflareAccountId, state.workerName, bundle, bindings);
     await cf.enableWorkersDev(state.cloudflareToken, state.cloudflareAccountId, state.workerName).catch(() => {});
     s2.succeed('Worker deployed');
@@ -486,14 +474,10 @@ async function stepDeployWorker(state) {
   saveState(state);
 }
 
-function readVersion(root) {
-  try {
-    const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
-    return pkg.version || '0.0.0';
-  } catch {
-    return '0.0.0';
-  }
-}
+// readVersion lived here and read the ROOT package.json — a gitignored file, so
+// a fresh clone had none and every install stamped itself '0.0.0'. It now lives
+// in ../version.mjs, reading the tracked VERSION file, shared with `update` so
+// the two can no longer disagree about what version an install is running.
 
 // ── 6. Media processor (optional) ───────────────────────────────────────────
 

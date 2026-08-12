@@ -45,7 +45,8 @@ install keeps working if we disappear.
 | `src/api/cloudflare.mjs` | Workers + D1 over the Cloudflare REST API |
 | `src/api/telegram.mjs` | bot verification — it posts to the channel and deletes the message, because a bot can be a member and still unable to write |
 | `src/build.mjs` | builds the worker bundle from `../immich-api-shim` |
-| `src/deploy.mjs` | worker upload |
+| `src/bindings.mjs` | the worker's bindings — one definition, used by both `setup` and `update` |
+| `src/version.mjs` | the release version stamped into `BUILD_VERSION`, read from the tracked root `VERSION` |
 | `src/state.mjs` | reads and writes `.daemonclient-selfhost.json` — the install's credentials, created readable only by the owner |
 | `src/zke.mjs` | generates and seeds the encryption key material |
 | `src/ui.mjs` | prompts and output |
@@ -63,7 +64,7 @@ restarting.
 ## Tests
 
 ```bash
-npm test    # node --test, 68 tests
+npm test    # node --test, 82 tests
 ```
 
 They cover schema replay (a broken replay made `update` fail on every install

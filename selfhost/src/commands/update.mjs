@@ -15,6 +15,8 @@ import { c, accent, line, blank, panel, ok, fail, warn, info, hint, spinner, con
 import { loadState, saveState, isDone } from '../state.mjs';
 import * as cf from '../api/cloudflare.mjs';
 import { buildWorkerBundle } from '../build.mjs';
+import { workerBindings } from '../bindings.mjs';
+import { buildVersion, versionWarning } from '../version.mjs';
 import { ensureEncryptionKeys } from '../zke.mjs';
 import { MIGRATION_SQL, splitStatements } from '../../../schema/schema.mjs';
 
@@ -115,27 +117,12 @@ export async function runUpdate({ silent = false } = {}) {
     return;
   }
 
+  const vWarn = versionWarning(REPO_ROOT);
+  if (vWarn) warn(vWarn);
+
   const s3 = spinner('Deploying');
   try {
-    const bindings = [
-      { type: 'd1', name: 'DB', id: state.databaseId },
-      { type: 'plain_text', name: 'SELF_HOST', text: '1' },
-      { type: 'plain_text', name: 'APP_IDENTIFIER', text: 'selfhost' },
-      // Their Firebase project, carried forward from setup. Deploying blanks
-      // here would strip sign-in from a working install on every update.
-      { type: 'plain_text', name: 'FIREBASE_API_KEY', text: state.firebaseApiKey || '' },
-      { type: 'plain_text', name: 'FIREBASE_PROJECT_ID', text: state.firebaseProjectId || '' },
-      // Empty on purpose: the managed value points at a relay worker of ours.
-      { type: 'plain_text', name: 'TELEGRAM_PROXY', text: '' },
-      { type: 'plain_text', name: 'ALLOWED_ORIGINS', text: state.allowedOrigins || 'http://localhost:5173' },
-      { type: 'plain_text', name: 'EXTERNAL_DOMAIN', text: state.dashboardUrl || '' },
-      { type: 'plain_text', name: 'UPDATE_REPO', text: state.updateRepo || 'myrosama/DaemonClient' },
-      { type: 'plain_text', name: 'BUILD_VERSION', text: head },
-      // Reusing the SAME secrets is essential: a new session secret would sign
-      // everyone out, and a new encryption key would make stored files
-      // unreadable.
-      { type: 'secret_text', name: 'SESSION_SECRET', text: state.sessionSecret },
-    ];
+    const bindings = workerBindings(state, { repoRoot: REPO_ROOT });
     await cf.deployWorker(state.cloudflareToken, state.cloudflareAccountId, state.workerName, bundle, bindings);
     s3.succeed('Deployed');
   } catch (e) {
@@ -157,6 +144,6 @@ export async function runUpdate({ silent = false } = {}) {
   state.lastUpdate = { at: new Date().toISOString(), source: head };
   saveState(state);
   blank();
-  ok(`Updated to ${c.bold(head)}`);
+  ok(`Updated to ${c.bold(buildVersion(REPO_ROOT))} ${c.gray(`(built from ${head})`)}`);
   blank();
 }
