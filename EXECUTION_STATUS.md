@@ -13,11 +13,11 @@ order — this is what to work from), `docs/plan/MASTER_PLAN.md`, then
 | | |
 |---|---|
 | **Date** | 2026-08-11 |
-| **Phase** | 0 — Truth (make the docs match the code) |
+| **Phase** | Building — `BUILD_ORDER.md` wiring step 1 (P11) |
 | **Just finished** | Repo cleanup + docs rebuild. Readiness investigation (`PHASE_0.md`). Product spec and installer-stack research written from the operator's description of the user journey. |
-| **Working on now** | Nothing — awaiting a go-ahead to start Phase 0. |
-| **Next up** | `BUILD_ORDER.md` wiring step 1: **P11's version fix**, then cut the first release so P3 has a tag to pin to. |
-| **Blocked on** | Nothing. All five questions in `docs/plan/QUESTIONS.md` are answered. Phase 3 needs the operator present to create throwaway accounts, but that is scheduling, not a blocker. |
+| **Working on now** | **P11 is written and UNCOMMITTED, sitting in the working tree.** Gate 1 passed (77 tests, up from 68). Gate 3 did not run — both review agents hit an API session limit. Nothing ships unreviewed. |
+| **Next up** | Re-run the two Gate 3 agents on P11. If clean: commit, then cut `v2.1.0` (wiring step 2), which unblocks `install.sh` pinning a release tag. |
+| **Blocked on** | Gate 3 for P11 — agents terminated by an API session limit, needs re-running. Follow-up filed: `selfhost/src/deploy.mjs` and `env.mjs` are dead code holding a third `BUILD_VERSION` writer; delete them so future greps stop lying. |
 | **Staging** | None exists yet. Phase 3 creates one — throwaway Telegram + Cloudflare + Firebase accounts. Until then no self-host change has been proven on real infrastructure. |
 
 ## The single most important fact

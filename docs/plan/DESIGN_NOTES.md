@@ -136,3 +136,63 @@ The only thing that touches us is the update check."*
 **Security:** none — no product code changed.
 
 **Gate evidence:** G1 n/a · G2 n/a · G3 pending · G4 this commit.
+
+---
+
+## P11 — BUILD_VERSION from a tracked file            2026-08-11
+
+**Planned:** `BUILD_ORDER.md` P11 — stamp `BUILD_VERSION` from the tracked
+`VERSION` file instead of the gitignored root `package.json` (setup) and the
+git short SHA (update). Add a test asserting a SHA can never be stamped.
+
+**Did:** Gate 1 complete. Gates 2 and 3 **not** complete — see below.
+
+- `VERSION` (root, `2.1.0`), `selfhost/src/version.mjs` with
+  `readVersion` / `buildVersion`.
+- `setup.mjs` — deleted the local `readVersion` that read the root
+  `package.json`; imports `buildVersion`.
+- `update.mjs` — stops stamping `head`. It still *prints* `head`, because
+  "which source did I build from" and "which release am I on" are different
+  questions and the user wants both.
+- `selfhost/test/version.test.mjs` — 9 tests. 68 → 77.
+
+**Decisions:**
+- The test duplicates the worker's `isNewerVersion` verbatim rather than
+  importing it. The point is to fail if the CLI's stamp and the *worker's*
+  parser ever stop agreeing, and the worker is TypeScript that cannot be
+  imported here without a build step.
+- Fallback is `0.0.0`, never a SHA. `0.0.0` is older than every release so a
+  bad read over-notifies; a SHA never notifies at all. Only one of those is
+  recoverable by the user.
+
+**Two things found by checking rather than assuming:**
+
+1. **My own test was wrong.** `VERSION is tracked by git` asserted only that
+   the file exists and that no `^VERSION$` line appears in `.gitignore`.
+   Neither proves tracked — and it passed while `VERSION` was untracked, which
+   is the same class of mistake as the bug it guards. Now uses
+   `git ls-files --error-unmatch` and `git check-ignore`. It currently fails,
+   correctly, because `VERSION` is not committed yet.
+
+2. **A third `BUILD_VERSION` writer exists**: `selfhost/src/deploy.mjs:32`,
+   `workerVars`. It is **dead** — `deploy.mjs` and `env.mjs` both have zero
+   importers, confirmed by grep. So the fix is complete for every live path,
+   but the dead files should be deleted: they make future greps lie, which is
+   how this project has repeatedly ended up fixing code that never runs.
+   **Tracked as a follow-up, not silently dropped.**
+
+**Gate evidence:**
+- **G1 PASS.** New tests failed before the change (2 failures on the wiring
+  assertions), pass after. Suite 77/77 with `VERSION` staged; 76/77 while it is
+  not, by design.
+- **G2 PARTIAL, and stated rather than claimed.** No staging install exists
+  (Phase 3 builds one), so the binding has not been observed on a real worker.
+  What *was* verified live: `buildVersion()` returns `2.1.0`, and against the
+  real comparator `v2.2.0`→banner, `v2.1.0`→no banner, `v2.0.0`→no banner.
+- **G3 NOT RUN.** Both review agents — security and spec-conformance — were
+  terminated by an API session limit before producing findings. **P11 is
+  therefore uncommitted.** Nothing ships without an independent review.
+
+**Next action:** re-run both Gate 3 agents. If they pass, commit `VERSION`,
+`version.mjs`, the test and the two rewires together, then cut `v2.1.0` as the
+first real release (wiring step 2), which unblocks `install.sh` pinning a tag.
