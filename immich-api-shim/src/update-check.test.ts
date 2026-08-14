@@ -35,6 +35,10 @@ describe('isNewerVersion', () => {
 
 function makeEnv(store: Record<string, string> = {}, extra: Record<string, any> = {}) {
   return {
+    // The update check is a SELF-HOST feature — a managed worker is redeployed
+    // for its user and returns early. These tests exercise the self-hosted
+    // path, so the default env has to say so.
+    SELF_HOST: '1',
     BUILD_VERSION: '1.0.0',
     UPDATE_REPO: 'example/repo',
     DB: {
@@ -106,5 +110,55 @@ describe('getUpdateStatus', () => {
     const serialized = JSON.stringify(init || {});
     expect(serialized).not.toMatch(/super-secret-value/);
     expect(init?.method ?? 'GET').toBe('GET'); // a GET carries no body
+  });
+});
+
+describe('managed installs are pushed to, not nagged', () => {
+  beforeEach(() => vi.restoreAllMocks());
+
+  // A managed worker is redeployed for the user by the deployment service. It
+  // has no CLI, so an "update available" banner points at a command they cannot
+  // run. This was live and wrong: buildShimBindings sets neither BUILD_VERSION
+  // nor UPDATE_REPO, and `repo = env.UPDATE_REPO || DEFAULT_REPO` meant every
+  // hosted worker polled GitHub anyway while reporting currentVersion '0.0.0' —
+  // so the first published release would have made updateAvailable true for
+  // every hosted user, permanently.
+
+  it('never reports an update available on a managed install', async () => {
+    const fetchMock = vi.fn(async () => new Response(
+      JSON.stringify({ tag_name: 'v99.0.0', html_url: 'https://example.test/r' }),
+      { status: 200 },
+    ));
+    vi.stubGlobal('fetch', fetchMock);
+
+    // No SELF_HOST binding: this is the managed shape, exactly as
+    // deployment-service/src/index.ts buildShimBindings produces it.
+    const status = await getUpdateStatus(makeEnv({}, { SELF_HOST: undefined, BUILD_VERSION: undefined }));
+
+    expect(status.updateAvailable).toBe(false);
+  });
+
+  it('does not spend a request asking GitHub on a managed install', async () => {
+    const fetchMock = vi.fn(async () => new Response('{}', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await getUpdateStatus(makeEnv({}, { SELF_HOST: undefined }));
+
+    // 100k requests/day is the whole free-tier budget; a daily poll per worker
+    // that can never produce a useful answer is pure waste.
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('still reports updates on a self-hosted install', async () => {
+    const fetchMock = vi.fn(async () => new Response(
+      JSON.stringify({ tag_name: 'v99.0.0', html_url: 'https://example.test/r' }),
+      { status: 200 },
+    ));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const status = await getUpdateStatus(makeEnv({}, { SELF_HOST: '1' }));
+
+    expect(status.updateAvailable).toBe(true);
+    expect(fetchMock).toHaveBeenCalled();
   });
 });

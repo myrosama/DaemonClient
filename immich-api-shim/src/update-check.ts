@@ -1,4 +1,5 @@
 import type { Env } from './index';
+import { isSelfHost } from './selfhost-auth';
 
 // How a self-hosted install learns that a new version exists.
 //
@@ -80,6 +81,28 @@ async function writeCache(env: Env, value: UpdateStatus): Promise<void> {
 
 export async function getUpdateStatus(env: Env, force = false): Promise<UpdateStatus> {
   const currentVersion = env.BUILD_VERSION || '0.0.0';
+
+  // Managed installs are pushed to, never nagged.
+  //
+  // This check exists so a SELF-HOSTED operator finds out a fix shipped, since
+  // we deliberately cannot deploy to them. A managed worker is redeployed for
+  // its user by the deployment service, and its user has no CLI — so a banner
+  // saying "update available" points at a command they cannot run.
+  //
+  // It was worse than useless. `buildShimBindings` sets neither BUILD_VERSION
+  // nor UPDATE_REPO, and `repo` below falls back to DEFAULT_REPO, so every
+  // hosted worker polled GitHub daily while reporting currentVersion '0.0.0'.
+  // The first published release would have made updateAvailable TRUE for every
+  // hosted user, permanently, and burned a request a day each doing it.
+  if (!isSelfHost(env)) {
+    return {
+      currentVersion,
+      latestVersion: null,
+      updateAvailable: false,
+      releaseUrl: null,
+      checkedAt: new Date().toISOString(),
+    };
+  }
 
   if (!force) {
     const cached = await readCache(env);

@@ -16,7 +16,7 @@ order — this is what to work from), `docs/plan/MASTER_PLAN.md`, then
 | **Phase** | Building — `BUILD_ORDER.md` wiring step 1 (P11) |
 | **Just finished** | Repo cleanup + docs rebuild. Readiness investigation (`PHASE_0.md`). Product spec and installer-stack research written from the operator's description of the user journey. |
 | **Working on now** | P11 complete — all four gates passed. 82 tests. |
-| **Next up** | Two follow-ups **must land before `v2.1.0` is tagged** — see below. Then cut the release (wiring step 2), which unblocks `install.sh` pinning a tag. |
+| **Next up** | Cut `v2.1.0` — wiring step 2. Both release blockers are closed; `RELEASING.md` has the procedure and CI enforces it. That unblocks P3 (`install.sh` pinning a tag). |
 | **Blocked on** | Nothing. |
 | **Staging** | None exists yet. Phase 3 creates one — throwaway Telegram + Cloudflare + Firebase accounts. Until then no self-host change has been proven on real infrastructure. |
 
@@ -56,7 +56,7 @@ Update these numbers when they change; a drop means silently skipped tests.
 
 | Suite | Count | Command |
 |---|---|---|
-| `immich-api-shim` | 294 | `npm test` |
+| `immich-api-shim` | 297 | `npm test` |
 | `selfhost` | 82 | `npm test` |
 | `deployment-service` | 8 | `npm test` |
 | `processor` | 5 | `npm test` |
@@ -71,21 +71,30 @@ Typecheck clean: `immich-api-shim`, `deployment-service`.
 | Private repo | `myrosama/daemonclient-ops` — managed-service code, audits, security findings |
 | Open security findings | `daemonclient-ops/docs/AUDIT_FINDINGS_2026-08-06.md` — **not** in this repo, and deliberately not summarised here |
 
-## Must land before `v2.1.0` is tagged
+## Release blockers — both CLOSED 2026-08-12
 
-Both were raised by the Gate 3 spec review of P11. Both are currently latent and
-become live the moment a release is published — cutting the tag is what
-activates them.
+Raised by the Gate 3 spec review of P11. Both were latent, and cutting the tag
+was what would have activated them.
 
-| # | Problem | Evidence |
+| # | Problem | Resolution |
 |---|---|---|
-| A | **The managed path sets no `BUILD_VERSION` at all.** `buildShimBindings` emits neither it nor `UPDATE_REPO`, so every hosted worker reports `build: null` and `currentVersion: '0.0.0'`. Once `v2.1.0` exists, `updateAvailable` computes **true, permanently, for every hosted user** — telling them to run a CLI they do not have. | `deployment-service/src/index.ts:106-123`, used by all three deploy paths (`:324`, `:599`, `:655`); `immich-api-shim/src/update-check.ts:82,119` |
-| B | **`VERSION` is bumped ahead of its release, and nothing enforces the rule.** `VERSION` is `2.1.0`; the newest tag is `v2.0.0`. Anyone cloning `main` today stamps `2.1.0`, so when `v2.1.0` is cut — carrying commits they do not have — `isNewerVersion('v2.1.0','2.1.0')` is false and they never see it. The rule "bump VERSION *at* release, never ahead of it" exists only as a comment. | `VERSION:1` vs `git tag -l`; `version.mjs:24-26` |
+| A | The managed path set no `BUILD_VERSION`, and `repo = env.UPDATE_REPO \|\| DEFAULT_REPO` meant every hosted worker polled GitHub anyway while reporting `0.0.0`. The first release would have made `updateAvailable` **true, permanently, for every hosted user** — pointing at a CLI they do not have. | **Fixed.** `getUpdateStatus` now returns early unless `isSelfHost(env)`. The check exists so a self-hoster learns a fix shipped; managed users are pushed to. Also stops a daily request per hosted worker that could never produce a useful answer. shim 294 → 297 tests. |
+| B | `VERSION` was bumped ahead of its tag with nothing enforcing the rule, so anyone cloning `main` in between stamps an unreleased number and never sees the release when it lands. | **Enforced.** `.github/workflows/release.yml` fails a tag push whose `VERSION` does not match, is not a plain three-part semver, or has no changelog entry. Rule and full procedure in `RELEASING.md`. |
 
-`docs/PARITY.md:104` already names A as an unbuilt gap ("both flavours report
-the same version string, from the same source"). This is what closing it costs.
+`docs/PARITY.md:104` names "both flavours report the same version string, from
+the same source" as an unbuilt gap. A is closed in the direction that matters —
+managed users are no longer told something false. Reporting a *real* build
+string on managed workers is still open: it needs the version threaded through
+`deployment-service`, whose embed script (`deployment-service/scripts/`) is
+gitignored, so it is not a two-line change. Tracked below.
 
 ## Follow-ups, tracked not dropped
+
+- **Managed workers still report `build: null`.** Harmless now that the update
+  check is gated, but `/api/selfhost/status` cannot identify which bundle a
+  hosted worker runs. Needs `BUILD_VERSION` threaded through
+  `deployment-service/src/index.ts:106` from the `VERSION` file at embed time;
+  the embed script is gitignored, so this is tooling work, not a one-liner.
 
 - Delete `selfhost/src/deploy.mjs` and `selfhost/src/env.mjs`. Both have **zero
   importers** — independently verified in the Gate 3 review, including dynamic
