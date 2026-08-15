@@ -64,8 +64,13 @@ and an explanation. **One URL, and they are in.**
 
 ### 0 · Bootstrap
 
-`curl -fsSL https://get.daemonclient.uz | sh` — see `INSTALLER_STACK.md` for
-what that script does and why it is allowed to be a curl pipe.
+```
+curl -fsSL https://raw.githubusercontent.com/myrosama/DaemonClient/main/install.sh | sh
+```
+
+Fetched from GitHub, not from us — see `INSTALLER_STACK.md`. Nothing of ours is
+in the install path at all, so there is no host of ours whose compromise could
+change what a stranger runs.
 
 ### 1 · Telegram
 

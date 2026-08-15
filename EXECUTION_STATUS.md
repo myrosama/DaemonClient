@@ -37,7 +37,7 @@ All five open questions are answered — full reasoning in `docs/plan/QUESTIONS.
 | Tenancy | **One person per install.** Not a family product. The owner gate is not being opened. |
 | Version | **`v2.1.0`**, continuing the existing tag rather than inventing a third numbering scheme. |
 | Plan docs | **Public.** |
-| Entry point | **`curl -fsSL https://get.daemonclient.uz \| sh`** — install.sh checks git, installs a local no-sudo Node if missing (checksummed), clones the latest release tag, runs `npm ci`, hands over. `npm create daemonclient@latest` published as a second door. |
+| Entry point | **`curl -fsSL https://raw.githubusercontent.com/myrosama/DaemonClient/main/install.sh \| sh`** — fetched from **GitHub, not from us**, so nothing of ours is in the install path. It checks git, installs a local no-sudo Node if missing (checksummed), clones the latest release tag, runs `npm ci`, hands over. |
 | Firebase email sign-in | **The user flips the toggle themselves**; we open the console page and wait. Spike closed — no Identity Toolkit Admin API. |
 | Credential order | **Email/password asked LAST**, after Firebase exists. Never touches disk. |
 | Post-setup management | **Deferred to Phase 7.** Named later; cannot be `daemonclient`. |

@@ -22,6 +22,7 @@ import * as tg from '../api/telegram.mjs';
 import * as cf from '../api/cloudflare.mjs';
 import { buildWorkerBundle } from '../build.mjs';
 import { workerBindings } from '../bindings.mjs';
+import { ensureSubdomain, suggestSubdomain } from '../subdomain.mjs';
 import { buildVersion, versionWarning } from '../version.mjs';
 import { ensureEncryptionKeys } from '../zke.mjs';
 import { MIGRATION_SQL, splitStatements } from '../../../schema/schema.mjs';
@@ -273,7 +274,21 @@ async function stepCloudflare(state) {
     process.exit(1);
   }
 
-  const subdomain = await cf.getSubdomain(token, account.id).catch(() => null);
+  // A brand-new Cloudflare account has no workers.dev subdomain, and that is
+  // the expected state for a self-hoster. This used to be a read that fell back
+  // to null, so the install finished with no address at all — see subdomain.mjs.
+  const s4 = spinner('Checking your workers.dev address');
+  let subdomain;
+  try {
+    subdomain = await ensureSubdomain(cf, token, account.id, {
+      desired: suggestSubdomain(account.name),
+      candidates: [suggestSubdomain(account.name), suggestSubdomain('daemonclient')],
+    });
+    s4.succeed(`Address: ${c.bold(subdomain + '.workers.dev')}`);
+  } catch (e) {
+    s4.fail(e.message);
+    process.exit(1);
+  }
 
   state.cloudflareToken = token;
   state.cloudflareAccountId = account.id;
@@ -402,7 +417,10 @@ async function stepDeployWorker(state) {
   try {
     const bindings = workerBindings(state, { repoRoot: REPO_ROOT });
     await cf.deployWorker(state.cloudflareToken, state.cloudflareAccountId, state.workerName, bundle, bindings);
-    await cf.enableWorkersDev(state.cloudflareToken, state.cloudflareAccountId, state.workerName).catch(() => {});
+    // Not swallowed. A freshly uploaded script is unreachable until this is
+    // set, so a silent failure here yields a worker that exists and answers
+    // nothing — the same dead end as a missing subdomain, by a second route.
+    await cf.enableWorkersDev(state.cloudflareToken, state.cloudflareAccountId, state.workerName);
     s2.succeed('Worker deployed');
   } catch (e) {
     s2.fail(`Deploy failed: ${e.message}`);
@@ -581,7 +599,7 @@ async function stepFinish(state) {
 
   const lines = [
     `${c.bold('Your API')}`,
-    `  ${state.workerUrl || '(no workers.dev subdomain — check the Cloudflare dashboard)'}`,
+    `  ${state.workerUrl}`,
     '',
     `${c.bold('Sign in with')}`,
     `  ${state.adminEmail}`,

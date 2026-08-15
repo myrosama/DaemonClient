@@ -88,7 +88,25 @@ instead of it. This is a re-skin plus a distribution change, not a rewrite.
 
 ## Delivery
 
-**Entry point:** `curl -fsSL https://get.daemonclient.uz | sh`
+**Entry point:** the script is fetched from **GitHub**, not from us.
+
+```
+curl -fsSL https://raw.githubusercontent.com/myrosama/DaemonClient/main/install.sh | sh
+```
+
+Changed on the operator's point, and they were right. The earlier plan had this
+as `https://get.daemonclient.uz`, which means **we** host and serve the script
+that a stranger pipes into their shell. That is a trust hop that buys nothing:
+if anything of ours were ever compromised, that file is exactly what an
+attacker would want to change, and the user has no way to tell.
+
+Fetching from the repository removes it. The script sits in public source where
+it can be read before it is run, at a host the user must already trust to get
+the code at all. Uglier one-liner, one fewer thing to trust.
+
+A `get.daemonclient.uz` vanity redirect may exist later for the short version,
+but GitHub stays canonical and the docs show the long form — a redirect we
+control is the same trust hop wearing a nicer name.
 
 One line, as specified. The script does everything in order and hands over to
 the installer.
