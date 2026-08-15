@@ -232,6 +232,16 @@ footer{background:#000;padding:48px 0 0;position:relative;overflow:hidden;border
 .rd1{transition-delay:.08s}.rd2{transition-delay:.16s}.rd3{transition-delay:.24s}.rd4{transition-delay:.32s}
 
 /* ── TABLET ── */
+/* Scroll cue — shown on small screens only, where the hero is three short
+   lines in a tall viewport and the space beneath them otherwise reads as a
+   layout mistake rather than an invitation. */
+.scrollcue{display:none;position:absolute;left:50%;bottom:8vh;transform:translateX(-50%);
+  flex-direction:column;align-items:center;gap:9px;pointer-events:none;z-index:2}
+.scrollcue span{font-family:var(--mono);font-size:10px;letter-spacing:.22em;text-transform:uppercase;color:var(--dim)}
+.scrollcue i{display:block;width:1px;height:34px;background:linear-gradient(to bottom,var(--dim),transparent);animation:cuemove 1.9s ease-in-out infinite}
+@keyframes cuemove{0%,100%{opacity:.25;transform:translateY(0)}50%{opacity:.9;transform:translateY(6px)}}
+@media(prefers-reduced-motion:reduce){.scrollcue i{animation:none}}
+
 @media(max-width:880px){
   /* Footer stacking, matching the reference's own breakpoint behaviour:
      brand above the columns, columns still side by side. */
@@ -264,8 +274,15 @@ footer{background:#000;padding:48px 0 0;position:relative;overflow:hidden;border
      the pinned scroll distance so the animation does not cost two full screens
      of thumb travel on a phone. */
   #stage{height:170vh}
-  .hero-h{font-size:clamp(56px,17vw,88px);letter-spacing:-.045em;line-height:.92}
-  .stage-words .wrap{padding:0 20px}
+  /* 17vw still left the headline as a small band floating in a mostly empty
+     900px screen — the thing the operator's screenshot was actually about.
+     Bigger type and a nudge upward: the remaining space then sits BELOW the
+     words, where the scroll cue is and where emptiness reads as "keep going"
+     rather than as a layout mistake. */
+  .hero-h{font-size:clamp(52px,17.2vw,84px);letter-spacing:-.05em;line-height:.92}
+  .stage-words{align-items:center}
+  .stage-words .wrap{padding:0 18px;transform:translateY(-6vh)}
+  .scrollcue{display:flex}
 
   /* Footer: single column, full-width tap targets, reference spacing. */
   .ft-in{padding:0 20px}
@@ -289,7 +306,6 @@ footer{background:#000;padding:48px 0 0;position:relative;overflow:hidden;border
   .nav-logo img{width:23px;height:23px}
   #stage{height:200vh}
   .stage-words .wrap{padding:0 16px}
-  .hero-h{font-size:clamp(52px,15.5vw,76px)}
   .intro-text{font-size:18px;margin-bottom:40px}
   .chapter,.band{padding:64px 0}
   .ch-h{font-size:clamp(30px,8vw,40px)}
@@ -328,7 +344,7 @@ footer{background:#000;padding:48px 0 0;position:relative;overflow:hidden;border
 @media(max-width:380px){
   .ft-cols{grid-template-columns:1fr;gap:22px}
   .cta-grid{width:230vw}
-  .hero-h{font-size:13.6vw}
+  .hero-h{font-size:16.6vw}
   .ft-cols{gap:28px 28px}
 }
 </style>
@@ -391,6 +407,7 @@ footer{background:#000;padding:48px 0 0;position:relative;overflow:hidden;border
 <!-- PINNED STAGE: three words → paragraph, then real scroll -->
 <section id="stage">
   <div class="stage-sticky">
+    <div class="scrollcue" aria-hidden="true"><span>Scroll</span><i></i></div>
     <div class="stage-words" id="stage-words">
       <div class="wrap">
         <h1 class="hero-h">
