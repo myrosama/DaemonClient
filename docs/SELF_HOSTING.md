@@ -59,10 +59,10 @@ create a **Custom Token** with exactly these permissions:
 Do not use a Global API Key. The custom token can create your worker and
 database and nothing else.
 
-**An email and password.** This is the account you will sign in with, in the web
-apps and the mobile app. It exists only in your own database. There is no signup
-page, no password-reset email, and no way for anyone else to create an account
-on your server.
+**An email and password.** This is the account you will sign in with, in the
+web apps. It lives in **your own Firebase project** — Firebase Authentication,
+under your Google account. There is no public signup page, and nobody can
+create an account on your server but you.
 
 ### When it finishes
 
@@ -114,8 +114,13 @@ you are not building for self-host — so a self-host build never points at us:
 | Dashboard (`accounts-portal`) | `VITE_SELF_HOST=1 VITE_API_BASE=<your-worker> VITE_FIREBASE_API_KEY=… VITE_FIREBASE_AUTH_DOMAIN=<project>.firebaseapp.com VITE_FIREBASE_PROJECT_ID=<project> VITE_PHOTOS_URL=… VITE_DRIVE_URL=… npx vite build --mode selfhost` |
 
 Then host the built folders anywhere static (Firebase Hosting, Cloudflare Pages,
-Netlify, your own nginx) and add each address to `ALLOWED_ORIGINS`
-(`daemonclient update`), or the browser blocks its API calls. For local dev,
+Netlify, your own nginx) and add each address to `ALLOWED_ORIGINS`, or the
+browser blocks its API calls.
+
+`daemonclient web` and `daemonclient dashboard` add the addresses *they*
+create, but there is no command for adding one of your own: edit
+`allowedOrigins` in `.daemonclient-selfhost.json` and run `daemonclient update`,
+or set the variable directly in the Cloudflare dashboard. For local dev,
 `npm run dev` in `immich/web` or `drive` works too — set the same variables.
 
 ---
@@ -125,8 +130,8 @@ Netlify, your own nginx) and add each address to `ALLOWED_ORIGINS`
 ```bash
 daemonclient status      # what is running, and is it healthy
 daemonclient update      # rebuild from the current source and redeploy
+daemonclient dashboard   # build the dashboard and deploy it to Cloudflare Pages
 daemonclient processor   # add or change the media processor
-daemonclient password    # change your sign-in password
 daemonclient doctor      # diagnose a broken install
 ```
 
@@ -198,7 +203,7 @@ the failed request has woken it.
   your phone / browser
           │
           ▼
-  your Cloudflare Worker  ──── your D1 database (file index, accounts)
+  your Cloudflare Worker  ──── your D1 database (file index, settings, keys)
           │
           ▼
   your Telegram bot  ────────► your private channel (encrypted file chunks)
@@ -210,9 +215,14 @@ your worker, which is what allows thumbnails, EXIF and deduplication to work.
 
 **Two things you must not lose:**
 
-- `.daemonclient-selfhost.json` in your clone. It holds your tokens and your
-  encryption key. It is created readable only by you and is gitignored. Back it
-  up somewhere safe.
+- **Your encryption keys**, which live in your **D1 database** as the
+  `zke_password` and `zke_salt` rows — and nowhere else. Back them up with
+  `daemonclient doctor --show-keys`. Losing them means losing access to every
+  file already in Telegram.
+- `.daemonclient-selfhost.json` in your clone. It holds your Cloudflare and
+  Telegram tokens and your session secret — **not** your encryption keys. It is
+  created readable only by you and is gitignored. Worth backing up, but backing
+  up only this file does not protect your photos.
 - The Telegram channel. Deleting it, or removing the bot, or deleting messages
   in it, destroys the files. The index in D1 will still list them, but the bytes
   will be gone.
@@ -283,8 +293,10 @@ what to run for each problem it finds. The report it prints has every secret
 removed, so it is safe to paste into an issue.
 
 **"Cannot reach the server" in a web app.** The address you are serving the app
-from is not in `ALLOWED_ORIGINS`. Re-run `daemonclient update` after setting it,
-or add it in the Cloudflare dashboard under your worker's variables.
+from is not in `ALLOWED_ORIGINS`. If `daemonclient web` deployed the app, re-run
+it. If you are hosting it yourself, edit `allowedOrigins` in
+`.daemonclient-selfhost.json` and run `daemonclient update`, or set the variable
+in the Cloudflare dashboard under your worker.
 
 **Uploads fail with 413.** Cloudflare's free plan caps request bodies at 100 MB,
 so single files above that cannot be uploaded from mobile. Known limitation.
@@ -302,13 +314,36 @@ library being browsed hard can reach them.
 
 ## Questions people ask
 
-**Can other people use my server?** Only accounts in your database can sign in,
-and the only way to create one is `daemonclient password` with your Cloudflare
-token. Add family accounts that way if you want them.
+**Can other people use my server?** No — but not for the reason you might
+expect, so it is worth being precise.
 
-**Does it phone home?** No. The daily version check is an anonymous GET to
-GitHub's public releases endpoint, sends nothing about your install, and can be
-turned off by clearing `UPDATE_REPO`.
+Firebase email/password signup is **open by default**, and your web apps ship
+their Firebase Web API key in the browser bundle, as every Firebase app does.
+So a stranger *can* register an account in your project. What stops them
+reaching your files is the worker's **owner gate**: one install belongs to one
+account, and every authenticated route is checked against it. An account that
+is not the owner gets nothing, however it was created.
+
+If you would rather they could not register at all, turn off self-registration
+in the Firebase console under Authentication → Settings → User actions.
+
+So an install belongs to exactly one person. If someone else wants one, they
+run their own; that is the whole point of the architecture and it costs them a
+free Cloudflare account.
+
+**How do I change my password?** In your Firebase console, under
+Authentication → Users. It is your project, so account management happens
+there rather than through this CLI.
+
+**Does it phone home?** No. Roughly twice a day the worker makes an anonymous
+GET to GitHub's public releases endpoint to ask whether a newer version exists.
+It sends nothing about your install — no id, no domain, no usage — and the
+result is cached in your own database.
+
+There is currently **no switch to turn it off**: clearing `UPDATE_REPO` falls
+back to a default rather than disabling the check. If that matters to you,
+block the request at your network edge, or say so in an issue and it will get a
+proper opt-out.
 
 **Is this really free?** Yes, within the free tiers of Telegram, Cloudflare and
 (if you use it) Vercel. There is no paid version of self-hosting and no key to

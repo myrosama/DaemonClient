@@ -171,7 +171,7 @@
     <div class="diagram">   your phone / browser / any file manager (WebDAV)
                     │
                     ▼
-      your Cloudflare Worker  ──── your D1 database (file index, accounts)
+      your Cloudflare Worker  ──── your D1 database (file index, settings, keys)
                     │                (metadata only — never plaintext, never keys)
                     ▼
       your Telegram bot  ─────────► your private channel
@@ -234,7 +234,8 @@
     self-hosting guide.</p></div>
 
     <h2 id="auth">Accounts &amp; sign-in</h2>
-    <p><strong>One install, one owner.</strong> The first account to sign in claims the install; every
+    <p><strong>One install, one owner.</strong> The install is claimed by the first sign-in that goes
+    through the worker's own password login; every
     authenticated route is gated on that owner, so a second account in your Firebase project cannot read your
     data. The check lives at the single authentication chokepoint rather than being repeated per route, so a
     route added later is covered by default.</p>
@@ -350,8 +351,11 @@ node selfhost/bin/daemonclient.mjs setup</code></pre>
         <p>Setup signs in for real to check the details, so a typo or a still-disabled Email/Password provider
         fails here rather than on your phone later.</p>
         <div class="callout warn"><p><span class="tag">There is no signup page.</span> Accounts exist only in
-        your own Firebase project. The only way to add one is you, in the Firebase console (or
-        <code>daemonclient password</code>). Nobody else can create an account on your server.</p></div>
+        your own Firebase project. Firebase self-registration is open by default and your apps ship a
+        Firebase Web API key in the browser like every Firebase app, so a stranger <em>can</em> register —
+        what stops them reaching your files is the worker's <strong>owner gate</strong>: one install belongs
+        to one account, and every authenticated route is checked against it. Turn off self-registration in
+        the Firebase console (Authentication → Settings) if you would rather they could not.</p></div>
       </li>
 
       <li id="deploy"><h3>Deploy the worker &amp; encryption keys</h3>
@@ -436,15 +440,19 @@ daemonclient update</code></pre>
       neither the worker nor Telegram sees plaintext.</li>
       <li><strong>Photos</strong> is encrypted on your own single-tenant worker before reaching Telegram —
       the trade-off that enables thumbnails, EXIF and dedup, confined to infrastructure that serves only you.</li>
-      <li><strong>One install, one owner.</strong> The first account to sign in claims the install; every
+      <li><strong>One install, one owner.</strong> The install is claimed by the first sign-in that goes
+    through the worker's own password login; every
       authenticated route is gated on that owner, so a second account in your Firebase project cannot read
       your data.</li>
       <li><strong>Your bytes never transit shared machines.</strong> Heavy-compute features (HEIC) run only
       against a per-user processor URL from your own config — never a shared box.</li>
     </ul>
     <div class="callout warn"><p><span class="tag">Two things you must not lose</span></p>
-    <p><code>.daemonclient-selfhost.json</code> in your clone (your tokens + encryption key, mode 0600,
-    gitignored) and the Telegram channel itself. Losing the key means files already stored cannot be
+    <p>your <strong>encryption keys</strong> — which live in your D1 database as <code>zke_password</code> and
+    <code>zke_salt</code>, <em>not</em> in the state file; back them up with
+    <code>daemonclient doctor --show-keys</code> — and the Telegram channel itself.
+    <code>.daemonclient-selfhost.json</code> (mode 0600, gitignored) holds your tokens and session secret,
+    which is worth keeping but does not decrypt anything. Losing the key means files already stored cannot be
     decrypted — there is no backdoor, by design.</p></div>
 
     <h2 id="troubleshooting">Troubleshooting</h2>
@@ -504,7 +512,8 @@ daemonclient update</code></pre>
     accounts that way if you want them.</p>
     <h3>Does it phone home?</h3>
     <p>No. The daily version check is an anonymous GET to GitHub's public releases endpoint, sends nothing
-    about your install, and can be turned off by clearing <code>UPDATE_REPO</code>.</p>
+    about your install. There is currently no switch to disable it — clearing <code>UPDATE_REPO</code> falls
+    back to a default rather than turning the check off.</p>
     <h3>Is this really free?</h3>
     <p>Yes, within the free tiers of Telegram, Cloudflare, Firebase and (if you use it) Vercel. There is no
     paid version of self-hosting and no key to buy.</p>

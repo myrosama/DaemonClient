@@ -104,3 +104,39 @@ gitignored, so it is not a two-line change. Tracked below.
   run. `selfhost/README.md` no longer lists them.
 - `selfhost/package.json:3` still declares `"version": "1.0.0"` — a third
   version number in a change whose thesis is "one tracked file".
+
+## P0 — self-hosted bootstrap is broken
+
+Found by the Gate 3 review of Phase 0, from code, not from a doc. **Verified
+independently.** This is a product bug, not a documentation bug.
+
+**A fresh self-hosted install cannot be claimed by following the documented
+path.** `daemonclient web` → open the dashboard → sign in returns
+`Not authenticated`.
+
+The chain:
+
+| Step | Evidence |
+|---|---|
+| Nothing ever seeds `owner_uid` | it appears **once** in the whole repo, as a key constant — `owner-gate.ts:22`. `setup.mjs` writes only the schema and the ZKE keys. |
+| An unclaimed install can only be claimed by a credential with `mayClaim` | `owner-gate.ts:89-98` — `if (!mayClaim) throw new Error('Not authenticated')` |
+| A Firebase ID token never has it | `helpers.ts:119` — `requireOwner(env, session.uid, false)` |
+| The dashboard only ever presents a Firebase ID token | `accounts-portal/src/App.jsx:411,617,876,1346,1720` — `getIdToken()`, never `POST /api/auth/login` |
+| `/api/auth/exchange` does not help — it authenticates the same way | `auth.ts handleExchange` → `requireAuth` → the Firebase branch |
+
+So the only thing that can claim a self-hosted install is `POST /api/auth/login`,
+which Photos and the mobile app use and the dashboard does not. A user who signs
+into Photos *first* gets a working install; a user who follows the documentation
+gets a locked one.
+
+**The gate itself is right** — `owner-gate.ts:16-20` explains why a Firebase ID
+token must not claim, and that reasoning holds. The bug is that nothing else
+claims either.
+
+**Owner: P10 (account) / P15 (wizard) in `BUILD_ORDER.md`.** The account step
+should claim the install explicitly at the end of setup, while it still holds
+the password, rather than leaving it to whichever app the user happens to open
+first. Do not "fix" this by loosening `mayClaim`.
+
+This is exactly the class of defect Phase 3 exists to catch, found earlier and
+more cheaply by reading the code.
