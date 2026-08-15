@@ -33,7 +33,7 @@
 :root{
   --blue:#1E6BFF;--blue-hi:#38BDF8;
   --green:#10B981;--green-hi:#34D399;
-  --canvas:#0B0E14;
+  --canvas:#000000;
   --line:rgba(244,246,251,.08);--line-hi:rgba(244,246,251,.16);
   --text:#F4F6FB;--muted:#8A93A6;--dim:#5A6273;
   --head:'Space Grotesk',sans-serif;--body:'DM Sans',sans-serif;--mono:'JetBrains Mono',monospace;
@@ -44,7 +44,6 @@ html::-webkit-scrollbar,body::-webkit-scrollbar{width:0;height:0;display:none}
 body{background:var(--canvas);color:var(--text);font-family:var(--body);font-size:16px;line-height:1.6;overflow-x:hidden;-webkit-font-smoothing:antialiased}
 a{color:inherit;text-decoration:none}
 img{display:block}
-#shard-canvas{position:fixed;inset:0;width:100%;height:100%;pointer-events:none;z-index:0}
 nav,main,footer{position:relative;z-index:1}
 .wrap{max-width:1180px;margin:0 auto;padding:0 40px;width:100%}
 .mono{font-family:var(--mono);font-size:12px;font-weight:500;letter-spacing:.12em;text-transform:uppercase}
@@ -185,22 +184,47 @@ nav.hero-state .nav-burger{display:flex}
 /* ── CTA ── */
 #cta{text-align:center;padding:160px 0;position:relative;overflow:hidden;border-top:1px solid var(--line)}
 #cta::before{content:'';position:absolute;inset:0;background:radial-gradient(ellipse 70% 60% at 30% 110%,rgba(30,107,255,.1) 0%,transparent 55%),radial-gradient(ellipse 70% 60% at 70% 110%,rgba(16,185,129,.09) 0%,transparent 55%);pointer-events:none}
-.cta-in{position:relative;max-width:680px;margin:0 auto}
+.cta-in{position:relative;max-width:680px;margin:0 auto;z-index:1}
+/* Perspective frame — the vanishing-point grid above and below the CTA.
+   Two mirrored SVGs rather than one: each is anchored to its own edge so the
+   convergence point stays near the headline at any viewport height, which a
+   single stretched copy loses. Masked to fade out at the horizon so the lines
+   dissolve instead of stopping. */
+#cta{position:relative;overflow:hidden}
+.cta-grid{position:absolute;left:50%;transform:translateX(-50%);width:min(1180px,96vw);pointer-events:none;z-index:0;color:rgba(244,246,251,.16)}
+.cta-grid.top{top:0}
+.cta-grid.bot{bottom:0}
+#cta .cta-logo{display:block;width:52px;height:52px;margin:0 auto 22px}
 h2.cta-h{font-family:var(--head);font-size:clamp(34px,5vw,60px);font-weight:700;letter-spacing:-.035em;line-height:1.05;margin-bottom:16px;text-wrap:balance}
 h2.cta-h .u{color:var(--green-hi)}h2.cta-h .f{color:var(--blue-hi)}
 .cta-sub{font-size:17px;color:var(--muted);margin-bottom:40px}
 .cta-btns{display:flex;gap:14px;justify-content:center;flex-wrap:wrap}
 
 /* ── FOOTER ── */
-footer{border-top:1px solid var(--line);padding:80px 0 48px}
-.ft-top{display:flex;justify-content:space-between;gap:60px;flex-wrap:wrap;margin-bottom:64px}
-.ft-statement{font-family:var(--head);font-size:clamp(26px,3vw,38px);font-weight:700;letter-spacing:-.03em;line-height:1.1;max-width:520px}
-.ft-statement .u{color:var(--green-hi)}.ft-statement .f{color:var(--blue-hi)}
-.ft-cols{display:flex;gap:64px;flex-wrap:wrap}
-.ft-col h4{font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);margin-bottom:16px}
-.ft-col a{display:block;font-size:14px;color:var(--muted);margin-bottom:11px;transition:color .2s}
-.ft-col a:hover{color:var(--text)}
-.ft-bot{display:flex;justify-content:space-between;align-items:center;padding-top:32px;border-top:1px solid var(--line);font-family:var(--mono);font-size:11px;letter-spacing:.04em;color:var(--dim);flex-wrap:wrap;gap:14px}
+/* Footer — structure and spacing taken from the Moonshot AI reference.
+   The glow is a heavily blurred SVG behind everything, not a CSS gradient:
+   that soft off-centre light is what stops a black footer reading as a dead
+   band, and box-shadow/radial-gradient cannot reproduce its shape. */
+footer{background:#000;padding:48px 0 0;position:relative;overflow:hidden;border-top:1px solid var(--line)}
+.ft-glow{position:absolute;left:0;right:0;bottom:-30%;width:100%;height:130%;pointer-events:none;opacity:.85}
+.ft-in{position:relative;max-width:1240px;margin:0 auto;padding:0 40px}
+.ft-top{display:flex;gap:96px;padding:56px 0;margin:0}
+.ft-brand{flex:1;min-width:300px;display:flex;flex-direction:column;align-items:flex-start;gap:48px}
+.ft-brandinfo{display:flex;flex-direction:column;align-items:flex-start;gap:32px}
+.ft-logo{display:flex;align-items:center;gap:11px;font-family:var(--head);font-weight:700;font-size:21px;letter-spacing:-.02em;color:#fff}
+.ft-logo img{width:30px;height:30px}
+.ft-copy{font-size:14px;line-height:20px;color:#ffffff8f;max-width:34ch}
+.ft-copy p{margin:0}
+.ft-socials{display:flex;gap:15px}
+.ft-social{display:flex;align-items:center;justify-content:center;width:40px;height:40px;border-radius:50%;background:#ffffff26;transition:background .2s;color:#fff}
+.ft-social:hover{background:#ffffff50}
+.ft-social svg{width:16px;height:16px}
+.ft-cols{display:flex;gap:56px;flex-shrink:0}
+.ft-col{display:flex;flex-direction:column;gap:24px;min-width:118px}
+.ft-col h4{font-family:var(--body);font-size:14px;font-weight:500;line-height:20px;color:#fff;padding-bottom:16px;margin:0;letter-spacing:0;text-transform:none}
+.ft-col a{display:block;font-size:14px;line-height:20px;color:#ffffffd6;text-decoration:none;transition:color .2s;margin:0}
+.ft-col a:hover{color:#fff}
+.ft-bot{position:relative;display:flex;justify-content:space-between;align-items:center;padding:24px 0 32px;border-top:1px solid rgba(255,255,255,.08);font-family:var(--mono);font-size:11px;letter-spacing:.04em;color:var(--dim);flex-wrap:wrap;gap:14px}
 
 /* reveal */
 .reveal{opacity:0;transform:translateY(22px);transition:opacity .7s ease,transform .7s ease}
@@ -209,6 +233,13 @@ footer{border-top:1px solid var(--line);padding:80px 0 48px}
 
 /* ── TABLET ── */
 @media(max-width:880px){
+  /* Footer stacking, matching the reference's own breakpoint behaviour:
+     brand above the columns, columns still side by side. */
+  .ft-in{padding:0 32px}
+  .ft-top{flex-direction:column;gap:40px;padding:40px 0}
+  .ft-brand{gap:32px}
+  .ft-cols{gap:32px;flex-wrap:wrap}
+  .cta-grid{width:130vw}
   .wrap{padding:0 24px}
   .nav-in{padding:0 24px}
   .nav-links{display:none!important}
@@ -226,6 +257,31 @@ footer{border-top:1px solid var(--line);padding:80px 0 48px}
 /* ── MOBILE ── */
 @media(max-width:560px){
   .wrap{padding:0 18px}
+
+  /* The hero was a 3-line headline centred in 100vh, which left a large dead
+     band above and below it — the screenshot the operator sent is mostly empty
+     space. Fill more of the screen with the thing people came to read, and cut
+     the pinned scroll distance so the animation does not cost two full screens
+     of thumb travel on a phone. */
+  #stage{height:170vh}
+  .hero-h{font-size:clamp(56px,17vw,88px);letter-spacing:-.045em;line-height:.92}
+  .stage-words .wrap{padding:0 20px}
+
+  /* Footer: single column, full-width tap targets, reference spacing. */
+  .ft-in{padding:0 20px}
+  .ft-top{flex-direction:column;gap:32px;padding:32px 0}
+  .ft-brand{gap:28px}
+  .ft-brandinfo{gap:20px}
+  .ft-cols{display:grid;grid-template-columns:1fr 1fr;gap:28px 20px}
+  .ft-col{min-width:0;gap:14px}
+  .ft-col h4{padding-bottom:8px}
+  .ft-bot{flex-direction:column;align-items:flex-start;gap:10px;padding:20px 0 28px}
+  .ft-glow{opacity:.65}
+
+  /* The perspective grid needs to be wider than the screen on a phone or the
+     vanishing point sits inside the text block instead of behind it. */
+  .cta-grid{width:190vw}
+  #cta .cta-logo{width:44px;height:44px;margin-bottom:18px}
   .nav-in{padding:0 16px}
   nav{height:58px}
   #mnav{inset:58px 0 0}
@@ -270,6 +326,8 @@ footer{border-top:1px solid var(--line);padding:80px 0 48px}
 }
 /* ── SMALL PHONE ── */
 @media(max-width:380px){
+  .ft-cols{grid-template-columns:1fr;gap:22px}
+  .cta-grid{width:230vw}
   .hero-h{font-size:13.6vw}
   .ft-cols{gap:28px 28px}
 }
@@ -303,7 +361,6 @@ footer{border-top:1px solid var(--line);padding:80px 0 48px}
 </head>
 <body>
 
-<canvas id="shard-canvas"></canvas>
 
 <!-- NAV -->
 <nav id="nav">
@@ -482,7 +539,32 @@ footer{border-top:1px solid var(--line);padding:80px 0 48px}
 
 <!-- CTA -->
 <section id="cta">
+  <svg class="cta-grid top" viewBox="0 0 1180 300" fill="none" aria-hidden="true">
+    <defs><linearGradient id="ctaFadeT" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fff" stop-opacity="1"/><stop offset="1" stop-color="#fff" stop-opacity="0"/>
+    </linearGradient><mask id="ctaMaskT"><rect width="1180" height="300" fill="url(#ctaFadeT)"/></mask></defs>
+    <g mask="url(#ctaMaskT)" stroke="currentColor" stroke-width="1">
+      <path d="M60 2 H1120" /><path d="M60 2 Q20 2 20 42 V300" /><path d="M1120 2 Q1160 2 1160 42 V300" />
+      <path d="M20 62 H1160"/><path d="M20 132 H1160"/><path d="M20 220 H1160"/>
+      <path d="M590 300 L120 2"/><path d="M590 300 L330 2"/><path d="M590 300 L590 2"/>
+      <path d="M590 300 L850 2"/><path d="M590 300 L1060 2"/>
+    </g>
+  </svg>
+
+  <svg class="cta-grid bot" viewBox="0 0 1180 300" fill="none" aria-hidden="true">
+    <defs><linearGradient id="ctaFadeB" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0" stop-color="#fff" stop-opacity="1"/><stop offset="1" stop-color="#fff" stop-opacity="0"/>
+    </linearGradient><mask id="ctaMaskB"><rect width="1180" height="300" fill="url(#ctaFadeB)"/></mask></defs>
+    <g mask="url(#ctaMaskB)" stroke="currentColor" stroke-width="1">
+      <path d="M60 298 H1120" /><path d="M60 298 Q20 298 20 258 V0" /><path d="M1120 298 Q1160 298 1160 258 V0" />
+      <path d="M20 238 H1160"/><path d="M20 168 H1160"/><path d="M20 80 H1160"/>
+      <path d="M590 0 L120 298"/><path d="M590 0 L330 298"/><path d="M590 0 L590 298"/>
+      <path d="M590 0 L850 298"/><path d="M590 0 L1060 298"/>
+    </g>
+  </svg>
+
   <div class="wrap cta-in">
+    <img class="cta-logo reveal" src="uploads/logo.png" alt="DaemonClient">
     <span class="mono mark-m reveal">Get started — free, in minutes</span>
     <h2 class="cta-h reveal rd1" style="margin-top:18px">Start with <span class="f">Drive</span> or <span class="u">Photos</span>.</h2>
     <p class="cta-sub reveal rd2">No credit card. No subscription. Just your cloud — actually yours.</p>
@@ -498,20 +580,58 @@ footer{border-top:1px solid var(--line);padding:80px 0 48px}
 
 <!-- FOOTER -->
 <footer>
-  <div class="wrap">
+  <!-- The blurred glow, same construction as the reference: broad shapes under a
+       large gaussian blur. Two mirrored pairs so the light is symmetrical but
+       not flat. preserveAspectRatio="none" lets it stretch to any width. -->
+  <svg class="ft-glow" width="1440" height="526" viewBox="0 0 1440 526" fill="none" preserveAspectRatio="none" aria-hidden="true">
+    <g filter="url(#ftblur1)">
+      <path d="M338.7 631.6C983 729.1 1527.2 470.9 1816.3 259.6C1871.4 219.3 1947.8 244.6 1931.9 303.9C1868.8 539.3 1675.2 936.5 1210.3 1393.7C460.5 2130.9-626.7 485.5 338.7 631.6Z" fill="#1E6BFF" fill-opacity=".55"/>
+      <path d="M1116.3 631.6C472.1 729.1-72.1 470.9-361.3 259.6C-416.4 219.3-492.7 244.6-476.8 303.9C-413.7 539.3-220.2 936.5 244.8 1393.7C994.6 2130.9 2081.8 485.5 1116.3 631.6Z" fill="#10B981" fill-opacity=".45"/>
+    </g>
+    <g filter="url(#ftblur2)">
+      <path d="M559.2 880C1026.7 903.8 1538.8 581.5 1804.7 363.2C1824.8 346.7 1853.3 368.3 1841 391.3C1592.7 852.7 1044.5 1316.3 595.3 1267.9C112.5 1215.8-97.6 846.6 559.2 880Z" fill="#ffffff" fill-opacity=".30"/>
+      <path d="M895.9 880C428.4 903.8-83.7 581.5-349.6 363.2C-369.7 346.7-398.2 368.3-385.9 391.3C-137.6 852.7 410.6 1316.3 859.8 1267.9C1342.6 1215.8 1552.7 846.6 895.9 880Z" fill="#ffffff" fill-opacity=".30"/>
+    </g>
+    <defs>
+      <filter id="ftblur1" x="-719" y="0" width="2893" height="1825" filterUnits="userSpaceOnUse"><feGaussianBlur stdDeviation="120" result="b"/></filter>
+      <filter id="ftblur2" x="-709" y="37" width="2873" height="1554" filterUnits="userSpaceOnUse"><feGaussianBlur stdDeviation="160" result="b"/></filter>
+    </defs>
+  </svg>
+
+  <div class="ft-in">
     <div class="ft-top">
-      <div class="ft-statement"><span class="u">Unlimited</span>. <span class="f">Free</span>. Encrypted.<br>Actually yours.</div>
+      <div class="ft-brand">
+        <div class="ft-brandinfo">
+          <span class="ft-logo"><img src="uploads/logo.png" alt=""> DaemonClient</span>
+          <div class="ft-copy">
+            <p>Copyright © 2026 DaemonClient. Open source under AGPL-3.0.</p>
+            <p>Your files. Your cloud. Your control.</p>
+          </div>
+        </div>
+        <div class="ft-socials">
+          <a class="ft-social" href="https://github.com/myrosama/DaemonClient" target="_blank" rel="noopener" aria-label="GitHub">
+            <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.4 7.4 0 0 1 2-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+          </a>
+          <a class="ft-social" href="https://t.me/daemonclient" target="_blank" rel="noopener" aria-label="Telegram">
+            <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0a8 8 0 1 0 0 16A8 8 0 0 0 8 0Zm3.71 5.47-1.24 5.85c-.09.41-.34.51-.69.32L7.86 10.2l-.92.89c-.1.1-.19.19-.38.19l.14-1.95 3.56-3.21c.15-.14-.03-.21-.24-.08L5.62 9.2 3.73 8.6c-.41-.13-.42-.41.09-.61l7.37-2.84c.34-.12.64.08.52.32Z"/></svg>
+          </a>
+          <a class="ft-social" href="https://docs.daemonclient.uz" target="_blank" rel="noopener" aria-label="Documentation">
+            <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M3 1.5A1.5 1.5 0 0 1 4.5 0h6.4c.4 0 .78.16 1.06.44l1.6 1.6c.28.28.44.66.44 1.06V14.5a1.5 1.5 0 0 1-1.5 1.5h-8A1.5 1.5 0 0 1 3 14.5v-13ZM5 5h6v1.2H5V5Zm0 2.9h6v1.2H5V7.9ZM5 10.8h4V12H5v-1.2Z"/></svg>
+          </a>
+        </div>
+      </div>
+
       <div class="ft-cols">
         <div class="ft-col">
           <h4>Products</h4>
           <a href="https://drive.daemonclient.uz">Drive</a>
           <a href="https://photos.daemonclient.uz">Photos</a>
-          <a href="#drive">CLI</a>
+          <a href="https://accounts.daemonclient.uz">Dashboard</a>
         </div>
         <div class="ft-col">
           <h4>Project</h4>
           <a href="https://github.com/myrosama/DaemonClient" target="_blank" rel="noopener">GitHub</a>
-          <a href="https://t.me/daemonclient" target="_blank" rel="noopener">Telegram</a>
+          <a href="https://docs.daemonclient.uz" target="_blank" rel="noopener">Documentation</a>
           <a href="#secure">Security</a>
         </div>
         <div class="ft-col">
@@ -519,16 +639,14 @@ footer{border-top:1px solid var(--line);padding:80px 0 48px}
           <a href="https://accounts.daemonclient.uz/signup">Create account</a>
           <a href="https://accounts.daemonclient.uz/login">Sign in</a>
         </div>
+        <div class="ft-col">
+          <h4>Support</h4>
+          <a href="https://t.me/daemonclient" target="_blank" rel="noopener">Telegram</a>
+          <a href="https://tirikchilik.uz/cappucino" target="_blank" rel="noopener">Buy me a coffee</a>
+        </div>
       </div>
     </div>
-    <div style="margin:26px 0 6px">
-      <a href="https://tirikchilik.uz/cappucino" target="_blank" rel="noopener" aria-label="Buy me a coffee"
-         style="display:inline-flex;align-items:center;gap:9px;padding:11px 22px;border-radius:999px;font-weight:700;font-size:.95rem;line-height:1;color:#2a1a08;background:linear-gradient(135deg,#FFE08A 0%,#FFB23E 55%,#FF8A3D 100%);box-shadow:0 6px 20px rgba(255,138,61,.30);text-decoration:none;transition:transform .15s ease,box-shadow .15s ease"
-         onmouseover="this.style.transform='translateY(-2px)';this.style.boxShadow='0 10px 26px rgba(255,138,61,.45)'"
-         onmouseout="this.style.transform='none';this.style.boxShadow='0 6px 20px rgba(255,138,61,.30)'">
-        <span style="font-size:1.15em">☕</span> Buy me a coffee
-      </a>
-    </div>
+
     <div class="ft-bot">
       <span>© 2026 DaemonClient — open source</span>
       <span style="color:var(--green-hi)">● All systems operational</span>
@@ -578,17 +696,6 @@ mnav.querySelectorAll('a').forEach(a=>a.addEventListener('click',()=>{mnav.class
 const io=new IntersectionObserver(es=>{es.forEach(e=>{if(e.isIntersecting){e.target.classList.add('vis');io.unobserve(e.target);}});},{threshold:.12,rootMargin:'0px 0px -50px 0px'});
 document.querySelectorAll('.reveal').forEach(el=>io.observe(el));
 setTimeout(()=>document.querySelectorAll('.reveal').forEach(el=>el.classList.add('vis')),1800);
-
-/* full-page shard field */
-(function(){
-  const cv=document.getElementById('shard-canvas'),ctx=cv.getContext('2d');
-  const COL=['#1E6BFF','#38BDF8','#10B981','#34D399'];let W,H,sh=[];
-  function mk(init){return{x:Math.random()*(W||innerWidth),y:init?Math.random()*(H||innerHeight):(H||innerHeight)+30,w:9+Math.random()*34,h:4+Math.random()*12,ang:Math.random()*6.28,rot:(Math.random()-.5)*.008,vx:(Math.random()-.5)*.22,vy:-(.12+Math.random()*.4),color:COL[Math.floor(Math.random()*4)],a:.05+Math.random()*.1,stroke:Math.random()>.5};}
-  function size(){W=cv.width=innerWidth;H=cv.height=innerHeight;sh=Array.from({length:58},()=>mk(true));}
-  function draw(s){ctx.save();ctx.translate(s.x,s.y);ctx.rotate(s.ang);ctx.globalAlpha=s.a;const k=s.w*.22;ctx.beginPath();ctx.moveTo(-s.w/2+k,-s.h/2);ctx.lineTo(s.w/2+k,-s.h/2);ctx.lineTo(s.w/2-k,s.h/2);ctx.lineTo(-s.w/2-k,s.h/2);ctx.closePath();if(s.stroke){ctx.strokeStyle=s.color;ctx.lineWidth=.8;ctx.stroke();}else{ctx.fillStyle=s.color;ctx.fill();}ctx.restore();}
-  function tick(){ctx.clearRect(0,0,W,H);for(const s of sh){s.x+=s.vx;s.y+=s.vy;s.ang+=s.rot;if(s.y<-30){s.y=H+30;s.x=Math.random()*W;}draw(s);}requestAnimationFrame(tick);}
-  size();addEventListener('resize',size,{passive:true});requestAnimationFrame(tick);
-})();
 
 /* security figure: real photo → encrypted shards */
 (function(){
