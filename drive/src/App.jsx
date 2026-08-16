@@ -706,11 +706,13 @@ const DashboardView = () => {
 
     // --- HELPER COMPONENTS (defined locally to DashboardView) ---
     const IMAGE_EXTENSIONS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'avif', 'ico'];
-    // Any container the browser might decode counts as viewable — the <video>
-    // element sniffs and simply shows the fallback UI when the *codec* inside
-    // the container isn't supported (e.g. some .mkv/.avi files).
-    const VIDEO_EXTENSIONS = ['mp4', 'webm', 'ogg', 'ogv', 'mov', 'mkv', 'avi', 'm4v', 'mpg', 'mpeg', 'wmv', 'flv', '3gp', '3g2', 'ts', 'm2ts', 'divx'];
-    const AUDIO_EXTENSIONS = ['mp3', 'wav', 'flac', 'aac', 'm4a', 'opus', 'wma', 'oga'];
+    // Any container the browser might decode counts as viewable — the player
+    // sniffs and shows the fallback UI when the *codec* inside the container
+    // isn't supported (e.g. HEVC/x265 inside some .mkv files).
+    // .ogg is deliberately NOT here: it is ambiguous and overwhelmingly audio —
+    // it renders in the audio player instead.
+    const VIDEO_EXTENSIONS = ['mp4', 'webm', 'ogv', 'mov', 'mkv', 'avi', 'm4v', 'mpg', 'mpeg', 'wmv', 'flv', '3gp', '3g2', 'ts', 'm2ts', 'divx'];
+    const AUDIO_EXTENSIONS = ['mp3', 'wav', 'flac', 'aac', 'm4a', 'opus', 'wma', 'oga', 'ogg'];
     const VIEWABLE_EXTENSIONS = [...new Set([...IMAGE_EXTENSIONS, ...VIDEO_EXTENSIONS, ...AUDIO_EXTENSIONS])];
     const TEXT_EXTENSIONS = ['txt', 'md', 'json', 'csv', 'xml', 'html', 'htm', 'js', 'jsx', 'ts', 'tsx', 'py', 'css', 'scss', 'java', 'cpp', 'c', 'h', 'rs', 'go', 'sh', 'bash', 'yaml', 'yml', 'toml', 'ini', 'cfg', 'log', 'sql', 'rb', 'php', 'swift', 'kt', 'lua', 'r', 'dockerfile', 'env', 'gitignore'];
     const PDF_EXTENSIONS = ['pdf'];
@@ -1630,21 +1632,31 @@ const DashboardView = () => {
             }
         }, [isText, url]);
 
-        // Audio-decodes-but-video-doesn't detection. A file whose VIDEO codec is
-        // unsupported (e.g. HEVC/x265 inside .mkv on Chromium) still plays its
-        // audio track, so onError never fires — without this check the user gets
-        // a black screen with sound and no explanation.
+        // Audio-decodes-but-video-doesn't detection — deliberately conservative.
+        // A hard-video-codec failure (HEVC/x265 in .mkv on Chromium) still plays
+        // audio, so onError never fires. But a naive timer flags healthy videos
+        // that are still buffering their first video frames, so we require the
+        // strongest possible evidence: actively playing, HAVE_FUTURE_DATA,
+        // 2s+ of playback, videoWidth still 0 — sustained for 4 consecutive
+        // 1s checks. And the overlay never stops playback by itself: "Listen
+        // anyway" restores the exact old behaviour if detection is ever wrong.
         useEffect(() => {
             if (!isVideo) return;
-            const timer = setTimeout(() => {
+            let strikes = 0;
+            const interval = setInterval(() => {
                 const v = videoRef.current;
-                if (v && !v.error && v.readyState >= 2 && v.videoWidth === 0 && v.currentTime > 0.5) {
+                if (!v || v.error || v.videoWidth > 0 || v.seeking || v.paused || v.readyState < 3 || v.currentTime < 2) {
+                    strikes = 0;
+                    return;
+                }
+                strikes++;
+                if (strikes >= 4) {
                     setPlaybackFailed(true);
                     setMediaLoaded(true);
-                    v.pause();
+                    clearInterval(interval);
                 }
-            }, 2500);
-            return () => clearTimeout(timer);
+            }, 1000);
+            return () => clearInterval(interval);
         }, [isVideo]);
 
         return (
@@ -1706,14 +1718,22 @@ const DashboardView = () => {
 
                         {isVideo && playbackFailed && (
                             <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 text-center px-6">
-                                <p className="text-white/80 text-sm max-w-md">The container opened, but this file's video codec isn't supported by your browser (HEVC/x265 files — common in some .mkv and .mp4 rips — can't be decoded by Chrome or Firefox; Safari and some TVs can).</p>
-                                <p className="text-white/40 text-xs max-w-md">Audio-only playback was stopped. The file itself is intact — download it and play with VLC or any desktop player.</p>
-                                <button
-                                    onClick={() => { handleFileDownload(file); onClose(); }}
-                                    className="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-6 rounded-lg text-sm"
-                                >
-                                    Download instead
-                                </button>
+                                <p className="text-white/80 text-sm max-w-md">This file's video codec doesn't seem to be supported by your browser (HEVC/x265 files — common in some .mkv and .mp4 rips — can't be decoded by Chrome or Firefox; Safari and some TVs can).</p>
+                                <p className="text-white/40 text-xs max-w-md">The file itself is intact. You can still listen, or download it and play with VLC or any desktop player.</p>
+                                <div className="flex gap-3">
+                                    <button
+                                        onClick={() => setPlaybackFailed(false)}
+                                        className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-6 rounded-lg text-sm"
+                                    >
+                                        ▶ Listen anyway
+                                    </button>
+                                    <button
+                                        onClick={() => { handleFileDownload(file); onClose(); }}
+                                        className="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-6 rounded-lg text-sm"
+                                    >
+                                        Download instead
+                                    </button>
+                                </div>
                             </div>
                         )}
 
