@@ -393,52 +393,53 @@ async function handleStreamRequest(request, url) {
   const chunkIndex = Math.floor(start / CHUNK_SIZE);
   if (!messages[chunkIndex]) return rangeResponse(fileSize);
 
-  try {
-    let plaintext;
-    try {
-      plaintext = await loadChunk(vFile, fileId, chunkIndex);
-    } catch (e) {
-      if (e.code === 'ENCRYPTED_NO_KEY') {
-        // The SW restarted and only the page holds the key. Ask it to
-        // re-register; the player's next range request succeeds.
-        askClientToReregister(fileId);
-        return new Response('Encryption key not available — re-registering.', {
-          status: 503,
-          headers: { 'Retry-After': '2' },
-        });
-      }
-      throw e;
-    }
+  // The slice geometry is computable BEFORE the chunk is downloaded — chunk
+  // length is min(CHUNK_SIZE, fileSize - chunkStart) — so the response can be
+  // sent IMMEDIATELY with a body stream that delivers bytes when the chunk
+  // lands. This is the fix for seek-death on big files: the player used to
+  // wait 30s+ on a response that hadn't started (fresh 19MB chunk through the
+  // worker proxy), and Chromium's demuxer gave up → seek collapsed to EOF and
+  // playback "paused at the end". With headers-first the player sees a live
+  // 206, shows its spinner, and resumes when data arrives.
+  const chunkGlobalStart = chunkIndex * CHUNK_SIZE;
+  const chunkLen = Math.min(CHUNK_SIZE, fileSize - chunkGlobalStart);
+  const chunkEnd = Math.min(end, chunkGlobalStart + chunkLen - 1);
+  const sliceLen = chunkEnd - start + 1;
+  const localStart = start - chunkGlobalStart;
+  const localEnd = chunkEnd - chunkGlobalStart;
 
-    const chunkGlobalStart = chunkIndex * CHUNK_SIZE;
-    const localStart = start - chunkGlobalStart;
-    const chunkEnd = Math.min(end, chunkGlobalStart + plaintext.byteLength - 1);
-    const localEnd = chunkEnd - chunkGlobalStart;
-    const sliced = plaintext.slice(localStart, localEnd + 1);
-
-    // Prefetch the next chunk so sequential playback doesn't stall on a full
-    // 19 MB round trip at every chunk boundary. GATED to sequential access:
-    // a request near the chunk start (player reading it in order). A scrub
-    // probe (small range at a random offset) prefetches nothing — otherwise
-    // dragging the timeline seeded a 19 MB download after every stop.
-    const nearChunkStart = start - chunkIndex * CHUNK_SIZE < 64 * 1024;
-    if (nearChunkStart && messages[chunkIndex + 1]) {
-      loadChunk(vFile, fileId, chunkIndex + 1).catch(() => {});
-    }
-
-    return new Response(sliced, {
-      status: isRangeRequest ? 206 : 200,
-      headers: {
-        'Content-Type': contentTypeFor(vFile),
-        'Content-Length': sliced.byteLength.toString(),
-        'Accept-Ranges': 'bytes',
-        ...(isRangeRequest ? { 'Content-Range': `bytes ${start}-${chunkEnd}/${fileSize}` } : {}),
-      },
-    });
-  } catch (err) {
-    console.error('[SW] Stream error:', err);
-    return new Response('Streaming failed: ' + err.message, { status: 500 });
+  // Prefetch the next chunk for sequential playback (near chunk start only —
+  // scrub probes must not seed 19MB downloads after every stop).
+  const nearChunkStart = localStart < 64 * 1024;
+  if (nearChunkStart && messages[chunkIndex + 1]) {
+    loadChunk(vFile, fileId, chunkIndex + 1).catch(() => {});
   }
+
+  const cached = chunkCache.get(`${fileId}:${chunkIndex}`);
+  const body = new ReadableStream({
+    async start(controller) {
+      try {
+        let plaintext = cached;
+        if (!plaintext) {
+          plaintext = await loadChunk(vFile, fileId, chunkIndex);
+        }
+        controller.enqueue(new Uint8Array(plaintext.slice(localStart, localEnd + 1)));
+        controller.close();
+      } catch (e) {
+        controller.error(e);
+      }
+    },
+  });
+
+  return new Response(body, {
+    status: isRangeRequest ? 206 : 200,
+    headers: {
+      'Content-Type': contentTypeFor(vFile),
+      'Content-Length': sliceLen.toString(),
+      'Accept-Ranges': 'bytes',
+      ...(isRangeRequest ? { 'Content-Range': `bytes ${start}-${chunkEnd}/${fileSize}` } : {}),
+    },
+  });
 }
 
 // ── Fetch interceptor ──
