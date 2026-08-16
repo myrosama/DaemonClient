@@ -24,7 +24,7 @@ isn't. It was impossible under the old distribution model.
 
 | | Old model | New model |
 |---|---|---|
-| Entry | `git clone`, `npm install`, `node selfhost/bin/daemonclient.mjs setup` | `curl -fsSL https://get.daemonclient.uz \| sh` |
+| Entry | `git clone`, `npm install`, `node selfhost/bin/daemonclient.mjs setup` | one `curl` of `install.sh` **from GitHub** |
 | Dependencies | forbidden | installed by the bootstrap before we run |
 | Interface ceiling | hand-rolled ANSI | anything |
 | Node | assumed present | installed locally if missing |
@@ -91,7 +91,7 @@ instead of it. This is a re-skin plus a distribution change, not a rewrite.
 **Entry point:** the script is fetched from **GitHub**, not from us.
 
 ```
-curl -fsSL https://raw.githubusercontent.com/myrosama/DaemonClient/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/myrosama/DaemonClient/main/install.sh | sh   # not built yet — P1-P4
 ```
 
 Changed on the operator's point, and they were right. The earlier plan had this

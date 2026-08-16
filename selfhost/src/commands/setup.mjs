@@ -22,7 +22,7 @@ import * as tg from '../api/telegram.mjs';
 import * as cf from '../api/cloudflare.mjs';
 import { buildWorkerBundle } from '../build.mjs';
 import { workerBindings } from '../bindings.mjs';
-import { ensureSubdomain, suggestSubdomain } from '../subdomain.mjs';
+import { ensureSubdomain, suggestSubdomain, isLegalSubdomain } from '../subdomain.mjs';
 import { buildVersion, versionWarning } from '../version.mjs';
 import { ensureEncryptionKeys } from '../zke.mjs';
 import { MIGRATION_SQL, splitStatements } from '../../../schema/schema.mjs';
@@ -190,6 +190,27 @@ async function stepCloudflare(state) {
 
   if (isDone(state, 'cloudflare')) {
     ok(`Already configured: account ${c.bold(state.cloudflareAccountName || state.cloudflareAccountId)}`);
+
+    // Marked done is not the same as usable. An install set up before the
+    // subdomain fix has steps.cloudflare.done = true and no workersSubdomain,
+    // so returning here would skip the very code that gives it an address —
+    // and the summary would then print "null" under "Your cloud is live".
+    // Repair it in place rather than making the user reconfigure everything.
+    if (!state.workersSubdomain && state.cloudflareToken && state.cloudflareAccountId) {
+      const sFix = spinner('This install has no workers.dev address — fixing');
+      try {
+        state.workersSubdomain = await ensureSubdomain(cf, state.cloudflareToken, state.cloudflareAccountId, {
+          desired: suggestSubdomain(),
+          candidates: [suggestSubdomain(), suggestSubdomain()],
+        });
+        saveState(state);
+        sFix.succeed(`Address: ${c.bold(state.workersSubdomain + '.workers.dev')}`);
+      } catch (e) {
+        sFix.fail(e.message);
+        process.exit(1);
+      }
+    }
+
     if (!(await confirm('Reconfigure Cloudflare?', false))) return;
   }
 
@@ -277,12 +298,35 @@ async function stepCloudflare(state) {
   // A brand-new Cloudflare account has no workers.dev subdomain, and that is
   // the expected state for a self-hoster. This used to be a read that fell back
   // to null, so the install finished with no address at all — see subdomain.mjs.
+  // This is an account-wide write that names a PUBLIC hostname, and it is
+  // effectively one-shot — every worker on the account lives under it, and it
+  // ends up in Certificate Transparency logs. The worker name gets a prompt
+  // (above); something more permanent and more visible should not get less.
+  let chosen = suggestSubdomain();
+  // No `.catch(() => null)`. cloudflare.mjs already returns null for "this
+  // account has never registered one" (code 10007) and rethrows everything
+  // else — so swallowing here would turn a bad token or an outage into a
+  // prompt, which is the same class of silent failure this part exists to
+  // remove.
+  const existingSub = await cf.getSubdomain(token, account.id);
+  if (!existingSub) {
+    blank();
+    hint('Your account has no workers.dev address yet. This becomes the public hostname for every worker on it, so pick something you are happy to be seen.');
+    chosen = await ask('workers.dev address', {
+      defaultValue: chosen,
+      validate: (v) => (isLegalSubdomain(v.trim())
+        ? null
+        : 'Lowercase letters, numbers and dashes, up to 63 characters, not starting or ending with a dash.'),
+    });
+    chosen = chosen.trim();
+  }
+
   const s4 = spinner('Checking your workers.dev address');
   let subdomain;
   try {
     subdomain = await ensureSubdomain(cf, token, account.id, {
-      desired: suggestSubdomain(account.name),
-      candidates: [suggestSubdomain(account.name), suggestSubdomain('daemonclient')],
+      desired: chosen,
+      candidates: [suggestSubdomain(), suggestSubdomain()],
     });
     s4.succeed(`Address: ${c.bold(subdomain + '.workers.dev')}`);
   } catch (e) {
@@ -420,16 +464,36 @@ async function stepDeployWorker(state) {
     // Not swallowed. A freshly uploaded script is unreachable until this is
     // set, so a silent failure here yields a worker that exists and answers
     // nothing — the same dead end as a missing subdomain, by a second route.
-    await cf.enableWorkersDev(state.cloudflareToken, state.cloudflareAccountId, state.workerName);
+    // Retry: a subdomain registered moments ago takes time to propagate, and
+    // this is the step that depends on it. One shot here was optimistic.
+    let routeErr;
+    for (let i = 0; i < 3; i++) {
+      try { await cf.enableWorkersDev(state.cloudflareToken, state.cloudflareAccountId, state.workerName); routeErr = null; break; }
+      catch (e) { routeErr = e; await new Promise((r) => setTimeout(r, 2500)); }
+    }
+    if (routeErr) {
+      // Deliberately not "Deploy failed": the upload succeeded, only the route
+      // toggle did not. Saying otherwise sends the user after the bundle, the
+      // token or their permissions instead of the actual problem.
+      s2.fail(`Uploaded, but could not put the worker on workers.dev: ${routeErr.message}`);
+      hint('The code is deployed but has no public address yet. Run setup again in a minute — everything else is saved.');
+      process.exit(1);
+    }
     s2.succeed('Worker deployed');
   } catch (e) {
     s2.fail(`Deploy failed: ${e.message}`);
     process.exit(1);
   }
 
-  const workerUrl = state.workersSubdomain
-    ? `https://${state.workerName}.${state.workersSubdomain}.workers.dev`
-    : null;
+  // No `|| null` fallback. Both routes into this step now guarantee a
+  // subdomain, so its absence is a bug — and the old fallback is exactly what
+  // let a green "your cloud is live" panel print an empty address.
+  if (!state.workersSubdomain) {
+    fail('No workers.dev address for this account, so the worker would be unreachable.');
+    hint('Run setup again — it will claim one. If that keeps failing, pick a subdomain manually at https://dash.cloudflare.com → Workers & Pages.');
+    process.exit(1);
+  }
+  const workerUrl = `https://${state.workerName}.${state.workersSubdomain}.workers.dev`;
   state.workerUrl = workerUrl;
 
   // Seed the Telegram config into the worker's own database, so the running
@@ -474,7 +538,7 @@ async function stepDeployWorker(state) {
     process.exit(1);
   }
 
-  if (workerUrl) {
+  {
     const s4 = spinner('Waiting for the API to answer');
     let healthy = false;
     for (let i = 0; i < 10; i++) {
@@ -484,8 +548,15 @@ async function stepDeployWorker(state) {
       } catch {}
       await new Promise((r) => setTimeout(r, 2000));
     }
-    if (healthy) s4.succeed(`API live at ${c.bold(workerUrl)}`);
-    else s4.fail('The worker deployed but is not answering yet — it may need another minute.');
+    if (healthy) {
+      s4.succeed(`API live at ${c.bold(workerUrl)}`);
+    } else {
+      // Do not fall through to a summary headed "Your cloud is live". The
+      // contract is a REACHABLE address, and this one demonstrably is not.
+      s4.fail('The worker deployed but never answered.');
+      hint(`Give it a minute, then check ${accent(workerUrl + '/api/health')} and run ${accent('daemonclient doctor')}.`);
+      process.exit(1);
+    }
   }
 
   markDone(state, 'deploy');

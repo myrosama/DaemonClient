@@ -23,7 +23,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { ensureSubdomain, suggestSubdomain } from '../src/subdomain.mjs';
+import { ensureSubdomain, suggestSubdomain, isLegalSubdomain, CF } from '../src/subdomain.mjs';
 
 /** A fake Cloudflare that records what was asked of it. */
 function fakeCf({ existing = null, taken = [], failRegister = null } = {}) {
@@ -35,7 +35,7 @@ function fakeCf({ existing = null, taken = [], failRegister = null } = {}) {
     async registerSubdomain(_auth, _acct, name) {
       calls.push(['register', name]);
       if (failRegister) throw failRegister;
-      if (taken.includes(name)) { const e = new Error('already exists'); e.code = 10035; throw e; }
+      if (taken.includes(name)) { const e = new Error('Subdomain is unavailable'); e.code = CF.TAKEN; throw e; }
       this.current = name;
       return { subdomain: name };
     },
@@ -88,6 +88,56 @@ describe('a fresh account gets a subdomain instead of a blank URL', () => {
     );
   });
 
+  test('a plan/entitlement failure is fatal, not mistaken for a taken name', async () => {
+    // The old code matched the message text /not available/, so
+    // "This feature is not available on your plan" burned every candidate with
+    // blind writes and then told the user to go pick a name in the dashboard —
+    // advice that could not have helped them.
+    const notEntitled = new Error('This feature is not available on your plan');
+    notEntitled.code = 10015;
+    const cf = fakeCf({ existing: null, failRegister: notEntitled });
+
+    await assert.rejects(
+      () => ensureSubdomain(cf, 'tok', 'acct', { desired: 'a', candidates: ['b', 'c'] }),
+      (e) => { assert.match(e.message, /not available on your plan/); return true; },
+    );
+    assert.equal(cf.calls.filter(([k]) => k === 'register').length, 1, 'stops at the first, does not burn candidates');
+  });
+
+  test('a concurrency error retries the SAME name rather than re-rolling', async () => {
+    // 10035 is "multiple attempts to modify a resource at the same time". The
+    // first version of this module treated it as "taken" and discarded a
+    // perfectly good candidate.
+    let hits = 0;
+    const cf = {
+      calls: [],
+      async getSubdomain() { return null; },
+      async registerSubdomain(_a, _b, name) {
+        this.calls.push(['register', name]);
+        if (hits++ === 0) { const e = new Error('concurrent'); e.code = CF.CONCURRENT; throw e; }
+        return { subdomain: name };
+      },
+    };
+    const sub = await ensureSubdomain(cf, 'tok', 'acct', { desired: 'wanted', candidates: ['other'] });
+    assert.equal(sub, 'wanted');
+    assert.deepEqual(cf.calls, [['register', 'wanted'], ['register', 'wanted']]);
+  });
+
+  test('an empty-string subdomain is not treated as an existing one', async () => {
+    const cf = fakeCf({ existing: '' });
+    const sub = await ensureSubdomain(cf, 'tok', 'acct', { desired: 'fresh-name' });
+    assert.equal(sub, 'fresh-name');
+  });
+
+  test('prefers the name the API reports over the one we asked for', async () => {
+    const cf = {
+      async getSubdomain() { return null; },
+      async registerSubdomain() { return { subdomain: 'normalised-by-cloudflare' }; },
+    };
+    assert.equal(await ensureSubdomain(cf, 't', 'a', { desired: 'what-we-asked' }),
+                 'normalised-by-cloudflare');
+  });
+
   test('surfaces a permissions failure instead of swallowing it', async () => {
     const denied = new Error('Authentication error');
     denied.code = 10000;
@@ -99,27 +149,41 @@ describe('a fresh account gets a subdomain instead of a blank URL', () => {
 });
 
 describe('suggested names are legal workers.dev subdomains', () => {
-  test('lowercase, alphanumeric and dashes only', () => {
-    for (const raw of ['My Account Name', 'user@example.com', 'Ünïcødé Ltd.', '  spaced  ']) {
-      const s = suggestSubdomain(raw);
-      assert.match(s, /^[a-z0-9][a-z0-9-]{1,54}$/, `${JSON.stringify(raw)} -> ${JSON.stringify(s)}`);
-      assert.ok(!s.endsWith('-'), 'no trailing dash');
+  test('matches the rule workers.dev actually enforces', () => {
+    // Cloudflare's own rule, from wrangler: max 63, and it may not begin or end
+    // with a dash. Written out here rather than importing LEGAL — the earlier
+    // version of this test asserted the implementation's own regex, so it only
+    // ever proved the function agreed with itself. It passed while that regex
+    // permitted a trailing dash and capped at 55.
+    const CLOUDFLARE_RULE = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
+    for (let i = 0; i < 40; i++) {
+      const s = suggestSubdomain();
+      assert.match(s, CLOUDFLARE_RULE, JSON.stringify(s));
+      assert.ok(s.length <= 63);
+      assert.ok(!s.endsWith('-') && !s.startsWith('-'));
     }
   });
 
-  test('always returns something usable, even from junk', () => {
-    // Zero-state: an account name of '' or symbols must still yield a valid
-    // candidate rather than an empty string the API would reject.
-    for (const raw of ['', '   ', '...', '???', null, undefined]) {
-      const s = suggestSubdomain(raw);
-      assert.match(s, /^[a-z0-9][a-z0-9-]{1,54}$/, `${JSON.stringify(raw)} -> ${JSON.stringify(s)}`);
-    }
+  test('leaks nothing about the account', () => {
+    // The previous version derived the label from the Cloudflare account name,
+    // whose default on a personal signup is "<your email>'s Account" — putting
+    // the user's email into a permanent public hostname and into Certificate
+    // Transparency logs, on a privacy product, without asking.
+    const s = suggestSubdomain("contact@boboxon.uz's Account");
+    assert.doesNotMatch(s, /boboxon|contact|gmail|account/i,
+      'a suggested name must not carry anything about the account');
+    assert.match(s, /^daemonclient-[0-9a-f]{8}$/);
   });
 
   test('two calls do not collide', () => {
-    const a = suggestSubdomain('same name');
-    const b = suggestSubdomain('same name');
-    assert.notEqual(a, b, 'a random suffix keeps retries from repeating a taken name');
+    assert.notEqual(suggestSubdomain(), suggestSubdomain());
+  });
+
+  test('isLegalSubdomain enforces the same rule for names a user types', () => {
+    for (const ok of ['a', 'my-cloud', 'x9', 'a'.repeat(63)]) assert.ok(isLegalSubdomain(ok), ok);
+    for (const bad of ['-lead', 'trail-', 'Upper', 'has_underscore', '', 'a'.repeat(64), null, 42]) {
+      assert.ok(!isLegalSubdomain(bad), JSON.stringify(bad));
+    }
   });
 });
 

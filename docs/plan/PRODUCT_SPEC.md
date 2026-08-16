@@ -15,10 +15,9 @@ wins.
 > They share a brand and nothing else. The installer must not claim the
 > `daemonclient` command name, because that name belongs to the Drive CLI.
 >
-> **Chosen entry point:** `npm create daemonclient@latest` — the idiomatic npm
-> pattern for setup tools, which resolves to a package called
-> `create-daemonclient`. Verified available on npm, along with
-> `daemonclient` itself, which stays reserved for the Drive CLI.
+> **Chosen entry point:** a single `curl` of `install.sh` **from GitHub** — see
+> `INSTALLER_STACK.md`. Nothing of ours is in the install path. `daemonclient`
+> on npm stays reserved for the Drive CLI regardless.
 
 ---
 
@@ -65,7 +64,7 @@ and an explanation. **One URL, and they are in.**
 ### 0 · Bootstrap
 
 ```
-curl -fsSL https://raw.githubusercontent.com/myrosama/DaemonClient/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/myrosama/DaemonClient/main/install.sh | sh   # not built yet — P1-P4
 ```
 
 Fetched from GitHub, not from us — see `INSTALLER_STACK.md`. Nothing of ours is

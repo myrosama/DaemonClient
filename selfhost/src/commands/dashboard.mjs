@@ -29,9 +29,13 @@ export async function runDashboard() {
   const state = loadState();
   blank();
 
-  if (!isDone(state, 'deploy')) {
-    fail('Nothing deployed from this folder yet.');
-    hint(`Run ${accent('daemonclient setup')} first.`);
+  // `!state.workerUrl` as well as the deploy flag, matching web.mjs. Without
+  // it this builds the dashboard with an EMPTY VITE_API_BASE, deploys it, and
+  // finishes with a green "Dashboard is live" for a page that can never reach
+  // an API. Same silent-success class as the blank address setup used to print.
+  if (!isDone(state, 'deploy') || !state.workerUrl) {
+    fail('Your worker is not deployed yet, or has no address.');
+    hint(`Run ${accent('daemonclient setup')} first — the dashboard needs a worker to point at.`);
     return;
   }
   if (!state.firebaseProjectId || !state.firebaseApiKey) {
@@ -45,7 +49,7 @@ export async function runDashboard() {
     c.gray('whether everything is healthy. Built from this checkout, against'),
     c.gray('your Firebase project and your worker.'),
     '',
-    `Worker    ${c.bold(state.workerUrl || '?')}`,
+    `Worker    ${c.bold(state.workerUrl)}`,
     `Firebase  ${c.bold(state.firebaseProjectId)}`,
   ]);
   blank();
@@ -62,7 +66,7 @@ export async function runDashboard() {
     `VITE_FIREBASE_API_KEY=${state.firebaseApiKey}`,
     `VITE_FIREBASE_AUTH_DOMAIN=${state.firebaseProjectId}.firebaseapp.com`,
     `VITE_FIREBASE_PROJECT_ID=${state.firebaseProjectId}`,
-    `VITE_API_BASE=${state.workerUrl || ''}`,
+    `VITE_API_BASE=${state.workerUrl}`,
     `VITE_PHOTOS_URL=${photosUrl}`,
     `VITE_DRIVE_URL=${driveUrl}`,
     '',

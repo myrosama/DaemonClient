@@ -144,10 +144,10 @@ the user's own worker.
 The re-skin and the distribution change, together, because neither is worth
 much alone.
 
-Publish as **`create-daemonclient`** so the entry point is
-`npm create daemonclient@latest`. That single change removes the no-dependency
-constraint — see `INSTALLER_STACK.md` — which is what makes a good interface
-possible at all. Rebuild the prompts on `@clack/prompts` (4 deps, built for
+The entry point is a single `curl` of `install.sh` **from GitHub** — see
+`INSTALLER_STACK.md`. The bootstrap runs `npm ci` before any of our code
+executes, which removes the no-dependency constraint and is what makes a good
+interface possible at all. Rebuild the prompts on `@clack/prompts` (4 deps, built for
 wizards, first-class Ctrl-C handling) and the deploy phase on `listr2`, so
 several minutes of work reads as progress rather than a hang.
 

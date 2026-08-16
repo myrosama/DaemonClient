@@ -25,6 +25,7 @@ export async function runStatus() {
   let apiOk = false;
   let status = null;
   try {
+    if (!state.workerUrl) throw new Error('no address recorded for this install');
     const res = await fetch(`${state.workerUrl}/api/health`, { signal: AbortSignal.timeout(15000) });
     apiOk = res.ok;
     status = await res.json().catch(() => null);
@@ -68,6 +69,7 @@ export async function runStatus() {
   // Update check, straight from GitHub releases.
   const s4 = spinner('Checking for updates');
   try {
+    if (!state.workerUrl) return null;
     const res = await fetch(`${state.workerUrl}/api/selfhost/status`, {
       signal: AbortSignal.timeout(15000),
     });

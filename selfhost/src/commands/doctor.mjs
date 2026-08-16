@@ -135,6 +135,7 @@ export async function runDoctor({ showKeys = false } = {}) {
   // ── API
   const s3 = spinner('API');
   try {
+    if (!state.workerUrl) throw new Error('no address recorded for this install');
     const res = await fetch(`${state.workerUrl}/api/health`, { signal: AbortSignal.timeout(15000) });
     const body = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(`health returned ${res.status}`);

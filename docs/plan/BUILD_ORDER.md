@@ -165,17 +165,31 @@ Exists and is substantial: `verifyToken`, `REQUIRED_TOKEN_PERMISSIONS`,
 `memberships`, `createD1`, `queryD1`, `deployWorker`, `getSubdomain`,
 `registerSubdomain`, `enableWorkersDev`.
 
-**Two gaps, both already found:**
+**Status: SHIPPED** (`c8f6ee8` + follow-ups). Both gaps closed:
 
-- `registerSubdomain` is complete and **called nowhere**. A fresh account has no
-  `workers.dev` subdomain, so setup ends with a blank API address and a cheerful
-  summary. Wire it, and fail loudly if it cannot be claimed.
-- `enableWorkersDev` failure is swallowed (`setup.mjs:417` `.catch(() => {})`),
-  which produces the same blank-URL outcome by a second route.
+- `registerSubdomain` was complete and called nowhere; `ensureSubdomain`
+  (`src/subdomain.mjs`) now wires it, on the fresh path and on the resume path,
+  and fails loudly rather than finishing with a blank address.
+- `enableWorkersDev` no longer swallows its failure, retries for propagation,
+  and reports the route toggle rather than blaming the deploy.
 
-**Plus the open spike:** can a link pre-select the three permissions on the
-token screen? Undocumented; needs a real browser. Fallback is the current plain
-link plus an exact list.
+Gate 3 found two blockers that shipped green and were fixed after:
+the retry keyed on Cloudflare code **10035** (concurrency) rather than
+**10031** (name taken), so the candidate loop was dead on the exact case it
+existed for — and the unit test manufactured a 10035 error, so the suite
+endorsed the mistake. And `suggestSubdomain` derived the public hostname from
+the Cloudflare **account name**, whose personal-signup default is
+`<email>'s Account`, putting a user's email into public DNS and Certificate
+Transparency logs. It is now a neutral random label, and setup prompts before
+claiming.
+
+**Still open, carried forward:**
+- The pre-scoped Cloudflare token link is fixed in the accounts portal
+  (`2e86f39`) but the installer still prints the plain URL — `setup.mjs`.
+- The permission list disagrees: `cloudflare.mjs` `REQUIRED_TOKEN_PERMISSIONS`
+  names four, `docs/SELF_HOSTING.md` names three. Decide, do not paper over.
+- `verifyToken` never probes `/workers/subdomain`, so a token lacking that
+  permission now fails late and hard instead of at validation.
 
 **Test standalone:** against a throwaway Cloudflare account that has never had a
 subdomain — the only configuration that exercises the bug.

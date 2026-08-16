@@ -243,7 +243,15 @@ function DotGridPage({ children, className = '' }) {
 // TERMINAL BAR — decorative header for setup pages
 // ============================================================================
 
-function TerminalBar({ command = 'curl -fsL https://daemonclient.uz/install.sh | bash' }) {
+// The install command shown to users. Fetched from GitHub, not from us: a
+// script we host is a host of ours in the install path, and it is exactly the
+// file an attacker would want to change. This default also used to point at
+// daemonclient.uz/install.sh, which does not exist — anyone who copied it got
+// a 404 piped into bash.
+const INSTALL_COMMAND =
+  'curl -fsSL https://raw.githubusercontent.com/myrosama/DaemonClient/main/install.sh | sh';
+
+function TerminalBar({ command = INSTALL_COMMAND }) {
   return (
     <div className="w-full flex justify-center pt-6 px-4">
       <div className="inline-flex items-center gap-3 bg-[#111318] border border-white/[0.08] rounded-lg px-5 py-2.5">

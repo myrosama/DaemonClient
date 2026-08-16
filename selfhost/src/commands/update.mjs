@@ -134,6 +134,7 @@ export async function runUpdate({ silent = false } = {}) {
   let healthy = false;
   for (let i = 0; i < 8; i++) {
     try {
+      if (!state.workerUrl) break;
       const res = await fetch(`${state.workerUrl}/api/health`, { signal: AbortSignal.timeout(8000) });
       if (res.ok) { healthy = true; break; }
     } catch {}
