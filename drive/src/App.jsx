@@ -1617,6 +1617,7 @@ const DashboardView = () => {
         const [playbackFailed, setPlaybackFailed] = useState(false);
         const [textContent, setTextContent] = useState(null);
         const [textLoading, setTextLoading] = useState(false);
+        const videoRef = useRef(null);
 
         // Load text content when viewing text files
         useEffect(() => {
@@ -1628,6 +1629,23 @@ const DashboardView = () => {
                     .catch(() => { setTextContent('Failed to load file content.'); setMediaLoaded(true); setTextLoading(false); });
             }
         }, [isText, url]);
+
+        // Audio-decodes-but-video-doesn't detection. A file whose VIDEO codec is
+        // unsupported (e.g. HEVC/x265 inside .mkv on Chromium) still plays its
+        // audio track, so onError never fires — without this check the user gets
+        // a black screen with sound and no explanation.
+        useEffect(() => {
+            if (!isVideo) return;
+            const timer = setTimeout(() => {
+                const v = videoRef.current;
+                if (v && !v.error && v.readyState >= 2 && v.videoWidth === 0 && v.currentTime > 0.5) {
+                    setPlaybackFailed(true);
+                    setMediaLoaded(true);
+                    v.pause();
+                }
+            }, 2500);
+            return () => clearTimeout(timer);
+        }, [isVideo]);
 
         return (
             <div
@@ -1675,6 +1693,7 @@ const DashboardView = () => {
 
                         {isVideo && (
                             <video
+                                ref={videoRef}
                                 src={url}
                                 controls
                                 autoPlay
@@ -1687,7 +1706,8 @@ const DashboardView = () => {
 
                         {isVideo && playbackFailed && (
                             <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 text-center px-6">
-                                <p className="text-white/80 text-sm max-w-md">Your browser can't decode this file — the container is allowed but the codec inside it isn't supported (common with some .mkv/.avi files).</p>
+                                <p className="text-white/80 text-sm max-w-md">The container opened, but this file's video codec isn't supported by your browser (HEVC/x265 files — common in some .mkv and .mp4 rips — can't be decoded by Chrome or Firefox; Safari and some TVs can).</p>
+                                <p className="text-white/40 text-xs max-w-md">Audio-only playback was stopped. The file itself is intact — download it and play with VLC or any desktop player.</p>
                                 <button
                                     onClick={() => { handleFileDownload(file); onClose(); }}
                                     className="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-6 rounded-lg text-sm"
