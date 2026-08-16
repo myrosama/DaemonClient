@@ -54,11 +54,25 @@ async function uploadFile(file, botToken, channelId, onProgress, abortSignal, pa
     const proxyBaseUrl = getWorkerUrl() + '/proxy';
     const isEncrypted = encryptionKey !== null;
 
+    // A resumed upload MUST keep the encryption mode it started with. The
+    // remaining parts are encrypted (or not) based on TODAY's key state, while
+    // the manifest records a single file-level flag — mixing modes leaves a
+    // file that decrypts into garbage no matter which way it is flagged.
+    if (existingSession && !!existingSession.encrypted !== isEncrypted) {
+        throw new Error(
+            existingSession.encrypted
+                ? 'This upload started ENCRYPTED — unlock ZKE first (Settings → enter your password), or dismiss this session and upload the file fresh.'
+                : 'This upload started UNENCRYPTED — disable ZKE first (Settings), or dismiss this session and upload the file fresh.'
+        );
+    }
+
     // Create or resume upload session
     const sessionId = existingSession?.sessionId || `upload_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const completedParts = existingSession?.completedParts || [];
     const uploadedMessageInfo = completedParts.map(p => ({ message_id: p.message_id, file_id: p.file_id }));
     let uploadedBytes = completedParts.reduce((sum, p) => sum + (p.chunkSize || 0), 0);
+    const initialBytes = uploadedBytes; // speed baseline: a resumed run must not
+    // count bytes uploaded in a previous session against this run's clock.
     const startTime = Date.now();
 
     // Persist session to IndexedDB
@@ -109,12 +123,21 @@ async function uploadFile(file, botToken, channelId, onProgress, abortSignal, pa
         for (let attempt = 1; attempt <= UPLOAD_RETRIES; attempt++) {
             if (abortSignal.aborted) throw new Error("Upload was cancelled by the user.");
 
-            // Wait for online if offline
+            // Wait for online if offline. Abort-aware: without the abort
+            // listener, cancelling while offline left this promise pending
+            // forever and froze the whole upload queue.
             if (!navigator.onLine) {
                 onProgress({ percent: Math.round((uploadedBytes / file.size) * 100), status: '⏸ Waiting for connection...', speed: '', eta: '' });
-                await new Promise(resolve => {
-                    const handler = () => { window.removeEventListener('online', handler); resolve(); };
-                    window.addEventListener('online', handler);
+                await new Promise((resolve, reject) => {
+                    const cleanup = () => {
+                        window.removeEventListener('online', onOnline);
+                        abortSignal.removeEventListener('abort', onAbort);
+                    };
+                    const onOnline = () => { cleanup(); resolve(); };
+                    const onAbort = () => { cleanup(); reject(new Error("Upload was cancelled by the user.")); };
+                    if (abortSignal.aborted) { onAbort(); return; }
+                    window.addEventListener('online', onOnline);
+                    abortSignal.addEventListener('abort', onAbort);
                 });
                 onProgress({ percent: Math.round((uploadedBytes / file.size) * 100), status: 'Connection restored! Resuming...', speed: '', eta: '' });
                 await sleep(1000);
@@ -122,7 +145,7 @@ async function uploadFile(file, botToken, channelId, onProgress, abortSignal, pa
 
             try {
                 const elapsedTime = (Date.now() - startTime) / 1000 || 1;
-                const speed = uploadedBytes / elapsedTime;
+                const speed = (uploadedBytes - initialBytes) / elapsedTime;
                 const remainingBytes = file.size - uploadedBytes;
                 const eta = (speed > 0 && remainingBytes > 0) ? remainingBytes / speed : Infinity;
 
@@ -172,6 +195,11 @@ async function uploadFile(file, botToken, channelId, onProgress, abortSignal, pa
                         // Partial update — the caller's wrapper merges over previous state.
                         onProgress({ status: `Rate limited. Waiting ${retryAfter}s...` });
                         await sleep(retryAfter * 1000 + 500);
+                    } else if ([400, 401, 403, 404].includes(result.error_code)) {
+                        // Fatal: bad chat_id, revoked bot token, bot kicked from the
+                        // channel... Retrying 10× with backoff only hides the real
+                        // cause for minutes. Fail fast with Telegram's own message.
+                        throw new Error(`Telegram rejected the upload: ${result.description || `error ${result.error_code}`}`);
                     } else { await sleep(2000 * attempt); }
                 }
             } catch (error) {
@@ -185,10 +213,15 @@ async function uploadFile(file, botToken, channelId, onProgress, abortSignal, pa
     }
     onProgress({ percent: 100, status: `Upload complete!`, speed: '', eta: '' });
 
-    // Mark session as completed and clean up
-    await deleteUploadSession(sessionId);
+    // The resumable session is deliberately NOT deleted here. It is deleted by
+    // the caller once the file entry is safely saved — if the manifest save
+    // fails or the tab dies in that window, the session survives, the resume
+    // banner reappears, and a resume rebuilds the manifest from completedParts
+    // with zero re-uploading. Deleting here orphaned every chunk in Telegram
+    // whenever that save failed.
 
     return {
+        sessionId,
         fileName: file.name,
         fileSize: file.size,
         fileType: file.type,
@@ -555,6 +588,14 @@ const DashboardView = () => {
     const resumeInputRef = useRef(null);
     const [isDragging, setIsDragging] = useState(false);
     const dragCounter = useRef(0);
+    // Files registered with the streaming service worker in this session, so a
+    // restarted SW can ask us (NEED_REGISTER) to re-send the registration —
+    // including the decryption key, which the SW deliberately never persists.
+    const registeredFilesRef = useRef(new Map());
+    // Upload pump guard. `uploadProgress.active` is not visible to a second
+    // effect run until React re-renders, so two quick enqueues could both pass
+    // the isUploading check and start the same file twice.
+    const pumpingUploadRef = useRef(false);
     const isUploading = uploadProgress.active;
     const isDownloading = downloadProgress.active;
     const isRenaming = editingFileId !== null;
@@ -592,6 +633,38 @@ const DashboardView = () => {
         window.addEventListener('beforeunload', handler);
         return () => window.removeEventListener('beforeunload', handler);
     }, [isUploading]);
+
+    // --- EFFECT: keep service-worker streaming registrations alive ---
+    // The SW is terminated after ~30s idle; its in-memory registrations (and
+    // decryption keys) vanish with it. Re-register periodically while the page
+    // is open so long viewing sessions survive pauses, and answer the SW's
+    // explicit NEED_REGISTER requests for anything we still hold.
+    // registerFileWithSW is defined below and read via closure — it only runs
+    // after mount, by which point it is initialized.
+    useEffect(() => {
+        if (!('serviceWorker' in navigator)) return;
+
+        const onNeedRegister = (event) => {
+            const fileId = event.data?.fileId;
+            if (event.data?.type !== 'NEED_REGISTER' || !fileId) return;
+            const item = registeredFilesRef.current.get(fileId);
+            if (item && config?.botToken) {
+                registerFileWithSW(item).catch(() => { });
+            }
+        };
+        navigator.serviceWorker.addEventListener('message', onNeedRegister);
+
+        const keepalive = setInterval(() => {
+            for (const item of registeredFilesRef.current.values()) {
+                registerFileWithSW(item).catch(() => { });
+            }
+        }, 25000);
+
+        return () => {
+            navigator.serviceWorker.removeEventListener('message', onNeedRegister);
+            clearInterval(keepalive);
+        };
+    }, [config, encryptionKey, zkeEnabled]);
 
     // --- Resume upload handler ---
     const handleResumeUpload = async (session) => {
@@ -658,6 +731,7 @@ const DashboardView = () => {
         const isViewable = !isFolder && VIEWABLE_EXTENSIONS.includes(ext);
         const isPdf = !isFolder && PDF_EXTENSIONS.includes(ext);
         const isAudio = !isFolder && AUDIO_EXTENSIONS.includes(ext);
+        const isVideo = !isFolder && VIDEO_EXTENSIONS.includes(ext);
         const isText = !isFolder && TEXT_EXTENSIONS.includes(ext);
         const isOpenable = isViewable || isPdf || isAudio || isText;
 
@@ -696,7 +770,7 @@ const DashboardView = () => {
                     </button>
                     {/* Open: hidden on mobile for media, always shown on desktop for viewable + pdf */}
                     {isOpenable && (
-                        <button onClick={() => onOpen(item)} disabled={isBusy} className="hidden md:block bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-1 px-4 rounded-md text-sm transition-colors">{isPdf ? 'Open PDF' : isAudio ? '▶ Play' : isText ? 'View' : 'Open'}</button>
+                        <button onClick={() => onOpen(item)} disabled={isBusy} className="hidden md:block bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-1 px-4 rounded-md text-sm transition-colors">{isPdf ? 'Open PDF' : isVideo || isAudio ? '▶ Play' : isText ? 'View' : 'Open'}</button>
                     )}
                     {/* Download: icon on mobile, text on desktop */}
                     {!isFolder && (
@@ -839,7 +913,8 @@ const DashboardView = () => {
 
     // --- EFFECT: PROCESS UPLOAD QUEUE (Uses currentFolderId) ---
     useEffect(() => {
-        if (isUploading || uploadQueue.length === 0) return;
+        if (isUploading || uploadQueue.length === 0 || pumpingUploadRef.current) return;
+        pumpingUploadRef.current = true;
 
         const startNextUpload = async () => {
             const queueItem = uploadQueue[0];
@@ -861,7 +936,12 @@ const DashboardView = () => {
                     fileToUpload,
                     config.botToken,
                     config.channelId,
-                    (p) => setUploadProgress(prev => ({ ...prev, ...p, status: `${statusPrefix} - ${p.status}`, active: true })),
+                    (p) => setUploadProgress(prev => ({
+                        ...prev,
+                        ...p,
+                        active: true,
+                        status: p.status ? `${statusPrefix} - ${p.status}` : prev.status,
+                    })),
                     controller.signal,
                     targetParentId,
                     zkeEnabled ? encryptionKey : null,
@@ -872,6 +952,9 @@ const DashboardView = () => {
                 const newId = crypto.randomUUID();
                 const syncEngine = getSyncEngine(getUid());
                 const savedItem = await syncEngine.addItem({ id: newId, ...newFileData });
+                // Manifest saved — NOW the resumable session can go. Deleting it
+                // any earlier orphaned the Telegram chunks if this save failed.
+                if (newFileData.sessionId) await deleteUploadSession(newFileData.sessionId);
                 // Update local items list immediately (optimistic)
                 setItems(prev => [...prev, savedItem].sort((a, b) => {
                     if (a.type === 'folder' && b.type !== 'folder') return -1;
@@ -889,12 +972,12 @@ const DashboardView = () => {
             } finally {
                 setUploadProgress({ active: false });
                 setAbortController(null);
-                const nextQueue = uploadQueue.slice(1);
-                setUploadQueue(nextQueue);
-                if (nextQueue.length === 0) {
-                    setUploadBatchTotal(0);
-                    clearFeedback();
-                }
+                // Functional update: the closure's uploadQueue is stale once
+                // files were added mid-upload, and rebuilding from it dropped them.
+                setUploadQueue(prev => prev.slice(1));
+                setUploadBatchTotal(prev => Math.max(0, prev - 1));
+                pumpingUploadRef.current = false;
+                clearFeedback();
             }
         };
 
@@ -1004,6 +1087,15 @@ const DashboardView = () => {
     };
     const handleLogout = async () => {
         try { await destroySyncEngine(); } catch { }
+        // Drop the SW's streaming registrations (and its chunk cache) so the
+        // next user on this machine can't stream the previous user's files.
+        try {
+            const reg = await navigator.serviceWorker?.ready;
+            reg?.active?.postMessage({ type: 'CLEAR_FILES' });
+        } catch {
+            // Best-effort — the SW may not be running.
+        }
+        registeredFilesRef.current.clear();
         // Destroy encryption key from memory, then clear the session (onAuthChange
         // routes back to the login screen).
         setEncryptionKey(null);
@@ -1435,6 +1527,10 @@ const DashboardView = () => {
     const filteredItems = items.filter(item => item.fileName.toLowerCase().includes(searchTerm.toLowerCase()));
 
     // --- FILE VIEWER LOGIC ---
+    // registerFileWithSW records into registeredFilesRef (declared with the
+    // other refs above) so a restarted service worker can ask us
+    // (NEED_REGISTER) to re-send the registration — including the key, which
+    // the SW deliberately never persists to disk.
     const registerFileWithSW = async (item) => {
         if (!('serviceWorker' in navigator)) {
             throw new Error('Service Workers not supported');
@@ -1442,6 +1538,11 @@ const DashboardView = () => {
         const registration = await navigator.serviceWorker.ready;
         const sw = registration.active;
         if (!sw) throw new Error('Service Worker not active');
+
+        registeredFilesRef.current.set(item.id, item);
+        while (registeredFilesRef.current.size > 5) {
+            registeredFilesRef.current.delete(registeredFilesRef.current.keys().next().value);
+        }
 
         let rawKeyBytes = null;
         if (zkeEnabled && encryptionKey) {
@@ -1469,6 +1570,7 @@ const DashboardView = () => {
                 isEncrypted: item.encrypted === true,
                 fileSize: item.fileSize,
                 fileType: item.fileType || 'application/octet-stream',
+                fileName: item.fileName,
             }, [channel.port2]);
             // Timeout after 5s
             setTimeout(() => reject(new Error('SW registration timeout')), 5000);
@@ -1477,6 +1579,11 @@ const DashboardView = () => {
 
     const handleFileOpen = async (item) => {
         if (!config?.botToken) return;
+        if (item.encrypted && !encryptionKey) {
+            setFeedbackMessage({ type: 'error', text: 'This file is encrypted. Enter your encryption password in Settings to unlock previews.' });
+            clearFeedback();
+            return;
+        }
         const ext = getFileExt(item.fileName, item.fileType);
 
         try {
