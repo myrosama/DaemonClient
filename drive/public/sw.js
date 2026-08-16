@@ -21,10 +21,45 @@ const CHUNK_SIZE = 19 * 1024 * 1024; // 19 MB plaintext chunk
 // ── Virtual file registry (in memory; metadata mirrored to IndexedDB) ──
 const virtualFiles = new Map();
 
-// ── Chunk cache, LRU by insertion order, refreshed on hit ──
+// ── Chunk cache + in-flight dedupe ──
 const chunkCache = new Map();
 const inflightChunks = new Map();
-const MAX_CACHE_ENTRIES = 10;
+
+// ── Chunk cache, LRU by insertion order, refreshed on hit ──
+// Size adapts to the device: 19 MB/chunk × N. 16 entries ≈ 304 MB is fine on
+// a desktop with ≥8 GB; a 2 GB phone gets 6 (114 MB). A bigger cache is what
+// lets back-and-forth seeking in a big file hit memory instead of Telegram.
+const DEVICE_MEM_GB = (typeof navigator !== 'undefined' && navigator.deviceMemory) || 4;
+const MAX_CACHE_ENTRIES = DEVICE_MEM_GB >= 8 ? 16 : DEVICE_MEM_GB >= 4 ? 10 : 6;
+
+// ── Chunk download scheduler ──
+// A scrub burst fires range requests across many chunks at once; letting them
+// all download concurrently saturates the link so the chunk the user actually
+// stopped on arrives last. Cap concurrency and always run the MOST RECENTLY
+// DEMANDED chunk first — stale scrub probes wait, and the winner is what the
+// player is waiting for.
+const MAX_CONCURRENT_CHUNK_LOADS = 2;
+let activeLoads = 0;
+const pendingLoads = []; // { key, wanted, run } — wanted = demand timestamp
+const chunkDemand = new Map(); // cacheKey -> last demand timestamp
+
+function scheduleLoad(key, run) {
+  chunkDemand.set(key, Date.now());
+  return new Promise((resolve, reject) => {
+    pendingLoads.push({ key, wanted: Date.now(), run, resolve, reject });
+    pumpLoads();
+  });
+}
+
+function pumpLoads() {
+  while (activeLoads < MAX_CONCURRENT_CHUNK_LOADS && pendingLoads.length > 0) {
+    // Newest demand first.
+    pendingLoads.sort((a, b) => (chunkDemand.get(b.key) || b.wanted) - (chunkDemand.get(a.key) || a.wanted));
+    const job = pendingLoads.shift();
+    activeLoads++;
+    job.run().then(job.resolve, job.reject).finally(() => { activeLoads--; pumpLoads(); });
+  }
+}
 
 // ── Telegram file_path cache (paths are valid ~1h; getFile is rate-limited
 //    and used to be called for every single range request) ──
@@ -182,7 +217,7 @@ async function getFilePath(partData, botToken, workerUrl) {
 
   const infoUrl = `https://api.telegram.org/bot${botToken}/getFile?file_id=${partData.file_id}`;
   let lastErr;
-  for (let attempt = 1; attempt <= 4; attempt++) {
+  for (let attempt = 1; attempt <= 5; attempt++) {
     try {
       const infoRes = await fetch(`${workerUrl}/proxy?url=${encodeURIComponent(infoUrl)}`);
       const infoData = await infoRes.json();
@@ -197,13 +232,16 @@ async function getFilePath(partData, botToken, workerUrl) {
       return infoData.result.file_path;
     } catch (e) {
       lastErr = e;
-      await sleep(1000 * attempt);
+      await sleep(Math.min(1000 * 2 ** (attempt - 1), 15000));
     }
   }
   throw lastErr;
 }
 
 // ── Download + decrypt one chunk, with retry, dedupe and LRU caching ──
+// Playback-critical: transient failures (worker cold start, Telegram hiccups,
+// rate limits) are retried with exponential backoff so the player's own
+// buffer covers the gap instead of surfacing a media error to the user.
 async function loadChunk(vFile, fileId, chunkIndex) {
   const cacheKey = `${fileId}:${chunkIndex}`;
 
@@ -216,9 +254,12 @@ async function loadChunk(vFile, fileId, chunkIndex) {
   }
 
   const inflight = inflightChunks.get(cacheKey);
-  if (inflight) return inflight;
+  if (inflight) {
+    chunkDemand.set(cacheKey, Date.now()); // still wanted — bump priority
+    return inflight;
+  }
 
-  const promise = (async () => {
+  const promise = scheduleLoad(cacheKey, async () => {
     const partData = vFile.messages[chunkIndex];
     const tgPath = await getFilePath(partData, vFile.botToken, vFile.workerUrl);
     const downloadUrl = `https://api.telegram.org/file/bot${vFile.botToken}/${tgPath}`;
@@ -226,15 +267,20 @@ async function loadChunk(vFile, fileId, chunkIndex) {
 
     let rawData;
     let lastErr;
-    for (let attempt = 1; attempt <= 4; attempt++) {
+    for (let attempt = 1; attempt <= 5; attempt++) {
       try {
         const fileRes = await fetch(proxyUrl);
+        if (fileRes.status === 429) {
+          const ra = parseInt(fileRes.headers.get('Retry-After') || '0', 10);
+          await sleep((ra || 3) * 1000);
+          continue;
+        }
         if (!fileRes.ok) throw new Error(`Proxy fetch failed: ${fileRes.status}`);
         rawData = await fileRes.arrayBuffer();
         break;
       } catch (e) {
         lastErr = e;
-        await sleep(1000 * attempt);
+        await sleep(Math.min(1000 * 2 ** (attempt - 1), 15000));
       }
     }
     if (!rawData) throw lastErr;
@@ -257,7 +303,7 @@ async function loadChunk(vFile, fileId, chunkIndex) {
     }
     chunkCache.set(cacheKey, rawData);
     return rawData;
-  })();
+  });
 
   inflightChunks.set(cacheKey, promise);
   try {
@@ -345,9 +391,12 @@ async function handleStreamRequest(request, url) {
     const sliced = plaintext.slice(localStart, localEnd + 1);
 
     // Prefetch the next chunk so sequential playback doesn't stall on a full
-    // 19 MB round trip at every chunk boundary. Fire-and-forget, deduped and
-    // bounded by the same LRU cache.
-    if (messages[chunkIndex + 1]) {
+    // 19 MB round trip at every chunk boundary. GATED to sequential access:
+    // a request near the chunk start (player reading it in order). A scrub
+    // probe (small range at a random offset) prefetches nothing — otherwise
+    // dragging the timeline seeded a 19 MB download after every stop.
+    const nearChunkStart = start - chunkIndex * CHUNK_SIZE < 64 * 1024;
+    if (nearChunkStart && messages[chunkIndex + 1]) {
       loadChunk(vFile, fileId, chunkIndex + 1).catch(() => {});
     }
 

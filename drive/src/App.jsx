@@ -443,6 +443,224 @@ const ProgressBar = ({ percent, status, speed, eta, onCancel }) => (
     </div>
 );
 
+// --- File-type tables (module scope: shared by the file list and viewer) ---
+const IMAGE_EXTENSIONS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'avif', 'ico'];
+// Any container the browser might decode counts as viewable — the player
+// sniffs; a codec it can't decode (HEVC/x265) plays audio with a black
+// screen, which is standard browser behaviour everywhere.
+// .ogg is deliberately NOT here: it is ambiguous and overwhelmingly audio —
+// it renders in the audio player instead.
+const VIDEO_EXTENSIONS = ['mp4', 'webm', 'ogv', 'mov', 'mkv', 'avi', 'm4v', 'mpg', 'mpeg', 'wmv', 'flv', '3gp', '3g2', 'ts', 'm2ts', 'divx'];
+const AUDIO_EXTENSIONS = ['mp3', 'wav', 'flac', 'aac', 'm4a', 'opus', 'wma', 'oga', 'ogg'];
+const VIEWABLE_EXTENSIONS = [...new Set([...IMAGE_EXTENSIONS, ...VIDEO_EXTENSIONS, ...AUDIO_EXTENSIONS])];
+const TEXT_EXTENSIONS = ['txt', 'md', 'json', 'csv', 'xml', 'html', 'htm', 'js', 'jsx', 'ts', 'tsx', 'py', 'css', 'scss', 'java', 'cpp', 'c', 'h', 'rs', 'go', 'sh', 'bash', 'yaml', 'yml', 'toml', 'ini', 'cfg', 'log', 'sql', 'rb', 'php', 'swift', 'kt', 'lua', 'r', 'dockerfile', 'env', 'gitignore'];
+const PDF_EXTENSIONS = ['pdf'];
+const getFileExt = (name, type) => {
+    const ext = (name || '').split('.').pop().toLowerCase();
+    if (ext && ext !== name.toLowerCase()) return ext;
+    if (type) {
+        if (type.startsWith('image/')) return type.split('/')[1];
+        if (type.startsWith('video/')) return type.split('/')[1];
+        if (type === 'application/pdf') return 'pdf';
+    }
+    return '';
+};
+
+// --- File viewer (module scope on purpose) ---
+// It used to be defined INSIDE DashboardView, so every parent re-render
+// (feedback messages auto-clearing, upload ticks, sync updates...) created a
+// NEW component type and React remounted the whole subtree — ripping the
+// <video> element out of the DOM mid-playback and starting the movie from
+// 0:00. At module scope the element survives parent re-renders.
+//
+// Self-healing: on a hard media error the user gets Retry (which reloads the
+// stream and restores the exact playback position) instead of a dead player.
+const FileViewerModal = ({ file, onClose, onDownload }) => {
+    const ext = getFileExt(file.fileName, file.fileType);
+    const url = `/stream/${file.id}`;
+    const isImage = IMAGE_EXTENSIONS.includes(ext);
+    const isVideo = VIDEO_EXTENSIONS.includes(ext);
+    const isAudio = AUDIO_EXTENSIONS.includes(ext);
+    const isText = TEXT_EXTENSIONS.includes(ext);
+    const [mediaLoaded, setMediaLoaded] = useState(false);
+    const [mediaError, setMediaError] = useState(null);
+    const [textContent, setTextContent] = useState(null);
+    const [textLoading, setTextLoading] = useState(false);
+    const videoRef = useRef(null);
+
+    useEffect(() => {
+        if (isText && url) {
+            setTextLoading(true);
+            let cancelled = false;
+            fetch(url)
+                .then(res => res.text())
+                .then(text => { if (!cancelled) { setTextContent(text); setMediaLoaded(true); setTextLoading(false); } })
+                .catch(() => { if (!cancelled) { setTextContent('Failed to load file content.'); setMediaLoaded(true); setTextLoading(false); } });
+            return () => { cancelled = true; };
+        }
+    }, [isText, url]);
+
+    // Position-preserving reload for the video element.
+    const reloadVideoAt = (t) => {
+        const v = videoRef.current;
+        if (!v) return;
+        const wasPaused = v.paused;
+        const src = v.src;
+        v.src = '';
+        v.load();
+        v.src = src;
+        v.load();
+        const onLoaded = () => {
+            v.removeEventListener('loadedmetadata', onLoaded);
+            try { v.currentTime = t; } catch { /* seekable may not cover t yet */ }
+            if (!wasPaused) v.play().catch(() => { });
+        };
+        v.addEventListener('loadedmetadata', onLoaded);
+    };
+
+    const handleVideoError = () => {
+        const v = videoRef.current;
+        setMediaLoaded(true);
+        setMediaError({
+            code: v?.error?.code,
+            // MEDIA_ERR_NETWORK(2) / MEDIA_ERR_DECODE(3) are transient or
+            // recoverable via reload; SRC_NOT_SUPPORTED(4) is a hard codec wall.
+            hard: v?.error?.code === 4,
+        });
+    };
+
+    const retryMedia = () => {
+        setMediaError(null);
+        setMediaLoaded(false);
+        reloadVideoAt(videoRef.current?.currentTime || 0);
+    };
+
+    return (
+        <div
+            className="fixed inset-0 z-[100] font-sans flex flex-col"
+            style={{ background: 'rgba(0,0,0,0.92)', backdropFilter: 'blur(20px)' }}
+        >
+            {/* Top bar */}
+            <div className="flex items-center justify-between px-4 py-3 md:px-6" onClick={(e) => e.stopPropagation()}>
+                <button
+                    onClick={onClose}
+                    className="w-10 h-10 flex items-center justify-center rounded-full bg-white/10 hover:bg-white/20 transition-colors"
+                    title="Close"
+                >
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
+                </button>
+                <p className="text-white/70 text-sm truncate max-w-[60%] mx-4">{file.fileName}</p>
+                <button
+                    onClick={() => { onDownload(file); onClose(); }}
+                    className="w-10 h-10 flex items-center justify-center rounded-full bg-white/10 hover:bg-white/20 transition-colors"
+                    title="Download"
+                >
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></svg>
+                </button>
+            </div>
+
+            {/* Content area */}
+            <div className="flex-1 flex items-center justify-center px-4 pb-4 overflow-hidden" onClick={onClose}>
+                <div onClick={(e) => e.stopPropagation()} className="relative max-w-full max-h-full flex items-center justify-center">
+                    {!mediaLoaded && (
+                        <div className="absolute inset-0 flex items-center justify-center">
+                            <div className="w-8 h-8 border-2 border-white/20 border-t-white/80 rounded-full animate-spin" />
+                        </div>
+                    )}
+
+                    {isImage && (
+                        <img
+                            src={url}
+                            alt={file.fileName}
+                            onLoad={() => setMediaLoaded(true)}
+                            onError={() => setMediaLoaded(true)}
+                            className={`max-w-full max-h-[88vh] object-contain rounded-md transition-opacity duration-300 ${mediaLoaded ? 'opacity-100' : 'opacity-0'}`}
+                        />
+                    )}
+
+                    {(isVideo || isAudio) && !mediaError && (
+                        isVideo ? (
+                            <video
+                                key={file.id}
+                                ref={videoRef}
+                                src={url}
+                                controls
+                                autoPlay
+                                playsInline
+                                preload="metadata"
+                                onLoadedData={() => setMediaLoaded(true)}
+                                onError={handleVideoError}
+                                className={`max-w-full max-h-[88vh] rounded-md transition-opacity duration-300 ${mediaLoaded ? 'opacity-100' : 'opacity-0'}`}
+                            />
+                        ) : (
+                            <div className={`w-full max-w-lg p-8 rounded-2xl transition-opacity duration-300 ${mediaLoaded ? 'opacity-100' : 'opacity-0'}`}
+                                style={{ background: 'linear-gradient(135deg, rgba(99,102,241,0.2) 0%, rgba(139,92,246,0.2) 100%)', backdropFilter: 'blur(20px)', border: '1px solid rgba(255,255,255,0.1)' }}>
+                                <div className="text-center mb-6">
+                                    <div className="w-20 h-20 mx-auto mb-4 rounded-2xl flex items-center justify-center" style={{ background: 'linear-gradient(135deg, #6366f1, #8b5cf6)' }}>
+                                        <svg width="32" height="32" viewBox="0 0 24 24" fill="white"><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55C7.79 13 6 14.79 6 17s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z" /></svg>
+                                    </div>
+                                    <p className="text-white font-medium text-lg truncate" title={file.fileName}>{file.fileName}</p>
+                                    <p className="text-white/40 text-sm mt-1">{(file.fileSize / 1024 / 1024).toFixed(2)} MB • {ext.toUpperCase()}</p>
+                                </div>
+                                <audio
+                                    key={file.id}
+                                    ref={videoRef}
+                                    src={url}
+                                    controls
+                                    autoPlay
+                                    onLoadedData={() => setMediaLoaded(true)}
+                                    onError={handleVideoError}
+                                    className="w-full"
+                                    style={{ filter: 'invert(1) hue-rotate(180deg)', height: '40px' }}
+                                />
+                            </div>
+                        )
+                    )}
+
+                    {(isVideo || isAudio) && mediaError && (
+                        <div className="flex flex-col items-center justify-center gap-4 text-center px-6 max-w-md">
+                            {mediaError.hard ? (
+                                <>
+                                    <p className="text-white/80 text-sm">This file's format/codec isn't supported by your browser (e.g. HEVC/x265 video, which Chrome and Firefox can't decode).</p>
+                                    <p className="text-white/40 text-xs">The file itself is intact — download it and play it with VLC or any desktop player.</p>
+                                </>
+                            ) : (
+                                <p className="text-white/80 text-sm">Playback was interrupted (network hiccup or a busy connection). Your position is saved.</p>
+                            )}
+                            <div className="flex gap-3">
+                                {!mediaError.hard && (
+                                    <button onClick={retryMedia} className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-6 rounded-lg text-sm">
+                                        ↻ Resume playback
+                                    </button>
+                                )}
+                                <button onClick={() => { onDownload(file); onClose(); }} className="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-6 rounded-lg text-sm">
+                                    Download
+                                </button>
+                            </div>
+                        </div>
+                    )}
+
+                    {isText && (
+                        <div className="w-full max-w-4xl max-h-[85vh] overflow-auto rounded-xl" style={{ background: '#1a1b26', border: '1px solid rgba(255,255,255,0.08)' }}>
+                            <div className="flex items-center justify-between px-4 py-2 border-b border-white/5" style={{ background: 'rgba(99,102,241,0.1)' }}>
+                                <span className="text-white/60 text-xs font-mono">{file.fileName}</span>
+                                <span className="text-white/30 text-xs">{textContent ? textContent.split('\n').length : 0} lines</span>
+                            </div>
+                            <pre className="p-4 text-sm text-white/80 font-mono whitespace-pre-wrap break-words leading-relaxed" style={{ tabSize: 4 }}>
+                                {textLoading ? 'Loading...' : textContent}
+                            </pre>
+                        </div>
+                    )}
+
+                    {!isImage && !isVideo && !isAudio && !isText && (
+                        <p className="text-white/50 text-sm">This file type cannot be previewed.</p>
+                    )}
+                </div>
+            </div>
+        </div>
+    );
+};
+
 // --- TERMS MODAL ---
 const TermsModal = ({ onClose }) => {
     return (
@@ -704,28 +922,7 @@ const DashboardView = () => {
         setIncompleteSessions(prev => prev.filter(s => s.sessionId !== sessionId));
     };
 
-    // --- HELPER COMPONENTS (defined locally to DashboardView) ---
-    const IMAGE_EXTENSIONS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'avif', 'ico'];
-    // Any container the browser might decode counts as viewable — the player
-    // sniffs and shows the fallback UI when the *codec* inside the container
-    // isn't supported (e.g. HEVC/x265 inside some .mkv files).
-    // .ogg is deliberately NOT here: it is ambiguous and overwhelmingly audio —
-    // it renders in the audio player instead.
-    const VIDEO_EXTENSIONS = ['mp4', 'webm', 'ogv', 'mov', 'mkv', 'avi', 'm4v', 'mpg', 'mpeg', 'wmv', 'flv', '3gp', '3g2', 'ts', 'm2ts', 'divx'];
-    const AUDIO_EXTENSIONS = ['mp3', 'wav', 'flac', 'aac', 'm4a', 'opus', 'wma', 'oga', 'ogg'];
-    const VIEWABLE_EXTENSIONS = [...new Set([...IMAGE_EXTENSIONS, ...VIDEO_EXTENSIONS, ...AUDIO_EXTENSIONS])];
-    const TEXT_EXTENSIONS = ['txt', 'md', 'json', 'csv', 'xml', 'html', 'htm', 'js', 'jsx', 'ts', 'tsx', 'py', 'css', 'scss', 'java', 'cpp', 'c', 'h', 'rs', 'go', 'sh', 'bash', 'yaml', 'yml', 'toml', 'ini', 'cfg', 'log', 'sql', 'rb', 'php', 'swift', 'kt', 'lua', 'r', 'dockerfile', 'env', 'gitignore'];
-    const PDF_EXTENSIONS = ['pdf'];
-    const getFileExt = (name, type) => {
-        const ext = (name || '').split('.').pop().toLowerCase();
-        if (ext && ext !== name.toLowerCase()) return ext;
-        if (type) {
-            if (type.startsWith('image/')) return type.split('/')[1];
-            if (type.startsWith('video/')) return type.split('/')[1];
-            if (type === 'application/pdf') return 'pdf';
-        }
-        return '';
-    };
+    // --- Extension tables live at module scope (see below) ---
 
     const FileItem = ({ item, isEditing, renameValue, setRenameValue, onSaveRename, onCancelRename, onStartRename, onDownload, onDelete, onFolderClick, onOpen, isBusy }) => {
         const isFolder = item.type === 'folder';
@@ -1607,180 +1804,6 @@ const DashboardView = () => {
         }
     };
 
-    const FileViewerModal = ({ file, onClose }) => {
-        if (!file) return null;
-        const ext = getFileExt(file.fileName, file.fileType);
-        const url = `/stream/${file.id}`;
-        const isImage = IMAGE_EXTENSIONS.includes(ext);
-        const isVideo = VIDEO_EXTENSIONS.includes(ext);
-        const isAudio = AUDIO_EXTENSIONS.includes(ext);
-        const isText = TEXT_EXTENSIONS.includes(ext);
-        const [mediaLoaded, setMediaLoaded] = useState(false);
-        const [playbackFailed, setPlaybackFailed] = useState(false);
-        const [textContent, setTextContent] = useState(null);
-        const [textLoading, setTextLoading] = useState(false);
-        const videoRef = useRef(null);
-
-        // Load text content when viewing text files
-        useEffect(() => {
-            if (isText && url) {
-                setTextLoading(true);
-                fetch(url)
-                    .then(res => res.text())
-                    .then(text => { setTextContent(text); setMediaLoaded(true); setTextLoading(false); })
-                    .catch(() => { setTextContent('Failed to load file content.'); setMediaLoaded(true); setTextLoading(false); });
-            }
-        }, [isText, url]);
-
-        // Audio-decodes-but-video-doesn't detection — deliberately conservative.
-        // A hard-video-codec failure (HEVC/x265 in .mkv on Chromium) still plays
-        // audio, so onError never fires. But a naive timer flags healthy videos
-        // that are still buffering their first video frames, so we require the
-        // strongest possible evidence: actively playing, HAVE_FUTURE_DATA,
-        // 2s+ of playback, videoWidth still 0 — sustained for 4 consecutive
-        // 1s checks. And the overlay never stops playback by itself: "Listen
-        // anyway" restores the exact old behaviour if detection is ever wrong.
-        useEffect(() => {
-            if (!isVideo) return;
-            let strikes = 0;
-            const interval = setInterval(() => {
-                const v = videoRef.current;
-                if (!v || v.error || v.videoWidth > 0 || v.seeking || v.paused || v.readyState < 3 || v.currentTime < 2) {
-                    strikes = 0;
-                    return;
-                }
-                strikes++;
-                if (strikes >= 4) {
-                    setPlaybackFailed(true);
-                    setMediaLoaded(true);
-                    clearInterval(interval);
-                }
-            }, 1000);
-            return () => clearInterval(interval);
-        }, [isVideo]);
-
-        return (
-            <div
-                className="fixed inset-0 z-[100] font-sans flex flex-col"
-                style={{ background: 'rgba(0,0,0,0.92)', backdropFilter: 'blur(20px)' }}
-            >
-                {/* Top bar */}
-                <div className="flex items-center justify-between px-4 py-3 md:px-6" onClick={(e) => e.stopPropagation()}>
-                    <button
-                        onClick={onClose}
-                        className="w-10 h-10 flex items-center justify-center rounded-full bg-white/10 hover:bg-white/20 transition-colors"
-                        title="Close"
-                    >
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
-                    </button>
-                    <p className="text-white/70 text-sm truncate max-w-[60%] mx-4">{file.fileName}</p>
-                    <button
-                        onClick={() => { handleFileDownload(file); onClose(); }}
-                        className="w-10 h-10 flex items-center justify-center rounded-full bg-white/10 hover:bg-white/20 transition-colors"
-                        title="Download"
-                    >
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></svg>
-                    </button>
-                </div>
-
-                {/* Content area */}
-                <div className="flex-1 flex items-center justify-center px-4 pb-4 overflow-hidden" onClick={onClose}>
-                    <div onClick={(e) => e.stopPropagation()} className="relative max-w-full max-h-full flex items-center justify-center">
-                        {/* Loading indicator */}
-                        {!mediaLoaded && (
-                            <div className="absolute inset-0 flex items-center justify-center">
-                                <div className="w-8 h-8 border-2 border-white/20 border-t-white/80 rounded-full animate-spin" />
-                            </div>
-                        )}
-
-                        {isImage && (
-                            <img
-                                src={url}
-                                alt={file.fileName}
-                                onLoad={() => setMediaLoaded(true)}
-                                onError={() => setMediaLoaded(true)}
-                                className={`max-w-full max-h-[88vh] object-contain rounded-md transition-opacity duration-300 ${mediaLoaded ? 'opacity-100' : 'opacity-0'}`}
-                            />
-                        )}
-
-                        {isVideo && (
-                            <video
-                                ref={videoRef}
-                                src={url}
-                                controls
-                                autoPlay
-                                playsInline
-                                onLoadedData={() => setMediaLoaded(true)}
-                                onError={() => { setMediaLoaded(true); setPlaybackFailed(true); }}
-                                className={`max-w-full max-h-[88vh] rounded-md transition-opacity duration-300 ${mediaLoaded && !playbackFailed ? 'opacity-100' : 'opacity-0'}`}
-                            />
-                        )}
-
-                        {isVideo && playbackFailed && (
-                            <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 text-center px-6">
-                                <p className="text-white/80 text-sm max-w-md">This file's video codec doesn't seem to be supported by your browser (HEVC/x265 files — common in some .mkv and .mp4 rips — can't be decoded by Chrome or Firefox; Safari and some TVs can).</p>
-                                <p className="text-white/40 text-xs max-w-md">The file itself is intact. You can still listen, or download it and play with VLC or any desktop player.</p>
-                                <div className="flex gap-3">
-                                    <button
-                                        onClick={() => setPlaybackFailed(false)}
-                                        className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-6 rounded-lg text-sm"
-                                    >
-                                        ▶ Listen anyway
-                                    </button>
-                                    <button
-                                        onClick={() => { handleFileDownload(file); onClose(); }}
-                                        className="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-6 rounded-lg text-sm"
-                                    >
-                                        Download instead
-                                    </button>
-                                </div>
-                            </div>
-                        )}
-
-                        {isAudio && (
-                            <div className={`w-full max-w-lg p-8 rounded-2xl transition-opacity duration-300 ${mediaLoaded ? 'opacity-100' : 'opacity-0'}`}
-                                style={{ background: 'linear-gradient(135deg, rgba(99,102,241,0.2) 0%, rgba(139,92,246,0.2) 100%)', backdropFilter: 'blur(20px)', border: '1px solid rgba(255,255,255,0.1)' }}>
-                                <div className="text-center mb-6">
-                                    <div className="w-20 h-20 mx-auto mb-4 rounded-2xl flex items-center justify-center" style={{ background: 'linear-gradient(135deg, #6366f1, #8b5cf6)' }}>
-                                        <svg width="32" height="32" viewBox="0 0 24 24" fill="white"><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55C7.79 13 6 14.79 6 17s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z" /></svg>
-                                    </div>
-                                    <p className="text-white font-medium text-lg truncate" title={file.fileName}>{file.fileName}</p>
-                                    <p className="text-white/40 text-sm mt-1">{(file.fileSize / 1024 / 1024).toFixed(2)} MB • {ext.toUpperCase()}</p>
-                                </div>
-                                <audio
-                                    src={url}
-                                    controls
-                                    autoPlay
-                                    onLoadedData={() => setMediaLoaded(true)}
-                                    onError={() => { setMediaLoaded(true); setPlaybackFailed(true); }}
-                                    className="w-full"
-                                    style={{ filter: 'invert(1) hue-rotate(180deg)', height: '40px' }}
-                                />
-                                {playbackFailed && <p className="text-white/50 text-xs text-center mt-3">Your browser can't decode this audio format — use Download instead.</p>}
-                            </div>
-                        )}
-
-                        {isText && (
-                            <div className="w-full max-w-4xl max-h-[85vh] overflow-auto rounded-xl" style={{ background: '#1a1b26', border: '1px solid rgba(255,255,255,0.08)' }}>
-                                <div className="flex items-center justify-between px-4 py-2 border-b border-white/5" style={{ background: 'rgba(99,102,241,0.1)' }}>
-                                    <span className="text-white/60 text-xs font-mono">{file.fileName}</span>
-                                    <span className="text-white/30 text-xs">{textContent ? textContent.split('\n').length : 0} lines</span>
-                                </div>
-                                <pre className="p-4 text-sm text-white/80 font-mono whitespace-pre-wrap break-words leading-relaxed" style={{ tabSize: 4 }}>
-                                    {textLoading ? 'Loading...' : textContent}
-                                </pre>
-                            </div>
-                        )}
-
-                        {!isImage && !isVideo && !isAudio && !isText && (
-                            <p className="text-white/50 text-sm">This file type cannot be previewed.</p>
-                        )}
-                    </div>
-                </div>
-            </div>
-        );
-    };
-
     return (
         <div className="min-h-screen bg-gray-900 text-white flex items-center justify-center p-4 font-sans"
             onDragEnter={handleDragEnter}
@@ -1928,7 +1951,7 @@ const DashboardView = () => {
                 zkeMode={zkeMode}
                 onZkeToggle={handleZkeToggle}
             />}
-            {viewingFile && <FileViewerModal file={viewingFile} onClose={() => setViewingFile(null)} />}
+            {viewingFile && <FileViewerModal file={viewingFile} onClose={() => setViewingFile(null)} onDownload={handleFileDownload} />}
         </div>
     );
 };
