@@ -132,12 +132,26 @@ persist genuinely never persisting.
 Exists and is good: `loadState`, `saveState`, `markDone`, `isDone`, `redact`,
 `checkStatePermissions`, `SECRET_KEYS`.
 
-**The gap to close:** `PRODUCT_SPEC.md` §4 says the account password never
-touches disk. `SECRET_KEYS` currently governs *redaction in output*; it needs to
-also govern *what is allowed to be written at all*, with a test that writes a
-password-bearing state object and asserts the file on disk does not contain it.
+**Status: SHIPPED.** `SECRET_KEYS` governs redaction in *output*; a separate
+`NEVER_PERSIST` now governs what may be written at all, and `saveState` strips
+those keys before serialising — before, not after, since a redaction pass over
+the string would still have built a string containing the secret.
 
-**Test standalone:** already has tests; add the write-rejection one above.
+The two sets are deliberately different, and a test asserts they stay so:
+`cloudflareToken` must persist and be redacted; `adminPassword` must never
+persist at all. Nothing writes the password today, so this is preventive — one
+`state.adminPassword = pw` anywhere would have put cleartext on disk with no
+test to notice.
+
+Tests assert the FILE ON DISK, not the in-memory object, since that is the only
+thing that survives the process. They also cover: nested occurrences, the
+caller's own object staying intact (setup uses the password moments later), a
+reload yielding `undefined` rather than `''` (an empty string would sail through
+a truthiness check), and a rewrite not widening an existing file's mode.
+
+Also corrected a comment claiming this file holds the encryption keys. It does
+not — they are in the user's D1. That claim had already reached the docs and
+the CLI's closing message, where it told people to back up the wrong thing.
 
 ## P7 · Telegram — `api/telegram.mjs` **harden**
 

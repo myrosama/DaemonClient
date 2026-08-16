@@ -169,7 +169,8 @@ async function uploadFile(file, botToken, channelId, onProgress, abortSignal, pa
                 } else {
                     if (response.status === 429 && result.parameters?.retry_after) {
                         const retryAfter = parseInt(result.parameters.retry_after, 10);
-                        onProgress(prev => ({ ...prev, status: `Rate limited. Waiting ${retryAfter}s...` }));
+                        // Partial update — the caller's wrapper merges over previous state.
+                        onProgress({ status: `Rate limited. Waiting ${retryAfter}s...` });
                         await sleep(retryAfter * 1000 + 500);
                     } else { await sleep(2000 * attempt); }
                 }
@@ -246,7 +247,7 @@ async function downloadFile(fileInfo, botToken, onProgress, abortSignal, decrypt
                 if (!fileInfoData.ok) {
                     if (fileInfoData.error_code === 429 && fileInfoData.parameters?.retry_after) {
                         const waitTime = fileInfoData.parameters.retry_after;
-                        onProgress(prev => ({ ...prev, status: `Rate limited. Waiting ${waitTime}s...` }));
+                        onProgress({ status: `Rate limited. Waiting ${waitTime}s...` });
                         await sleep(waitTime * 1000 + 500);
                         continue;
                     }
@@ -631,8 +632,13 @@ const DashboardView = () => {
     };
 
     // --- HELPER COMPONENTS (defined locally to DashboardView) ---
-    const VIEWABLE_EXTENSIONS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'mp4', 'webm', 'ogg', 'mov'];
+    const IMAGE_EXTENSIONS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'avif', 'ico'];
+    // Any container the browser might decode counts as viewable — the <video>
+    // element sniffs and simply shows the fallback UI when the *codec* inside
+    // the container isn't supported (e.g. some .mkv/.avi files).
+    const VIDEO_EXTENSIONS = ['mp4', 'webm', 'ogg', 'ogv', 'mov', 'mkv', 'avi', 'm4v', 'mpg', 'mpeg', 'wmv', 'flv', '3gp', '3g2', 'ts', 'm2ts', 'divx'];
     const AUDIO_EXTENSIONS = ['mp3', 'wav', 'flac', 'aac', 'm4a', 'opus', 'wma', 'oga'];
+    const VIEWABLE_EXTENSIONS = [...new Set([...IMAGE_EXTENSIONS, ...VIDEO_EXTENSIONS, ...AUDIO_EXTENSIONS])];
     const TEXT_EXTENSIONS = ['txt', 'md', 'json', 'csv', 'xml', 'html', 'htm', 'js', 'jsx', 'ts', 'tsx', 'py', 'css', 'scss', 'java', 'cpp', 'c', 'h', 'rs', 'go', 'sh', 'bash', 'yaml', 'yml', 'toml', 'ini', 'cfg', 'log', 'sql', 'rb', 'php', 'swift', 'kt', 'lua', 'r', 'dockerfile', 'env', 'gitignore'];
     const PDF_EXTENSIONS = ['pdf'];
     const getFileExt = (name, type) => {
@@ -1496,11 +1502,12 @@ const DashboardView = () => {
         if (!file) return null;
         const ext = getFileExt(file.fileName, file.fileType);
         const url = `/stream/${file.id}`;
-        const isImage = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'].includes(ext);
-        const isVideo = ['mp4', 'webm', 'ogg', 'mov'].includes(ext);
+        const isImage = IMAGE_EXTENSIONS.includes(ext);
+        const isVideo = VIDEO_EXTENSIONS.includes(ext);
         const isAudio = AUDIO_EXTENSIONS.includes(ext);
         const isText = TEXT_EXTENSIONS.includes(ext);
         const [mediaLoaded, setMediaLoaded] = useState(false);
+        const [playbackFailed, setPlaybackFailed] = useState(false);
         const [textContent, setTextContent] = useState(null);
         const [textLoading, setTextLoading] = useState(false);
 
@@ -1561,14 +1568,26 @@ const DashboardView = () => {
 
                         {isVideo && (
                             <video
+                                src={url}
                                 controls
                                 autoPlay
+                                playsInline
                                 onLoadedData={() => setMediaLoaded(true)}
-                                onError={() => setMediaLoaded(true)}
-                                className={`max-w-full max-h-[88vh] rounded-md transition-opacity duration-300 ${mediaLoaded ? 'opacity-100' : 'opacity-0'}`}
-                            >
-                                <source src={url} type={ext === 'mkv' ? 'video/webm' : `video/${ext}`} />
-                            </video>
+                                onError={() => { setMediaLoaded(true); setPlaybackFailed(true); }}
+                                className={`max-w-full max-h-[88vh] rounded-md transition-opacity duration-300 ${mediaLoaded && !playbackFailed ? 'opacity-100' : 'opacity-0'}`}
+                            />
+                        )}
+
+                        {isVideo && playbackFailed && (
+                            <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 text-center px-6">
+                                <p className="text-white/80 text-sm max-w-md">Your browser can't decode this file — the container is allowed but the codec inside it isn't supported (common with some .mkv/.avi files).</p>
+                                <button
+                                    onClick={() => { handleFileDownload(file); onClose(); }}
+                                    className="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-6 rounded-lg text-sm"
+                                >
+                                    Download instead
+                                </button>
+                            </div>
                         )}
 
                         {isAudio && (
@@ -1582,15 +1601,15 @@ const DashboardView = () => {
                                     <p className="text-white/40 text-sm mt-1">{(file.fileSize / 1024 / 1024).toFixed(2)} MB • {ext.toUpperCase()}</p>
                                 </div>
                                 <audio
+                                    src={url}
                                     controls
                                     autoPlay
                                     onLoadedData={() => setMediaLoaded(true)}
-                                    onError={() => setMediaLoaded(true)}
+                                    onError={() => { setMediaLoaded(true); setPlaybackFailed(true); }}
                                     className="w-full"
                                     style={{ filter: 'invert(1) hue-rotate(180deg)', height: '40px' }}
-                                >
-                                    <source src={url} type={ext === 'mp3' ? 'audio/mpeg' : ext === 'm4a' ? 'audio/mp4' : `audio/${ext}`} />
-                                </audio>
+                                />
+                                {playbackFailed && <p className="text-white/50 text-xs text-center mt-3">Your browser can't decode this audio format — use Download instead.</p>}
                             </div>
                         )}
 

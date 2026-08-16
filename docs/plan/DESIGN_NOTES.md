@@ -283,3 +283,45 @@ token URL rather than the pre-scoped one already fixed in the portal; the
 permission list says four in code and three in docs; `verifyToken` never probes
 `/workers/subdomain`, so a token lacking it now fails late and hard instead of
 at validation.
+
+---
+
+## P6 — the password must never reach disk            2026-08-16
+
+**Planned:** `BUILD_ORDER.md` P6 — make `SECRET_KEYS` govern what may be
+written, not only what is redacted from output.
+
+**Did:** split the concern rather than widening the existing set, because the
+two are genuinely different and one `Set` cannot express both:
+
+| | |
+|---|---|
+| `SECRET_KEYS` | must be redacted from output, **but must persist** — the install cannot work without the Cloudflare token |
+| `NEVER_PERSIST` | must not reach the file at all — `adminPassword`, plus the dead `storageKey` |
+
+`saveState` strips before serialising, not after. A redaction pass over the
+JSON string would already have built a string containing the secret.
+
+**Decisions:**
+- `stripUnpersistable` deep-copies rather than mutating. `setup.mjs` uses the
+  password within seconds of `saveState`, so stripping the caller's live object
+  would break the flow the guard exists to protect. A test asserts this.
+- A reload must yield `undefined`, not `''`. An empty string passes a
+  truthiness check and would try to create a Firebase account with no password.
+- Nothing writes `adminPassword` today. This is preventive: the value is
+  already in scope in `stepAccount`, so a single plausible line would have put
+  cleartext on disk, and no existing test would have failed.
+
+**Also fixed:** the module comment claimed the state file holds "the storage
+encryption key". It does not — `zke.mjs` writes the keys to the user's D1 and
+nowhere else. That false claim had already propagated into `SELF_HOSTING.md`,
+the docs site, and the CLI's closing message, where it told people to back up a
+file that cannot decrypt a single photo.
+
+**Security:** the guard is the security property. Verified against the real
+file rather than only in tests — password absent, key name absent, Cloudflare
+token still present, caller object intact, reload `undefined`, mode 0600.
+
+**Gate evidence:** G1 — test failed first (no `NEVER_PERSIST` export), 98 → 107
+· G2 n/a, no staging install (Phase 3), stated not claimed · G3 pending ·
+G4 this commit.
