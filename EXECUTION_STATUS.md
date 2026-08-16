@@ -12,12 +12,12 @@ order — this is what to work from), `docs/plan/MASTER_PLAN.md`, then
 
 | | |
 |---|---|
-| **Date** | 2026-08-11 |
-| **Phase** | Building — `BUILD_ORDER.md` wiring step 1 (P11) |
-| **Just finished** | Repo cleanup + docs rebuild. Readiness investigation (`PHASE_0.md`). Product spec and installer-stack research written from the operator's description of the user journey. |
-| **Working on now** | P11 complete — all four gates passed. 82 tests. |
-| **Next up** | Cut `v2.1.0` — wiring step 2. Both release blockers are closed; `RELEASING.md` has the procedure and CI enforces it. That unblocks P3 (`install.sh` pinning a tag). |
-| **Blocked on** | Nothing. |
+| **Date** | 2026-08-16 |
+| **Phase** | Building — `BUILD_ORDER.md`. P11 and P8 shipped; Phase 0 done. |
+| **Just finished** | **P8** — a fresh Cloudflare account no longer finishes setup with a blank address. Gate 3 found two blockers that 93 green tests had missed (see `DESIGN_NOTES.md`), both fixed. Also: Phase 0 doc corrections, and the landing-page redesign the operator asked for (deployed). |
+| **Working on now** | Nothing in flight. |
+| **Next up** | **P5** (the `@clack/prompts` UI kit) and **P6** (state store — the password must never reach disk). Both are prerequisites for every wizard step, so they come before P7/P9/P10. |
+| **Blocked on** | Nothing. `v2.1.0` is deliberately NOT cut yet — see below. |
 | **Staging** | None exists yet. Phase 3 creates one — throwaway Telegram + Cloudflare + Firebase accounts. Until then no self-host change has been proven on real infrastructure. |
 
 ## The single most important fact
@@ -57,7 +57,7 @@ Update these numbers when they change; a drop means silently skipped tests.
 | Suite | Count | Command |
 |---|---|---|
 | `immich-api-shim` | 297 | `npm test` |
-| `selfhost` | 82 | `npm test` |
+| `selfhost` | 98 | `npm test` |
 | `deployment-service` | 8 | `npm test` |
 | `processor` | 5 | `npm test` |
 
@@ -70,6 +70,20 @@ Typecheck clean: `immich-api-shim`, `deployment-service`.
 | Public repo | `myrosama/DaemonClient` — the product |
 | Private repo | `myrosama/daemonclient-ops` — managed-service code, audits, security findings |
 | Open security findings | `daemonclient-ops/docs/AUDIT_FINDINGS_2026-08-06.md` — **not** in this repo, and deliberately not summarised here |
+
+## Why `v2.1.0` is not cut yet
+
+`BUILD_ORDER.md` puts "cut the first release" at wiring step 2, but its stated
+purpose is *"so P3 has something to pin to"* — and P3 is at step 7. Nothing
+consumes a release today: `install.sh` does not exist (P1–P4 unbuilt), and
+there are zero self-hosted installs to notify.
+
+Meanwhile the flow it would tag still has a **P0 bootstrap bug** (below) that
+stops a self-hoster signing in at all. Tagging that as the first release aimed
+at self-hosters would ship a known dead end to exactly the people it is for.
+
+The release lands after the bootstrap bug and the wizard parts, closer to when
+P3 actually needs it. Both original release blockers are already closed:
 
 ## Release blockers — both CLOSED 2026-08-12
 

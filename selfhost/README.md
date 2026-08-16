@@ -24,10 +24,15 @@ User-facing documentation lives in
 
 ## Two rules for this directory
 
-**No dependencies. Ever.** This has to run from a fresh clone with nothing
-installed — `git clone && node selfhost/bin/daemonclient.mjs setup`. Plain
-`.mjs`, Node 18+, standard library only. A `npm install` step here is a barrier
-between a stranger and a working install.
+**No dependencies — for now.** Today this runs from a bare clone with nothing
+installed: plain `.mjs`, Node 18+, standard library only, and CI fails the build
+if a dependency appears.
+
+That rule has an expiry date. The planned entry point is a `curl` of
+`install.sh`, which runs `npm ci` before any of our code executes — so the
+constraint it protects against ("a stranger has only git and node") stops being
+the starting position, and the interface work in `BUILD_ORDER.md` P5 depends on
+lifting it. Until `install.sh` exists, the rule stands and the CI guard stays.
 
 **Nothing may point at operator infrastructure.** `test/selfhost.test.mjs`
 enforces this by grepping the built output for our Cloudflare subdomain and
@@ -47,14 +52,17 @@ install keeps working if we disappear.
 | `src/build.mjs` | builds the worker bundle from `../immich-api-shim` |
 | `src/bindings.mjs` | the worker's bindings — one definition, used by both `setup` and `update` |
 | `src/version.mjs` | the release version stamped into `BUILD_VERSION`, read from the tracked root `VERSION` |
+| `src/subdomain.mjs` | claims the account's `workers.dev` subdomain — the address the whole install is reached at. Fails loudly rather than leaving it blank |
 | `src/state.mjs` | reads and writes `.daemonclient-selfhost.json` — the install's credentials, created readable only by the owner |
-| `src/zke.mjs` | generates and seeds the encryption key material |
+| `src/zke.mjs` | generates and seeds the encryption key material — into the user's D1, never into the state file |
 | `src/ui.mjs` | prompts and output |
 
 ## State
 
 Everything the install needs is in `.daemonclient-selfhost.json` in the user's
-clone: tokens, ids, and the encryption key. It is gitignored, chmod 600, and
+clone: tokens, ids and the session secret. **Not** the encryption keys — those
+live in the user's D1 (`zke_password`, `zke_salt`) and nowhere else, which is
+what `doctor --show-keys` reads. It is gitignored, chmod 600, and
 losing it means losing access to files already in Telegram. `doctor --show-keys`
 prints the key material so it can be backed up.
 
@@ -64,7 +72,7 @@ restarting.
 ## Tests
 
 ```bash
-npm test    # node --test, 82 tests
+npm test    # node --test, 98 tests
 ```
 
 They cover schema replay (a broken replay made `update` fail on every install

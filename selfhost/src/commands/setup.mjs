@@ -694,7 +694,15 @@ async function stepFinish(state) {
   panel('Your cloud is live', lines);
 
   blank();
-  warn(`Keep ${c.bold(statePath())} safe — it holds your tokens and encryption key.`);
-  hint('It is already gitignored and readable only by you. If you lose the encryption key, files already in Telegram cannot be decrypted.');
+  // This used to say the state file holds "your tokens and encryption key". It
+  // does not. The keys are the zke_password and zke_salt rows in the user's own
+  // D1 and exist nowhere else — zke.mjs writes them there and only there. As
+  // the final message of the whole install it is the one people act on, so
+  // saying it wrong means someone backs up a file that cannot decrypt a single
+  // photo and believes they are covered.
+  warn('Back up your encryption keys. They live in your database, NOT in the file below.');
+  hint(`Run ${accent('daemonclient doctor --show-keys')} and keep the output somewhere safe. Lose those and files already in Telegram cannot be decrypted — there is no recovery.`);
+  blank();
+  hint(`${c.bold(statePath())} holds your Cloudflare and Telegram tokens. Worth keeping, already gitignored and readable only by you — but it is not what protects your photos.`);
   blank();
 }

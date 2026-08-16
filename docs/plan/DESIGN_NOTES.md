@@ -196,3 +196,90 @@ git short SHA (update). Add a test asserting a SHA can never be stamped.
 **Next action:** re-run both Gate 3 agents. If they pass, commit `VERSION`,
 `version.mjs`, the test and the two rewires together, then cut `v2.1.0` as the
 first real release (wiring step 2), which unblocks `install.sh` pinning a tag.
+
+---
+
+## P8 — claim a workers.dev subdomain            2026-08-16
+
+**Planned:** wire `registerSubdomain`, stop `enableWorkersDev` swallowing its
+failure, and make "a green summary with a blank address" impossible.
+
+**Did:** shipped, then largely rewritten after Gate 3. The first version passed
+93 tests and was broken in two ways neither the tests nor I caught.
+
+**Gate 3 findings, both blocking, neither caught by a green suite:**
+
+1. **The retry loop never ran.** It keyed on Cloudflare code `10035`, which is
+   *"multiple attempts to modify a resource at the same time"* — concurrency.
+   A name collision is `10031`. So on the exact case the feature existed for,
+   the check was false, `ensureSubdomain` rethrew on the first candidate, and
+   setup exited. The candidate list was decoration.
+
+   **And the test manufactured a 10035 error**, so the suite was green
+   *because the test agreed with the mistake*. This is the second time in three
+   parts that a test was written to confirm the implementation rather than
+   challenge it — the P11 review found the same shape. The lesson is not "write
+   more tests", it is: **when a test and the code agree about an external
+   system, at least one of them has to have checked that system.** Codes now
+   come from wrangler's source.
+
+2. **The suggested hostname leaked an email address.** It was derived from the
+   Cloudflare account name, whose personal-signup default is
+   `<your email>'s Account`, so `contact@boboxon.uz's Account` became
+   `contact-boboxon-uz-s-account-bd1920.workers.dev` — permanent, public DNS,
+   Certificate Transparency logs, on a privacy product, and `doctor` prints the
+   URL in a report labelled safe to share. Now a neutral random label, and
+   setup **prompts** before claiming: this is account-wide, public and
+   effectively one-shot, and the worker name already gets a prompt for less.
+
+**And my own fix had made one case worse.** The resume path
+(`isDone(state,'cloudflare')`) returned early without checking whether the
+install had an address, so a pre-fix state file skipped the new code entirely —
+and since the commit had deleted the "(no workers.dev subdomain)" message, the
+summary printed the literal word `null` under a panel reading "Your cloud is
+live". Strictly worse than what it replaced, for exactly the users it was meant
+to rescue. Fixed with an in-place repair.
+
+**Same class, found in four more commands:** `dashboard.mjs` built with an empty
+`VITE_API_BASE`, deployed it, and printed "Dashboard is live" for a page that
+could never reach an API; `doctor`/`status`/`update` fetched `null/api/health`
+and reported "API not responding" with a fix that could not work.
+
+**A claim of mine that was false.** I told the operator "nothing of ours is in
+the install path". The accounts portal was shipping
+`curl -fsL https://daemonclient.uz/install.sh | bash` to real users — our
+domain, and a 404. True of the plan docs, not of the product.
+
+**And the last thing setup printed was wrong in the dangerous direction.**
+`stepFinish` told users the state file "holds your tokens and encryption key".
+It does not — the keys are `zke_password`/`zke_salt` in their own D1. As the
+final message of the install it is the one people act on, so anyone who backed
+up that file believed they were covered and was not. Caught by an external
+read-only analysis the operator supplied
+(`~/Desktop/findings/daemonclient-analysis-2026-08-16.md`), which also
+correctly flagged the now-stale "No dependencies. Ever." rule.
+
+**Decisions:**
+- `subdomain.mjs` is its own module because four lines inline in an interactive
+  wizard step cannot be tested — which is precisely how `registerSubdomain`
+  came to exist, be correct, and be called from nowhere for months.
+- `LEGAL` now matches Cloudflare's real rule (max 63, no leading or trailing
+  dash). The old one permitted a trailing dash and capped at 55, and the test
+  asserting it was byte-identical to the implementation — proving the function
+  agreed with itself.
+
+**Security:** HIGH-1 (dead retry) and HIGH-2 (PII in a public hostname) fixed
+before push. MEDIUM-3 (message-text matching swallowing real failures) fixed.
+MEDIUM-5 (misleading "Deploy failed" for a routing problem) fixed, with retries
+for propagation. LOW-6/7/8 fixed or recorded.
+
+**Gate evidence:** G1 — new tests failed first, 82 → 98 · G2 **not run**, no
+staging install exists (Phase 3), stated rather than claimed · G3 — two
+independent agents, findings above, every fix verified personally · G4 —
+`c8f6ee8` + `3d434de`, pushed, CI green.
+
+**Still open, carried into P7/P9:** the installer prints the plain Cloudflare
+token URL rather than the pre-scoped one already fixed in the portal; the
+permission list says four in code and three in docs; `verifyToken` never probes
+`/workers/subdomain`, so a token lacking it now fails late and hard instead of
+at validation.
