@@ -518,15 +518,26 @@ const FileViewerModal = ({ file, onClose, onDownload }) => {
         v.addEventListener('loadedmetadata', onLoaded);
     };
 
+    // A seek that lands on an uncached chunk takes a full 19 MB round trip;
+    // the player should SPIN, not die. Transient media errors (network,
+    // momentary stream gap) are auto-retried twice at the current position
+    // before anything is shown. Only a hard decode/format failure (code 4)
+    // or a failure that survives retries surfaces to the user.
+    const autoRetryRef = useRef(0);
     const handleVideoError = () => {
         const v = videoRef.current;
         setMediaLoaded(true);
-        setMediaError({
-            code: v?.error?.code,
-            // MEDIA_ERR_NETWORK(2) / MEDIA_ERR_DECODE(3) are transient or
-            // recoverable via reload; SRC_NOT_SUPPORTED(4) is a hard codec wall.
-            hard: v?.error?.code === 4,
-        });
+        if (v?.error?.code === 4) {
+            setMediaError({ code: 4, hard: true });
+            return;
+        }
+        if (autoRetryRef.current < 2) {
+            autoRetryRef.current++;
+            const at = v?.currentTime || 0;
+            setTimeout(() => reloadVideoAt(at), 900);
+            return;
+        }
+        setMediaError({ code: v?.error?.code, hard: false });
     };
 
     const retryMedia = () => {
@@ -589,6 +600,7 @@ const FileViewerModal = ({ file, onClose, onDownload }) => {
                                 playsInline
                                 preload="metadata"
                                 onLoadedData={() => setMediaLoaded(true)}
+                                onPlaying={() => { autoRetryRef.current = 0; }}
                                 onError={handleVideoError}
                                 className={`max-w-full max-h-[88vh] rounded-md transition-opacity duration-300 ${mediaLoaded ? 'opacity-100' : 'opacity-0'}`}
                             />

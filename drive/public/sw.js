@@ -238,6 +238,26 @@ async function getFilePath(partData, botToken, workerUrl) {
   throw lastErr;
 }
 
+// If the SW restarted mid-session, encrypted files are recovered from
+// IndexedDB WITHOUT the key (it is never persisted). A range request that
+// arrives before the page re-registers must STALL — waiting for the key —
+// not fail: the <video> element treats a failed range request as a fatal
+// media error and dies, even though the key arrives a moment later.
+let lastKeyAsk = 0;
+async function waitForDecryptionKey(fileId, timeoutMs = 15000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const reg = virtualFiles.get(fileId);
+    if (reg && reg.decryptionKey) return true;
+    if (Date.now() - lastKeyAsk > 2000) {
+      lastKeyAsk = Date.now();
+      askClientToReregister(fileId);
+    }
+    await sleep(400);
+  }
+  return false;
+}
+
 // ── Download + decrypt one chunk, with retry, dedupe and LRU caching ──
 // Playback-critical: transient failures (worker cold start, Telegram hiccups,
 // rate limits) are retried with exponential backoff so the player's own
@@ -285,16 +305,22 @@ async function loadChunk(vFile, fileId, chunkIndex) {
     }
     if (!rawData) throw lastErr;
 
-    // Decrypt only when the file is encrypted AND we hold the key. Serving
-    // ciphertext as if it were plaintext (the old silent fall-through) made
-    // previews fail with garbage instead of a real error.
+    // Decrypt only when the file is encrypted. If the SW restarted the key is
+    // not in memory (never persisted) — WAIT for the page to re-send it rather
+    // than failing: a failed range request kills the player instantly, while a
+    // slow one just shows the player's buffering spinner.
     if (vFile.isEncrypted) {
-      if (!vFile.decryptionKey) {
-        const err = new Error('ENCRYPTED_NO_KEY');
-        err.code = 'ENCRYPTED_NO_KEY';
-        throw err;
+      let key = vFile.decryptionKey;
+      if (!key) {
+        const got = await waitForDecryptionKey(fileId);
+        if (!got) {
+          const err = new Error('ENCRYPTED_NO_KEY');
+          err.code = 'ENCRYPTED_NO_KEY';
+          throw err;
+        }
+        key = virtualFiles.get(fileId).decryptionKey;
       }
-      rawData = await decryptChunk(rawData, vFile.decryptionKey);
+      rawData = await decryptChunk(rawData, key);
     }
 
     if (chunkCache.size >= MAX_CACHE_ENTRIES) {
