@@ -349,3 +349,50 @@ path and it now lies about that commit.
 **What changes:** `git add -A` is not good enough when the tree may have another
 session in it. Stage by explicit path — `git add selfhost/ docs/` — the way the
 P11 commit did after the same warning.
+
+---
+
+## P1 · P2 · P4 — the bootstrap script            2026-08-17
+
+**Planned:** `install.sh` — platform check, a private Node if needed, fetch the
+source, hand over.
+
+**Did:** all four, with P3 written but deliberately failing until a release
+exists.
+
+**Decisions:**
+- **Sourceable.** `main` runs only when the file is executed, not sourced, so
+  the suite can exercise `detect_platform`, `node_ok` and `verify_checksum`
+  individually. Shell scripts are usually untestable and then are never tested;
+  this one is 16 tests.
+- **No fallback to `main` in `fetch_source`.** A moving branch means two people
+  running the same command on the same day get different code, and a bad commit
+  reaches everyone instantly. It stops with the releases URL and a git-clone
+  alternative instead.
+- **A length test.** "You can read it before running it" is the argument that
+  makes a curl pipe defensible; a script nobody can read does not honour it, so
+  400 lines is enforced rather than intended.
+
+**Security:** the checksum check is the whole justification for fetching a
+runtime, so it is tested both ways — a matching digest and a deliberately wrong
+one. No `sudo` anywhere, asserted. Everything under `~/.daemonclient`, removable
+with one `rm -rf`, which the script states before doing anything.
+
+**A test I got wrong, again.** "never invokes sudo" forbade the *word*, and
+failed on the script's own line telling the user "no sudo, nothing
+system-wide" — flagging the sentence that makes the promise. That is the second
+guard of mine to fire on prose (the first asserted a doc string was absent and
+tripped on an explanatory comment). Both times the failure mode is the same: a
+guard that reports a bug which is not there gets deleted by the next person, and
+then guards nothing. Match the mechanism, never the wording.
+
+**Gate evidence:** G1 — 14 tests failed first (no `install.sh`), 115 → 131 ·
+G2 — exercised for real: platform mapping, the unsupported-platform message,
+and what a user gets today with no releases published · G3 pending ·
+G4 `3176506`.
+
+**Ordering correction this produced.** Trying to start P5 showed the wiring
+table was backwards: P5 needs npm dependencies, and `install.sh` running
+`npm ci` is what makes them legal, yet P5 was step 3 and install.sh step 7.
+Corrected in `BUILD_ORDER.md`. Cutting `v2.1.0` is now the last thing gating
+installation.

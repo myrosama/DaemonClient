@@ -12,11 +12,11 @@ order — this is what to work from), `docs/plan/MASTER_PLAN.md`, then
 
 | | |
 |---|---|
-| **Date** | 2026-08-16 |
+| **Date** | 2026-08-17 |
 | **Phase** | Building — `BUILD_ORDER.md`. P11 and P8 shipped; Phase 0 done. |
-| **Just finished** | **P8** — a fresh Cloudflare account no longer finishes setup with a blank address. Gate 3 found two blockers that 93 green tests had missed (see `DESIGN_NOTES.md`), both fixed. Also: Phase 0 doc corrections, and the landing-page redesign the operator asked for (deployed). |
+| **Just finished** | **`install.sh` (P1, P2, P4)** — a machine with nothing on it now reaches the installer. Before that: **P6** (the account password can no longer reach disk) and the **P0 bootstrap fix** (a fresh install can now be signed into). |
 | **Working on now** | Nothing in flight. |
-| **Next up** | **P1–P4 (`install.sh`)**, not P5. See the ordering correction below. |
+| **Next up** | **Cut `v2.1.0`.** It is now the last thing gating installation — `install.sh` is written and stops with "this project has published no releases yet", which is honest but is also the end of the road for a new user. Then **P5** (the UI kit), whose dependencies `install.sh` finally makes legal. |
 | **Blocked on** | Nothing. `v2.1.0` is deliberately NOT cut yet — see below. |
 | **Staging** | None exists yet. Phase 3 creates one — throwaway Telegram + Cloudflare + Firebase accounts. Until then no self-host change has been proven on real infrastructure. |
 
@@ -57,7 +57,7 @@ Update these numbers when they change; a drop means silently skipped tests.
 | Suite | Count | Command |
 |---|---|---|
 | `immich-api-shim` | 297 | `npm test` |
-| `selfhost` | 98 | `npm test` |
+| `selfhost` | 131 | `npm test` |
 | `deployment-service` | 8 | `npm test` |
 | `processor` | 5 | `npm test` |
 
@@ -70,6 +70,22 @@ Typecheck clean: `immich-api-shim`, `deployment-service`.
 | Public repo | `myrosama/DaemonClient` — the product |
 | Private repo | `myrosama/daemonclient-ops` — managed-service code, audits, security findings |
 | Open security findings | `daemonclient-ops/docs/AUDIT_FINDINGS_2026-08-06.md` — **not** in this repo, and deliberately not summarised here |
+
+## Shipped since the plan was written
+
+| Part | What it fixed |
+|---|---|
+| P11 | `BUILD_VERSION` — installs stopped seeing updates after one `update` |
+| P8 | a fresh Cloudflare account finished setup with no address at all |
+| P6 | the account password could reach disk in cleartext |
+| P0 | a fresh install could not be signed into — `owner_uid` was written by nothing |
+| P1/P2/P4 | `install.sh` — bootstrap, no sudo, checksummed Node, pinned source |
+
+Every one went through the four gates. Gate 3 (two independent agents) found
+blockers in P8 and P11 that green test suites had missed — twice because a test
+had been written to agree with the implementation rather than challenge it.
+That pattern is the single most useful thing the gates have caught; see
+`DESIGN_NOTES.md`.
 
 ## Ordering correction — install.sh must come before the UI kit
 
