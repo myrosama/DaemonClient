@@ -16,7 +16,7 @@ order — this is what to work from), `docs/plan/MASTER_PLAN.md`, then
 | **Phase** | Building — `BUILD_ORDER.md`. P11 and P8 shipped; Phase 0 done. |
 | **Just finished** | **P8** — a fresh Cloudflare account no longer finishes setup with a blank address. Gate 3 found two blockers that 93 green tests had missed (see `DESIGN_NOTES.md`), both fixed. Also: Phase 0 doc corrections, and the landing-page redesign the operator asked for (deployed). |
 | **Working on now** | Nothing in flight. |
-| **Next up** | **P5** (the `@clack/prompts` UI kit) and **P6** (state store — the password must never reach disk). Both are prerequisites for every wizard step, so they come before P7/P9/P10. |
+| **Next up** | **P1–P4 (`install.sh`)**, not P5. See the ordering correction below. |
 | **Blocked on** | Nothing. `v2.1.0` is deliberately NOT cut yet — see below. |
 | **Staging** | None exists yet. Phase 3 creates one — throwaway Telegram + Cloudflare + Firebase accounts. Until then no self-host change has been proven on real infrastructure. |
 
@@ -71,6 +71,22 @@ Typecheck clean: `immich-api-shim`, `deployment-service`.
 | Private repo | `myrosama/daemonclient-ops` — managed-service code, audits, security findings |
 | Open security findings | `daemonclient-ops/docs/AUDIT_FINDINGS_2026-08-06.md` — **not** in this repo, and deliberately not summarised here |
 
+## Ordering correction — install.sh must come before the UI kit
+
+`BUILD_ORDER.md`'s wiring table put **P5 (UI kit) at step 3** and
+**P1–P4 (`install.sh`) at step 7**. That is backwards, and trying to start P5
+is what surfaced it.
+
+P5's whole premise is that dependencies are allowed (`@clack/prompts`,
+`listr2`). What makes them allowed is `install.sh` running `npm ci` before any
+of our code executes. Until that exists, `selfhost/` must still run from a bare
+clone — and CI enforces it with a guard that fails the build if a dependency
+appears. So P5 cannot be built first without either breaking that promise or
+disabling the guard that protects it.
+
+**Revised order:** P1, P2, P4 are buildable now. P3 clones a release tag and is
+the one piece that genuinely waits on `v2.1.0`.
+
 ## Why `v2.1.0` is not cut yet
 
 `BUILD_ORDER.md` puts "cut the first release" at wiring step 2, but its stated
@@ -119,7 +135,7 @@ gitignored, so it is not a two-line change. Tracked below.
 - `selfhost/package.json:3` still declares `"version": "1.0.0"` — a third
   version number in a change whose thesis is "one tracked file".
 
-## P0 — self-hosted bootstrap is broken
+## P0 — self-hosted bootstrap — FIXED 2026-08-17
 
 Found by the Gate 3 review of Phase 0, from code, not from a doc. **Verified
 independently.** This is a product bug, not a documentation bug.
@@ -147,10 +163,18 @@ gets a locked one.
 token must not claim, and that reasoning holds. The bug is that nothing else
 claims either.
 
-**Owner: P10 (account) / P15 (wizard) in `BUILD_ORDER.md`.** The account step
-should claim the install explicitly at the end of setup, while it still holds
-the password, rather than leaving it to whichever app the user happens to open
-first. Do not "fix" this by loosening `mayClaim`.
+**Fixed** in `selfhost/src/owner.mjs` + `stepDeployWorker`. Setup now claims the
+install for the account it just created, using the uid from the sign-in it
+already performed (`state.adminUserId`). The gate was **not** loosened — that
+would have handed any unowned install to the first stranger with a Firebase
+token. Instead the claim happens where the person is demonstrably holding the
+Cloudflare token for that database, which is far stronger proof of ownership
+than "arrived first".
+
+Reads before writing, refuses a blank uid (owner-gate trims `''` to null, so a
+blank row would look unclaimed while existing), treats an unreadable result as
+unknown rather than unowned, and exits rather than finishing if the database
+belongs to a different account. 107 → 115 tests.
 
 This is exactly the class of defect Phase 3 exists to catch, found earlier and
 more cheaply by reading the code.

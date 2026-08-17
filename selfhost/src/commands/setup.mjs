@@ -24,6 +24,7 @@ import { buildWorkerBundle } from '../build.mjs';
 import { workerBindings } from '../bindings.mjs';
 import { ensureSubdomain, suggestSubdomain, isLegalSubdomain } from '../subdomain.mjs';
 import { buildVersion, versionWarning } from '../version.mjs';
+import { claimInstallOwner } from '../owner.mjs';
 import { ensureEncryptionKeys } from '../zke.mjs';
 import { MIGRATION_SQL, splitStatements } from '../../../schema/schema.mjs';
 
@@ -535,6 +536,33 @@ async function stepDeployWorker(state) {
     // key state is unknown cannot upload, and saying nothing would hide that.
     s3b.fail(`Could not set up encryption: ${e.message}`);
     hint('Nothing was changed. Check your connection, then run "daemonclient doctor".');
+    process.exit(1);
+  }
+
+  // Claim the install for the account setup just created.
+  //
+  // Without this the install is reachable and unusable: owner_uid is never
+  // written by anything, an unclaimed install refuses every Firebase ID token
+  // (owner-gate mayClaim=false, correctly), and the dashboard presents nothing
+  // else — so the documented path of `daemonclient web` then signing in
+  // returned "Not authenticated" forever.
+  const s3c = spinner('Claiming this install for your account');
+  try {
+    const outcome = await claimInstallOwner({
+      query: (sql, params) => cf.queryD1(
+        state.cloudflareToken, state.cloudflareAccountId, state.databaseId, sql, params),
+    }, state.adminUserId);
+    s3c.succeed(outcome.claimed ? 'Install claimed' : 'Install already claimed by your account');
+    if (!outcome.claimed && outcome.owner !== state.adminUserId) {
+      // Someone else owns this database. Better to say so than to finish with a
+      // summary the user cannot sign in to.
+      s3c.fail('This database is already claimed by a different account.');
+      hint('Use the account that set it up, or create a fresh database and run setup again.');
+      process.exit(1);
+    }
+  } catch (e) {
+    s3c.fail(`Could not claim the install: ${e.message}`);
+    hint(`Nothing was changed. Run ${accent('daemonclient doctor')} once your connection is back.`);
     process.exit(1);
   }
 
