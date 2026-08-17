@@ -50,7 +50,7 @@ an interface. Marked per part:
 
 ---
 
-## P1 · Platform and prerequisites — `install.sh` **new**
+## P1 · Platform and prerequisites — `install.sh` **SHIPPED**
 
 **Contract:** exits 0 having proven the machine can proceed, or exits non-zero
 with one actionable sentence.
@@ -63,7 +63,7 @@ with one actionable sentence.
 **Test standalone:** run in a container with each prerequisite removed in turn;
 assert the message names the missing thing and the exit code is non-zero.
 
-## P2 · Local Node — `install.sh` **new**
+## P2 · Local Node — `install.sh` **SHIPPED**
 
 **Contract:** a `node` ≥18 exists on `PATH` for the rest of the script, without
 touching anything system-wide.
@@ -80,7 +80,7 @@ for all four platform pairs are fetchable. Current LTS is v24 (Krypton).*
 container with node 16 → asserts it is bypassed, not used; corrupt the tarball
 → asserts the checksum fails and nothing is extracted.
 
-## P3 · Source fetch — `install.sh` **new**
+## P3 · Source fetch — `install.sh` **WRITTEN, blocked on a release**
 
 **Contract:** the repository at the latest **release tag** in
 `~/.daemonclient/src`.
@@ -88,14 +88,17 @@ container with node 16 → asserts it is bypassed, not used; corrupt the tarball
 `git clone --depth 1 --branch <tag>`. Never `main` — two people running the
 command on the same day must get the same bytes.
 
-**Blocked on Phase 1.** There are no releases, so there is nothing to pin to.
-This is the ordering dependency that makes the release work load-bearing for
-*installation*, not just updates.
+**Written, and deliberately fails today.** There are no releases, so there is
+nothing to pin to. `fetch_source` says exactly that and points at the releases
+page, rather than falling back to `main` — a moving branch means two people
+running the same command on the same day get different code, and a bad commit
+reaches everyone instantly. This is the ordering dependency that makes the
+release work load-bearing for *installation*, not just updates.
 
 **Test standalone:** clone into a temp dir; assert the checked-out tag matches
 the latest release and the tree is complete enough to build.
 
-## P4 · Hand-over — `install.sh` **new**
+## P4 · Hand-over — `install.sh` **SHIPPED**
 
 **Contract:** `npm ci` in the installer package, then `exec` the installer.
 
@@ -304,11 +307,19 @@ with the logic and the presentation interleaved.
 
 Each row is shippable and leaves the tree working.
 
+**Corrected 2026-08-17.** The original table put P5 at step 3 and P1–P4 at step
+7. That is backwards: P5's premise is that dependencies are allowed, and what
+allows them is `install.sh` running `npm ci` before our code executes. Until it
+exists, `selfhost/` must run from a bare clone and CI enforces that. So the
+bootstrap comes first.
+
 | Step | Parts | Proves |
 |---|---|---|
-| 1 | P11 version fix | a release can be cut and an updated install still sees the next one |
-| 2 | *cut the first release* | P3 has something to pin to |
-| 3 | P5, P6 | the interface and the state layer stand alone |
+| 1 | P11 version fix ✅ | a release can be cut and an updated install still sees the next one |
+| 2 | P6 state store ✅, P8 Cloudflare ✅, owner claim ✅ | credentials verify, the password never lands on disk, a fresh install can be signed into |
+| 3 | P1, P2, P4 `install.sh` ✅ | a machine with nothing on it reaches the installer |
+| 4 | *cut the first release* | P3 has a tag to pin to — the last thing gating installation |
+| 5 | P5 | the interface, now that dependencies are legal |
 | 4 | P7, P8 | credentials verify against real services, on a fresh account |
 | 5 | P9, P10 | a Google project appears from nothing and an account signs in |
 | 6 | P15 | the wizard runs end to end from a clone |
