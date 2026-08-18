@@ -160,6 +160,36 @@ describe('P2 — Node, without touching the system', () => {
   });
 });
 
+describe('P4 — the installer gets a terminal to ask questions on', () => {
+  // `curl -fsSL … | sh` makes the SHELL's stdin the pipe carrying the script,
+  // and by hand-over time that pipe is at EOF. `exec node … setup` inherits it,
+  // so the wizard's very first question reads end-of-file instead of an answer
+  // — on the exact command the README tells everyone to run. Reopening
+  // /dev/tty is the standard fix; refusing out loud is the fallback.
+
+  test('uses the terminal it already has', () => {
+    assert.equal(inShell('stdin_plan yes yes').out.trim(), 'inherit');
+    assert.equal(inShell('stdin_plan yes no').out.trim(), 'inherit');
+  });
+
+  test('reopens /dev/tty when stdin is a pipe — the curl | sh case', () => {
+    assert.equal(inShell('stdin_plan no yes').out.trim(), 'tty');
+  });
+
+  test('refuses when there is no terminal at all, rather than asking into a void', () => {
+    assert.equal(inShell('stdin_plan no no').out.trim(), 'none');
+  });
+
+  test('the hand-over actually redirects, not just decides', () => {
+    // A plan nothing acts on is the same bug with extra steps. This project
+    // has shipped that exact shape before: `registerSubdomain` was complete,
+    // correct, and called from nowhere.
+    const s = src();
+    assert.match(s, /stdin_plan/, 'the decision is made');
+    assert.match(s, /setup\s*<\s*\/dev\/tty/, 'and the tty branch really redirects stdin');
+  });
+});
+
 describe('P3 — pinned source, never a moving branch', () => {
   test('clones a release tag rather than main', () => {
     const s = src();

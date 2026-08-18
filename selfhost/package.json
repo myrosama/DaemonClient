@@ -1,6 +1,5 @@
 {
   "name": "daemonclient-selfhost",
-  "version": "1.0.0",
   "private": true,
   "description": "Setup and maintenance CLI for a self-hosted DaemonClient",
   "type": "module",
@@ -15,5 +14,8 @@
   },
   "engines": {
     "node": ">=18"
+  },
+  "dependencies": {
+    "@clack/prompts": "1.7.0"
   }
 }

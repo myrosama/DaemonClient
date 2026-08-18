@@ -106,9 +106,20 @@ jobs:
   # no way to tell our bug apart from their own misconfiguration, and it is what
   # the README now points every new user at.
   #
-  # No `npm ci` step: this package has no dependencies, on purpose — it must run
-  # from a fresh clone with nothing installed. If a lockfile install ever
-  # becomes necessary here, that is itself the regression.
+  # This job used to run `npm test` with no install, and enforce a hard "no
+  # dependencies" rule, because the package ran straight from a bare clone.
+  # `install.sh` ended that — it runs `npm ci` before any of our code executes,
+  # which is what makes the prompt library legal (BUILD_ORDER P5).
+  #
+  # The rule was replaced, not dropped. `test/dependencies.test.mjs` now holds
+  # the same ground in a form that runs locally too: a package budget, exact
+  # pins only, no install scripts, and a lockfile that agrees with
+  # package.json. It lives in the suite rather than here on purpose — a guard
+  # that only exists in CI is a guard nobody runs before pushing.
+  #
+  # `npm ci` itself is load-bearing: it is the exact command install.sh runs on
+  # a stranger's machine, so a lockfile that cannot be installed fails here
+  # instead of there.
   selfhost:
     needs: changes
     if: needs.changes.outputs.selfhost == 'true'
@@ -122,15 +133,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+          cache: npm
+          cache-dependency-path: selfhost/package-lock.json
+      - run: npm ci
       - run: npm test
-      - name: no dependencies
-        run: |
-          node -e '
-            const p = require("./package.json");
-            const n = Object.keys(p.dependencies ?? {}).length
-                    + Object.keys(p.devDependencies ?? {}).length;
-            if (n) { console.error(`selfhost gained ${n} dependencies; it must run from a bare clone`); process.exit(1); }
-          '
 
   # The owner-pinned image thumbnailer that runs on each user's own Vercel.
   processor:

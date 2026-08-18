@@ -185,12 +185,44 @@ fetch_source() {
 
 # ── P4 · hand over ───────────────────────────────────────────────────────────
 
+# Where should the installer read answers from?
+#
+#   inherit — we already have a terminal; just pass it through
+#   tty     — we do not, but /dev/tty is readable; reopen it
+#   none    — no terminal at all
+#
+# THE BUG THIS EXISTS FOR. The documented entry point is `curl … | sh`, which
+# means the SHELL's stdin is the pipe carrying this very script — and by the
+# time we reach here, that pipe is at EOF. `exec node … setup` would inherit it,
+# so the wizard's first question would read end-of-file instead of an answer,
+# and every question after it too. Reopening /dev/tty is the standard fix and
+# the reason every `curl | sh` installer that asks anything does it.
+stdin_plan() {
+  local interactive="${1:-}" tty_readable="${2:-}"
+  if [ "$interactive" = yes ]; then printf 'inherit\n'; return 0; fi
+  if [ "$tty_readable" = yes ]; then printf 'tty\n'; return 0; fi
+  printf 'none\n'
+}
+
 hand_over() {
   step "Installing the installer's dependencies"
   ( cd "$SRC_DIR/selfhost" && npm ci --no-audit --no-fund --loglevel=error )
   ok "Ready"
   say ""
-  exec node "$SRC_DIR/selfhost/bin/daemonclient.mjs" setup
+
+  local interactive=no tty_readable=no
+  [ -t 0 ] && interactive=yes
+  [ -r /dev/tty ] && tty_readable=yes
+
+  case "$(stdin_plan "$interactive" "$tty_readable")" in
+    inherit) exec node "$SRC_DIR/selfhost/bin/daemonclient.mjs" setup ;;
+    tty)     exec node "$SRC_DIR/selfhost/bin/daemonclient.mjs" setup < /dev/tty ;;
+    none)
+      die "Setup asks questions, and this shell has no terminal to ask them on." \
+          "That happens under cron, in a CI job, or in a container started without a TTY." \
+          "Everything is already downloaded. Run it from a terminal:" \
+          "  node $SRC_DIR/selfhost/bin/daemonclient.mjs setup" ;;
+  esac
 }
 
 main() {
