@@ -26,6 +26,9 @@ import {
   c, accent, line, blank, panel, ok, fail, warn, info, hint, spinner, confirm,
 } from '../ui.mjs';
 import { loadState, saveState, isDone } from '../state.mjs';
+// One definition of where the Firebase CLI is, shared with provisioning
+// (api/firebase.mjs). This file used to carry its own copy.
+import { firebaseCli } from '../api/firebase.mjs';
 
 const run = promisify(execFile);
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -119,7 +122,7 @@ export async function runWeb() {
   writeFirebaseConfig(projectId, sites);
 
   // ── Deploy ────────────────────────────────────────────────────────────────
-  const cli = await firebaseCli();
+  const cli = await firebaseCli(REPO_ROOT);
   if (!cli.available) {
     blank();
     warn('The Firebase CLI is not available, so the apps were built but not deployed.');
@@ -306,14 +309,6 @@ function writeFirebaseConfig(projectId, sites) {
   // The `site` key on each entry names the target site directly, so no .firebaserc
   // target mapping is needed and the operator's .firebaserc is left untouched.
   fs.writeFileSync(path.join(REPO_ROOT, SELFHOST_FIREBASE_CONFIG), JSON.stringify(firebaseJson, null, 2));
-}
-
-async function firebaseCli() {
-  // Prefer a globally-installed firebase; fall back to npx firebase-tools.
-  try { await run('firebase', ['--version'], { ...bigBuffer }); return { available: true, cmd: 'firebase', args: [] }; }
-  catch {}
-  try { await run('npx', ['--yes', 'firebase-tools', '--version'], { cwd: REPO_ROOT, ...bigBuffer }); return { available: true, cmd: 'npx', args: ['--yes', 'firebase-tools'] }; }
-  catch { return { available: false }; }
 }
 
 async function firebaseLoggedIn(cli, projectId) {
