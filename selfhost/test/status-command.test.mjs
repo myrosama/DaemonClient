@@ -259,3 +259,44 @@ describe('under a real terminal', () => {
       assert.notEqual(status, 124, '`daemonclient status` hung — a spinner was left running on a real terminal');
     });
 });
+
+describe('every network call can give up', () => {
+  test('the Telegram call is given a timeout', { timeout: 15000 }, async () => {
+    // It was the only call in the CLI without one. A network that DROPS packets
+    // rather than refusing them — a corporate firewall, which is exactly what a
+    // self-hoster is likely to be behind — left `status` and `setup` waiting
+    // forever with no way out but Ctrl-C. And the pty guard above would have
+    // blamed a leaked spinner, sending the next maintainer at the wrong bug.
+    //
+    // Asserts the wiring, not the wall clock: waiting out a real 15-second
+    // timeout would add 15 seconds to every run of this suite, and a test
+    // nobody wants to run is a test that gets deleted.
+    const tg = await import('../src/api/telegram.mjs');
+
+    assert.ok(Number.isFinite(tg.REQUEST_TIMEOUT_MS) && tg.REQUEST_TIMEOUT_MS > 0,
+      'telegram.mjs must declare a finite timeout');
+    assert.ok(tg.REQUEST_TIMEOUT_MS <= 60000,
+      'a timeout longer than a minute is not a timeout, it is a hang with extra steps');
+
+    let seen;
+    globalThis.fetch = async (_url, opts) => {
+      seen = opts?.signal;
+      return Response.json({ ok: true, result: { username: 'my_bot' } });
+    };
+    await tg.getMe('123:fake');
+
+    assert.ok(seen instanceof AbortSignal, 'no AbortSignal reached fetch');
+    assert.equal(seen.aborted, false, 'and it is live, not an already-spent signal');
+  });
+
+  test('an aborted Telegram call rejects rather than hanging', { timeout: 15000 }, async () => {
+    const tg = await import('../src/api/telegram.mjs');
+    globalThis.fetch = async (_url, opts) =>
+      new Promise((_, reject) => {
+        opts.signal.addEventListener('abort', () => reject(new Error('The operation was aborted')));
+        // Abort immediately, standing in for the timeout firing.
+        queueMicrotask(() => opts.signal.dispatchEvent(new Event('abort')));
+      });
+    await assert.rejects(() => tg.getMe('123:fake'), /abort/i);
+  });
+});

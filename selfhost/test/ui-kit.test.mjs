@@ -182,21 +182,25 @@ describe('secrets', () => {
 });
 
 describe('progress', () => {
-  test('the spinner cleans up its interrupt handlers, so Ctrl-C cannot leave a hidden cursor', async () => {
-    // THIS IS THE DEFECT P5 EXISTS TO FIX. The hand-rolled spinner in ui.mjs
-    // writes \x1b[?25l to hide the cursor and restores it only in its own
-    // clear(). A Ctrl-C or an uncaught exception mid-spin therefore leaves the
-    // user's terminal with no cursor after we exit, until they run `reset`.
+  test('the spinner cleans up after itself — no leaked handlers, no leaked interval', async () => {
+    // WHAT THIS DOES AND DOES NOT PROVE. clack installs its SIGINT, SIGTERM,
+    // exit, uncaughtExceptionMonitor and unhandledRejection handlers together
+    // with the render interval, and removes them together too — so the
+    // listener count is an observable proxy for "the interval was cleared",
+    // which is the leak that hangs the process. That is what this asserts.
     //
-    // Asserting "a SIGINT handler exists while spinning and is gone after" is
-    // the behavioural form of that: it is the mechanism that restores the
-    // cursor, and it is observable.
+    // It does NOT prove anything about Ctrl-C. A running spinner puts stdin in
+    // RAW MODE, so the terminal never raises SIGINT at all and this listener
+    // never fires on a real keystroke — the earlier version of this test said
+    // otherwise in its own comment, which is exactly the kind of overclaim that
+    // makes a suite feel safer than it is. Cancellation is covered in
+    // test/cli-entry.test.mjs, against the real binary.
     const t = terminal();
     const before = process.listenerCount('SIGINT');
 
     const s = spinner('Deploying your worker', t);
     assert.ok(process.listenerCount('SIGINT') > before,
-      'a spinner must handle SIGINT — otherwise Ctrl-C exits with the cursor still hidden');
+      'clack installs its handlers with the interval; if they are absent, so is the cleanup');
 
     s.update('Uploading the bundle');
     s.succeed('Worker deployed');

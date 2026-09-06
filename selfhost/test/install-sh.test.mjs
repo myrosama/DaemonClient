@@ -121,15 +121,60 @@ describe('P1 — platform and prerequisites', () => {
 
 describe('P2 — Node, without touching the system', () => {
   test('accepts a new-enough Node already on PATH', () => {
-    assert.ok(inShell('node_ok "v18.0.0" && echo YES').out.includes('YES'));
-    assert.ok(inShell('node_ok "v22.11.0" && echo YES').out.includes('YES'));
+    for (const v of ['v20.12.0', 'v20.19.0', 'v22.11.0', 'v24.1.0']) {
+      assert.match(inShell(`node_ok "${v}" && echo YES`).out, /YES/, `${v} must be accepted`);
+    }
   });
 
   test('rejects a Node that is too old, and junk', () => {
-    for (const v of ['v16.20.0', 'v14.0.0', '', 'not-a-version']) {
+    // v18 IS a rejection, and this test used to assert the opposite.
+    //
+    // `@clack/prompts` — which every prompt in the installer goes through —
+    // imports `styleText` from `node:util`, added in Node **20.12.0**. On Node
+    // 18 `npm ci` succeeds and the CLI then dies at import time with "does not
+    // provide an export named 'styleText'". Ubuntu 22.04 LTS and Debian 12 both
+    // ship Node 18, so this was not a corner: those users would have installed
+    // cleanly and hit a stack trace on their first command.
+    //
+    // The suite ASSERTED v18.0.0 was fine, which is how a test stops being a
+    // check and starts being a pin holding the bug in place.
+    for (const v of ['v16.20.0', 'v14.0.0', 'v18.0.0', 'v18.20.8', 'v19.9.0', '', 'not-a-version']) {
       const r = inShell(`node_ok "${v}" && echo YES || echo NO`);
       assert.match(r.out, /NO/, `${JSON.stringify(v)} must be rejected`);
     }
+  });
+
+  test('the minor version counts — 20.0 through 20.11 still lack styleText', () => {
+    // A major-only comparison passes Node 20.0, which is 20.x and broken in
+    // exactly the same way. This is the assertion that makes the floor 20.12
+    // rather than "20-ish".
+    for (const v of ['v20.0.0', 'v20.9.0', 'v20.11.1']) {
+      assert.match(inShell(`node_ok "${v}" && echo YES || echo NO`).out, /NO/, `${v} must be rejected`);
+    }
+    assert.match(inShell('node_ok "v20.12.0" && echo YES').out, /YES/);
+  });
+
+  test('the floor it enforces is the floor the package declares', () => {
+    // Two places state a minimum Node, and they drifted: install.sh said 18
+    // while the dependency needed 20.12. Whichever is lower is what a stranger
+    // actually runs, so they have to agree.
+    const declared = JSON.parse(
+      fs.readFileSync(path.join(import.meta.dirname, '..', 'package.json'), 'utf8'),
+    ).engines?.node ?? '';
+    const wanted = declared.match(/(\d+)\.(\d+)/);
+    assert.ok(wanted, `selfhost/package.json engines.node ("${declared}") must name a major.minor`);
+
+    assert.match(src(), new RegExp(`MIN_NODE_MAJOR=${wanted[1]}\\b`), 'install.sh major matches package.json');
+    assert.match(src(), new RegExp(`MIN_NODE_MINOR=${wanted[2]}\\b`), 'install.sh minor matches package.json');
+  });
+
+  test('npm is not silenced past its own engine warning', () => {
+    // npm prints EBADENGINE — "required: { node: '>= 20.12.0' }" — at WARN
+    // level. `--loglevel=error` hid it, which is how a Node that cannot run
+    // this package reached a stack trace with npm having noticed and said
+    // nothing.
+    assert.ok(!/--loglevel=error/.test(src()),
+      'npm ci must not run below warn level; EBADENGINE is a warning');
   });
 
   test('verifies the download against SHASUMS256 before extracting', () => {

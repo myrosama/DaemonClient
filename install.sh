@@ -33,7 +33,18 @@ REPO="${DC_REPO:-myrosama/DaemonClient}"
 HOME_DIR="${DC_HOME:-$HOME/.daemonclient}"
 SRC_DIR="$HOME_DIR/src"
 NODE_DIR="$HOME_DIR/node"
-MIN_NODE=18
+# 20.12 exactly, not 18 and not "the current LTS".
+#
+# `@clack/prompts` — which every prompt in the installer goes through — opens
+# with `import { styleText } from 'node:util'`, and `styleText` landed in Node
+# **20.12.0**. On Node 18 the install completes without a word of complaint and
+# then dies at import time with "does not provide an export named 'styleText'".
+# Ubuntu 22.04 LTS and Debian 12 both ship Node 18, so that was not a corner.
+#
+# The minor matters: Node 20.0 through 20.11 are 20.x and still lack it.
+MIN_NODE_MAJOR=20
+MIN_NODE_MINOR=12
+MIN_NODE="$MIN_NODE_MAJOR.$MIN_NODE_MINOR"
 
 # ── output ───────────────────────────────────────────────────────────────────
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
@@ -77,17 +88,27 @@ require_cmd() {
 # ── P2 · Node, without touching the system ───────────────────────────────────
 
 # True when the given `node --version` string is new enough.
+#
+# Compares major AND minor. A major-only check would accept Node 20.0, which is
+# 20.x and still has no `styleText` — the whole reason the floor moved.
+#
+# Every comparison is an `if` condition, deliberately: under `set -e` a bare
+# failing `[ ... ]` as a statement in its own right would abort the script,
+# and this function's job is to RETURN false, not to die.
 node_ok() {
-  local v="${1:-}"
+  local v="${1:-}" major minor rest
   v="${v#v}"
+  major="${v%%.*}"
   case "$v" in
-    ''|*[!0-9.]*[!0-9.]*) ;;   # obvious junk falls through to the digit test
+    *.*) rest="${v#*.}"; minor="${rest%%.*}" ;;
+    *)   minor=0 ;;
   esac
-  local major="${v%%.*}"
-  case "$major" in
-    ''|*[!0-9]*) return 1 ;;
-  esac
-  [ "$major" -ge "$MIN_NODE" ]
+  case "$major" in ''|*[!0-9]*) return 1 ;; esac
+  case "$minor" in ''|*[!0-9]*) minor=0 ;; esac
+  if [ "$major" -gt "$MIN_NODE_MAJOR" ]; then return 0; fi
+  if [ "$major" -lt "$MIN_NODE_MAJOR" ]; then return 1; fi
+  if [ "$minor" -ge "$MIN_NODE_MINOR" ]; then return 0; fi
+  return 1
 }
 
 # The reason fetching a runtime is acceptable at all: we check what we got.
@@ -206,13 +227,26 @@ stdin_plan() {
 
 hand_over() {
   step "Installing the installer's dependencies"
-  ( cd "$SRC_DIR/selfhost" && npm ci --no-audit --no-fund --loglevel=error )
+  # `--loglevel=warn`, not `error`. npm prints EBADENGINE — "required:
+  # { node: '>= 20.12.0' }" — at warn level, and silencing it is how a Node
+  # that cannot run this package got all the way to a stack trace with npm
+  # having noticed and said nothing.
+  ( cd "$SRC_DIR/selfhost" && npm ci --no-audit --no-fund --loglevel=warn )
   ok "Ready"
   say ""
 
   local interactive=no tty_readable=no
   [ -t 0 ] && interactive=yes
-  [ -r /dev/tty ] && tty_readable=yes
+  # `[ -r /dev/tty ]` tests the device node's PERMISSION BITS, which are
+  # rw-rw-rw- on a machine with no controlling terminal just as much as on one
+  # with. Under cron, a systemd unit, a CI runner or `docker run` without `-t`
+  # it answers "readable" and the open then fails with ENXIO — so the `none`
+  # branch below, whose whole message is about those exact situations, could
+  # never fire in any of them. The user got a raw `bash: /dev/tty: No such
+  # device or address` instead, after npm ci had already run.
+  #
+  # Opening it is the only honest test.
+  ( exec 3</dev/tty ) 2>/dev/null && tty_readable=yes
 
   case "$(stdin_plan "$interactive" "$tty_readable")" in
     inherit) exec node "$SRC_DIR/selfhost/bin/daemonclient.mjs" setup ;;

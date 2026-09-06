@@ -50,6 +50,14 @@ import {
   isCancel,
 } from '@clack/prompts';
 
+// A pty with no window size reports `columns === 0` — `script -c`, `expect`,
+// some CI runners, a detached tmux pane. clack's `getColumns` returns
+// `output.columns` whenever it is a NUMBER, and 0 is a number, so it then wraps
+// every panel at width zero: one character per line, a few hundred lines of it.
+// The hand-rolled `ui.mjs` clamped with `stdout.columns || 80` and did not have
+// this. Clamp once, and only for the value that is meaningless.
+if (process.stdout.columns === 0) process.stdout.columns = 80;
+
 // ── cancellation ─────────────────────────────────────────────────────────────
 
 /** Thrown after the exit handler runs. In production `process.exit` never
@@ -74,11 +82,18 @@ export function setResumeHint(command) {
 
 let exitHandler = (code) => process.exit(code);
 
-/** Test seam. Named so nobody mistakes it for part of the interface. */
+/** Test seam. Named so nobody mistakes it for part of the interface.
+ *
+ *  The returned restore only puts back what it replaced IF nothing else has
+ *  swapped the handler since. Without that check, two overlapping tests
+ *  restoring out of order leave `handleCancel` non-exiting for the rest of the
+ *  process — and every later cancellation assertion silently stops testing
+ *  cancellation. */
 export function __setExitHandlerForTests(fn) {
   const previous = exitHandler;
-  exitHandler = typeof fn === 'function' ? fn : previous;
-  return () => { exitHandler = previous; };
+  const mine = typeof fn === 'function' ? fn : previous;
+  exitHandler = mine;
+  return () => { if (exitHandler === mine) exitHandler = previous; };
 }
 
 /** The single exit path for Ctrl-C at any prompt. 130 is the conventional
@@ -134,13 +149,18 @@ function withRequired(validate, required, label) {
 
 export async function text(message, opts = {}) {
   const { required = true, validate, placeholder, initialValue, defaultValue, ...rest } = opts;
+  // `...rest` FIRST. Spread last, a caller passing `{ message: … }` silently
+  // replaced the question actually being asked, and `select`'s `{ options: … }`
+  // silently replaced the choices — the prompt would ask one thing and return
+  // an answer to another. Nothing does that today; P15 migrates every caller
+  // onto this file, which is precisely when it would start happening.
   const value = await clackText({
+    ...rest,
     message,
     placeholder,
     initialValue,
     defaultValue,
     validate: withRequired(validate, required && defaultValue === undefined, 'Required.'),
-    ...rest,
   });
   return guard(value, rest);
 }
@@ -152,22 +172,22 @@ export async function text(message, opts = {}) {
 export async function password(message, opts = {}) {
   const { required = true, validate, ...rest } = opts;
   const value = await clackPassword({
+    ...rest,
     message,
     validate: withRequired(validate, required, 'Required.'),
-    ...rest,
   });
   return guard(value, rest);
 }
 
 export async function confirm(message, opts = {}) {
   const { initialValue = true, ...rest } = opts;
-  const value = await clackConfirm({ message, initialValue, ...rest });
+  const value = await clackConfirm({ ...rest, message, initialValue });
   return guard(value, rest);
 }
 
 /** @param {Array<{value: any, label?: string, hint?: string}>} options */
 export async function select(message, options, opts = {}) {
-  const value = await clackSelect({ message, options, ...opts });
+  const value = await clackSelect({ ...opts, message, options });
   return guard(value, opts);
 }
 
@@ -185,15 +205,58 @@ export async function select(message, options, opts = {}) {
  * uncaughtExceptionMonitor and unhandledRejection handlers and removes them on
  * stop. That is the whole argument for this part in one sentence.
  */
+let spinnersRunning = 0;
+let exitReconcilerInstalled = false;
+
+/**
+ * Ctrl-C during a spinner does not reach us, and it exits 0.
+ *
+ * A running clack spinner calls `block()` from `@clack/core`, which puts stdin
+ * in RAW MODE. With ISIG off the terminal never raises SIGINT at all — Ctrl-C
+ * arrives as a plain `\x03` byte, `block`'s own key handler sees it, and does:
+ *
+ *     t && r.write(cursor.show), process.exit(0);
+ *
+ * `process.exit(0)`. So `handleCancel()` never runs, the resume message never
+ * prints, and — the part that actually matters — **an abandoned install reports
+ * SUCCESS**. `install.sh` `exec`s us, so `curl … | sh` on a cancelled setup
+ * exits 0, and anything scripting around it is told the cloud is up.
+ *
+ * We cannot outrank `block`'s handler: it is registered when the spinner
+ * starts, before ours could be. But an `exit` listener can still correct the
+ * status — calling `process.exit` from inside one replaces the code. So the
+ * rule is: if the process is exiting 0 while a spinner is still running, that
+ * was not a success.
+ *
+ * Deliberately narrow. It cannot fire on a normal finish, because finishing
+ * stops the spinner first.
+ */
+function installExitReconciler() {
+  if (exitReconcilerInstalled) return;
+  exitReconcilerInstalled = true;
+  process.on('exit', (code) => {
+    if (spinnersRunning > 0 && code === 0) process.exit(130);
+  });
+}
+
 export function spinner(message, opts = {}) {
+  installExitReconciler();
   const s = clackSpinner(opts);
   let current = message;
+  let finished = false;
+  const finish = (fn, text) => {
+    if (!finished) { finished = true; spinnersRunning -= 1; }
+    fn(text || current);
+  };
+  spinnersRunning += 1;
   s.start(current);
   return {
     update(text) { current = text; s.message(text); },
-    succeed(text) { s.stop(text || current); },
-    fail(text) { s.error(text || current); },
-    stop(text) { s.stop(text || current); },
+    succeed(text) { finish((t) => s.stop(t), text); },
+    fail(text) { finish((t) => s.error(t), text); },
+    stop(text) { finish((t) => s.stop(t), text); },
+    /** True when a SIGNAL-delivered SIGINT reached clack's spinner. It prints
+     *  "Canceled" and does NOT exit, so the caller has to notice. */
     get isCancelled() { return s.isCancelled; },
   };
 }
@@ -246,6 +309,22 @@ export async function taskList(list, opts = {}) {
       s.fail(`${item.title} — failed`);
       throw err;
     }
+
+    // A SIGNAL-delivered SIGINT (`kill -INT`, a parent shell forwarding one)
+    // takes a different path from a Ctrl-C keystroke: clack's spinner handler
+    // prints "Canceled" and RETURNS, without exiting. Without this check the
+    // list carried straight on — so the wizard said "Canceled" and then
+    // created the D1 database and deployed the worker anyway. Saying you
+    // stopped while a deploy continues is the worst thing to be wrong about at
+    // that particular moment.
+    //
+    // The step already in flight cannot be un-run; it finished above. What
+    // this guarantees is that the NEXT one does not start.
+    if (s.isCancelled) {
+      s.stop(`${item.title} — stopped`);
+      return handleCancel(opts);
+    }
+
     s.succeed(done || item.title);
   }
 }

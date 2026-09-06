@@ -55,6 +55,21 @@ describe('the size of what we install on someone else’s machine', () => {
       `selfhost installs ${count} packages (budget ${BUDGET}). Raising this is allowed, but say why in the commit — every one of these runs on a stranger's machine while they paste in a Cloudflare token.`);
   });
 
+  test('every package is pinned by content hash, from the public registry', () => {
+    // `npm ci` verifies the integrity hash, so this is what makes "the same
+    // command gives everyone the same bytes" true rather than aspirational —
+    // and it is what a compromised mirror would have to defeat. A `resolved`
+    // pointing anywhere but registry.npmjs.org means someone's private mirror
+    // leaked into a file strangers install from.
+    const lock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+    for (const [name, meta] of Object.entries(lock.packages ?? {})) {
+      if (name === '') continue;
+      assert.match(meta.integrity ?? '', /^sha(512|256)-/, `${name} has no integrity hash`);
+      assert.match(meta.resolved ?? '', /^https:\/\/registry\.npmjs\.org\//, `${name} resolves off the public registry`);
+      assert.match(meta.version ?? '', /^\d+\.\d+\.\d+/, `${name} is not pinned to an exact version`);
+    }
+  });
+
   test('has no build scripts, which run before anyone can inspect anything', () => {
     // A package with an install script executes arbitrary code during
     // `npm ci` — before the wizard has printed its first word, and on a
@@ -65,6 +80,53 @@ describe('the size of what we install on someone else’s machine', () => {
       .map(([name]) => name);
     assert.deepEqual(withScripts, [],
       'these run arbitrary code at install time on a stranger’s machine');
+  });
+});
+
+describe('the Node we promise to run on', () => {
+  // THE BUG THIS EXISTS FOR, and it shipped.
+  //
+  // `selfhost` declared `engines.node: ">=18"` and `install.sh` had
+  // `MIN_NODE=18`, while `@clack/prompts` — the package every prompt goes
+  // through — declares `">= 20.12.0"` and opens with
+  // `import { styleText } from 'node:util'`, added in Node 20.12.0.
+  //
+  // Nothing caught it. `npm ci` exits 0 on Node 18 (EBADENGINE is a warning,
+  // and install.sh was passing `--loglevel=error`), CI ran only Node 22, and
+  // the install.sh test positively ASSERTED that v18.0.0 was acceptable.
+  // Ubuntu 22.04 LTS and Debian 12 ship Node 18: those users installed
+  // cleanly and got "does not provide an export named 'styleText'" on their
+  // first command.
+  //
+  // So the floor is computed from the lockfile rather than trusted from a
+  // constant. Adding a dependency with a higher requirement now fails here,
+  // on any Node, without anyone having to remember.
+
+  const parse = (range) => {
+    const m = String(range ?? '').match(/(\d+)(?:\.(\d+))?(?:\.(\d+))?/);
+    return m ? [Number(m[1]), Number(m[2] ?? 0), Number(m[3] ?? 0)] : null;
+  };
+  const cmp = (a, b) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
+
+  test('is at least as new as every dependency demands', () => {
+    const lock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+    const ours = parse(pkg.engines?.node);
+    assert.ok(ours, 'selfhost/package.json must declare engines.node');
+
+    for (const [name, meta] of Object.entries(lock.packages ?? {})) {
+      if (name === '' || !meta.engines?.node) continue;
+      const theirs = parse(meta.engines.node);
+      if (!theirs) continue;
+      assert.ok(cmp(ours, theirs) >= 0,
+        `${name.replace('node_modules/', '')} needs Node ${meta.engines.node}, but we promise ${pkg.engines.node} — raise engines.node AND install.sh's MIN_NODE_*`);
+    }
+  });
+
+  test('is a floor install.sh can actually enforce', () => {
+    // A range like ">=20" cannot express the 20.12 boundary that matters, and
+    // install.sh compares major and minor. Keep it a plain floor.
+    assert.match(pkg.engines.node, /^>=\s*\d+\.\d+(\.\d+)?$/,
+      'engines.node must be a simple >=major.minor floor, so install.sh can match it');
   });
 });
 

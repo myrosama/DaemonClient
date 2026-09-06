@@ -7,12 +7,19 @@
 
 const API = 'https://api.telegram.org';
 
+// Every other network call in this CLI carries one; this one did not, so a
+// network that DROPS packets rather than refusing them — a corporate firewall,
+// which is exactly the environment a self-hoster is likely to be behind — hung
+// `daemonclient status` and `setup` forever, with no way out but Ctrl-C.
+export const REQUEST_TIMEOUT_MS = 15000;
+
 async function call(token, method, params) {
   const url = `${API}/bot${token}/${method}`;
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(params || {}),
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
   const data = await res.json().catch(() => ({ ok: false, description: 'unreadable response' }));
   return data;

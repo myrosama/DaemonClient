@@ -44,8 +44,13 @@ export async function runStatus() {
     const s = spinner('Checking your API');
     try {
       const res = await fetch(`${state.workerUrl}/api/health`, { signal: AbortSignal.timeout(15000) });
-      health = res.ok ? await res.json().catch(() => null) : null;
-      s.stop(res.ok ? 'API answered' : `API answered ${res.status}`);
+      // Read the body whatever the status. A 5xx health response is exactly
+      // when its `database` field is worth showing — an earlier version of this
+      // rewrite only parsed on `res.ok`, which silently dropped the Database
+      // row at the moment it mattered most.
+      health = await res.json().catch(() => null);
+      if (res.ok) s.succeed('API answered');
+      else s.fail(`API answered ${res.status}`);
       mark(res.ok, 'API', state.workerUrl);
     } catch (e) {
       s.fail('API did not answer');
@@ -60,7 +65,7 @@ export async function runStatus() {
   const s2 = spinner('Checking Telegram');
   try {
     const me = await tg.getMe(state.telegramBotToken);
-    s2.stop('Telegram answered');
+    s2.succeed('Telegram answered');
     mark(!!me.username, 'Telegram bot', me.username ? `@${me.username}` : 'no username');
   } catch (e) {
     s2.fail('Telegram did not answer');
@@ -76,7 +81,8 @@ export async function runStatus() {
       // processor as broken sends people to debug something that is fine.
       const res = await fetch(`${state.processorUrl}/health`, { signal: AbortSignal.timeout(60000) });
       const body = await res.json().catch(() => ({}));
-      s3.stop(res.ok ? 'Processor answered' : 'Processor reported a problem');
+      if (res.ok) s3.succeed('Processor answered');
+      else s3.fail('Processor reported a problem');
       mark(res.ok, 'Processor', res.ok ? state.processorUrl : (body.problems || []).join('; '));
     } catch {
       s3.fail('Processor did not answer');
@@ -103,13 +109,13 @@ export async function runStatus() {
         signal: AbortSignal.timeout(15000),
       });
       if (res.status === 401) {
-        s4.stop('Update status needs a sign-in');
+        s4.succeed('Update status needs a sign-in');
         log.info('Sign in on the dashboard to see update status.');
       } else if (res.ok) {
         const body = await res.json();
         const update = body.update;
         if (update?.updateAvailable) {
-          s4.stop('An update is available');
+          s4.succeed('An update is available');
           note([
             `You are running ${update.currentVersion}; ${update.latestVersion} is out.`,
             '',
@@ -119,10 +125,10 @@ export async function runStatus() {
         } else if (update?.latestVersion) {
           s4.succeed(`Up to date (${update.currentVersion})`);
         } else {
-          s4.stop('No update information');
+          s4.succeed('No update information');
         }
       } else {
-        s4.stop(`Update check answered ${res.status}`);
+        s4.fail(`Update check answered ${res.status}`);
       }
     } catch {
       s4.fail('Could not reach the update check');

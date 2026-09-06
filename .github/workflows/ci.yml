@@ -124,15 +124,26 @@ jobs:
     needs: changes
     if: needs.changes.outputs.selfhost == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: selfhost
+    strategy:
+      fail-fast: false
+      matrix:
+        # The FLOOR and a current release. Running only the newest is how a
+        # dependency requiring Node >= 20.12 sat next to `engines: ">=18"` and
+        # `MIN_NODE=18` in install.sh without anything going red: Ubuntu 22.04
+        # and Debian 12 users would have installed cleanly and then hit
+        # "does not provide an export named 'styleText'" on their first
+        # command. 20.12.0 is the oldest Node this package claims to run on, so
+        # it is the one worth proving.
+        node: ['20.12.0', '22']
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: ${{ matrix.node }}
           cache: npm
           cache-dependency-path: selfhost/package-lock.json
       - run: npm ci
