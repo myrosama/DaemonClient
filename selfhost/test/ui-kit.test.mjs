@@ -22,7 +22,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import {
-  text, password, confirm, select, spinner, taskList, note, intro, outro, log,
+  text, password, confirm, select, spinner, taskList, withSpinner, note, intro, outro, log,
   setResumeHint, __setExitHandlerForTests, Cancelled, interactiveProblem,
 } from '../src/ui-kit.mjs';
 
@@ -286,6 +286,85 @@ describe('progress', () => {
       { title: 'Seeding encryption keys', task: async () => { laterRan = true; return 'x'; } },
     ], t));
     assert.equal(laterRan, false, 'later steps depend on earlier ones — seeding keys into a database that was never created is worse than stopping');
+  });
+});
+
+describe('withSpinner — the spinner stops on every way out', () => {
+  // The whole point of this helper. A spinner nobody stops holds a live
+  // interval, so the PROCESS NEVER EXITS — shipped twice already: clack's
+  // own tasks() stops on the line after the await with no try, and
+  // `daemonclient status` returned past a running spinner. Both are the
+  // same mistake, both are unrepresentable through this function.
+
+  test('returns what the step returned, untouched', async () => {
+    const t = terminal();
+    const account = { id: 'abc123', name: 'Personal' };
+    const got = await withSpinner('Verifying the token', async () => account, t);
+    assert.equal(got, account, 'a step usually returns a value the caller needs, not a message');
+  });
+
+  test('a string return becomes the finishing line', async () => {
+    const t = terminal();
+    const got = await withSpinner('Creating the database', async () => 'Database created', t);
+    assert.equal(got, 'Database created');
+    assert.match(t.seen(), /Database created/);
+  });
+
+  test('without a string return the original message stays', async () => {
+    const t = terminal();
+    await withSpinner('Creating the database', async () => 42, t);
+    assert.match(t.seen(), /Creating the database/);
+  });
+
+  test('the step can relabel the spinner while it runs', async () => {
+    // The wait is not padding: clack repaints on an ~80ms interval, so a
+    // relabel followed immediately by a return is overwritten by the
+    // finishing line before any frame carrying it is ever painted. The first
+    // version of this test had no wait and failed for that reason — it was
+    // asserting on a frame that never existed, not on the relabel.
+    const t = terminal();
+    await withSpinner('Deploying', async (update) => {
+      update('Uploading the bundle');
+      await new Promise((r) => setTimeout(r, 160));
+    }, t);
+    assert.match(t.seen(), /Uploading the bundle/);
+  });
+
+  test('a throwing step still stops the spinner, and rethrows', async () => {
+    const t = terminal();
+    const before = process.listenerCount('SIGINT');
+
+    await assert.rejects(
+      () => withSpinner('Deploying the worker', async () => { throw new Error('Cloudflare said 403'); }, t),
+      /Cloudflare said 403/,
+    );
+
+    assert.equal(process.listenerCount('SIGINT'), before,
+      'the spinner outlived the throw — that is the hang this function exists to prevent');
+    assert.match(t.seen(), /Deploying the worker/, 'and the failed step is left on screen');
+  });
+
+  test('a synchronous throw is caught too, not just a rejected promise', async () => {
+    // `await` on a function that throws before returning a promise still
+    // routes through the same catch — but only if the call itself is inside
+    // the try, which is the kind of thing that silently regresses.
+    const t = terminal();
+    const before = process.listenerCount('SIGINT');
+    await assert.rejects(() => withSpinner('Building', () => { throw new Error('boom'); }, t), /boom/);
+    assert.equal(process.listenerCount('SIGINT'), before, 'no spinner survived a synchronous throw');
+  });
+
+  test('taskList is this function, so both share the guarantee', async () => {
+    // taskList is implemented in terms of withSpinner. If that ever stops
+    // being true, the two cleanup paths can drift apart — which is how one
+    // of them ends up with the bug the other already fixed.
+    const t = terminal();
+    const before = process.listenerCount('SIGINT');
+    await assert.rejects(() => taskList([
+      { title: 'Creating the database', task: async () => 'Database created' },
+      { title: 'Deploying', task: async () => { throw new Error('403'); } },
+    ], t));
+    assert.equal(process.listenerCount('SIGINT'), before);
   });
 });
 

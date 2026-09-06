@@ -300,33 +300,71 @@ export async function taskList(list, opts = {}) {
     // `enabled: false` is how a resumed setup skips work it already did.
     // Creating a D1 database a second time is not free.
     if (item?.enabled === false) continue;
-
-    const s = spinner(item.title, opts);
-    let done;
-    try {
-      done = await item.task((message) => s.update(message));
-    } catch (err) {
-      s.fail(`${item.title} — failed`);
-      throw err;
-    }
-
-    // A SIGNAL-delivered SIGINT (`kill -INT`, a parent shell forwarding one)
-    // takes a different path from a Ctrl-C keystroke: clack's spinner handler
-    // prints "Canceled" and RETURNS, without exiting. Without this check the
-    // list carried straight on — so the wizard said "Canceled" and then
-    // created the D1 database and deployed the worker anyway. Saying you
-    // stopped while a deploy continues is the worst thing to be wrong about at
-    // that particular moment.
-    //
-    // The step already in flight cannot be un-run; it finished above. What
-    // this guarantees is that the NEXT one does not start.
-    if (s.isCancelled) {
-      s.stop(`${item.title} — stopped`);
-      return handleCancel(opts);
-    }
-
-    s.succeed(done || item.title);
+    await withSpinner(item.title, item.task, opts);
   }
+}
+
+/**
+ * One step, with the spinner guaranteed to stop.
+ *
+ * WHY THIS EXISTS RATHER THAN CALLING `spinner()` DIRECTLY.
+ *
+ * A spinner nobody stops does not merely look untidy — it holds a live
+ * interval, so **the process never exits**. That is not theory: it shipped
+ * twice. `clack.tasks()` stops its spinner on the line *after* the await,
+ * with no `try`, so any throwing step hangs the CLI. And `daemonclient
+ * status` opened a spinner and then `return`ed past it on an install with
+ * no recorded address — reproduced under a pty, hung until killed, cursor
+ * left hidden.
+ *
+ * Both are the same mistake, and it is a mistake that is easy to make
+ * because the `stop()` is somewhere else in the function from the `start()`,
+ * on a line any early return or throw can skip. This puts them in the same
+ * expression, so the skip is not expressible:
+ *
+ *     const account = await withSpinner('Verifying the token', () =>
+ *       cf.verifyToken(token));
+ *
+ * The spinner stops on the way out, whichever way out is taken.
+ *
+ * The step function receives an updater for its own label, and may return a
+ * string to have that be the finishing line — the same contract `taskList`
+ * items have, since that is now implemented in terms of this. Any non-string
+ * return is passed back to the caller untouched, which is the usual case:
+ * what a step returns is normally a value the caller needs, not a message.
+ *
+ * @template T
+ * @param {string} message
+ * @param {(update: (text: string) => void) => Promise<T>} step
+ * @returns {Promise<T>}
+ */
+export async function withSpinner(message, step, opts = {}) {
+  const s = spinner(message, opts);
+  let result;
+  try {
+    result = await step((text) => s.update(text));
+  } catch (err) {
+    s.fail(`${message} — failed`);
+    throw err;
+  }
+
+  // A SIGNAL-delivered SIGINT (`kill -INT`, a parent shell forwarding one)
+  // takes a different path from a Ctrl-C keystroke: clack's spinner handler
+  // prints "Canceled" and RETURNS, without exiting. Without this check a
+  // taskList carried straight on — so the wizard said "Canceled" and then
+  // created the D1 database and deployed the worker anyway. Saying you
+  // stopped while a deploy continues is the worst thing to be wrong about at
+  // that particular moment.
+  //
+  // The step already in flight cannot be un-run; it finished above. What this
+  // guarantees is that nothing AFTER it starts.
+  if (s.isCancelled) {
+    s.stop(`${message} — stopped`);
+    return handleCancel(opts);
+  }
+
+  s.succeed(typeof result === 'string' && result ? result : message);
+  return result;
 }
 
 // ── the terminal we were actually given ──────────────────────────────────────
