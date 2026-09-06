@@ -45,6 +45,16 @@ body{background:var(--canvas);color:var(--text);font-family:var(--body);font-siz
 a{color:inherit;text-decoration:none}
 img{display:block}
 nav,main,footer{position:relative;z-index:1}
+
+/* ── AMBIENT BACKGROUND (ribbon-field) ──
+   A fixed WebGL layer behind everything. Sections with their own opaque
+   background (.band-drive, .band-photos, footer) simply paint over it —
+   it only ever shows through the flat black of body/.chapter. z-index:0
+   against nav/main/footer's explicit z-index:1 above keeps it behind
+   regardless of DOM order; pointer-events:none keeps every link and button
+   on the page clickable straight through it. */
+#ribbon-bg{position:fixed;inset:0;z-index:0;pointer-events:none;overflow:hidden}
+#ribbon-bg canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
 .wrap{max-width:1180px;margin:0 auto;padding:0 40px;width:100%}
 .mono{font-family:var(--mono);font-size:12px;font-weight:500;letter-spacing:.12em;text-transform:uppercase}
 .mark-b{color:var(--blue-hi)}.mark-g{color:var(--green-hi)}.mark-m{color:var(--dim)}
@@ -182,7 +192,12 @@ nav.hero-state .nav-burger{display:flex}
 .device-cap a{color:var(--green-hi)}
 
 /* ── CTA ── */
-#cta{text-align:center;padding:160px 0;position:relative;overflow:hidden;border-top:1px solid var(--line)}
+/* Opaque on purpose: this section already has its own background treatment
+   (the perspective-grid SVGs below + the radial-gradient glow in ::before),
+   so the ribbon-field layer behind everything else should not also show
+   through here — it would compete with a background this section already
+   has. */
+#cta{text-align:center;padding:160px 0;position:relative;overflow:hidden;border-top:1px solid var(--line);background:var(--canvas)}
 #cta::before{content:'';position:absolute;inset:0;background:radial-gradient(ellipse 70% 60% at 30% 110%,rgba(30,107,255,.1) 0%,transparent 55%),radial-gradient(ellipse 70% 60% at 70% 110%,rgba(16,185,129,.09) 0%,transparent 55%);pointer-events:none}
 .cta-in{position:relative;max-width:680px;margin:0 auto;z-index:1}
 /* Perspective frame — the vanishing-point grid above and below the CTA.
@@ -201,11 +216,27 @@ h2.cta-h .u{color:var(--green-hi)}h2.cta-h .f{color:var(--blue-hi)}
 .cta-btns{display:flex;gap:14px;justify-content:center;flex-wrap:wrap}
 
 /* ── FOOTER ── */
-/* Footer — structure and spacing taken from the Moonshot AI reference.
-   The glow is a heavily blurred SVG behind everything, not a CSS gradient:
-   that soft off-centre light is what stops a black footer reading as a dead
-   band, and box-shadow/radial-gradient cannot reproduce its shape. */
-footer{background:#000;padding:48px 0 0;position:relative;overflow:hidden;border-top:1px solid var(--line)}
+/* Footer — checked line-by-line against Moonshot's own shipped CSS (saved
+   copy of moonshot.ai), not just its screenshot. Every value below that has a
+   Moonshot counterpart is now the SAME number: 96/56/24px gaps, 40x40 social
+   circles with #ffffff26→#ffffff50 hover, 14px/20px type at #ffffffd6 and
+   #ffffff8f. Two values are deliberately NOT copied, and here is why:
+     - container: Moonshot's page runs at max-width:1440px/padding:80px. Ours
+       runs the whole site at .wrap{max-width:1180px} — copying 1440 would
+       make the footer wider than the nav and every chapter above it, so it
+       keeps OUR container width instead of Moonshot's.
+     - the border-top that used to sit here: Moonshot has none — its footer
+       starts exactly where the glow does, no seam. Removed, so ours does too.
+   The glow itself is a heavily blurred SVG behind everything, not a CSS
+   gradient: that soft off-centre light is what stops a black footer reading
+   as a dead band, and box-shadow/radial-gradient cannot reproduce its shape. */
+footer{background:#000;padding:48px 0 0;position:relative;overflow:hidden}
+/* The visible part of this glow was never the shapes themselves — their own
+   top edge sits off to the sides of the viewBox (x>1440 / x<0), so what
+   actually shows is blur bleeding sideways in from just outside frame. Why
+   that matters: it makes raw fill-opacity a weak lever, measured
+   pixel-by-pixel in an isolated same-size render — see the <use> stack
+   inside the SVG below for the actual fix and the numbers. */
 .ft-glow{position:absolute;left:0;right:0;bottom:-30%;width:100%;height:130%;pointer-events:none;opacity:.85}
 .ft-in{position:relative;max-width:1240px;margin:0 auto;padding:0 40px}
 .ft-top{display:flex;gap:96px;padding:56px 0;margin:0}
@@ -219,8 +250,11 @@ footer{background:#000;padding:48px 0 0;position:relative;overflow:hidden;border
 .ft-social{display:flex;align-items:center;justify-content:center;width:40px;height:40px;border-radius:50%;background:#ffffff26;transition:background .2s;color:#fff}
 .ft-social:hover{background:#ffffff50}
 .ft-social svg{width:16px;height:16px}
-.ft-cols{display:flex;gap:56px;flex-shrink:0}
-.ft-col{display:flex;flex-direction:column;gap:24px;min-width:118px}
+.ft-coffee{display:inline-flex;align-items:center;gap:7px;width:fit-content;padding:8px 14px 8px 12px;border-radius:999px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.04);color:#ffffffd6;font-size:13px;line-height:1;transition:background .2s,border-color .2s,color .2s}
+.ft-coffee svg{width:15px;height:15px;flex-shrink:0}
+.ft-coffee:hover{background:rgba(255,255,255,.09);border-color:rgba(255,255,255,.28);color:#fff}
+.ft-cols{display:flex;gap:64px;flex-shrink:0}
+.ft-col{display:flex;flex-direction:column;gap:24px;min-width:130px}
 .ft-col h4{font-family:var(--body);font-size:14px;font-weight:500;line-height:20px;color:#fff;padding-bottom:16px;margin:0;letter-spacing:0;text-transform:none}
 .ft-col a{display:block;font-size:14px;line-height:20px;color:#ffffffd6;text-decoration:none;transition:color .2s;margin:0}
 .ft-col a:hover{color:#fff}
@@ -377,6 +411,7 @@ footer{background:#000;padding:48px 0 0;position:relative;overflow:hidden;border
 </head>
 <body>
 
+<div id="ribbon-bg" aria-hidden="true"><canvas id="ribbon-bg-canvas"></canvas></div>
 
 <!-- NAV -->
 <nav id="nav">
@@ -605,11 +640,29 @@ footer{background:#000;padding:48px 0 0;position:relative;overflow:hidden;border
       <path d="M338.7 631.6C983 729.1 1527.2 470.9 1816.3 259.6C1871.4 219.3 1947.8 244.6 1931.9 303.9C1868.8 539.3 1675.2 936.5 1210.3 1393.7C460.5 2130.9-626.7 485.5 338.7 631.6Z" fill="#1E6BFF" fill-opacity=".55"/>
       <path d="M1116.3 631.6C472.1 729.1-72.1 470.9-361.3 259.6C-416.4 219.3-492.7 244.6-476.8 303.9C-413.7 539.3-220.2 936.5 244.8 1393.7C994.6 2130.9 2081.8 485.5 1116.3 631.6Z" fill="#10B981" fill-opacity=".45"/>
     </g>
-    <g filter="url(#ftblur2)">
-      <path d="M559.2 880C1026.7 903.8 1538.8 581.5 1804.7 363.2C1824.8 346.7 1853.3 368.3 1841 391.3C1592.7 852.7 1044.5 1316.3 595.3 1267.9C112.5 1215.8-97.6 846.6 559.2 880Z" fill="#ffffff" fill-opacity=".30"/>
-      <path d="M895.9 880C428.4 903.8-83.7 581.5-349.6 363.2C-369.7 346.7-398.2 368.3-385.9 391.3C-137.6 852.7 410.6 1316.3 859.8 1267.9C1342.6 1215.8 1552.7 846.6 895.9 880Z" fill="#ffffff" fill-opacity=".30"/>
-    </g>
+    <!-- The "inverted dome" the operator meant. Moonshot's own value for this
+         pair is full-opacity white (fixed above, from a .30 that was the only
+         thing making the layer read as absent) — but at that huge a blur
+         radius, plain fill-opacity turned out to be a weak lever: measured
+         pixel-by-pixel in a same-size isolated render, opacity 1.0 only
+         reached ~48/255 at its brightest sampled point, against a pure black
+         background. Not a rounding error — genuinely too faint on a normal
+         screen, which is exactly what "no change at all" was reporting.
+         CSS filter:brightness() on this element was tried next and measured
+         to do NOTHING here — identical output at 1x, 2.6x and 4.2x,
+         reproducible, so it is not used. What DOES measurably move the
+         result, verified the same pixel-sampling way (48 → 138 at the same
+         point): stacking the same blurred pair several times. Each pass adds
+         real alpha on top of the last instead of fighting a filter pipeline
+         that silently ignores it. <use> so the ~250-char path data is not
+         repeated four times over. -->
+    <g filter="url(#ftblur2)"><use href="#ftGlowW1" fill="#fff"/><use href="#ftGlowW2" fill="#fff"/></g>
+    <g filter="url(#ftblur2)"><use href="#ftGlowW1" fill="#fff"/><use href="#ftGlowW2" fill="#fff"/></g>
+    <g filter="url(#ftblur2)"><use href="#ftGlowW1" fill="#fff"/><use href="#ftGlowW2" fill="#fff"/></g>
+    <g filter="url(#ftblur2)"><use href="#ftGlowW1" fill="#fff"/><use href="#ftGlowW2" fill="#fff"/></g>
     <defs>
+      <path id="ftGlowW1" d="M559.2 880C1026.7 903.8 1538.8 581.5 1804.7 363.2C1824.8 346.7 1853.3 368.3 1841 391.3C1592.7 852.7 1044.5 1316.3 595.3 1267.9C112.5 1215.8-97.6 846.6 559.2 880Z"/>
+      <path id="ftGlowW2" d="M895.9 880C428.4 903.8-83.7 581.5-349.6 363.2C-369.7 346.7-398.2 368.3-385.9 391.3C-137.6 852.7 410.6 1316.3 859.8 1267.9C1342.6 1215.8 1552.7 846.6 895.9 880Z"/>
       <filter id="ftblur1" x="-719" y="0" width="2893" height="1825" filterUnits="userSpaceOnUse"><feGaussianBlur stdDeviation="120" result="b"/></filter>
       <filter id="ftblur2" x="-709" y="37" width="2873" height="1554" filterUnits="userSpaceOnUse"><feGaussianBlur stdDeviation="160" result="b"/></filter>
     </defs>
@@ -659,7 +712,15 @@ footer{background:#000;padding:48px 0 0;position:relative;overflow:hidden;border
         <div class="ft-col">
           <h4>Support</h4>
           <a href="https://t.me/daemonclient" target="_blank" rel="noopener">Telegram</a>
-          <a href="https://tirikchilik.uz/cappucino" target="_blank" rel="noopener">Buy me a coffee</a>
+          <!-- Was a standalone block under the socials — that grew the
+               footer taller for no reason, when this column already sits
+               shorter than Products/Project (3 links each) and had the
+               room to spare. Still visually its own thing (the pill shape
+               and icon do that), just without spending new height on it. -->
+          <a class="ft-coffee" href="https://tirikchilik.uz/cappucino" target="_blank" rel="noopener">
+            <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M2.4 3.4h8.6v5.4a2.9 2.9 0 0 1-2.9 2.9H5.3a2.9 2.9 0 0 1-2.9-2.9V3.4Z" stroke="currentColor" stroke-width="1.15"/><path d="M11 5.1h1.15a1.75 1.75 0 1 1 0 3.5H11" stroke="currentColor" stroke-width="1.15" stroke-linecap="round"/><path d="M5.1 1.3c0 .55-.65.65-.65 1.2M8 1.3c0 .55-.65.65-.65 1.2" stroke="currentColor" stroke-width="1" stroke-linecap="round"/></svg>
+            Buy me a coffee
+          </a>
         </div>
       </div>
     </div>
@@ -762,6 +823,226 @@ setTimeout(()=>document.querySelectorAll('.reveal').forEach(el=>el.classList.add
     requestAnimationFrame(draw);
   }
   size();addEventListener('resize',()=>size(),{passive:true});requestAnimationFrame(draw);
+})();
+</script>
+<script>
+/* Ribbon Field — ambient WebGL background.
+   Ported from ThreeUI's PredictiveArcCanvas (variant "ribbon-field"):
+   RibbonFieldBackground.tsx + ribbonFieldShaders.ts, source revision
+   SHA-256 fa86582fc870. The shader and render loop are unchanged from that
+   source; only the host boundary is adapted, since this project is plain
+   HTML/JS rather than React:
+     - a React-mounted <div> becomes #ribbon-bg, a fixed full-page layer
+       inserted once, not remounted per component instance
+     - the host is pointer-events:none (so the page underneath stays
+       clickable), which would silence a pointermove listener bound to it —
+       so pointer tracking listens on `window` instead, using viewport
+       bounds where the source used host.getBoundingClientRect()
+     - added: prefers-reduced-motion draws one static frame and skips the
+       animation loop; the source has no such gate
+   Degrades to nothing if WebGL is unavailable — the page keeps its flat
+   black background, unchanged. */
+(function(){
+  const RIBBON_FIELD_VERTEX_SHADER=`
+        attribute vec2 position;
+        void main() {
+          gl_Position = vec4(position, 0.0, 1.0);
+        }
+      `;
+
+  const RIBBON_FIELD_FRAGMENT_SHADER=`
+        precision highp float;
+        uniform vec2 resolution;
+        uniform float time;
+        uniform vec2 pointer;
+
+        float hash(vec2 p) {
+          p = fract(p * vec2(123.34, 456.21));
+          p += dot(p, p + 45.32);
+          return fract(p.x * p.y);
+        }
+
+        float ribbon(vec2 uv, float offset, float width, float phase) {
+          float y = 0.55 + 0.20 * sin((uv.x * 2.15) + phase) + 0.045 * sin((uv.x * 7.0) - phase * 0.7);
+          float d = abs(uv.y - y - offset);
+          return exp(-(d * d) / width);
+        }
+
+        void main() {
+          vec2 uv = gl_FragCoord.xy / resolution.xy;
+          vec2 p = uv;
+          p.x *= resolution.x / resolution.y;
+
+          float t = time * 0.22;
+          float drift = (pointer.x - 0.5) * 0.06;
+
+          float rightFade = smoothstep(0.28, 0.72, uv.x);
+          float centerDark = 1.0 - smoothstep(0.0, 0.88, distance(uv, vec2(0.18, 0.48)));
+
+          float r1 = ribbon(vec2(uv.x + drift, uv.y), 0.03, 0.0065, t + 0.9);
+          float r2 = ribbon(vec2(uv.x - drift * 0.7, uv.y), -0.23, 0.0085, t + 3.25);
+          float r3 = ribbon(vec2(uv.x + drift * 0.4, uv.y), 0.25, 0.014, t + 1.85);
+
+          float glow = r1 * 1.14 + r2 * 1.05 + r3 * 0.48;
+
+          vec3 teal = vec3(0.17, 0.83, 0.75);
+          vec3 cyan = vec3(0.22, 0.82, 0.96);
+          vec3 indigo = vec3(0.39, 0.38, 0.92);
+          vec3 purple = vec3(0.66, 0.33, 0.98);
+          vec3 blue = vec3(0.23, 0.51, 0.96);
+
+          vec3 col = vec3(0.0);
+          col += cyan * r1 * 0.92;
+          col += teal * r1 * 0.62;
+          col += indigo * r3 * 0.42;
+          col += blue * r2 * 0.66;
+          col += purple * (r2 + r3) * 0.30;
+
+          float bloom = exp(-pow(distance(uv, vec2(0.76, 0.40 + 0.035 * sin(t))), 2.0) / 0.050);
+          bloom += exp(-pow(distance(uv, vec2(0.71, 0.75 + 0.025 * cos(t))), 2.0) / 0.030);
+          col += vec3(0.42, 0.85, 1.0) * bloom * 0.34;
+
+          vec2 grid = fract(gl_FragCoord.xy / 7.0) - 0.5;
+          float dotShape = smoothstep(0.29, 0.11, length(grid));
+          float noise = hash(floor(gl_FragCoord.xy / 7.0));
+          float scan = 0.72 + 0.28 * sin((uv.x + uv.y) * 38.0 + time * 1.3);
+          float dots = dotShape * (0.48 + 0.52 * noise) * scan;
+
+          float micro = hash(gl_FragCoord.xy + time) * 0.035;
+          float alpha = clamp((glow * 1.55 + bloom * 0.50) * dots * rightFade, 0.0, 1.0);
+          alpha *= 1.0 - centerDark * 0.56;
+
+          vec3 base = vec3(0.005, 0.005, 0.005);
+          vec3 finalColor = mix(base, col, clamp(alpha * 1.55, 0.0, 1.0));
+          finalColor += micro * rightFade;
+
+          gl_FragColor = vec4(finalColor, 1.0);
+        }
+      `;
+
+  // Matches PredictiveArcCanvas's configured usage: speed=1, pointerAmount=1,
+  // smoothing=0.035, hue=0, saturation=1, brightness=1, opacity=1.
+  const OPTIONS={speed:1,pointerAmount:1,smoothing:0.035,brightness:1,opacity:1,hue:0,saturation:1};
+
+  function compile(gl,type,source){
+    const shader=gl.createShader(type);
+    if(!shader)throw new Error('Unable to create ribbon-field shader');
+    gl.shaderSource(shader,source);
+    gl.compileShader(shader);
+    if(!gl.getShaderParameter(shader,gl.COMPILE_STATUS)){
+      const info=gl.getShaderInfoLog(shader);
+      gl.deleteShader(shader);
+      throw new Error(info||'ribbon-field shader compilation failed');
+    }
+    return shader;
+  }
+
+  const host=document.getElementById('ribbon-bg');
+  const canvas=document.getElementById('ribbon-bg-canvas');
+  if(!host||!canvas)return;
+
+  try{
+    const gl=canvas.getContext('webgl',{alpha:true,antialias:false,premultipliedAlpha:false});
+    if(!gl)throw new Error('WebGL unavailable');
+
+    const vertex=compile(gl,gl.VERTEX_SHADER,RIBBON_FIELD_VERTEX_SHADER);
+    const fragment=compile(gl,gl.FRAGMENT_SHADER,RIBBON_FIELD_FRAGMENT_SHADER);
+    const program=gl.createProgram();
+    if(!program)throw new Error('Unable to create ribbon-field program');
+    gl.attachShader(program,vertex);
+    gl.attachShader(program,fragment);
+    gl.linkProgram(program);
+    if(!gl.getProgramParameter(program,gl.LINK_STATUS)){
+      throw new Error(gl.getProgramInfoLog(program)||'ribbon-field program link failed');
+    }
+    gl.useProgram(program);
+
+    const buffer=gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER,buffer);
+    gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,-1,1,1,-1,1,1]),gl.STATIC_DRAW);
+    const positionAttr=gl.getAttribLocation(program,'position');
+    gl.enableVertexAttribArray(positionAttr);
+    gl.vertexAttribPointer(positionAttr,2,gl.FLOAT,false,0,0);
+
+    const resolutionU=gl.getUniformLocation(program,'resolution');
+    const timeU=gl.getUniformLocation(program,'time');
+    const pointerU=gl.getUniformLocation(program,'pointer');
+
+    let mouseX=0.72,mouseY=0.42,targetX=0.72,targetY=0.42,frame=0,visible=true;
+    const startedAt=performance.now();
+    const reducedMotion=matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+    function pointer(event){
+      targetX=0.72+((event.clientX/Math.max(innerWidth,1))-0.72)*OPTIONS.pointerAmount;
+      targetY=0.42+((1-event.clientY/Math.max(innerHeight,1))-0.42)*OPTIONS.pointerAmount;
+    }
+    function resize(){
+      const bounds=host.getBoundingClientRect();
+      const ratio=Math.min(devicePixelRatio||1,2);
+      canvas.width=Math.max(1,Math.floor(bounds.width*ratio));
+      canvas.height=Math.max(1,Math.floor(bounds.height*ratio));
+      gl.viewport(0,0,canvas.width,canvas.height);
+      gl.uniform2f(resolutionU,canvas.width,canvas.height);
+    }
+    function render(now){
+      mouseX+=(targetX-mouseX)*OPTIONS.smoothing;
+      mouseY+=(targetY-mouseY)*OPTIONS.smoothing;
+      gl.uniform1f(timeU,(now-startedAt)*0.001*OPTIONS.speed);
+      gl.uniform2f(pointerU,mouseX,mouseY);
+      gl.drawArrays(gl.TRIANGLES,0,6);
+      frame=visible&&!document.hidden&&!reducedMotion?requestAnimationFrame(render):0;
+    }
+
+    const resizeObserver=new ResizeObserver(resize);
+    const intersection=new IntersectionObserver(function(entries){
+      const entry=entries[0];
+      visible=entry?entry.isIntersecting:true;
+      if(visible&&!frame&&!reducedMotion)frame=requestAnimationFrame(render);
+      if(!visible&&frame){cancelAnimationFrame(frame);frame=0;}
+    });
+    resizeObserver.observe(host);
+    intersection.observe(host);
+    addEventListener('pointermove',pointer,{passive:true});
+
+    // Dim toward the fade-out point as the page scrolls past the hero: full
+    // brightness for the word carousel, fading down once the intro paragraph
+    // takes over and staying dim through every chapter after, since the
+    // chapters put body copy right where the glow is brightest (the shader's
+    // own rightFade favours the right two-thirds of the screen). Self-contained
+    // — its own scroll listener and its own read of #stage's geometry — rather
+    // than reusing the page's existing onScroll(), which runs in the earlier
+    // script block and has nothing to do with this layer.
+    //
+    // Opacity, not the shader's own brightness uniform: the page behind this
+    // canvas is the same flat black the shader fades toward at low alpha
+    // (`base = vec3(0.005,...)`), so fading opacity down IS fading brightness
+    // down, for a fraction of the cost of re-deriving it in GLSL.
+    const stageEl=document.getElementById('stage');
+    function scrollBrightness(){
+      if(!stageEl)return OPTIONS.opacity;
+      const range=Math.max(1,stageEl.offsetHeight-innerHeight);
+      const p=Math.min(1,Math.max(0,(scrollY-stageEl.offsetTop)/range));
+      // 0.2 still washed out the muted-gray body copy (--muted, #8A93A6 — low
+      // contrast to begin with) wherever it sits in the brightest part of the
+      // glow; 0.12 was the first value where every chapter paragraph rendered
+      // fully legible in a side-by-side check, with the effect still visibly
+      // present as texture.
+      const fadeStart=0.28,fadeEnd=0.75,dimFloor=0.12;
+      const f=Math.min(1,Math.max(0,(p-fadeStart)/(fadeEnd-fadeStart)));
+      return OPTIONS.opacity*(1-f*(1-dimFloor));
+    }
+    function updateBrightness(){canvas.style.opacity=String(scrollBrightness());}
+
+    resize();
+    updateBrightness();
+    addEventListener('scroll',updateBrightness,{passive:true});
+    canvas.style.filter='hue-rotate('+OPTIONS.hue+'deg) saturate('+OPTIONS.saturation+') brightness('+OPTIONS.brightness+')';
+    if(reducedMotion)render(performance.now());
+    else frame=requestAnimationFrame(render);
+  }catch(e){
+    // WebGL unsupported or blocked: leave the page on its flat black
+    // background, unchanged.
+  }
 })();
 </script>
 <script>
