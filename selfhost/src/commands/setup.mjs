@@ -11,11 +11,12 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 import {
   c, accent, line, blank, panel, rule, step, ok, fail, warn, info, hint,
-  ask, askSecret, confirm, select, spinner, symbols,
+  ask, askSecret, confirm, select, spinner, symbols, pause,
 } from '../ui.mjs';
 import { loadState, saveState, markDone, isDone, checkStatePermissions, statePath } from '../state.mjs';
 import * as tg from '../api/telegram.mjs';
@@ -26,11 +27,20 @@ import { ensureSubdomain, suggestSubdomain, isLegalSubdomain } from '../subdomai
 import { buildVersion, versionWarning } from '../version.mjs';
 import { claimInstallOwner } from '../owner.mjs';
 import { ensureEncryptionKeys } from '../zke.mjs';
+// P9 + P10: the four console steps that used to be the user's problem.
+import {
+  firebaseCli, cliRunner, isSignedIn, isLegalProjectId, suggestProjectId,
+  ensureProject, ensureWebApp, firebaseConfig,
+} from '../api/firebase.mjs';
+import { ensureAccount, signIn } from '../api/identity.mjs';
 import { MIGRATION_SQL, splitStatements } from '../../../schema/schema.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '../../..');
 const TOTAL_STEPS = 7;
+// Stable on purpose: ensureWebApp finds the app a previous run created by this
+// exact name, and a rename would make every resumed setup register another one.
+const FIREBASE_APP_NAME = 'DaemonClient';
 
 const randomSecret = (bytes = 32) => crypto.randomBytes(bytes).toString('base64url');
 
@@ -359,6 +369,24 @@ async function stepAccount(state) {
   line();
   hint('DaemonClient signs you in with Firebase Authentication, the same as the hosted version — you just use your own project instead of ours. It is free, and it is the only account store involved.');
   blank();
+
+  // The automatic path (P9 + P10) creates the project, the web app and the
+  // account. It needs the Firebase CLI, which we cannot install for someone —
+  // firebase-tools is 70 dependencies, and this package has a budget of 12. So
+  // when it is missing or signed out, the manual path below still works. That
+  // fallback is the reason this step keeps two shapes rather than one.
+  const cli = await firebaseCli(REPO_ROOT);
+  let provisioned = null;
+  if (cli.available) provisioned = await provisionFirebase(state, cli);
+
+  if (provisioned) {
+    await accountInProject(state, provisioned.projectId, provisioned.apiKey);
+    return;
+  }
+
+  warn('Setting the Firebase project up for you needs the Firebase CLI, which is not available here.');
+  hint(`Install it with ${accent('npm i -g firebase-tools')} and run setup again to skip these steps — or do them by hand now:`);
+  blank();
   line(`  ${c.bold('Create the project')}`);
   line(`    1. Open ${accent('https://console.firebase.google.com')} and add a project`);
   line(`       ${c.gray('Analytics is not needed — turn it off to keep setup short')}`);
@@ -370,45 +398,121 @@ async function stepAccount(state) {
 
   const projectId = await ask('Firebase project ID', {
     defaultValue: state.firebaseProjectId || '',
-    validate: (v) => (/^[a-z0-9-]{4,}$/.test(v) ? null : 'Project IDs look like my-cloud-4f21.'),
+    validate: (v) => (isLegalProjectId(v) ? null : 'Project IDs look like my-cloud-4f21.'),
   });
+  const apiKey = await ask('Firebase Web API key', {
+    defaultValue: state.firebaseApiKey || '',
+    validate: (v) => (v.startsWith('AIza') ? null : 'Web API keys start with AIza.'),
+  });
+  await accountInProject(state, projectId, apiKey, { mustExist: true });
+}
 
-  let apiKey = state.firebaseApiKey || '';
+/**
+ * Create the project, the web app, and read the config back — the four console
+ * steps that used to be the user's problem. Returns null to fall back to the
+ * manual path; it never throws the whole wizard away for something the manual
+ * path could still get past.
+ */
+async function provisionFirebase(state, cli) {
+  const run = cliRunner(cli, REPO_ROOT);
+
+  if (!(await isSignedIn(run))) {
+    info('The Firebase CLI is not signed in yet. This opens a browser and signs in to YOUR Google account — we never see it.');
+    if (!(await confirm('Sign in to Google now?', true))) return null;
+    try {
+      // Inherit the terminal: this command is a browser handshake and prints a
+      // URL the user has to see.
+      await new Promise((resolve, reject) => {
+        const child = spawn(cli.cmd, [...cli.args, 'login'], { stdio: 'inherit', cwd: REPO_ROOT });
+        child.on('error', reject);
+        child.on('exit', (code) => (code === 0 ? resolve() : reject(new Error(`firebase login exited ${code}`))));
+      });
+    } catch (e) {
+      fail(`Could not sign in: ${e.message}`);
+      return null;
+    }
+    if (!(await isSignedIn(run))) { fail('Still not signed in.'); return null; }
+  }
+
+  // Reuse the project from an interrupted run rather than making a second one.
+  let projectId = state.firebaseProjectId;
+  if (!projectId) {
+    projectId = suggestProjectId();
+    blank();
+    info(`Your project will be called ${c.bold(projectId)} — this becomes part of your sign-in address, so it is public.`);
+    const chosen = await ask('Project id', {
+      defaultValue: projectId,
+      validate: (v) => (isLegalProjectId(v) ? null : '6–30 characters, lowercase letters, digits and hyphens, starting with a letter.'),
+    });
+    projectId = chosen;
+
+    const s = spinner(`Creating the Firebase project ${projectId}`);
+    try {
+      await ensureProject(run, { projectId, displayName: 'DaemonClient' });
+      s.succeed(`Created ${projectId}`);
+    } catch (e) {
+      s.fail(e.message);
+      return null;
+    }
+    state.firebaseProjectId = projectId;
+    saveState(state);
+  }
+
+  const s2 = spinner('Registering the web app');
+  let config;
+  try {
+    config = await ensureWebApp(run, { projectId, displayName: FIREBASE_APP_NAME });
+    s2.succeed('Web app registered');
+  } catch (e) {
+    s2.fail(e.message);
+    return null;
+  }
+  state.firebaseApiKey = config.apiKey;
+  saveState(state);
+  return config;
+}
+
+/**
+ * The account itself, in a project that now exists.
+ *
+ * The Email/Password switch is the one step with no CLI command and no
+ * documented Admin API — the decision to stop looking is in QUESTIONS.md. So
+ * this opens the exact page and waits. Pressing Enter without flipping it is
+ * the most likely mistake in the whole wizard, which is why P10 has a message
+ * for that specific case rather than a code.
+ */
+async function accountInProject(state, projectId, apiKey, { mustExist = false } = {}) {
+  blank();
+  if (!mustExist) {
+    line(`  ${c.bold('One switch we cannot flip for you')}`);
+    line(`    Open ${accent(firebaseConfig.providersUrl(projectId))}`);
+    line('    Enable Email/Password, then come back here.');
+    blank();
+    await pause('Press Enter once Email/Password is enabled');
+  }
+
   let email = state.adminEmail || '';
   while (true) {
-    if (!apiKey) {
-      apiKey = await ask('Firebase Web API key', {
-        validate: (v) => (v.startsWith('AIza') ? null : 'Web API keys start with AIza.'),
-      });
-    }
-    email = await ask('The email you added as a user', {
+    email = await ask(mustExist ? 'The email you added as a user' : 'The email address to sign in with', {
       defaultValue: email,
       validate: (v) => (/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v) ? null : 'That does not look like an email address.'),
     });
-    const password = await askSecret('Its password');
+    const password = await askSecret(mustExist ? 'Its password' : 'A password for it (at least 6 characters)');
 
-    // Sign in for real: a typo in the key, a project with Email/Password still
-    // disabled, or a user that was never created all fail here rather than at
-    // the user's first login attempt on their phone.
-    const s = spinner('Signing in to check the details');
+    // Create it, then sign in for real. A typo in the key, Email/Password
+    // still disabled, or a user that was never created all fail HERE rather
+    // than at the user's first login attempt on their phone.
+    const s = spinner(mustExist ? 'Signing in to check the details' : 'Creating your account');
     try {
-      const res = await fetch(
-        `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${apiKey}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email, password, returnSecureToken: true }),
-        },
-      );
-      const body = await res.json().catch(() => ({}));
-      if (body.error) throw new Error(explainFirebaseError(body.error.message));
-      s.succeed(`Signed in as ${c.bold(email)}`);
-      state.adminUserId = body.localId;
+      const { uid, created } = mustExist
+        ? { uid: await signIn(apiKey, email, password), created: false }
+        : await ensureAccount(apiKey, email, password);
+      s.succeed(created ? `Created and signed in as ${c.bold(email)}` : `Signed in as ${c.bold(email)}`);
+      state.adminUserId = uid;
       break;
     } catch (e) {
       s.fail(e.message);
       if (!(await confirm('Try again?', true))) process.exit(1);
-      if (/API key/i.test(e.message)) apiKey = '';
     }
   }
 

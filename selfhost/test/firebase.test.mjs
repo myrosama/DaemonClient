@@ -343,3 +343,29 @@ describe('one definition of where the CLI is', () => {
     assert.deepEqual(offenders, [], 'these should import firebaseCli from api/firebase.mjs');
   });
 });
+
+describe('the provisioning is actually reachable', () => {
+  // Source-level on purpose, and this is the one place that is the right
+  // level: the question is not "does it behave correctly" but "does anything
+  // call it at all". This repo has shipped complete, correct, well-tested code
+  // that ran nowhere at least twice — registerSubdomain, and
+  // interactiveProblem — and both times every behavioural test passed while
+  // the user got the old broken path.
+  const setup = fs.readFileSync(
+    path.join(import.meta.dirname, '..', 'src', 'commands', 'setup.mjs'), 'utf8');
+
+  for (const fn of ['ensureProject', 'ensureWebApp', 'ensureAccount']) {
+    test(`setup.mjs calls ${fn}`, () => {
+      assert.match(setup, new RegExp(`\\b${fn}\\s*\\(`), `${fn} is imported but never called`);
+    });
+  }
+
+  test('the console errand is a fallback now, not the only path', () => {
+    // The five manual steps still exist for someone without the Firebase CLI,
+    // which we cannot install for them. What must NOT survive is that being
+    // the only route: if the automatic branch ever disappears, this catches it.
+    assert.match(setup, /provisionFirebase/, 'the automatic path is gone');
+    assert.match(setup, /Authentication → Users → Add user/, 'the manual fallback should still be there for a machine with no CLI');
+  });
+});
+
