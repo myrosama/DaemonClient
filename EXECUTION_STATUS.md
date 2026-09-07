@@ -12,12 +12,12 @@ order — this is what to work from), `docs/plan/MASTER_PLAN.md`, then
 
 | | |
 |---|---|
-| **Date** | 2026-08-17 |
-| **Phase** | Building — `BUILD_ORDER.md`. P11 and P8 shipped; Phase 0 done. |
-| **Just finished** | **`install.sh` (P1, P2, P4)** — a machine with nothing on it now reaches the installer. Before that: **P6** (the account password can no longer reach disk) and the **P0 bootstrap fix** (a fresh install can now be signed into). |
-| **Working on now** | Nothing in flight. |
-| **Next up** | **Cut `v2.1.0`.** It is now the last thing gating installation — `install.sh` is written and stops with "this project has published no releases yet", which is honest but is also the end of the road for a new user. Then **P5** (the UI kit), whose dependencies `install.sh` finally makes legal. |
-| **Blocked on** | Nothing. `v2.1.0` is deliberately NOT cut yet — see below. |
+| **Date** | 2026-09-08 |
+| **Phase** | Building — `BUILD_ORDER.md`. P11, P8, P6, P0, P1/P2/P4, P5, **P9 and P10** shipped; Phase 0 done. |
+| **Just finished** | **P9 + P10, and the wiring that makes them real.** Setup no longer prints a five-step Firebase console errand — it creates the project, registers the web app, creates the account and signs in to prove it. One switch stays manual (Email/Password has no CLI command); setup opens that exact page. |
+| **Working on now** | Nothing in flight. Gate 3 on P9/P10 not yet run. |
+| **Next up** | **Gate 3 on P9/P10**, then **P15** (the wizard rewrite onto the UI kit) and **P13/P14**. The release is last — see below, the reason it is held has changed. |
+| **Blocked on** | **Creating a real Firebase project has never been run.** Every read path is verified against the live CLI, but `projects:create` needs a Google account and burns project quota, so only the operator can prove it. That is the one thing standing between here and a release. |
 | **Staging** | None exists yet. Phase 3 creates one — throwaway Telegram + Cloudflare + Firebase accounts. Until then no self-host change has been proven on real infrastructure. |
 
 ## The single most important fact
@@ -57,7 +57,7 @@ Update these numbers when they change; a drop means silently skipped tests.
 | Suite | Count | Command |
 |---|---|---|
 | `immich-api-shim` | 297 | `npm test` |
-| `selfhost` | 131 | `npm test` |
+| `selfhost` | 252 | `npm ci && npm test` |
 | `deployment-service` | 8 | `npm test` |
 | `processor` | 5 | `npm test` |
 
@@ -80,6 +80,10 @@ Typecheck clean: `immich-api-shim`, `deployment-service`.
 | P6 | the account password could reach disk in cleartext |
 | P0 | a fresh install could not be signed into — `owner_uid` was written by nothing |
 | P1/P2/P4 | `install.sh` — bootstrap, no sudo, checksummed Node, pinned source |
+| P5 | the UI kit — Ctrl-C can no longer return a truthy symbol into state, nor report an abandoned install as a success; four hangs fixed; `curl \| sh` now gets a terminal to ask questions on |
+| — | **Node floor 18 → 20.12**, which is what the prompt library actually needs. Node 18 installed cleanly and then died at import. Now enforced in three places and exercised by CI. |
+| P9 | the Firebase project, created instead of clicked — four of the five console steps gone |
+| P10 | the account, created and then proven by signing in — the fifth manual step was "Add user" |
 
 Every one went through the four gates. Gate 3 (two independent agents) found
 blockers in P8 and P11 that green test suites had missed — twice because a test
@@ -103,19 +107,32 @@ disabling the guard that protects it.
 **Revised order:** P1, P2, P4 are buildable now. P3 clones a release tag and is
 the one piece that genuinely waits on `v2.1.0`.
 
-## Why `v2.1.0` is not cut yet
+## Why `v2.1.0` is not cut yet — restated 2026-09-08
 
-`BUILD_ORDER.md` puts "cut the first release" at wiring step 2, but its stated
-purpose is *"so P3 has something to pin to"* — and P3 is at step 7. Nothing
-consumes a release today: `install.sh` does not exist (P1–P4 unbuilt), and
-there are zero self-hosted installs to notify.
+The reason has changed twice now, and both changes are worth keeping visible
+because each one was a real correction rather than a rephrasing.
 
-Meanwhile the flow it would tag still has a **P0 bootstrap bug** (below) that
-stops a self-hoster signing in at all. Tagging that as the first release aimed
-at self-hosters would ship a known dead end to exactly the people it is for.
+**First reason (expired).** "Nothing consumes a release." That stopped being
+true when `install.sh` landed: it pins to the latest release tag and refuses to
+install without one.
 
-The release lands after the bootstrap bug and the wizard parts, closer to when
-P3 actually needs it. Both original release blockers are already closed:
+**Second reason (now fixed).** A tag would have opened a road ending at five
+manual Firebase console steps — the thing the locked decision at the top of
+this file calls not acceptable. P9 and P10 removed four of them and setup now
+opens the page for the fifth.
+
+**The reason today is narrower and factual: nobody has ever created a Firebase
+project with this code.** Every read path is verified against the live CLI —
+`projects:list`, `apps:list`, `apps:sdkconfig`, the error envelopes, the
+resume path that reuses an existing app without duplicating it. But
+`projects:create` and `accounts:signUp` write, need a real Google account, and
+burn project quota. They are covered by unit tests against recorded shapes and
+by nothing else.
+
+That is a one-session job for the operator with a throwaway Google account, and
+it is the last thing between here and a release worth cutting.
+
+Both original release blockers remain closed:
 
 ## Release blockers — both CLOSED 2026-08-12
 
@@ -148,8 +165,21 @@ gitignored, so it is not a two-line change. Tracked below.
   that bypasses `version.mjs`. Dead code that mentions a symbol makes future
   greps lie, which is how this project has repeatedly fixed things that never
   run. `selfhost/README.md` no longer lists them.
-- `selfhost/package.json:3` still declares `"version": "1.0.0"` — a third
-  version number in a change whose thesis is "one tracked file".
+- ~~`selfhost/package.json` declares `"version": "1.0.0"`~~ — **fixed**
+  `8541f1f`. The field is gone (the package is `private`, so it needs none),
+  and `test/dependencies.test.mjs` fails if it comes back.
+
+- **28 raw spinner sites** across `setup`, `doctor`, `update`, `web`,
+  `dashboard` and `processor`, all still on `ui.mjs`. Each is an instance of the
+  hang class P5 found twice: a leaked spinner blocks process exit in BOTH
+  implementations (verified under a pty). P15 removes them; before then the kit
+  should grow a `withSpinner()` that stops in a `finally`.
+
+- **`firebase-tools` can never be a `selfhost` dependency** — 70 direct
+  dependencies, 5.8 MB unpacked, against a package budget of 12. P9 must shell
+  out, and `web.mjs:311` already has the function to reuse: `firebaseCli()`,
+  which prefers a global `firebase` and falls back to `npx --yes
+  firebase-tools`. Reuse it; do not write a second one.
 
 ## P0 — self-hosted bootstrap — FIXED 2026-08-17
 

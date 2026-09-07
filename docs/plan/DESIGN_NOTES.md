@@ -396,3 +396,201 @@ table was backwards: P5 needs npm dependencies, and `install.sh` running
 `npm ci` is what makes them legal, yet P5 was step 3 and install.sh step 7.
 Corrected in `BUILD_ORDER.md`. Cutting `v2.1.0` is now the last thing gating
 installation.
+
+---
+
+## P5 · UI kit — `8541f1f` + Gate 3 fixes
+
+**What it is.** `selfhost/src/ui-kit.mjs`, on `@clack/prompts` 1.7.0 — this
+package's first dependency ever, made legal by `install.sh` running `npm ci`.
+`status.mjs` is migrated onto it as proof it works in a real command; the rest
+follow when P15 rewrites `setup.mjs`.
+
+**Why a wrapper.** Cancellation, not tidiness. clack signals Ctrl-C by
+*resolving with a symbol*, and a symbol is truthy, so
+`state.cloudflareToken = await text(...)` passes every validity check and lands
+on disk as `null`. Same family as the `''`-through-a-truthiness-check bug P6
+fixed and the `10035` that made a retry loop dead.
+
+**listr2 was specified and is not used.** clack 1.7 ships `tasks()`. Measured:
+clack alone 6 packages / 372K; with listr2 24 / 1.2M.
+
+### What the gates actually caught
+
+**Gate 1/2 (mine, by running things):** `clack.tasks()` has no `try`, so a
+throwing step leaks its spinner and the process never exits — and deploy steps
+fail routinely. And `daemonclient status` returned past a running spinner on a
+deployed install with no `workerUrl`, hanging forever on a real terminal.
+
+**Gate 3 (independent agent) found seven more, all confirmed by reproduction.**
+This is the largest haul any gate has produced on this project, and the top one
+would have broken a large fraction of installs:
+
+1. **Node 18 could not run the kit at all.** `@clack/core` opens with
+   `import { styleText } from 'node:util'` — added in **Node 20.12.0** — while
+   `install.sh` had `MIN_NODE=18` and `package.json` said `>=18`. `npm ci`
+   exits 0 (EBADENGINE is a *warning*, and install.sh passed
+   `--loglevel=error`, silencing it), CI ran only Node 22, and
+   `install-sh.test.mjs` **positively asserted that v18.0.0 was acceptable** —
+   the suite was a pin holding the bug in place. Ubuntu 22.04 LTS and Debian 12
+   ship Node 18: those users would have installed cleanly and hit a
+   `node:util` stack trace on their first command.
+
+2. **Ctrl-C during a spinner exited 0.** A running clack spinner calls `block()`,
+   which puts stdin in RAW MODE — so the terminal never raises SIGINT, Ctrl-C
+   arrives as a `\x03` byte, and `@clack/core` answers it with
+   `process.exit(0)`. `install.sh` ends with `exec node … setup`, so an
+   abandoned install handed `curl … | sh` a **success**. Separately, on the
+   signalled path (`kill -INT`) clack prints "Canceled" and does *not* exit, so
+   `taskList` ran every remaining step — the wizard said it had stopped while
+   the Cloudflare deploy carried on.
+
+3. **`[ -r /dev/tty ]` tests permission bits, not existence.** Under cron, CI or
+   `docker run` without `-t` it answers "readable" and the open then fails
+   ENXIO — so the `none` branch, whose entire message is about those exact
+   situations, could never fire in any of them.
+
+4. **`interactiveProblem()` was called from nowhere** — the `registerSubdomain`
+   shape this project keeps shipping, and which `install-sh.test.mjs`'s own
+   comment warns about. The case it guards leaves a prompt unsettled, exits 13,
+   and leaves the cursor hidden.
+
+5. **`tg.getMe` had no timeout** — the only call in the CLI without one. A
+   network that *drops* packets rather than refusing them (a corporate
+   firewall) hung `status` and `setup` forever.
+
+6. **`note()` rendered one character per line when `stdout.columns === 0`** —
+   `script -c`, `expect`, detached panes. clack's `getColumns` accepts any
+   number, including 0. The hand-rolled `panel()` it replaced clamped with
+   `|| 80`.
+
+7. **Caller options were spread after the wrapper's own fields**, so
+   `{ message: … }` silently replaced the question and `{ options: … }` the
+   choices. Latent, and P15 is exactly when it would start biting.
+
+Plus, found while fixing: `daemonclient status | head` printed an EPIPE stack
+trace.
+
+### Two of my own regression tests were decorative
+
+Written for the fixes above, both passed with the fix deliberately removed:
+
+- the EPIPE test piped `2>&1` **into** the pipe, so `head` swallowed the very
+  crash report it was looking for — and `head` is a race anyway, since it has
+  to exit before our next write. Replaced with `spawn` + `stdout.destroy()`,
+  which is deterministic.
+- the SIGINT test interpolated a marker path into a template literal, JSON
+  stringified it, and handed it through `script -qec` — two layers of shell
+  quoting; the write landed elsewhere and the throw was swallowed by the test's
+  own `catch {}`. Replaced with a child *file* and the path passed by
+  environment.
+
+Both were only found because every guard was re-run against the unfixed code.
+**That check is now the routine, not the exception**: a test that has never
+been seen to fail is a claim, not a check.
+
+### And the first mutation run was worthless
+
+`subprocess.run(capture_output=True)` waits for EOF on the pipes, and the pty
+test spawns `script`, whose grandchildren inherit those pipes and hold them
+open past exit. So every mutation timed out and was scored as a kill —
+**"17 caught / 0 survived"**, from a harness that would have reported the same
+for code with no tests at all. Rebuilt to write to a file.
+
+**Gate evidence:** G1 — tests first, 131 → 193 · G2 — real pty, real
+`\x03`, real network, `npm ci` from a clean checkout · G3 — independent agent,
+7 confirmed findings, all fixed; second agent (mutation) lost to a session
+limit and re-run here · G4 — pending.
+
+### Carried forward
+
+- **28 raw spinner sites** across the un-migrated commands. A leaked spinner
+  blocks process exit in *both* implementations (verified under a pty), so the
+  kit should grow a `withSpinner()` that stops in a `finally` and P15 should
+  remove the raw sites.
+- **`firebase-tools` can never be a `selfhost` dependency** — 70 direct
+  dependencies, 5.8 MB unpacked, against a budget of 12. P9 must shell out, and
+  `web.mjs:311` already has `firebaseCli()` to reuse.
+
+---
+
+## P9 + P10 · the Firebase console errand, removed — `1d9e015`, `8c5fc43`, `b8e9b32`
+
+**What changed for the user.** Step 4 used to print five console steps and then
+ask for a project id and an API key to be pasted back. It now creates the
+project, registers the web app, reads the config, creates the account and signs
+in to prove it. One switch stays manual — enabling Email/Password has no CLI
+command and no documented Admin API — so setup opens that exact page for that
+exact project and waits.
+
+**The manual path stays, and that is not hedging.** `firebase-tools` is 70
+direct dependencies and 5.8 MB unpacked, against this package's budget of 12.
+It can never be bundled into something strangers pipe into a shell. So it is
+invoked as a subprocess, and when it is absent or signed out the five steps are
+still how someone finishes. Two shapes for one step, on purpose.
+
+### What running the CLI taught that reading it would not
+
+All three of these came from `firebase-tools 14.11.2` against a real project.
+
+**`--json` is load-bearing.** Its own help: "output JSON instead of text, *also
+triggers non-interactive mode*". Without it these commands sit on prompts no
+installer will answer.
+
+**`apps:sdkconfig WEB` fails without an app id** the moment a project has more
+than one web app — "Project <id> has multiple apps, must specify an app id" —
+and under `--json` it cannot prompt its way out. That is not an edge case: it
+is exactly what a *second run of setup* produces. It reproduces on this
+project's own Firebase account today. Every sdkconfig call now passes the app
+id, and `ensureWebApp` reuses the previous run's app rather than adding another
+— verified against the real project, app count 2 → 2.
+
+**The real error is on stdout; stderr is noise.** Captured from a genuine
+failure:
+
+```
+e.message → "Command failed: firebase apps:sdkconfig WEB --project …"
+e.stdout  → {"status":"error","error":"Project … has multiple apps, …"}
+e.stderr  → "(node:49148) [DEP0040] DeprecationWarning: punycode …"
+```
+
+The file had `e.stderr || e.stdout || e.message`, which reads perfectly
+naturally and shows the user a punycode deprecation warning at the exact
+moment they need the reason their deploy failed. **Order matters here and it is
+the opposite of the obvious one.** No mock would have found this — the fakes
+threw `Error` objects with a `.message`, which is what I imagined the shape to
+be. Gate 2 found it in one run against the real CLI.
+
+Same lesson on the Identity Toolkit side: codes arrive bare
+(`INVALID_LOGIN_CREDENTIALS`) or with the actionable half appended
+(`WEAK_PASSWORD : Password should be at least 6 characters` — the tail is the
+only part that says what to change), and a bad key does *not* return
+`API_KEY_INVALID`. It returns "API key not valid." — which means setup.mjs has
+carried a map entry for that code that has never once fired.
+
+### The mutation that survived
+
+Six mutations against P10's tests; five caught. The survivor interpolated the
+password into the message built on the **network-failure** path — a different
+branch from the API-error path the leak test covered, and the branch where a
+careless hand reaches for context because the request body is right there.
+Test added, mutation now caught.
+
+That is the second time in this session that re-running the guards against
+deliberately broken code found a test asserting less than it appeared to. The
+first was in P5. The routine is now: every guard gets run against the unfixed
+code before it counts as a guard.
+
+### What is still unproven, and by whom it can be proven
+
+`projects:create` and `accounts:signUp` **write**. They need a real Google
+account and burn project quota, so they are covered by unit tests against
+recorded shapes and by nothing else. Every *read* path is verified live.
+
+This is now the single thing between the repo and a release worth cutting, and
+it is a one-session job for the operator with a throwaway Google account.
+
+**Gate evidence:** G1 — tests first, both modules (the suite failed on a
+missing module before either existed) · G2 — real CLI, real API, real project;
+found the stderr/stdout ordering bug and confirmed the no-duplicate resume path
+· G3 — **not yet run on P9/P10** · G4 — `1d9e015`, `8c5fc43`, `b8e9b32`.

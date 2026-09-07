@@ -110,22 +110,49 @@ installer's first prompt.
 
 ---
 
-## P5 · UI kit — **new** (replaces `ui.mjs`)
+## P5 · UI kit — **SHIPPED** `8541f1f`
 
 **Contract:** one module every other part imports for anything it shows a human.
 
-`@clack/prompts` for questions and framing, `listr2` for the multi-minute
-deploy. Wraps them so the rest of the code never imports either directly — one
-place to change if the choice turns out wrong.
+`selfhost/src/ui-kit.mjs`, on `@clack/prompts` 1.7.0 — this package's first
+dependency, made legal by `install.sh` running `npm ci`. Provides `intro`,
+`outro`, `note`, `log`, `text`, `password`, `confirm`, `select`, `spinner`,
+`taskList`, `setResumeHint` and `interactiveProblem`.
 
-Must provide: `intro`/`outro`, `text`, `password`, `confirm`, `select`,
-`spinner`, `note`, `taskList`, and a single `onCancel` that turns Ctrl-C at any
-prompt into a clean exit with resume instructions.
+**The reason it is a wrapper and not a direct import** is cancellation, not
+tidiness. clack signals Ctrl-C by RESOLVING with a symbol, and a symbol is
+truthy, so `state.cloudflareToken = await text(...)` passes every validity
+check and lands on disk as `null`. Every prompt routes through one `guard()`;
+nothing exported can return the symbol, and a test proves it for all four
+prompt types.
 
-Replaces 299 lines of hand-rolled ANSI in `ui.mjs`.
+**`listr2` was specified and is not used.** This plan named it on the belief
+clack had no task-list widget. It has `tasks()`. Measured 2026-08-18: clack
+alone 6 packages / 372K, with listr2 24 / 1.2M. Eighteen extra packages on a
+stranger's machine, installed by a command they piped into a shell, to render a
+list clack already renders.
 
-**Test standalone:** a demo script exercising every widget, run by eye once and
-then snapshot-tested for non-TTY output (CI has no terminal).
+**Two hangs it found**, both the same shape — a spinner whose `stop()` sits on
+a line that can be skipped. `clack.tasks()` has no `try`, so a throwing step
+leaks its spinner and the process never exits (deploy steps fail routinely, so
+this was the common path); `taskList()` is ours now. And `daemonclient status`
+returned past a running spinner on a deployed install with no `workerUrl`.
+
+**Demo:** `node selfhost/scripts/ui-demo.mjs` — every widget on one screen, for
+the judgements a test cannot make. It refuses without a TTY rather than hanging.
+
+**Gate 3 found seven more**, all confirmed and all fixed — the largest haul any
+gate has produced here. The top one: `@clack/core` needs **Node 20.12+**
+(`styleText`), while `install.sh` accepted 18 and the test suite *asserted* that
+18 was fine. Ubuntu 22.04 and Debian 12 ship Node 18. Full list and the two
+decorative regression tests it exposed are in `DESIGN_NOTES.md`.
+
+**Still open, carried forward:** the other five commands (`setup`, `doctor`,
+`update`, `web`, `dashboard`, `processor`) still use `ui.mjs` and hold **28
+raw spinner sites**, each one an instance of the same hazard — a leaked
+spinner blocks process exit in BOTH implementations, verified. P15 removes them
+when it rewrites the wizard; until then the kit should grow a `withSpinner()`
+that stops in a `finally`, so the mistake stops being representable.
 
 ## P6 · State store — `state.mjs` **harden**
 
@@ -211,7 +238,7 @@ claiming.
 **Test standalone:** against a throwaway Cloudflare account that has never had a
 subdomain — the only configuration that exercises the bug.
 
-## P9 · Firebase — **new**
+## P9 · Firebase — **SHIPPED** `1d9e015` + `b8e9b32`
 
 **Contract:** `() → {projectId, apiKey, authDomain, appId}` for a project that
 did not exist beforehand.
@@ -228,10 +255,24 @@ Admin API route was undocumented and saved one click.
 `identitytoolkit.googleapis.com` not yet enabled. `web.mjs:153` already handles
 that error class for Hosting; copy the pattern.
 
-**Test standalone:** against a throwaway Google account. Also test the refusal
-path by exhausting quota or mocking the error body.
+**Built as `src/api/firebase.mjs`.** Three things turned up by running the CLI
+rather than reading its docs, none of which are documented:
 
-## P10 · Account — **new**
+- `--json` is what makes it automatable at all: its help says it "also
+  triggers non-interactive mode". Without it these commands wait on prompts.
+- `apps:sdkconfig WEB` with no app id FAILS once a project has more than one
+  web app, and under `--json` it cannot prompt its way out. That is what a
+  second run produces. Reproduced on this project's own account. Every call
+  passes the app id; `ensureWebApp` reuses the previous run's app.
+- when a call fails, the real message is on **stdout** inside the JSON
+  envelope, while **stderr** carries a node punycode deprecation warning. The
+  natural `e.stderr || e.stdout` order shows the user the warning instead of
+  the reason.
+
+**Still unproven:** `projects:create` has never been run. It writes, needs a
+Google account, and burns quota — operator only.
+
+## P10 · Account — **SHIPPED** `8c5fc43` + `b8e9b32`
 
 **Contract:** `(email, password, apiKey) → uid`, then a sign-in round-trip that
 proves it works.
@@ -245,8 +286,16 @@ without actually flipping the switch in P9. That is the single most likely
 human error in the whole flow, and the message must say exactly that rather
 than surfacing a raw API error.
 
-**Test standalone:** against a throwaway project, both with the provider on and
-deliberately off.
+**Built as `src/api/identity.mjs`.** Codes come back bare
+(`INVALID_LOGIN_CREDENTIALS`) or with the actionable half appended
+(`WEAK_PASSWORD : Password should be at least 6 characters`), and a bad key
+does *not* produce `API_KEY_INVALID` — it produces "API key not valid.", which
+is why setup.mjs's old map entry for that code never fired. `EMAIL_EXISTS`
+falls through to a sign-in so a resumed run works, but only a successful one
+counts: re-running with a different password must not leave someone owning an
+install they cannot log into.
+
+**Still unproven:** `accounts:signUp` has never created a real account.
 
 ## P11 · Worker build and deploy — `build.mjs` + `deploy.mjs` **reuse**
 
@@ -318,17 +367,26 @@ bootstrap comes first.
 | 1 | P11 version fix ✅ | a release can be cut and an updated install still sees the next one |
 | 2 | P6 state store ✅, P8 Cloudflare ✅, owner claim ✅ | credentials verify, the password never lands on disk, a fresh install can be signed into |
 | 3 | P1, P2, P4 `install.sh` ✅ | a machine with nothing on it reaches the installer |
-| 4 | *cut the first release* | P3 has a tag to pin to — the last thing gating installation |
-| 5 | P5 | the interface, now that dependencies are legal |
-| 4 | P7, P8 | credentials verify against real services, on a fresh account |
-| 5 | P9, P10 | a Google project appears from nothing and an account signs in |
+| 4 | P5 ✅ | the interface, now that dependencies are legal |
+| 5 | P7, P9 ✅, P10 ✅ | credentials verify against real services; a Google project appears from nothing and an account signs in |
 | 6 | P15 | the wizard runs end to end from a clone |
-| 7 | P1–P4 | `install.sh` reaches step 6 on a machine with nothing on it |
-| 8 | P13, P14 | one URL, signed in, Photos and Drive working |
+| 7 | P13, P14 | one URL, signed in, Photos and Drive working |
+| 8 | *cut the first release* | P3 has a tag to pin to — and the tag is worth installing |
 
-Step 8 is the product. Everything before it is a part that can be demonstrated
+Step 7 is the product. Everything before it is a part that can be demonstrated
 on its own, which is the point — no step depends on a part that has not already
 been shown to work.
+
+**The release moved to last, 2026-08-18.** It was step 4, on the reasoning that
+`install.sh` refuses to install with no release to pin to, so the tag was "the
+last thing gating installation". True, but it gates the *wrong* thing: what a
+tag opens the road to today is `setup.mjs` step 4, which tells the user to open
+the Firebase console and do **five manual steps** — create a project, disable
+Analytics, enable Email/Password, add a user, register a web app — then paste
+back a project id and an API key. The locked decision in `EXECUTION_STATUS.md`
+calls exactly that "not acceptable", and P9/P10 exist to remove it. Cutting the
+tag before then publishes the experience the plan was written to prevent, to
+the only people who would ever run it.
 
 ## Gates
 
