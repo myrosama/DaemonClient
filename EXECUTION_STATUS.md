@@ -12,11 +12,11 @@ order — this is what to work from), `docs/plan/MASTER_PLAN.md`, then
 
 | | |
 |---|---|
-| **Date** | 2026-09-08 |
+| **Date** | 2026-09-19 |
 | **Phase** | Building — `BUILD_ORDER.md`. P11, P8, P6, P0, P1/P2/P4, P5, **P9 and P10** shipped; Phase 0 done. |
 | **Just finished** | **P9 + P10, and the wiring that makes them real.** Setup no longer prints a five-step Firebase console errand — it creates the project, registers the web app, creates the account and signs in to prove it. One switch stays manual (Email/Password has no CLI command); setup opens that exact page. |
-| **Working on now** | Nothing in flight. Gate 3 on P9/P10 not yet run. |
-| **Next up** | **Gate 3 on P9/P10**, then **P15** (the wizard rewrite onto the UI kit) and **P13/P14**. The release is last — see below, the reason it is held has changed. |
+| **Working on now** | Nothing in flight. Gate 3 on P9/P10 done — clean on secrets, `owner_uid`, resume and spinners; two findings fixed, one of which uncovered nine more dead functions. |
+| **Next up** | **P15** (the wizard rewrite onto the UI kit), then **P13/P14**. The release is last and still waits on one live proof — see below. |
 | **Blocked on** | **Creating a real Firebase project has never been run.** Every read path is verified against the live CLI, but `projects:create` needs a Google account and burns project quota, so only the operator can prove it. That is the one thing standing between here and a release. |
 | **Staging** | None exists yet. Phase 3 creates one — throwaway Telegram + Cloudflare + Firebase accounts. Until then no self-host change has been proven on real infrastructure. |
 
@@ -57,7 +57,7 @@ Update these numbers when they change; a drop means silently skipped tests.
 | Suite | Count | Command |
 |---|---|---|
 | `immich-api-shim` | 297 | `npm test` |
-| `selfhost` | 252 | `npm ci && npm test` |
+| `selfhost` | 257 | `npm ci && npm test` |
 | `deployment-service` | 8 | `npm test` |
 | `processor` | 5 | `npm test` |
 
@@ -84,6 +84,8 @@ Typecheck clean: `immich-api-shim`, `deployment-service`.
 | — | **Node floor 18 → 20.12**, which is what the prompt library actually needs. Node 18 installed cleanly and then died at import. Now enforced in three places and exercised by CI. |
 | P9 | the Firebase project, created instead of clicked — four of the five console steps gone |
 | P10 | the account, created and then proven by signing in — the fifth manual step was "Add user" |
+| — | **`firebase login` could hang forever over SSH.** A VPS/NAS/Pi has a TTY but no local browser, so the OAuth redirect to localhost never arrives. Detected now; `--no-localhost` used instead. |
+| — | **A test for dead code.** Three times this repo has shipped a function nobody calls. There is now a guard for the class; it found nine more on its first run. |
 
 Every one went through the four gates. Gate 3 (two independent agents) found
 blockers in P8 and P11 that green test suites had missed — twice because a test

@@ -594,3 +594,69 @@ it is a one-session job for the operator with a throwaway Google account.
 missing module before either existed) · G2 — real CLI, real API, real project;
 found the stderr/stdout ordering bug and confirmed the no-duplicate resume path
 · G3 — **not yet run on P9/P10** · G4 — `1d9e015`, `8c5fc43`, `b8e9b32`.
+
+---
+
+## Gate 3 on P9/P10 — `cd63f84`
+
+Clean on what mattered most, and the reviewer traced further than asked:
+secrets never reach disk, logs or argv (both the API-error and network-failure
+branches checked); the `owner_uid` path was followed across into `owner.mjs`
+and confirmed that re-configuring the admin email cannot hijack an install that
+is already claimed; the resume path creates no duplicate project or app,
+verified against the real Firebase project; every new spinner stops on every
+branch.
+
+### The finding that mattered
+
+**`firebase login` could hang forever, on exactly the machines this product is
+for.** It starts a local server and waits for an OAuth redirect to localhost.
+A laptop is fine. A VPS, NAS or Pi over SSH has a perfectly good TTY — which is
+what `install.sh` checks for — and no local browser at all, so the redirect
+never arrives and the wizard waits with no timeout and no guidance.
+
+Worth sitting with: `install.sh` verifies a TTY precisely so the wizard can ask
+questions. **A TTY is not a browser.** The check that exists is real and
+correct and does not cover this, and "install it on the box in the cupboard" is
+an ordinary way to self-host. It was also the one unbounded external wait left
+in a CLI that had already given every network call a 15-second timeout for this
+exact reason — the `tg.getMe` lesson, unlearned in a new place.
+
+SSH is now checked alongside DISPLAY, because X11 forwarding sets DISPLAY while
+leaving the redirect just as unreachable. The pre-existing `looksHeadless()`
+would have answered "desktop" in that case.
+
+### The third function nobody calls
+
+`explainFirebaseError` outlived the rewrite that replaced its only caller,
+leaving a second and subtly different error vocabulary beside the live one.
+That is now three: `registerSubdomain`, `interactiveProblem`, and this — and
+this one was mine, committed three commits after a message that named the
+other two as the pattern to avoid.
+
+Deleting it would have been the small fix. Instead there is now a test for the
+class: **a declared function whose name appears exactly once in the package is
+a function nobody calls.** It found nine more immediately, and forced a
+distinction worth keeping:
+
+- **Dead** — deleted. `deploy.mjs` and `env.mjs` (zero importers; deploy.mjs
+  also held a third `BUILD_VERSION` writer bypassing `version.mjs`, which is
+  how a grep for that symbol starts lying). `config.mjs`'s `checkPermissions`,
+  a near-duplicate of the live `checkStatePermissions` — the dangerous kind,
+  where a future fix lands in the copy that never runs.
+- **Parked** — allowlisted with a reason each. The Cloudflare-OAuth leftovers
+  are blocked on the operator registering an OAuth app, not forgotten. Adding
+  to that list is a visible decision in review; silent accumulation is what
+  produced the three.
+
+And one of the dead ones, `looksHeadless()`, was the very detector this commit
+needed — sitting unused inside an API client. It moved to `ui-kit.mjs` beside
+`interactiveProblem` (the same question: what can this terminal actually do),
+gained the SSH check, and is now used by the thing that needed it.
+
+The guard has a blind spot, documented in the test: short common names
+(`load`, `save`) collide with unrelated words and slip through. It is a net,
+not a proof. All three that have actually bitten had distinctive names.
+
+**Gate evidence:** G1 — tests first · G2 — real CLI, real project · G3 —
+independent agent, 2 findings acted on, 3 lower-severity noted · G4 — `cd63f84`.
