@@ -370,6 +370,29 @@ export async function withSpinner(message, step, opts = {}) {
 // ── the terminal we were actually given ──────────────────────────────────────
 
 /**
+ * True when a browser probably cannot open ON THIS MACHINE.
+ *
+ * Matters because `wrangler login` and `firebase login` both start a local
+ * server and wait for an OAuth redirect to localhost. On a laptop that is
+ * seamless. On a VPS, NAS or Pi reached over SSH the user's browser is on a
+ * different machine entirely and can never reach it, so the wait never ends —
+ * and "the box in the cupboard" is a normal way to self-host.
+ *
+ * SSH is checked as well as DISPLAY because X11 forwarding sets DISPLAY while
+ * leaving the redirect just as unreachable. macOS and Windows always have a
+ * desktop and are never guessed at.
+ *
+ * This lived in api/cloudflare.mjs, unused, left over from the parked
+ * Cloudflare-OAuth plan. A terminal-capability question belongs next to the
+ * other one (`interactiveProblem`), not inside an API client.
+ */
+export function noLocalBrowser(env = process.env, platform = process.platform) {
+  if (platform === 'darwin' || platform === 'win32') return false;
+  if (env.SSH_CONNECTION || env.SSH_TTY || env.SSH_CLIENT) return true;
+  return !env.DISPLAY && !env.WAYLAND_DISPLAY;
+}
+
+/**
  * Refuse, with one sentence, rather than hang.
  *
  * This is not hypothetical. The documented entry point is

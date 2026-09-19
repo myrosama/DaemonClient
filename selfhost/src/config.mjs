@@ -203,15 +203,6 @@ function quote(v) {
 
 // ── Safety checks ───────────────────────────────────────────────────────────
 
-export function checkPermissions() {
-  const file = configPath();
-  if (!fs.existsSync(file) || os.platform() === 'win32') return null;
-  const mode = fs.statSync(file).mode & 0o777;
-  return (mode & 0o077)
-    ? `${file} is mode ${mode.toString(8)} — it holds live credentials. Run: chmod 600 ${file}`
-    : null;
-}
-
 /** A .env inside the repo will be read by wrangler and can silently override
  *  the user's Cloudflare sign-in. Find them so the CLI can refuse to continue. */
 export function findHostileDotEnvFiles(repoRoot) {

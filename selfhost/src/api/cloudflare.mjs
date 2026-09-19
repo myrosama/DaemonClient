@@ -146,11 +146,6 @@ export function oauthPortBusy() {
 }
 
 /** No display and no browser — sign-in will print a URL and then time out. */
-export function looksHeadless() {
-  if (os.platform() === 'win32' || os.platform() === 'darwin') return false;
-  return !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY;
-}
-
 /** Run `wrangler login`, inheriting stdio so the user sees the URL. */
 export function login() {
   return serialise(() => new Promise((resolve, reject) => {

@@ -33,6 +33,7 @@ import {
   ensureProject, ensureWebApp, firebaseConfig,
 } from '../api/firebase.mjs';
 import { ensureAccount, signIn } from '../api/identity.mjs';
+import { noLocalBrowser } from '../ui-kit.mjs';
 import { MIGRATION_SQL, splitStatements } from '../../../schema/schema.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -384,8 +385,16 @@ async function stepAccount(state) {
     return;
   }
 
-  warn('Setting the Firebase project up for you needs the Firebase CLI, which is not available here.');
-  hint(`Install it with ${accent('npm i -g firebase-tools')} and run setup again to skip these steps — or do them by hand now:`);
+  // Two different situations reach this point and they need different advice.
+  // Saying "the CLI is not available" when it is installed and signed in sends
+  // someone off to reinstall firebase-tools over a quota error.
+  if (!cli.available) {
+    warn('Setting the Firebase project up for you needs the Firebase CLI, which is not available here.');
+    hint(`Install it with ${accent('npm i -g firebase-tools')} and run setup again to skip these steps — or do them by hand now:`);
+  } else {
+    warn('Could not set the Firebase project up automatically — the reason is above.');
+    hint('You can fix that and run setup again, or do these steps by hand now:');
+  }
   blank();
   line(`  ${c.bold('Create the project')}`);
   line(`    1. Open ${accent('https://console.firebase.google.com')} and add a project`);
@@ -419,11 +428,29 @@ async function provisionFirebase(state, cli) {
   if (!(await isSignedIn(run))) {
     info('The Firebase CLI is not signed in yet. This opens a browser and signs in to YOUR Google account — we never see it.');
     if (!(await confirm('Sign in to Google now?', true))) return null;
+    // `firebase login` starts a web server on THIS machine and waits for an
+    // OAuth redirect to localhost. That is fine on a laptop. It never returns
+    // on a VPS, a NAS or a Pi over SSH: the browser is on the user's OWN
+    // machine and cannot reach the server's localhost, so nothing ever arrives
+    // and the wizard waits forever. Since "install it on the box in the
+    // cupboard" is a normal way to self-host, that is a real hang, not a
+    // corner — and it is the one unbounded external wait left in this CLI,
+    // which gave every network call a 15s timeout for exactly this reason.
+    //
+    // `--no-localhost` prints a code to paste instead, which works anywhere.
+    // Used only when a local browser looks unlikely, because when there IS one
+    // the redirect flow is the nicer of the two.
+    const args = [...cli.args, 'login'];
+    if (noLocalBrowser()) {
+      args.push('--no-localhost');
+      info('No local browser detected — signing in with a code you paste, instead of a redirect.');
+    }
+    hint('If this seems to hang, press Ctrl-C: it is waiting on a browser that may never answer.');
     try {
       // Inherit the terminal: this command is a browser handshake and prints a
       // URL the user has to see.
       await new Promise((resolve, reject) => {
-        const child = spawn(cli.cmd, [...cli.args, 'login'], { stdio: 'inherit', cwd: REPO_ROOT });
+        const child = spawn(cli.cmd, args, { stdio: 'inherit', cwd: REPO_ROOT });
         child.on('error', reject);
         child.on('exit', (code) => (code === 0 ? resolve() : reject(new Error(`firebase login exited ${code}`))));
       });
@@ -521,21 +548,6 @@ async function accountInProject(state, projectId, apiKey, { mustExist = false } 
   state.adminEmail = email.toLowerCase();
   markDone(state, 'account');
   saveState(state);
-}
-
-/** Firebase error codes are shouty and unhelpful; say what to actually do. */
-function explainFirebaseError(code) {
-  const map = {
-    EMAIL_NOT_FOUND: 'No user with that email in this project. Add one under Authentication → Users.',
-    INVALID_PASSWORD: 'Wrong password for that user.',
-    INVALID_LOGIN_CREDENTIALS: 'That email and password combination was rejected. Check both, and that the user exists.',
-    OPERATION_NOT_ALLOWED: 'Email/Password sign-in is not enabled. Turn it on under Authentication → Sign-in method.',
-    USER_DISABLED: 'That user is disabled in the Firebase console.',
-    API_KEY_INVALID: 'That Web API key is not valid for this project.',
-    INVALID_EMAIL: 'That email address is not valid.',
-  };
-  for (const [k, v] of Object.entries(map)) if (String(code).includes(k)) return v;
-  return String(code);
 }
 
 // ── 5. Deploy ───────────────────────────────────────────────────────────────

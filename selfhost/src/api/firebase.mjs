@@ -181,7 +181,15 @@ export function cliErrorText(e) {
   if (stdout) {
     try {
       const parsed = JSON.parse(stdout);
-      if (typeof parsed?.error === 'string' && parsed.error) return parsed.error;
+      const err = parsed?.error;
+      if (typeof err === 'string' && err) return err;
+      // Some Google CLIs shape `error` as an object. Not what firebase-tools
+      // 14.11.2 does, but the cost of being wrong is that the raw JSON
+      // envelope gets shown to the user as if it were a sentence.
+      if (err && typeof err === 'object') {
+        const inner = err.message ?? err.status ?? err.code;
+        if (inner) return String(inner);
+      }
     } catch { /* not the envelope; fall through */ }
   }
   const stderr = String(e?.stderr ?? '')

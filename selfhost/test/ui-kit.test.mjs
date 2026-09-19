@@ -23,7 +23,7 @@ import path from 'node:path';
 
 import {
   text, password, confirm, select, spinner, taskList, withSpinner, note, intro, outro, log,
-  setResumeHint, __setExitHandlerForTests, Cancelled, interactiveProblem,
+  setResumeHint, __setExitHandlerForTests, Cancelled, interactiveProblem, noLocalBrowser,
 } from '../src/ui-kit.mjs';
 
 const SRC = path.join(import.meta.dirname, '..', 'src');
@@ -409,6 +409,37 @@ describe('the terminal we were actually given', () => {
 
   test('an interactive stdin passes', () => {
     assert.equal(interactiveProblem({ isTTY: true }), null);
+  });
+});
+
+describe('noLocalBrowser — can an OAuth redirect to localhost work here', () => {
+  // `wrangler login` and `firebase login` both start a local server and wait
+  // for a redirect to localhost. On a VPS, NAS or Pi over SSH the user's
+  // browser is on a different machine and can never reach it, so the wizard
+  // waits forever — and installing on the box in the cupboard is a normal way
+  // to self-host.
+
+  test('an SSH session counts even when DISPLAY is set', () => {
+    // The case the old copy of this check got wrong: X11 forwarding sets
+    // DISPLAY, which looks like a desktop, while leaving the redirect just as
+    // unreachable.
+    assert.equal(noLocalBrowser({ SSH_CONNECTION: '10.0.0.1 22', DISPLAY: ':0' }, 'linux'), true);
+    assert.equal(noLocalBrowser({ SSH_TTY: '/dev/pts/0' }, 'linux'), true);
+    assert.equal(noLocalBrowser({ SSH_CLIENT: '10.0.0.1' }, 'linux'), true);
+  });
+
+  test('a Linux desktop is fine', () => {
+    assert.equal(noLocalBrowser({ DISPLAY: ':0' }, 'linux'), false);
+    assert.equal(noLocalBrowser({ WAYLAND_DISPLAY: 'wayland-0' }, 'linux'), false);
+  });
+
+  test('a bare Linux box with no display is not', () => {
+    assert.equal(noLocalBrowser({}, 'linux'), true);
+  });
+
+  test('macOS and Windows always have a desktop and are never guessed at', () => {
+    assert.equal(noLocalBrowser({}, 'darwin'), false);
+    assert.equal(noLocalBrowser({}, 'win32'), false);
   });
 });
 
