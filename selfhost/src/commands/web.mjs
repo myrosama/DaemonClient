@@ -26,6 +26,7 @@ import {
   c, accent, line, blank, panel, ok, fail, warn, info, hint, spinner, confirm,
 } from '../ui.mjs';
 import { loadState, saveState, isDone } from '../state.mjs';
+import { findOperatorMarkers } from '../operator-markers.mjs';
 // One definition of where the Firebase CLI is, shared with provisioning
 // (api/firebase.mjs). This file used to carry its own copy.
 import { firebaseCli } from '../api/firebase.mjs';
@@ -235,6 +236,14 @@ function assertNoOperator(key, cwd, dist) {
   if (!fs.existsSync(distDir)) {
     throw new Error(`${key} build produced no ${dist}/ directory — the build did not run.`);
   }
+  // The user's own identity, from state — the only Firebase project and key a
+  // self-host build is allowed to carry.
+  const state = loadState();
+  const owner = {
+    host,
+    apiKey: state.firebaseApiKey,
+    projectId: state.firebaseProjectId,
+  };
   const hits = [];
   let scanned = 0;
   const walk = (dir) => {
@@ -244,7 +253,8 @@ function assertNoOperator(key, cwd, dist) {
       if (st.isDirectory()) walk(p);
       else if (/\.(js|mjs|cjs|html|json|css|map)$/.test(name)) {
         scanned++;
-        if (fs.readFileSync(p, 'utf8').includes(host)) hits.push(path.relative(cwd, p));
+        const reasons = findOperatorMarkers(fs.readFileSync(p, 'utf8'), owner);
+        if (reasons.length) hits.push({ file: path.relative(cwd, p), reasons });
       }
     }
   };
@@ -253,9 +263,14 @@ function assertNoOperator(key, cwd, dist) {
     throw new Error(`${key} build wrote no scannable files to ${dist}/ — refusing to deploy an empty build.`);
   }
   if (hits.length) {
+    const detail = hits
+      .slice(0, 3)
+      .map((h) => `  ${h.file}: ${h.reasons.join('; ')}`)
+      .join('\n');
+    const more = hits.length > 3 ? `\n  …and ${hits.length - 3} more file(s)` : '';
     throw new Error(
-      `self-host build of ${key} still routes data to the operator host ${host} (${hits[0]}) — ` +
-      `refusing to ship it. Check the self-host env vars were passed to the build.`,
+      `self-host build of ${key} still carries operator values — refusing to ship it.\n${detail}${more}\n` +
+      `Check the self-host env vars were passed to the build.`,
     );
   }
 }

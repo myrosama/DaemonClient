@@ -1,0 +1,6 @@
+#!/bin/sh
+# core.hooksPath (set so the shared secret scan runs) hides .git/hooks. Keep any
+# pre-push hook this clone already had there working; do nothing otherwise.
+local_hook="$(git rev-parse --git-dir)/hooks/pre-push"
+if [ -x "$local_hook" ]; then exec "$local_hook" "$@"; fi
+exit 0

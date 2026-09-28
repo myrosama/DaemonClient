@@ -1,0 +1,9 @@
+#!/bin/sh
+# Block commits that contain credential-shaped content.
+# Install for this clone:  git config core.hooksPath scripts/hooks
+node "$(git rev-parse --show-toplevel)/scripts/scan-secrets.mjs" --staged || exit $?
+
+# core.hooksPath hides .git/hooks. Keep any pre-commit hook this clone already had.
+local_hook="$(git rev-parse --git-dir)/hooks/pre-commit"
+if [ -x "$local_hook" ]; then exec "$local_hook" "$@"; fi
+exit 0

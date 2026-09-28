@@ -18,6 +18,18 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Refuse credential-shaped content on every push and PR. The local pre-commit
+  # hook is opt-in and `--no-verify` skips it; this is the backstop. Not
+  # path-filtered on purpose: a secret can land in any file.
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: node scripts/scan-secrets.mjs --all
+
   # Which areas changed — every downstream job gates on these so unrelated
   # pushes stay free.
   changes:
