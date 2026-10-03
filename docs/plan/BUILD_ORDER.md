@@ -1,5 +1,9 @@
 # Build order — the parts, and how they wire together
 
+> **Paused 2026-09-30 by the operator.** Do not resume unless asked. Where each
+> part stopped, the gate debt, and how to resume are in `EXECUTION_STATUS.md`,
+> under "Paused 2026-09-30 — how to resume".
+
 The phases in `MASTER_PLAN.md` are organised around *problems to fix*. This file
 is organised around *parts to build*: each one has a contract, is testable on
 its own, and is only wired into `install.sh` once it stands up alone.
@@ -147,12 +151,12 @@ gate has produced here. The top one: `@clack/core` needs **Node 20.12+**
 18 was fine. Ubuntu 22.04 and Debian 12 ship Node 18. Full list and the two
 decorative regression tests it exposed are in `DESIGN_NOTES.md`.
 
-**Still open, carried forward:** the other five commands (`setup`, `doctor`,
-`update`, `web`, `dashboard`, `processor`) still use `ui.mjs` and hold **28
-raw spinner sites**, each one an instance of the same hazard — a leaked
-spinner blocks process exit in BOTH implementations, verified. P15 removes them
-when it rewrites the wizard; until then the kit should grow a `withSpinner()`
-that stops in a `finally`, so the mistake stops being representable.
+**Still open, carried forward:** the other six commands (`setup`, `doctor`,
+`update`, `web`, `dashboard`, `processor`) still use `ui.mjs` and held **28
+raw spinner sites** when counted, each one an instance of the same hazard — a
+leaked spinner blocks process exit in BOTH implementations, verified. The kit
+now has `withSpinner()`, which stops in a `finally` (`54c4e4c`); no command uses
+it yet. P15 moves the raw sites onto it when it rewrites the wizard.
 
 ## P6 · State store — `state.mjs` **harden**
 
@@ -198,6 +202,13 @@ message today would be a wasted support round-trip.
 
 **Test standalone:** against a real throwaway bot — this is not mockable in any
 way that proves anything.
+
+**State at the pause (2026-09-30): not shipped.** Two of the three cases are
+already told apart — *chat not found* (`telegram.mjs:45`) and *in the channel
+but cannot post* (`:58`). *Not an admin* is not reported separately, and
+`verifyChannelAccess`'s messages have no tests — only the module's timeout
+wiring is tested, in `status-command.test.mjs`. Unit tests can pin the three messages now; the
+real-bot check waits for the throwaway accounts.
 
 ## P8 · Cloudflare — `api/cloudflare.mjs` **harden**
 
@@ -301,6 +312,9 @@ install they cannot log into.
 
 **Contract:** `(repoRoot) → bundle`, then deployed with the right bindings.
 
+*(2026-09-30: `deploy.mjs` turned out to be dead — zero importers — and was
+deleted in `cd63f84`. Deployment goes through `api/cloudflare.mjs`.)*
+
 Exists: `buildWorkerBundle`, `workerVars`, `deployWorker`, `buildCheck`.
 
 **One change:** `BUILD_VERSION` comes from the tracked `VERSION` file, not the
@@ -331,12 +345,18 @@ address survives into the bundle.
 and the heaviest step in the whole installer. Needs a real run before it can be
 claimed to work.
 
+**Changed while this part was open:** `42eebd5` widened `assertNoOperator` —
+it now reads the install's state and requires every Google API key in the bundle
+to be the user's own, failing closed when that key is unknown. One independent
+review, with its findings fixed but not re-reviewed; review it again as part of
+P13.
+
 ## P14 · Health check and the final URL — **harden**
 
 **Contract:** poll until the worker answers, then print **one** URL — their
 dashboard, not the workers.dev API address.
 
-Exists as a 10×2s poll in `setup.mjs:471-483`. What is missing is the ending
+Exists as a 10×2s poll in `setup.mjs` (`:688-693` at the pause). What is missing is the ending
 `PRODUCT_SPEC.md` asks for: one URL that lands them signed in, not three URLs
 and an explanation.
 
@@ -349,6 +369,11 @@ through P5.
 Written **last**, when every part it calls already works alone. This is the
 inversion of how the current `setup.mjs` grew, and it is why it is 627 lines
 with the logic and the presentation interleaved.
+
+**At the pause it is 852 lines**, and the job is wider than `setup.mjs`: `ui.mjs`
+is still imported by six commands (setup, doctor, update, web, dashboard,
+processor), plus the entry point `bin/daemonclient.mjs` and
+`test/selfhost.test.mjs`. Retiring it means moving all of them onto the kit.
 
 ---
 
@@ -368,7 +393,7 @@ bootstrap comes first.
 | 2 | P6 state store ✅, P8 Cloudflare ✅, owner claim ✅ | credentials verify, the password never lands on disk, a fresh install can be signed into |
 | 3 | P1, P2, P4 `install.sh` ✅ | a machine with nothing on it reaches the installer |
 | 4 | P5 ✅ | the interface, now that dependencies are legal |
-| 5 | P7, P9 ✅, P10 ✅ | credentials verify against real services; a Google project appears from nothing and an account signs in |
+| 5 | P7 (open), P9 ✅, P10 ✅ | credentials verify against real services; a Google project appears from nothing and an account signs in |
 | 6 | P15 | the wizard runs end to end from a clone |
 | 7 | P13, P14 | one URL, signed in, Photos and Drive working |
 | 8 | *cut the first release* | P3 has a tag to pin to — and the tag is worth installing |

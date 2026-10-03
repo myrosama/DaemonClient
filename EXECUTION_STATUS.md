@@ -1,9 +1,14 @@
 # Execution status
 
-**Read this first after any context reset.** Then `docs/plan/PRODUCT_SPEC.md`
-(what we are building), `docs/plan/BUILD_ORDER.md` (the parts and their wiring
-order — this is what to work from), `docs/plan/MASTER_PLAN.md`, then
-`git log --oneline`.
+> **The self-host installer is PAUSED — since 2026-09-30, by the operator.**
+> Do not resume it unless the operator asks. Current work is fixing bugs in the
+> live product. Everything needed to pick self-hosting back up is in
+> [Paused 2026-09-30 — how to resume](#paused-2026-09-30--how-to-resume).
+
+**Read this first after any context reset.** For self-host work, then
+`docs/plan/PRODUCT_SPEC.md` (what we are building), `docs/plan/BUILD_ORDER.md`
+(the parts and their wiring order — this is what to work from),
+`docs/plan/MASTER_PLAN.md`, then `git log --oneline`.
 
 > **Two different things share the brand.** The **installer** is what this plan
 > builds — an interactive setup script, run once. The **DaemonClient CLI** is a
@@ -12,13 +17,69 @@ order — this is what to work from), `docs/plan/MASTER_PLAN.md`, then
 
 | | |
 |---|---|
-| **Date** | 2026-09-19 |
-| **Phase** | Building — `BUILD_ORDER.md`. P11, P8, P6, P0, P1/P2/P4, P5, **P9 and P10** shipped; Phase 0 done. |
-| **Just finished** | **P9 + P10, and the wiring that makes them real.** Setup no longer prints a five-step Firebase console errand — it creates the project, registers the web app, creates the account and signs in to prove it. One switch stays manual (Email/Password has no CLI command); setup opens that exact page. |
-| **Working on now** | Nothing in flight. Gate 3 on P9/P10 done — clean on secrets, `owner_uid`, resume and spinners; two findings fixed, one of which uncovered nine more dead functions. |
-| **Next up** | **P15** (the wizard rewrite onto the UI kit), then **P13/P14**. The release is last and still waits on one live proof — see below. |
-| **Blocked on** | **Creating a real Firebase project has never been run.** Every read path is verified against the live CLI, but `projects:create` needs a Google account and burns project quota, so only the operator can prove it. That is the one thing standing between here and a release. |
+| **Date** | 2026-09-30 |
+| **Phase** | **Self-host installer PAUSED.** Shipped before the pause: P11, P8, P6, P0, P1/P2/P4, P5, P9, P10; Phase 0 done. |
+| **Just finished** | Brought these records current (they had gone stale for eleven days and two commits), recorded the gate debt honestly, and paused the self-host work. |
+| **Working on now** | Bug fixes in the live product — none started yet. Update this row as each one starts and ships. |
+| **Next up** | Whatever bug the operator brings. Self-host resumes only when asked; where it resumes is in the pause section below, deliberately not here. |
+| **Blocked on** | *(self-host, on resume)* **Creating a real Firebase project has never been run.** Every read path is verified against the live CLI, but `projects:create` needs a Google account and burns project quota, so only the operator can prove it. That is the one thing standing between here and a release. |
 | **Staging** | None exists yet. Phase 3 creates one — throwaway Telegram + Cloudflare + Firebase accounts. Until then no self-host change has been proven on real infrastructure. |
+
+## Paused 2026-09-30 — how to resume
+
+Paused after `883b132`, the last code commit. First, see what moved under the
+installer while it was paused — bug fixes to the worker reach self-hosters too:
+
+```
+git log --oneline 883b132..HEAD -- selfhost/ install.sh immich-api-shim/
+```
+
+Then run the test baseline below. A lower count means tests were skipped.
+
+### Where each part stood
+
+In `BUILD_ORDER.md` wiring order. P7 is step 5, so it comes **before** P15.
+
+| # | Part | State at the pause |
+|---|---|---|
+| 1 | **Gate 3 debt** | Close it before building anything new — see the gate record below. The owner claim (P0) first: it touches the owner gate, which `GATES.md` says always gets the full treatment. |
+| 2 | **P7 Telegram** | Not finished. `api/telegram.mjs` already tells *chat not found* (`:45`) and *in the channel but cannot post* (`:58`) apart. It does not separately report *not an admin*, and `verifyChannelAccess`'s messages have no tests (only the module's timeout wiring is tested, in `status-command.test.mjs`). Gate 2 needs a real throwaway bot. |
+| 3 | **P8 carry-forwards** | Three items, listed under P8 in `BUILD_ORDER.md`: the installer prints the plain token URL, the permission list says four in code and three in the docs, and `/workers/subdomain` is not probed at validation. |
+| 4 | **P15 wizard rewrite** | Bigger than planned. `setup.mjs` is 852 lines (the plan said 627), and `ui.mjs` is still imported by six commands — setup, doctor, update, web, dashboard, processor — plus the entry point `bin/daemonclient.mjs` and `test/selfhost.test.mjs`. Retiring it means moving all of them. `withSpinner()` exists in the kit (`54c4e4c`), but no command uses it yet. |
+| 5 | **P13 web apps** | Never run end to end; the Photos SvelteKit build is the heaviest step. `assertNoOperator` in `web.mjs` was widened in `42eebd5` and has had one review, not a second — re-review it here. |
+| 6 | **P14 final URL** | Still the 10×2s poll, ending in three URLs rather than one that lands the user signed in. |
+| 7 | **Release `v2.1.0`**, then P3 | Waits on the live proof below. |
+
+### Only the operator can unblock
+
+- **Throwaway accounts** — a Telegram bot, a Cloudflare account, a Google
+  account — for the Phase 3 staging install. Gate 2 for P7, P13 and the end-to-end
+  run all need them.
+- **One live run of `projects:create` and `accounts:signUp`** on the throwaway
+  Google account. The last proof before a release.
+
+### Gate record — what actually ran
+
+`GATES.md` asks for all four gates, with Gate 3 as **two** separate reviewers,
+security and spec conformance. An earlier version of this file said every part
+went through all four. That was not true. From the design notes and the review
+agents actually launched:
+
+| Part | Gate 2 — real infrastructure | Gate 3 — independent review |
+|---|---|---|
+| P11 | Partial: the real comparator, no real worker | Security + spec, two agents |
+| P8 | Not run | Security + spec, two agents |
+| P6 | Checked against the real state file; no staging | **Never run** — "G3 pending" in the design note, never closed |
+| P0 owner claim `8ddfc37` | Not run | **No dedicated review**, and no design-note entry at all. The P9/P10 reviewer traced `owner_uid` into `owner.mjs` in passing. |
+| P1/P2/P4 `install.sh` | Partial: platform mapping, and the no-release path | **No dedicated review.** P5's review touched `install.sh` only for the Node floor. |
+| P5 UI kit | Real pty, real `^C`, real network, `npm ci` from a clean checkout | One correctness+security agent; the test-adversary agent hit a session limit and its mutation run was redone by the author. No spec review — P5 is "light gates" in `BUILD_ORDER.md`, so this one is the mildest debt. |
+| P9/P10 | Real CLI and a real project — **read paths only**; `projects:create` and `signUp` unproven | One correctness+security agent; no spec review, which full-gates parts (P7–P10) require |
+| Secret scanner + wider leak guard `42eebd5` | Not run | One agent; its findings fixed; the fixes not re-reviewed |
+| `image-size` bump `883b132` | n/a | None — a dependency bump |
+
+`42eebd5` and `883b132` were committed but **not pushed** at the pause, so CI
+has not run on them. The next push carries them, including a new CI job that
+scans for committed credentials — if that push goes red, look there first.
 
 ## The single most important fact
 
@@ -53,11 +114,12 @@ only thing that touches us is the update check."*
 ## Test baseline
 
 Update these numbers when they change; a drop means silently skipped tests.
+All four re-run and confirmed 2026-09-30.
 
 | Suite | Count | Command |
 |---|---|---|
 | `immich-api-shim` | 297 | `npm test` |
-| `selfhost` | 257 | `npm ci && npm test` |
+| `selfhost` | 278 | `npm ci && npm test` |
 | `deployment-service` | 8 | `npm test` |
 | `processor` | 5 | `npm test` |
 
@@ -86,11 +148,15 @@ Typecheck clean: `immich-api-shim`, `deployment-service`.
 | P10 | the account, created and then proven by signing in — the fifth manual step was "Add user" |
 | — | **`firebase login` could hang forever over SSH.** A VPS/NAS/Pi has a TTY but no local browser, so the OAuth redirect to localhost never arrives. Detected now; `--no-localhost` used instead. |
 | — | **A test for dead code.** Three times this repo has shipped a function nobody calls. There is now a guard for the class; it found nine more on its first run. |
+| — | **A secret scanner** (`scripts/scan-secrets.mjs`) in an opt-in pre-commit hook (`core.hooksPath scripts/hooks`) and in CI, and a wider self-host leak guard: every Google API key in a self-host bundle must be the user's own, and the build fails closed when that key is unknown. `42eebd5`, unpushed at the pause. |
+| — | `image-size` 2.0.2 → 2.0.4 in the shim, a dependency bump. `883b132`, unpushed at the pause. |
 
-Every one went through the four gates. Gate 3 (two independent agents) found
-blockers in P8 and P11 that green test suites had missed — twice because a test
-had been written to agree with the implementation rather than challenge it.
-That pattern is the single most useful thing the gates have caught; see
+**Not every one went through all four gates** — the gate record in the pause
+section above says exactly which did. Where Gate 3 did run, it found real
+defects in P8, P11, P5 and P9/P10 that green test suites had missed — more than once because a
+test had been written to agree with the implementation rather than challenge
+it. That pattern is the single most useful thing the gates have caught, and the
+reason the missing reviews are listed as debt rather than waived; see
 `DESIGN_NOTES.md`.
 
 ## Ordering correction — install.sh must come before the UI kit
@@ -161,21 +227,20 @@ gitignored, so it is not a two-line change. Tracked below.
   `deployment-service/src/index.ts:106` from the `VERSION` file at embed time;
   the embed script is gitignored, so this is tooling work, not a one-liner.
 
-- Delete `selfhost/src/deploy.mjs` and `selfhost/src/env.mjs`. Both have **zero
-  importers** — independently verified in the Gate 3 review, including dynamic
-  imports and tests — and `deploy.mjs:32` holds a third `BUILD_VERSION` writer
-  that bypasses `version.mjs`. Dead code that mentions a symbol makes future
-  greps lie, which is how this project has repeatedly fixed things that never
-  run. `selfhost/README.md` no longer lists them.
+- ~~Delete `selfhost/src/deploy.mjs` and `selfhost/src/env.mjs`~~ — **done**
+  `cd63f84`. Both had zero importers, and `deploy.mjs:32` held a third
+  `BUILD_VERSION` writer that bypassed `version.mjs`.
 - ~~`selfhost/package.json` declares `"version": "1.0.0"`~~ — **fixed**
   `8541f1f`. The field is gone (the package is `private`, so it needs none),
   and `test/dependencies.test.mjs` fails if it comes back.
 
-- **28 raw spinner sites** across `setup`, `doctor`, `update`, `web`,
-  `dashboard` and `processor`, all still on `ui.mjs`. Each is an instance of the
+- **Raw spinner sites** across `setup`, `doctor`, `update`, `web`,
+  `dashboard` and `processor`, all still on `ui.mjs` — 28 when P5 counted them;
+  `setup.mjs` has grown since, so recount on resume. Each is an instance of the
   hang class P5 found twice: a leaked spinner blocks process exit in BOTH
-  implementations (verified under a pty). P15 removes them; before then the kit
-  should grow a `withSpinner()` that stops in a `finally`.
+  implementations (verified under a pty). The kit now has `withSpinner()`,
+  which stops in a `finally` (`54c4e4c`); no command uses it yet. P15 moves the
+  raw sites onto it.
 
 - **`firebase-tools` can never be a `selfhost` dependency** — 70 direct
   dependencies, 5.8 MB unpacked, against a package budget of 12. P9 must shell

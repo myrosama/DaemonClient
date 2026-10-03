@@ -197,6 +197,12 @@ git short SHA (update). Add a test asserting a SHA can never be stamped.
 `version.mjs`, the test and the two rewires together, then cut `v2.1.0` as the
 first real release (wiring step 2), which unblocks `install.sh` pinning a tag.
 
+**Closed 2026-08-12** (recorded 2026-09-30, when the records audit found this
+still reading "not run"). Both Gate 3 agents were re-run. Their findings are
+listed in `58f424e`'s commit message, which is where P11 shipped, and as release
+blockers A and B in `EXECUTION_STATUS.md`. The release was not cut then; see
+`BUILD_ORDER.md` for why it moved to last.
+
 ---
 
 ## P8 — claim a workers.dev subdomain            2026-08-16
@@ -506,7 +512,7 @@ limit and re-run here · G4 — pending.
 
 - **28 raw spinner sites** across the un-migrated commands. A leaked spinner
   blocks process exit in *both* implementations (verified under a pty), so the
-  kit should grow a `withSpinner()` that stops in a `finally` and P15 should
+  kit should grow a `withSpinner()` (done, `54c4e4c`) that stops in a `finally` and P15 should
   remove the raw sites.
 - **`firebase-tools` can never be a `selfhost` dependency** — 70 direct
   dependencies, 5.8 MB unpacked, against a budget of 12. P9 must shell out, and
@@ -660,3 +666,53 @@ not a proof. All three that have actually bitten had distinctive names.
 
 **Gate evidence:** G1 — tests first · G2 — real CLI, real project · G3 —
 independent agent, 2 findings acted on, 3 lower-severity noted · G4 — `cd63f84`.
+
+---
+
+## Paused — the records audit            2026-09-30
+
+The operator paused self-host work to fix bugs in the live product, and first
+asked whether the process in `GATES.md` was actually being followed. Checked
+against the design notes and the review agents actually launched, not against
+memory. It had drifted:
+
+- **This file's own "G3 pending" entries were never closed.** P6 and
+  P1/P2/P4 shipped with no dedicated independent review, while
+  `EXECUTION_STATUS.md` said every part went through all four gates.
+- **P0, the owner claim (`8ddfc37`), has no entry here at all** — no design
+  note and no gate evidence; its only record is `EXECUTION_STATUS.md`. It is
+  the serious one: it touches the owner gate, which `GATES.md` lists among the
+  things that always get the full treatment. The P9/P10 reviewer traced
+  `owner_uid` into `owner.mjs` in passing, which is not a review of it.
+- **Gate 3 lost a reviewer.** P11 and P8 had two, security and spec
+  conformance. P9 and P10 had one correctness-and-security reviewer and no spec
+  review, though they are full-gates parts. P5 had the same single reviewer; its
+  test-adversary agent hit a session limit and the mutation run was redone by
+  the author. P5 is "light gates", so its case is the mildest.
+- **Other stale entries.** P11's section still said "G3 NOT RUN … P11 is
+  therefore uncommitted" seven weeks after both had stopped being true (closed
+  above). 0.4 and 0.6 still read "G3 pending"; they are planning documents, so
+  they are recorded here rather than chased.
+- **The records went stale.** `42eebd5` (secret scanner, wider leak guard) and
+  `883b132` (a dependency bump) landed with no status update, and a context
+  compaction then happened with the summary as the only record of them. The
+  status file exists to make that impossible.
+
+Gate 2 was not skipped outright: P5 ran under a real pty, P9/P10 against the
+real CLI and a real project. But none of it ran as the staging install
+`GATES.md` defines, and the P9/P10 write paths are unproven.
+
+**The lesson:** a gate that is "pending" in a design note is invisible
+everywhere else. The debt is now a table in `EXECUTION_STATUS.md`, and closing
+it is the first step on resume, before any new part.
+
+**Gate evidence (records change):** G1 n/a · G2 — every count re-run
+(297/278/8/5, both typechecks clean) · G3 — one independent read-only agent
+checked each claim against the repo and found, among others, a false one: the
+first draft said the secret scanner runs in a pre-push hook, but
+`scripts/hooks/pre-push` only chains to a local hook. It also found an
+off-by-one line cite, P5's adversary agent misdescribed, P0 cited to a design
+note that does not exist, `ui.mjs` importers outside `commands/`, the stale P11
+entry above, and `BUILD_ORDER.md`'s P5 carry-forward still asking for a
+`withSpinner()` that already existed. Every finding was re-checked by hand and fixed before
+committing · G4 — this commit.
