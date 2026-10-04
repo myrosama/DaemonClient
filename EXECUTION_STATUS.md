@@ -17,11 +17,12 @@
 
 | | |
 |---|---|
-| **Date** | 2026-10-04 |
+| **Date** | 2026-10-05 |
 | **Phase** | **Self-host installer PAUSED.** Shipped before the pause: P11, P8, P6, P0, P1/P2/P4, P5, P9, P10; Phase 0 done. |
-| **Just finished** | Bug 1 fixed in code: a brand-new account could not use Photos or Drive for its first minutes (see "Live-product bugs" at the end). Two machines now share memory; the MacBook owns the iOS section below. |
-| **Working on now** | Bug fixes in the live product — none started yet. Update this row as each one starts and ships. |
-| **Next up** | Whatever bug the operator brings. Self-host resumes only when asked; where it resumes is in the pause section below, deliberately not here. |
+| **Just finished** | Bug 1 **shipped**: a brand-new account could not use Photos or Drive for its first minutes (see "Live-product bugs" at the end). Two machines share memory; the MacBook owns the iOS section below. |
+| **Live on the web** | Firebase Hosting `photos`, `drive`, `accounts` deployed 2026-10-04 from `main` `6dacd43`; checked on the live sites (Photos service worker, portal banner, Drive screen). Update this row on every deploy. |
+| **Working on now** | Bug 2, slow thumbnails when scrolling far (see "Live-product bugs"): a cloud session is building it as a draft PR. Also: a Photos slowness audit (cloud, report only), and the Drive-on-File-Browser spec (draft PR #1) in Gate 3 review. |
+| **Next up** | Bug 1's last check: a real new account on the live sites. Then bug 2's review and ship, the audit's approved removals, and the Drive spec's open questions to the operator. Self-host resumes only when asked; where it resumes is in the pause section below, deliberately not here. |
 | **Blocked on** | *(self-host, on resume)* **Creating a real Firebase project has never been run.** Every read path is verified against the live CLI, but `projects:create` needs a Google account and burns project quota, so only the operator can prove it. That is the one thing standing between here and a release. |
 | **Staging** | None exists yet. Phase 3 creates one — throwaway Telegram + Cloudflare + Firebase accounts. Until then no self-host change has been proven on real infrastructure. |
 
@@ -325,6 +326,10 @@ more cheaply by reading the code.
 
 ### 1. New accounts could not use Photos or Drive for their first minutes — fixed 2026-10-04
 
+**Status.** Shipped: `main` `6dacd43` (fix `cbc372c`), deployed 2026-10-04 to
+Firebase Hosting `photos`, `drive`, `accounts` and checked on the live sites.
+CI green on every job this touches. Open: G2 on a real new account.
+
 **Symptom.** Every brand-new account, for 1–3 minutes after setup: Photos showed
 `Error: 503` (from `loadServerConfig`), Drive "Configuration Error … Failed to
 fetch". Both started working on their own a few minutes later.
@@ -373,4 +378,23 @@ every HIGH/MEDIUM fixed and re-reviewed. G4 — this commit.
   the 5-minute "can't reach" message rather than fix it.
 - A dashboard click in the first instant before Firestore answers, or a
   middle-click, is not held.
+
+### 2. Thumbnails take very long when scrolling far down — in progress 2026-10-05
+
+**Symptom (operator).** With ~2,000 photos, scrolling down to an older period
+means a long wait before thumbnails appear: loading starts at the top and works
+through a queue. Opening a photo also waits behind thumbnail loads.
+
+**Cause (read in code, `immich/web/src/service-worker/index.ts`).** One
+first-in-first-out queue of 6 (`thumbAcquire`/`thumbRelease`) serves
+thumbnails and opened photos alike; queued requests are never dropped when the
+page cancels them; each thumbnail's manifest is fetched from the user's worker
+before it takes a slot, so a fast scroll fires dozens of worker calls at once;
+video chunks bypass the queue and compete with it.
+
+**Plan.** One scheduler: what the user opened (photo, viewer preview, video)
+goes first and pauses new thumbnail work until it loads; thumbnails run newest
+first, capped, and are dropped once the page cancels them; the manifest fetch
+moves inside the slot. Built by a cloud session as a draft PR from
+`feat/photos-media-scheduler`; then all four gates here before it ships.
 
