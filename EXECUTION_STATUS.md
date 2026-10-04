@@ -25,6 +25,20 @@
 | **Blocked on** | *(self-host, on resume)* **Creating a real Firebase project has never been run.** Every read path is verified against the live CLI, but `projects:create` needs a Google account and burns project quota, so only the operator can prove it. That is the one thing standing between here and a release. |
 | **Staging** | None exists yet. Phase 3 creates one — throwaway Telegram + Cloudflare + Firebase accounts. Until then no self-host change has been proven on real infrastructure. |
 
+## iOS app — MacBook
+
+**Built on the operator's MacBook since 2026-10-04**; production work stays on
+the Linux laptop. The MacBook session owns this section — the shared top table
+above is not edited from there, so the two machines never touch the same lines.
+
+| | |
+|---|---|
+| **Plan** | `daemonclient-ops/docs/roadmap-history/MOBILE_APP.md` (decided 2026-06-10): rebranded Flutter fork of `immich/mobile`, Photos + Drive in one app, four phases. |
+| **Shipped** | Phase 1 in part — `7349bde` rebrand + CI builds without a Mac, `b1a466d` full Flutter source tracked, `d64da81` mobile CI fixes. |
+| **Not yet met** | Phase 1 exit: TestFlight build on the iPhone, APK on the Samsung, login → existing library loads. |
+| **Working on now** | Nothing yet — machine set up 2026-10-04. First step is a written plan for the operator to approve. |
+| **Rules** | Plan first, approved by the operator. Every change through `GATES.md`. Message the Linux session before touching `immich-api-shim`, `deployment-service` or anything the per-user workers run — the app talks to them, and the native sync parser aborts all sync on one unexpected value. |
+
 ## Paused 2026-09-30 — how to resume
 
 Paused after `883b132`, the last code commit. First, see what moved under the
