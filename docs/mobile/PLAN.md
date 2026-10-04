@@ -30,7 +30,7 @@ reviewed by the operator before work starts.
 
 | Phase | Detailed plan | State |
 |---|---|---|
-| P0 Toolchain and skeleton | `plans/P0-toolchain-and-skeleton.md` | **ready for review** |
+| P0 Toolchain and skeleton | `plans/P0-toolchain-and-skeleton.md` | **approved 2026-10-04 — in progress** |
 | P1 The core | `plans/P1-core.md` | written as task 0.6 |
 | P2 Photos on the core | `plans/P2-photos.md` | written at the end of P1 |
 | P3 Drive | `plans/P3-drive.md` | written at the end of P2, after Drive's design is approved |
@@ -51,6 +51,10 @@ reviewed by the operator before work starts.
 Proportional rigor (`GATES.md`): tasks with no code (installs,
 investigations) record their evidence and skip Gate 3. Everything in the core
 gets the full treatment.
+
+**Execution (operator, 2026-10-04):** tasks are implemented in the main
+session; Gate 3 for every code task is two separate review agents (security,
+spec), as `GATES.md` requires.
 
 ## Global constraints
 
@@ -74,15 +78,17 @@ Failure modes the spec implies that are most likely to hurt a real user. Each
 is pinned by a test in the task named.
 
 1. **Interrupted upload** (app killed or network lost mid-file) → resumes
-   without duplicates; no asset record until every part is sent. → 1.6
+   without duplicates; no asset record until every part is sent. → 1.7
 2. **Mixed library** — worker-encrypted (`server`), unencrypted (`off`),
-   single-part (`telegramOriginalId`) and multi-part assets all display. → 1.4
+   single-part (`telegramOriginalId`) and multi-part assets all display. → 1.5
 3. **Seeking a huge video** — ranges at part boundaries, past the end, on a
-   2 GB file → correct `206`/`416`, memory bounded. → 0.3 (arithmetic), 1.5
+   2 GB file → correct `206`/`416`, memory bounded. → 0.3 (arithmetic), 1.6
 4. **Missing or wrong key** — no zke config, wrong password, truncated part →
-   a clear error, never plaintext written, never a crash. → 1.1, 1.4
-5. **Telegram refuses** — `429` floods, bot removed from the channel → backoff
-   or a clear message; backup never spins forever. → 1.3
+   a clear error, never plaintext written, never a crash. → 1.1, 1.5
+5. **Telegram's limits under load** — a fast scroll through 10,000 photos, or
+   a `429` flood: what is on screen loads first, scrolled-away requests are
+   dropped, reads pause for `retry_after`, and a removed bot gives a clear
+   message instead of endless retries. → 1.3, 1.4
 
 ---
 
@@ -112,16 +118,20 @@ Detailed: `plans/P0-toolchain-and-skeleton.md`.
       JavaScript, both directions.
 - [ ] **1.2** Session + worker client — sign-in (hosted and self-hosted),
       `telegram-config`, `zke-config`, `dc-manifest`, `bulk-upload-check`,
-      `POST /api/assets` (`clientUpload`).
-- [ ] **1.3** Telegram client — `sendDocument`, `getFile`, download,
-      `deleteMessage`; `429` and fatal errors.
-- [ ] **1.4** Read path — thumbnail, preview, original and byte ranges, for
-      every asset shape.
-- [ ] **1.5** Local media server — loopback only, per-launch secret, `Range`,
-      next-part prefetch, bounded cache.
-- [ ] **1.6** Upload engine — prepare encrypted parts on disk, send, resume
+      `POST /api/assets` (`clientUpload`); the Drive adapter's routes typed but
+      exercised in P3.
+- [ ] **1.3** Telegram client — `sendDocument`, `getFile` (with its result
+      cached), download, `deleteMessage`; `429` and fatal errors.
+- [ ] **1.4** Fetch scheduler (SPEC §4.9) — newest-first thumbnails,
+      cancellation when nobody waits, one fetch per file, bounded concurrency,
+      global pause on `429`.
+- [ ] **1.5** Read path — thumbnail, existing preview, original and byte
+      ranges, for every asset shape.
+- [ ] **1.6** Local media server — loopback only, per-launch secret, `Range`,
+      next-part prefetch, client disconnect cancels through the scheduler.
+- [ ] **1.7** Upload engine — prepare encrypted parts on disk, send, resume
       journal, metadata post.
-- [ ] **1.7** `dc-cli` and Gate 2 for the whole core against the test
+- [ ] **1.8** `dc-cli` and Gate 2 for the whole core against the test
       account, both directions with photos.daemonclient.uz.
 
 **Exit:** SPEC §9 P1.
@@ -135,13 +145,15 @@ Detailed: `plans/P0-toolchain-and-skeleton.md`.
       `workerUrl`; secrets to secure storage.
 - [ ] **2.3** Media through the local server — thumbnails, photos, video, on
       iOS and Android.
-- [ ] **2.4** Thumbnails and previews at upload (SPEC §5.1) — includes the
-      additive worker change for `telegramPreviewId` (Linux first).
+- [ ] **2.4** Thumbnails at upload (SPEC §5.1, D14) — 256 px JPEG +
+      thumbhash from the platform image engine; local thumbnails for assets
+      that have none. No preview, no worker change.
 - [ ] **2.5** Foreground automatic upload through the core.
 - [ ] **2.6** Background upload — encrypted parts handed to the background
       uploader (SPEC §5.2); Android WorkManager.
-- [ ] **2.7** HEIC and video on Android — native HEIC decode with preview
-      fallback; HEVC playback with the H.264 rendition fallback.
+- [ ] **2.7** HEIC and video on Android — native HEIC decode (Android 9+),
+      thumbnail-quality on Android 8; HEVC playback with the H.264 rendition
+      fallback.
 - [ ] **2.8** Live photos, EXIF/GPS, `deviceAssetId` dedupe.
 - [ ] **2.9** Account deletion entry (Apple requirement).
 - [ ] **2.10** Remove unused Immich features (approved list).

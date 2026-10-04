@@ -49,6 +49,9 @@ because of it (Cloudflare body and CPU limits).
 | D11 | **Top priorities for Photos:** automatic upload that just works (also in the background); excellent thumbnails; HEIC on **both** iPhone and Android; videos that open instantly and seek smoothly. | 2026-10-04 | operator |
 | D12 | Remove what DaemonClient does not use — from a written list the operator approves first (§5.7). | 2026-10-04 | operator |
 | D13 | One Cargo workspace at `mobile/`; both apps import the same core through one Flutter plugin package. | 2026-10-04 | plan |
+| D14 | **No preview upload from the apps.** Viewer order: blur (thumbhash, from D1) → thumbnail → original. An existing preview (`telegramPreviewId`, e.g. from the web's HEIC fix) is used when present. Supersedes the preview in §5.1's first version and the worker change it needed. | 2026-10-04 | operator |
+| D15 | **Smart loading:** what is on screen loads first; requests for what scrolled away are dropped; concurrency and Telegram's limits are respected (§4.9). | 2026-10-04 | operator |
+| D16 | One shared engine with two thin adapters — Photos (`/api/assets`, Photos key, thumbnails, checksum) and Drive (`/api/drive/files`, Drive key, ordered `messages`). | 2026-10-04 | plan, confirmed by operator |
 
 ---
 
@@ -197,6 +200,26 @@ or repurpose them, and every value must survive the app's strict parser
 - Logs never contain tokens, keys, passwords, or Telegram URLs (which embed the
   bot token).
 
+### 4.9 Fetch scheduler — smart loading (D15)
+
+Every Telegram read goes through one scheduler in the core:
+
+- **Visible first, newest first.** Thumbnail requests are served
+  last-in-first-out, so after a fast scroll the rows now on screen load before
+  the ones the user flew past.
+- **Dropped when nobody waits.** Immich's image loader already cancels a
+  request when its thumbnail scrolls off screen (`RemoteImagesImpl.swift:15-17`,
+  `image_request.dart:29`); the local server sees the connection close and the
+  scheduler cancels that fetch unless another request is waiting for the same
+  file.
+- **One fetch per file.** Concurrent requests for the same `file_id` share one
+  download.
+- **Bounded.** A fixed number of concurrent Telegram downloads; `getFile`
+  results are cached for their validity window so each thumbnail costs one
+  round-trip, not two; a `429` pauses all reads for `retry_after`.
+- **Classes:** thumbnails, then the photo/video being viewed, then prefetch.
+  Uploads have their own queue and never starve the screen.
+
 ---
 
 ## 5. DaemonClient Photos (Phase 2)
@@ -228,20 +251,21 @@ What changes in `immich/mobile`; everything else stays Immich's:
    worker.
 6. **Sync** — unchanged: `/api/sync/stream` on `workerUrl`.
 
-### 5.1 Thumbnails, HEIC and video (D11)
+### 5.1 Thumbnails, HEIC and video (D11, D14)
 
-- **Made on the phone by the OS's own image engine** (PhotoKit on iOS,
-  MediaStore/ImageDecoder on Android) — it reads HEIC, RAW and video frames,
-  applies rotation, and is hardware-accelerated. Rust does not decode images:
-  the platform does it better. Per upload: a 256 px JPEG thumbnail (the web's
-  size), its thumbhash, and a **~1440 px JPEG preview**.
-- **The preview is what makes HEIC work everywhere.** An Android phone shows an
-  iPhone photo through its JPEG preview — no HEIC decoder needed. Full-resolution
-  zoom decodes HEIC natively (Android 9+ `ImageDecoder`) and falls back to the
-  preview when the device cannot.
-- Storing the preview needs one **additive** worker change: `clientUpload`
-  accepts `telegramPreviewId` (today it reads only the thumbnail —
-  `assets.ts:1321-1324`). Linux machine first.
+- **Thumbnails are made on the phone by the OS's own image engine** (PhotoKit
+  on iOS, MediaStore/ImageDecoder on Android): it reads HEIC, RAW and video
+  frames, applies rotation, and is hardware-accelerated. Rust does not decode
+  images; the platform does it better. Per upload: a 256 px JPEG thumbnail (the
+  web's size) and its thumbhash. **No preview** (D14).
+- **What the viewer shows, in order:** the blur (thumbhash, already in D1 and
+  synced) → the thumbnail → the original. Where an asset already has a preview
+  (`telegramPreviewId`, from the web's HEIC fix), it is used before the
+  original. Assets with no thumbnail at all (some old web uploads) get one made
+  on the phone from the original and cached locally — never uploaded.
+- **HEIC:** iPhones and Android 9+ (`ImageDecoder`) decode HEIC natively, so
+  originals open directly. The app supports Android 8 (`minSdk 26`), which
+  cannot; there, a HEIC photo shows at thumbnail quality.
 - **Video** plays in the platform players (AVPlayer, ExoPlayer) from the
   core's local server. Rust's job: decrypt fast, map seeks to parts, and fetch
   the next part before the player asks. iPhone HEVC video plays on Android
@@ -364,3 +388,4 @@ into tasks.
 |---|---|---|
 | 2026-10-04 | First draft | operator, 2026-10-04 |
 | 2026-10-04 | D11–D13: priorities, clean-up, workspace at `mobile/`; §5.1, §5.2, §5.7 | operator (priorities), plan (layout) |
+| 2026-10-04 | D14–D16: no preview upload (§5.1 rewritten, worker change dropped), smart loading (§4.9), shared engine + two adapters | operator |

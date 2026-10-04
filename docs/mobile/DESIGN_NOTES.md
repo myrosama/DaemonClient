@@ -49,3 +49,13 @@ and `PLAN.md` with the detailed P0 plan.
 iOS Simulator runtime yet.
 
 **Gate evidence:** docs only — no gates apply.
+
+> **Correction, same day (operator):** the apps upload **no preview** (D14).
+> The preview was added on the web so browsers could show HEIC; iPhones and
+> Android 9+ decode HEIC natively, so the apps show blur → thumbnail →
+> original, and the planned `telegramPreviewId` worker change is dropped. One
+> fewer Telegram message per photo also eases rate limits during backup.
+> Added the same day: smart loading (D15, SPEC §4.9) — the operator wants
+> visible thumbnails first and scrolled-away requests dropped. Immich already
+> cancels off-screen image requests, so the core cancels the matching
+> Telegram fetch when the local-server connection closes.

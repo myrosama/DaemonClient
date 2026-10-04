@@ -135,6 +135,11 @@ machine first (rule in `project_ios_app` memory).
   `video_viewer.widget.dart:124` picks `original` vs `video/playback`.
 - Remote images are loaded natively through Pigeon APIs
   (`lib/platform/remote_image_api.g.dart`, Swift side in `ios/Runner/Images`).
+- Image requests are **cancellable** end to end: Dart `ImageRequest.cancel()`
+  (`lib/infrastructure/loaders/image_request.dart:29`) → native
+  `cancel()` → `URLSessionDataTask.cancel()`
+  (`ios/Runner/Images/RemoteImagesImpl.swift:15-17`). Scrolling a thumbnail off
+  screen closes its HTTP request.
 - Uploads: `lib/services/background_upload.service.dart` plus the foreground
   upload service; iOS background work in `ios/Runner/Background`.
 - Metadata sync stays on `/api/sync/stream` — see the strict-parse traps in the
