@@ -1,6 +1,7 @@
 # Mobile apps — spec
 
-**Status:** draft for the operator's review, 2026-10-04. Nothing here is built.
+**Status:** **approved by the operator, 2026-10-04.** Implementation follows
+`PLAN.md`.
 Changes to this file need the operator's approval; record each one in the
 decisions log (§11).
 
@@ -45,6 +46,9 @@ because of it (Cloudflare body and CPU limits).
 | D8 | Sign-in: server address field for self-hosters; "Sign in with a DaemonClient account" for the hosted service; "Create account" opens the sign-up page in an in-app browser sheet. | 2026-10-04 | operator |
 | D9 | Names and ids: **DaemonClient Photos** `uz.daemonclient.photos`, **DaemonClient Drive** `uz.daemonclient.drive`. | 2026-10-04 | operator (accepted default) |
 | D10 | Testing uses the test account only, never the operator's library. | 2026-10-04 | operator (accepted default) |
+| D11 | **Top priorities for Photos:** automatic upload that just works (also in the background); excellent thumbnails; HEIC on **both** iPhone and Android; videos that open instantly and seek smoothly. | 2026-10-04 | operator |
+| D12 | Remove what DaemonClient does not use — from a written list the operator approves first (§5.7). | 2026-10-04 | operator |
+| D13 | One Cargo workspace at `mobile/`; both apps import the same core through one Flutter plugin package. | 2026-10-04 | plan |
 
 ---
 
@@ -80,7 +84,7 @@ calls, and an app is not a browser.
 
 | Path | What |
 |---|---|
-| `mobile/core/` | Cargo workspace |
+| `mobile/Cargo.toml` | the Cargo workspace (one lockfile, one build folder) |
 | `mobile/core/dc-core/` | the core library — pure Rust, no FFI, fully unit-tested |
 | `mobile/core/dc-cli/` | a command-line front end to the core, for testing against real Telegram and a real worker without an app (Gate 2) |
 | `mobile/core/compat/` | test vectors produced by the **production** JavaScript crypto (`drive/src/crypto.js`), so Rust is checked against the real thing |
@@ -90,6 +94,10 @@ calls, and an app is not a browser.
 
 Keeping `dc-core` free of any binding code means a Swift binding (uniffi) can
 sit beside the Flutter one later without touching the core.
+
+**One core, two apps:** both apps list `dc_core_flutter` as a path dependency.
+There is one copy of the source; each app compiles it into its own bundle
+(iOS apps cannot share a library at run time, and do not need to).
 
 ---
 
@@ -220,6 +228,46 @@ What changes in `immich/mobile`; everything else stays Immich's:
    worker.
 6. **Sync** — unchanged: `/api/sync/stream` on `workerUrl`.
 
+### 5.1 Thumbnails, HEIC and video (D11)
+
+- **Made on the phone by the OS's own image engine** (PhotoKit on iOS,
+  MediaStore/ImageDecoder on Android) — it reads HEIC, RAW and video frames,
+  applies rotation, and is hardware-accelerated. Rust does not decode images:
+  the platform does it better. Per upload: a 256 px JPEG thumbnail (the web's
+  size), its thumbhash, and a **~1440 px JPEG preview**.
+- **The preview is what makes HEIC work everywhere.** An Android phone shows an
+  iPhone photo through its JPEG preview — no HEIC decoder needed. Full-resolution
+  zoom decodes HEIC natively (Android 9+ `ImageDecoder`) and falls back to the
+  preview when the device cannot.
+- Storing the preview needs one **additive** worker change: `clientUpload`
+  accepts `telegramPreviewId` (today it reads only the thumbnail —
+  `assets.ts:1321-1324`). Linux machine first.
+- **Video** plays in the platform players (AVPlayer, ExoPlayer) from the
+  core's local server. Rust's job: decrypt fast, map seeks to parts, and fetch
+  the next part before the player asks. iPhone HEVC video plays on Android
+  phones with an HEVC decoder; where one is missing, the existing H.264
+  rendition (`playbackChunks`) is the fallback.
+
+### 5.2 Automatic upload (D11)
+
+Keep Immich's backup engine — it watches the library, decides what to upload,
+tracks state, and schedules background work. Replace only how bytes travel:
+the core encrypts the parts **to files on disk**, and the existing background
+uploader (`background_downloader`, which uses `URLSession` on iOS) sends each
+part straight to Telegram's `sendDocument`. That keeps uploads running while
+the app is in the background, within iOS limits. The core then posts the
+metadata. Verified in P2 before it is relied on.
+
+### 5.7 Clean-up (D12)
+
+`immich/` holds the whole upstream Immich monorepo; `FORK.md` says `server/`,
+`machine-learning/`, `docker/`, `e2e/` and `cli/` are not used. The website's
+build (production, deployed from Linux) runs through the same pnpm workspace,
+so removals are proposed as a list, approved by the operator, and checked
+against the web build on the Linux machine before they land. Unused Immich
+features inside the app (demo logins, OAuth, Immich support and licence
+screens) are listed and removed in P2.
+
 Open items to settle **during** Phase 2, by reading code and testing — not
 assumed here: R§6 "Open items" (deviceAssetId, live photos, EXIF, iOS
 background limits).
@@ -314,4 +362,5 @@ into tasks.
 
 | Date | Change | Approved by |
 |---|---|---|
-| 2026-10-04 | First draft | — (pending) |
+| 2026-10-04 | First draft | operator, 2026-10-04 |
+| 2026-10-04 | D11–D13: priorities, clean-up, workspace at `mobile/`; §5.1, §5.2, §5.7 | operator (priorities), plan (layout) |
