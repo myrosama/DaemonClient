@@ -50,6 +50,21 @@ In `BUILD_ORDER.md` wiring order. P7 is step 5, so it comes **before** P15.
 | 6 | **P14 final URL** | Still the 10×2s poll, ending in three URLs rather than one that lands the user signed in. |
 | 7 | **Release `v2.1.0`**, then P3 | Waits on the live proof below. |
 
+**CI has been red since 2026-09-19 — found 2026-10-04, after the pause.** Only
+`selfhost (20.12.0)` fails; every other job, including the new `secrets` job,
+passes. Two causes, both on Node 20.12, the installer's own floor:
+
+- **Ctrl-C at a prompt crashes** instead of cancelling: `util.styleText` rejects
+  an array of formats (`['strikethrough', 'dim']`) on 20.12. A real user-facing
+  bug — the cancellation path P5 exists to protect.
+- `test/schema-replay.test.mjs` imports `node:sqlite`, which 20.12 does not have.
+
+It went red with the 19 Sep push (P5 through P9/P10 landed together) and nobody
+looked — Gate 4's "confirm CI is green" was skipped. Fix both before anything
+else in self-host: either raise the Node floor to a version that has both, or
+make the kit and the test work on 20.12. Decide on evidence from the Node
+changelog, not from memory.
+
 ### Only the operator can unblock
 
 - **Throwaway accounts** — a Telegram bot, a Cloudflare account, a Google
@@ -77,9 +92,9 @@ agents actually launched:
 | Secret scanner + wider leak guard `42eebd5` | Not run | One agent; its findings fixed; the fixes not re-reviewed |
 | `image-size` bump `883b132` | n/a | None — a dependency bump |
 
-`42eebd5` and `883b132` were committed but **not pushed** at the pause, so CI
-has not run on them. The next push carries them, including a new CI job that
-scans for committed credentials — if that push goes red, look there first.
+`42eebd5` and `883b132` were unpushed at the pause; they went out on
+2026-10-04 with the pause records (`2482165`). The new `secrets` CI job passed.
+CI as a whole is red, but from the Node 20.12 failure above, not from them.
 
 ## The single most important fact
 
