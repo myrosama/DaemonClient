@@ -45,7 +45,11 @@ turnstile."*
 
 ## 3. Architecture options
 
-File Browser's UI reaches its backend only through `frontend/src/api/*` (files, share, pub, search, users, settings, commands, tus) and `utils/auth.ts`. That single seam is what makes options A and C feasible.
+File Browser's UI reaches its backend through `frontend/src/api/*` (files, share, pub, search, users, settings, commands, tus), `utils/auth.ts` and `utils/constants.ts`. There are two exceptions, which build backend URLs directly with `createURL`:
+- `views/files/Preview.vue:303` (`api/raw`, for EPUB)
+- `views/Share.vue:362` (`api/public/dl`)
+
+The adapter's `createURL` must map those paths as well. Otherwise, that seam is what makes options A and C feasible.
 
 | | **A. Fork the Vue frontend; adapter in place of `api/*`** | **B. File Browser's REST API inside the worker** | **C. Fork; the service worker plays the backend** |
 |---|---|---|---|
@@ -109,7 +113,7 @@ Drive features File Browser lacks become **Settings tabs**: encryption (`/api/dr
 2. Turnstile siteverify, fail-closed, also checking `hostname` and `action`.
 3. Firebase `signInWithPassword` over REST (as `auth.ts:96-108`).
 4. Firestore `config/cloudflare` lookup, so an unprovisioned user goes to onboarding.
-5. Set `__session` with `Domain=.daemonclient.uz; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=400d`.
+5. Set `__session` with `Domain=.daemonclient.uz; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=400d`. The payload must be exactly what `/create-session` signs: `{uid, email, idToken, refreshToken, exp, scope:'global'}`, signed with `SESSION_SECRET` (`auth-worker/src/index.ts:174-186`). `/session-token` rejects a cookie with no `refreshToken` (`:269`).
 6. `303` to `continue`.
 
 At most four subrequests, counting the activity log `/create-session` already writes. Errors re-render the form with **one generic message**, so it never reveals which accounts exist. Headers: `no-store`, `frame-ancestors 'none'`, and a CSP allowing scripts and frames only from `challenges.cloudflare.com`. Turnstile's implicit render puts `cf-turnstile-response` into the form, so no app JavaScript is needed. One dashboard step: add `auth.daemonclient.uz` to the widget's hostnames (site key: `accounts-portal/src/components/Turnstile.jsx:6`).
@@ -157,7 +161,7 @@ Every phase passes all four gates in `docs/plan/GATES.md`.
 - **Gate 4.** Docs and code in separate commits, with no AI trailers.
 
 **Phases**
-1. Auth hub: `GET/POST /login`, logout hardening, a short-lived web exchange token. Additive; classic Drive keeps working.
+1. Auth hub: `GET/POST /login`, logout hardening, a short-lived web exchange token. Additive; classic Drive keeps working. Exit criterion: every web login path enforces Turnstile or a rate limit unconditionally.
 2. Import `e8a388f` unmodified. Then: license and NOTICE, rebrand, strip, static config. Then the read-only adapter (browse, search, preview, download, zip) at `/next/`.
 3. Writes (upload, mkdir, rename/move, recursive delete, editor save) and the Settings tabs.
 4. Cutover and a rollback drill. Remove `/classic/` after two weeks.
@@ -167,7 +171,7 @@ Every phase passes all four gates in `docs/plan/GATES.md`.
 
 1. Is a login page at `auth.daemonclient.uz/login` acceptable, with Photos able to share it later? Or must it live on `drive.daemonclient.uz`, which means moving Drive hosting to Cloudflare?
 2. Mobile JSON login: keep it without Turnstile and add a rate limit, or move the apps to an in-app web login that shows Turnstile?
-3. Is `TURNSTILE_SECRET` bound on the central worker today? Do you want Firebase-side abuse protection? That is a separate decision.
+3. Do you want abuse protection on Firebase's side as well? That is a separate product decision.
 4. Is sharing in scope for this update or a later one? Public links stream ciphertext through the worker to recipients.
 5. Copy: drop it, or ref-count shared Telegram messages?
 6. Is v1 without image thumbnails acceptable?
