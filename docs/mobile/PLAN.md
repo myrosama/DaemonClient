@@ -103,7 +103,7 @@ Detailed: `plans/P0-toolchain-and-skeleton.md`.
       flutter_rust_bridge codegen).
 - [ ] **0.2** Run the existing Photos fork in the Simulator; record what it
       does at sign-in.
-- [ ] **0.3** Cargo workspace at `mobile/` and `dc-core` with `chunk_plan`
+- [x] **0.3** Cargo workspace at `mobile/` and `dc-core` with `chunk_plan`
       (part count; byte range → parts, with the edge cases of Review focus 3).
 - [ ] **0.4** `dc_core_flutter` plugin; the Photos app shows the core version
       on its sign-in screen, on the iOS Simulator and Android.

@@ -221,18 +221,33 @@ git commit -m "docs(mobile): record what the current Photos fork does at sign-in
 
 ### Task 0.3: Cargo workspace and `dc-core` with `chunk_plan`
 
+> **Changed at Gate 3, 2026-10-05** (see `DESIGN_NOTES.md` 0.3): the eager
+> `parts_for_range(...) -> Option<Vec<PartSlice>>` below became
+> `plan_range(...) -> RangePlan` (`Partial(PartSlices)` — a lazy iterator —
+> `| Unsatisfiable | Ignore`) plus `plan_suffix(...)`, because a corrupt file
+> size could make the Vec enormous. The steps below are kept as written; the
+> code in `mobile/core/dc-core/src/chunk_plan.rs` is the current contract.
+
 Full treatment (it is the chunk path).
 
 **Files:**
-- Create: `mobile/Cargo.toml`, `mobile/rust-toolchain.toml`, `mobile/.gitignore`
+- Create: `mobile/Cargo.toml`, `mobile/rust-toolchain.toml`, `mobile/.gitignore`,
+  `mobile/clippy.toml` (added at Gate 3)
 - Create: `mobile/core/dc-core/Cargo.toml`, `mobile/core/dc-core/src/lib.rs`,
   `mobile/core/dc-core/src/chunk_plan.rs`
 
-**Interfaces:**
+**Interfaces** (as shipped after Gate 3):
 - Produces: `dc_core::version() -> &'static str`;
-  `dc_core::chunk_plan::{PART_SIZE: u64, ENCRYPTION_OVERHEAD: u64, part_count(file_size: u64) -> u64, PartSlice { index: u64, start: u64, end_inclusive: u64 }, parts_for_range(file_size: u64, start: u64, end_inclusive: u64) -> Option<Vec<PartSlice>>}`.
+  `dc_core::chunk_plan::{PART_SIZE: u64, ENCRYPTION_OVERHEAD: u64,
+  part_count(file_size: u64) -> u64, PartSlice { index: u64, start: u64,
+  end_inclusive: u64 }, RangePlan { Partial(PartSlices), Unsatisfiable, Ignore },
+  PartSlices (lazy Iterator<Item = PartSlice>; remaining() -> u64,
+  byte_range() -> (u64, u64)), plan_range(file_size: u64, start: u64,
+  end_inclusive: u64) -> RangePlan, plan_suffix(file_size: u64, suffix_len: u64)
+  -> RangePlan}`.
   Task 0.4 calls `version()` and `part_count()`; P1's read path and media
-  server call `parts_for_range()`.
+  server call `plan_range()` / `plan_suffix()` — after validating the manifest
+  (its part list must match `part_count`, allowing one part for 0 bytes).
 
 - [ ] **Step 1: Workspace files**
 

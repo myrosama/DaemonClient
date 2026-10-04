@@ -80,7 +80,20 @@ Photos and Drive store bytes **the same way**:
 | Key scope | one key per user per app — **different** password/salt for Photos (`zke_*` D1 config) and Drive (`drive_zke` D1 config) | `drive.ts:82-107`, `d1-adapter.ts:339` |
 
 Because each chunk carries its own IV and tag, any chunk can be fetched and
-decrypted alone. That is what makes video seeking and "open without
+decrypted alone.
+
+> **Corrections, 2026-10-05 (Gate 3 of P0 Task 0.3):**
+> - The Drive constant is now at `drive/src/App.jsx:81` (and `:296`), not `:28`
+>   — the 2026-10-04 bug-1 commits moved it.
+> - The worker stores **one** part for a 0-byte upload
+>   (`assets.ts:1788,1858`: `Math.max(1, Math.ceil(size / CHUNK_SIZE))`), where
+>   `Math.ceil` alone gives 0. Readers trust the manifest's part list, never a
+>   count computed from the size.
+> - Native players treat a short `206` as end-of-file, and iPhone video opens
+>   with a suffix range `bytes=-N` to find its index — both stated in the
+>   comments of `immich/web/src/service-worker/telegram-media.ts`
+>   (`planVideoRange`). The phone's media server must serve the full range and
+>   handle suffix ranges. That is what makes video seeking and "open without
 downloading" possible: a byte range maps to the chunks that cover it.
 
 ### Drive specifics
