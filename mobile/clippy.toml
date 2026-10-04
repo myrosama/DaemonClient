@@ -1,0 +1,5 @@
+# The strict lints in Cargo.toml forbid crash-prone shortcuts in the core.
+# Tests may use them: a panicking test is a failing test, which is the point.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-indexing-slicing-in-tests = true
