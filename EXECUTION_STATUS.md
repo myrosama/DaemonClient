@@ -34,10 +34,10 @@ above is not edited from there, so the two machines never touch the same lines.
 
 | | |
 |---|---|
-| **Plan** | `daemonclient-ops/docs/roadmap-history/MOBILE_APP.md` (decided 2026-06-10): rebranded Flutter fork of `immich/mobile`, Photos + Drive in one app, four phases. |
-| **Shipped** | Phase 1 in part — `7349bde` rebrand + CI builds without a Mac, `b1a466d` full Flutter source tracked, `d64da81` mobile CI fixes. |
-| **Not yet met** | Phase 1 exit: TestFlight build on the iPhone, APK on the Samsung, login → existing library loads. |
-| **Working on now** | Nothing yet — machine set up 2026-10-04. First step is a written plan for the operator to approve. |
+| **Start here** | **`docs/mobile/README.md`** — reading order, files, rules. |
+| **Direction (2026-10-04, replaces the 2026-06-10 plan)** | Two apps — DaemonClient Photos (the Immich fork) and DaemonClient Drive (new) — both Flutter, both on one **Rust core** that does encryption, Telegram transfers and media streaming on the phone. The worker keeps only metadata, as on the web. The old plan (`daemonclient-ops/docs/roadmap-history/MOBILE_APP.md`: one app, worker-side uploads) is superseded. |
+| **Shipped** | Before the new direction: `7349bde` rebrand (Android ids only) + CI, `b1a466d` full Flutter source tracked, `d64da81` mobile CI fixes. |
+| **Working on now** | `docs/mobile/SPEC.md` drafted (research in `RESEARCH.md`); **waiting for the operator's review**. Next: `PLAN.md`, then P0. Order: Rust core → Photos → Drive. No code yet. |
 | **Rules** | Plan first, approved by the operator. Every change through `GATES.md`. Message the Linux session before touching `immich-api-shim`, `deployment-service` or anything the per-user workers run — the app talks to them, and the native sync parser aborts all sync on one unexpected value. |
 
 ## Paused 2026-09-30 — how to resume
