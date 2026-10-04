@@ -17,9 +17,9 @@
 
 | | |
 |---|---|
-| **Date** | 2026-09-30 |
+| **Date** | 2026-10-04 |
 | **Phase** | **Self-host installer PAUSED.** Shipped before the pause: P11, P8, P6, P0, P1/P2/P4, P5, P9, P10; Phase 0 done. |
-| **Just finished** | Brought these records current (they had gone stale for eleven days and two commits), recorded the gate debt honestly, and paused the self-host work. |
+| **Just finished** | Bug 1 fixed in code: a brand-new account could not use Photos or Drive for its first minutes (see "Live-product bugs" at the end). Two machines now share memory; the MacBook owns the iOS section below. |
 | **Working on now** | Bug fixes in the live product — none started yet. Update this row as each one starts and ships. |
 | **Next up** | Whatever bug the operator brings. Self-host resumes only when asked; where it resumes is in the pause section below, deliberately not here. |
 | **Blocked on** | *(self-host, on resume)* **Creating a real Firebase project has never been run.** Every read path is verified against the live CLI, but `projects:create` needs a Google account and burns project quota, so only the operator can prove it. That is the one thing standing between here and a release. |
@@ -320,3 +320,57 @@ belongs to a different account. 107 → 115 tests.
 
 This is exactly the class of defect Phase 3 exists to catch, found earlier and
 more cheaply by reading the code.
+
+## Live-product bugs
+
+### 1. New accounts could not use Photos or Drive for their first minutes — fixed 2026-10-04
+
+**Symptom.** Every brand-new account, for 1–3 minutes after setup: Photos showed
+`Error: 503` (from `loadServerConfig`), Drive "Configuration Error … Failed to
+fetch". Both started working on their own a few minutes later.
+
+**Cause, with evidence.** A first-time Cloudflare account gets a brand-new
+`<name>.workers.dev` subdomain during provisioning (each is its own delegated
+DNS zone). Cloudflare issues its TLS certificate (`*.<name>.workers.dev`,
+Let's Encrypt) a minute or two **after** the deploy call returns. Until then the
+browser's handshake fails — Chrome logged `ERR_SSL_VERSION_OR_CIPHER_MISMATCH`
+against the test account's worker, and minutes later the same worker answered
+200 with a certificate issued minutes earlier. The Photos service worker turned
+the failed fetch into a synthesized 503. Ruled out on the way: the central API
+(200), the worker bundle new users receive (ran it locally exactly as deployed:
+200, CORS and preflight correct), CORS configuration.
+
+**Fix.** No error for something that fixes itself; say so, estimate, re-check.
+- accounts-portal dashboard: for accounts set up in the last 15 minutes
+  (`setupTimestamp`), probe `<worker>/api/health` from the browser
+  (`no-cors` — reachability, not CORS) and hold Photos/Drive links with "your
+  private cloud is finishing setup — usually 1–3 minutes" until it answers.
+  Established users are never probed. `src/utils/waitForWorker.js`,
+  `src/utils/cloudStartup.js`.
+- Photos: the service worker tags "the user's own worker could not be
+  reached" (`DC_WORKER_UNREACHABLE`; never for the shared entry point, so an
+  outage is not mislabelled); the root layout shows "isn't ready yet —
+  usually 1–3 minutes" with a countdown and auto re-check instead of the error
+  page; after login the app re-initialises against the user's worker
+  (`resetInit`) so a first login lands there too, not on a stuck spinner.
+- Drive: `driveApi` flags the same failure; the app shows the same screen.
+- Both apps cap the wait at 5 minutes (as the dashboard does), then say plainly
+  that the cloud can't be reached and stop reloading; countdowns pause in
+  background tabs; Photos gained a Sign out that also ends the shared session.
+
+**Gate evidence.** G1 — tests first: portal 25, Drive 11, Photos 13 (one through
+the real SDK); 8/8 mutations caught. G2 — module run against real hosts
+(reachable worker, unreachable host, route-off worker); builds of all three
+apps; svelte-check: no errors in changed files. **Not yet:** a real new account
+after deploy. G3 — four review rounds, separate security and spec agents;
+every HIGH/MEDIUM fixed and re-reviewed. G4 — this commit.
+
+**Known gaps, tracked:**
+- No CI job runs the Photos (`immich/web`) unit tests yet.
+- `deployment-service` `provisionWorker` ignores `enableWorkersDev`'s result
+  (the same defect P8 fixed in self-host only) — a failed route enable would
+  leave a new worker unreachable for good, and these screens would then show
+  the 5-minute "can't reach" message rather than fix it.
+- A dashboard click in the first instant before Firestore answers, or a
+  middle-click, is not held.
+
