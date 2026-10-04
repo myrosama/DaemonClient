@@ -198,6 +198,7 @@ jobs:
           cache: npm
           cache-dependency-path: accounts-portal/package-lock.json
       - run: npm ci
+      - run: npm test
       - run: npm run build
 
   # The Drive app. (No lint gate yet — the committed eslint config currently
@@ -218,4 +219,5 @@ jobs:
           cache: npm
           cache-dependency-path: drive/package-lock.json
       - run: npm ci
+      - run: npm test
       - run: npm run build

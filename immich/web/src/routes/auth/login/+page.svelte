@@ -8,6 +8,7 @@
   import { oauth } from '$lib/utils';
   import { getServerErrorMessage, handleError } from '$lib/utils/handle-error';
   import { persistSession, trySharedSignIn } from '$lib/utils/sso';
+  import { resetInit } from '$lib/utils/server';
   import { login, type LoginResponseDto } from '@immich/sdk';
   import { Alert, Button, Field, Input, PasswordInput, Stack } from '@immich/ui';
   import { onMount } from 'svelte';
@@ -34,8 +35,9 @@
     eventManager.emit('AuthLogin', user);
   };
 
-  const onFirstLogin = () => goto(Route.changePassword());
-  const onOnboarding = () => goto(Route.onboarding());
+  // invalidateAll: re-run the root load against the user's own worker (see resetInit).
+  const onFirstLogin = () => goto(Route.changePassword(), { invalidateAll: true });
+  const onOnboarding = () => goto(Route.onboarding(), { invalidateAll: true });
 
   onMount(async () => {
     // Already signed in on another DaemonClient app? Adopt that session instead
@@ -45,6 +47,7 @@
     const shared = await trySharedSignIn();
     if (shared) {
       persistSession(shared);
+      resetInit();
       await goto(data.continueUrl, { invalidateAll: true });
       return;
     }
@@ -103,6 +106,7 @@
         if ((user as any).workerUrl) {
           navigator.serviceWorker?.controller?.postMessage({ type: 'SET_WORKER_URL', workerUrl: (user as any).workerUrl });
         }
+        resetInit();
       }
 
       if (user.isAdmin && !serverConfig.isOnboarded) {

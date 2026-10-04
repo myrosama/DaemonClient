@@ -4,6 +4,8 @@
   import { getPagesProvider, getSettingsProvider } from '$lib/commands';
   import DownloadPanel from './DownloadPanel.svelte';
   import ErrorLayout from './ErrorLayout.svelte';
+  import CloudStartingLayout from './CloudStartingLayout.svelte';
+  import { clearWait, isWorkerUnreachable, sessionStore } from '$lib/utils/worker-unreachable';
   import OnEvents from '$lib/components/OnEvents.svelte';
   import NavigationLoadingBar from './NavigationLoadingBar.svelte';
   import UploadPanel from './UploadPanel.svelte';
@@ -142,6 +144,15 @@
       }
     }
   };
+
+  // Reached the app (or failed for some other reason): end any capped "still
+  // being created" wait, so a later outage starts with a fresh clock.
+  $effect(() => {
+    const storage = sessionStore();
+    if (storage && !isWorkerUnreachable(page.data.error)) {
+      clearWait(storage);
+    }
+  });
 </script>
 
 <OnEvents {onWebsocketConnect} />
@@ -188,7 +199,9 @@
 </svelte:head>
 
 <TooltipProvider>
-  {#if page.data.error}
+  {#if page.data.error && isWorkerUnreachable(page.data.error)}
+    <CloudStartingLayout />
+  {:else if page.data.error}
     <ErrorLayout error={page.data.error}></ErrorLayout>
   {:else}
     {@render children?.()}

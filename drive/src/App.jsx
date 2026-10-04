@@ -17,10 +17,63 @@ import {
     login as apiLogin, logout as apiLogout, getSession, getUid, getUserEmail,
     onAuthChange, getDriveConfig, getWorkerUrl, driveApi,
 } from './api.js';
+import { isWorkerUnreachable, waitStartedAt, waitedTooLong, clearWait, sessionStore } from './worker-unreachable.js';
 
 // Onboarding (account creation + Telegram/Cloudflare setup) lives entirely on
 // accounts.daemonclient.uz; the Drive app is login → dashboard only.
 const ACCOUNTS_ONBOARDING_URL = 'https://accounts.daemonclient.uz/setup?continue=https://drive.daemonclient.uz/dashboard';
+
+// Shown when the user's own worker can't be reached at all. For a brand-new
+// account that is Cloudflare still issuing the certificate for its new
+// workers.dev subdomain — it fixes itself within a few minutes — so say so and
+// keep checking. Capped (worker-unreachable.js WAIT_CAP_MS): past that the cause
+// is something else, so stop reloading and say that plainly.
+const CLOUD_RETRY_SECONDS = 20;
+function CloudStartingScreen({ onLogout }) {
+    const [state] = useState(() => {
+        const storage = sessionStore();
+        const started = storage ? waitStartedAt(storage) : null;
+        const gaveUp = storage ? waitedTooLong(storage) : false;
+        // No usable storage → we could never tell when to stop: retry by hand only.
+        return { gaveUp, autoRetry: started !== null && !gaveUp };
+    });
+    const [left, setLeft] = useState(CLOUD_RETRY_SECONDS);
+    useEffect(() => {
+        if (!state.autoRetry) return;
+        // Ticks skip while the tab is hidden, so a background tab sends nothing
+        // and the countdown picks up where it left off when the user returns.
+        const t = setInterval(() => {
+            if (!document.hidden) setLeft(l => Math.max(0, l - 1));
+        }, 1000);
+        return () => clearInterval(t);
+    }, [state.autoRetry]);
+    useEffect(() => {
+        if (state.autoRetry && left <= 0) window.location.reload();
+    }, [left, state.autoRetry]);
+    return (
+        <div className="min-h-screen bg-gray-900 text-white flex items-center justify-center p-4">
+            <div role="status" className="w-full max-w-xl bg-gray-800 rounded-xl shadow-2xl p-6">
+                <div className="flex justify-between items-center mb-4">
+                    <h1 className="text-3xl font-bold text-indigo-400">DaemonClient</h1>
+                    <button onClick={onLogout} className="bg-gray-700 hover:bg-gray-600 text-white py-2 px-4 rounded-lg text-sm">Logout</button>
+                </div>
+                {state.gaveUp ? (
+                    <>
+                        <h2 className="text-xl font-semibold mb-2">We can't reach your private cloud</h2>
+                        <p className="text-gray-300">It has been unreachable for more than five minutes. Your network may be blocking workers.dev, an ad blocker may be interfering, or something is wrong with your cloud. Try again, or log out and back in.</p>
+                    </>
+                ) : (
+                    <>
+                        <h2 className="text-xl font-semibold mb-2">Your private cloud isn't ready yet</h2>
+                        <p className="text-gray-300">If you just signed up, it is still being created — this usually takes 1–3 minutes, and nothing is wrong. Drive will open on its own when it is ready.</p>
+                        {state.autoRetry && <p className="mt-4 text-gray-400 text-sm">Checking again in {left}s…</p>}
+                    </>
+                )}
+                <button onClick={() => window.location.reload()} className="mt-4 bg-indigo-500 hover:bg-indigo-600 text-white py-2 px-4 rounded-lg text-sm">{state.gaveUp ? 'Try again' : 'Check now'}</button>
+            </div>
+        </div>
+    );
+}
 
 // ============================================================================
 // --- CORE LOGIC & HELPER FUNCTIONS ---
@@ -785,6 +838,7 @@ const DashboardView = () => {
     const [config, setConfig] = useState(null);
     const [isLoadingConfig, setIsLoadingConfig] = useState(true);
     const [configError, setConfigError] = useState('');
+    const [cloudStarting, setCloudStarting] = useState(false);
 
     const [items, setItems] = useState([]);
     const [totalItems, setTotalItems] = useState(0);
@@ -1025,6 +1079,9 @@ const DashboardView = () => {
         // 1. Fetch the user's Telegram bot config from their OWN worker. Used for
         //    the client's direct upload/download to Telegram.
         getDriveConfig().then(cfg => {
+            // Reached the cloud: end any capped "still being created" wait.
+            const storage = sessionStore();
+            if (storage) clearWait(storage);
             if (cfg && cfg.botToken && cfg.channelId) {
                 setConfig({ botToken: cfg.botToken, channelId: cfg.channelId, proxyUrl: cfg.proxyUrl });
             } else {
@@ -1032,7 +1089,8 @@ const DashboardView = () => {
                 setConfig(null);
             }
         }).catch(error => {
-            setConfigError(`Error loading config: ${error.message}.`);
+            if (isWorkerUnreachable(error)) setCloudStarting(true);
+            else setConfigError(`Error loading config: ${error.message}.`);
             setConfig(null);
         }).finally(() => {
             setIsLoadingConfig(false);
@@ -1298,6 +1356,9 @@ const DashboardView = () => {
     };
     const handleLogout = async () => {
         try { await destroySyncEngine(); } catch { }
+        // The next account in this tab starts any "isn't ready yet" wait afresh.
+        const waitStore = sessionStore();
+        if (waitStore) clearWait(waitStore);
         // Drop the SW's streaming registrations (and its chunk cache) so the
         // next user on this machine can't stream the previous user's files.
         try {
@@ -1733,6 +1794,7 @@ const DashboardView = () => {
     };
 
     if (isLoadingConfig) return <FullScreenLoader message="Loading Configuration..." />;
+    if (cloudStarting) return <CloudStartingScreen onLogout={handleLogout} />;
     if (configError) return (<div className="min-h-screen bg-gray-900 text-white flex items-center justify-center p-4"><div className="w-full max-w-3xl bg-gray-800 rounded-xl shadow-2xl p-6"><div className="flex justify-between items-center mb-4"><h1 className="text-3xl font-bold text-indigo-400">DaemonClient</h1><button onClick={handleLogout} className="bg-red-500 hover:bg-red-600 text-white py-2 px-4 rounded-lg text-sm">Logout</button></div><div className="p-4 bg-red-700 text-red-100 rounded-lg"><h2 className="text-xl font-semibold mb-2">Configuration Error</h2><p>{configError}</p><p className="mt-2">Try logging out and back in.</p></div></div></div>);
 
     const filteredItems = items.filter(item => item.fileName.toLowerCase().includes(searchTerm.toLowerCase()));

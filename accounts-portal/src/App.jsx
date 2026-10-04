@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { BrowserRouter, Routes, Route, Navigate, Link, useNavigate, useLocation } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
-import { auth, db, IS_SELF_HOST } from './config/firebase'
+import { auth, db, IS_SELF_HOST, PHOTOS_URL, DRIVE_URL } from './config/firebase'
 import firebase from './config/firebase'
 import { Button } from './components/ui/Button'
 import { Input } from './components/ui/Input'
@@ -12,6 +12,8 @@ import { toast } from './components/ui/Toast'
 import { SetupWorker } from './pages/SetupWorker'
 import { SetupProcessor } from './pages/SetupProcessor'
 import { consumeOAuthState, CF_OAUTH_REDIRECT_URI, DEPLOYMENT_WORKER } from './config/cloudflareOauth'
+import { waitForWorker } from './utils/waitForWorker'
+import { isFreshSetup, shouldHoldLink, appHosts } from './utils/cloudStartup'
 import { thumbHashToDataURL } from 'thumbhash'
 
 // Render a stored thumbhash (base64) into a tiny blurred data-URL preview —
@@ -1683,6 +1685,10 @@ function backendApiUrl(workerUrl) {
   return /\/api$/.test(base) ? base : `${base}/api`
 }
 
+// Hosts of the Photos/Drive links the dashboard holds while a fresh account's
+// cloud is still unreachable (see utils/cloudStartup.js).
+const APP_HOSTS = appHosts([PHOTOS_URL, DRIVE_URL])
+
 function DashboardPage() {
   const [services, setServices] = useState({ photos: null, drive: null })
   const [backend, setBackend] = useState(null)
@@ -1691,6 +1697,19 @@ function DashboardPage() {
   const [bgPreset, setBgPreset] = useState(
     () => localStorage.getItem('dc-bg-preset') || 'blue'
   )
+  // Can this browser reach the user's worker yet? A brand-new account lands
+  // here while Cloudflare is still issuing the certificate for its new
+  // workers.dev subdomain, and until then Photos and Drive fail ("Error: 503",
+  // "Failed to fetch"). Checked only for an account set up in the last few
+  // minutes (utils/cloudStartup.js) — never for established users.
+  //   'idle'     not checked (not a fresh account)
+  //   'checking' first probe in flight — Photos/Drive links held
+  //   'starting' unreachable — links held, banner explains
+  //   'ready'    reachable — links work; a note says so if we had been waiting
+  //   'unknown'  gave up after 5 minutes — links released, banner says so
+  const [cloud, setCloud] = useState('idle')
+  const [wasStarting, setWasStarting] = useState(false)
+  const [heldClick, setHeldClick] = useState(false)
 
   useEffect(() => {
     const user = auth.currentUser
@@ -1711,6 +1730,32 @@ function DashboardPage() {
     const t = setTimeout(() => setLoading(false), 3000)
     return () => { unsubs.forEach(u => u()); clearTimeout(t) }
   }, [])
+
+  const freshSetup = isFreshSetup(backend?.setupTimestamp)
+  useEffect(() => {
+    const workerUrl = backend?.workerUrl
+    if (!workerUrl || !freshSetup) { setCloud('idle'); return }
+    const ac = new AbortController()
+    setCloud('checking')
+    waitForWorker(workerUrl, {
+      signal: ac.signal,
+      onWaiting: () => { setCloud('starting'); setWasStarting(true) },
+    }).then((r) => {
+      if (r.reason === 'aborted') return
+      setCloud(r.ready ? 'ready' : 'unknown')
+    })
+    return () => ac.abort()
+  }, [backend?.workerUrl, freshSetup])
+
+  // While a fresh account's worker is unreachable, a click on any Photos/Drive
+  // link would only open an error page — hold it and explain instead. One
+  // handler for every such link on the page, so a link added later is covered.
+  const holdAppLinks = (e) => {
+    const a = e.target.closest && e.target.closest('a[href]')
+    if (!a || !shouldHoldLink(a.href, { cloud, hosts: APP_HOSTS })) return
+    e.preventDefault()
+    setHeldClick(true)
+  }
 
   // Pull REAL counts + recent items from the user's own worker once we know its
   // URL. Fires a fire-and-forget auto-update first so workers provisioned before
@@ -1828,7 +1873,40 @@ function DashboardPage() {
     <>
       <DashboardBackground preset={bgPreset} />
 
-      <div className="min-h-screen">
+      <div className="min-h-screen" onClickCapture={holdAppLinks}>
+        {(cloud === 'starting' || (cloud === 'checking' && heldClick)) && (
+          <div role="status" className="px-4 sm:px-8 lg:px-12 pt-5">
+            <div className={`max-w-[1020px] mx-auto dc-card rounded-[11px] px-5 py-4 flex items-start gap-3 ${heldClick ? 'ring-1 ring-amber-300/60' : ''}`}>
+              <Spinner size={16} className="text-white mt-0.5 shrink-0" />
+              <div className="text-[13px] leading-relaxed">
+                <p className="text-white font-medium">Your private cloud is finishing setup</p>
+                <p className="text-[rgba(255,255,255,0.6)]">
+                  Cloudflare is issuing its security certificate — this usually takes 1–3 minutes.
+                  This page checks on its own; the Photos and Drive buttons will work as soon as it is ready.
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+        {cloud === 'ready' && wasStarting && (
+          <div role="status" className="px-4 sm:px-8 lg:px-12 pt-5">
+            <div className="max-w-[1020px] mx-auto dc-card rounded-[11px] px-5 py-4 text-[13px] leading-relaxed">
+              <p className="text-white font-medium">Your private cloud is ready</p>
+              <p className="text-[rgba(255,255,255,0.6)]">Photos and Drive are good to go.</p>
+            </div>
+          </div>
+        )}
+        {cloud === 'unknown' && (
+          <div role="status" className="px-4 sm:px-8 lg:px-12 pt-5">
+            <div className="max-w-[1020px] mx-auto dc-card rounded-[11px] px-5 py-4 text-[13px] leading-relaxed ring-1 ring-amber-300/60">
+              <p className="text-white font-medium">Your private cloud is taking longer than usual</p>
+              <p className="text-[rgba(255,255,255,0.6)]">
+                It still can't be reached after five minutes. Try Photos or Drive again in a minute or two —
+                if it keeps failing, reload this page.
+              </p>
+            </div>
+          </div>
+        )}
         {loading ? (
           <div className="flex items-center justify-center min-h-screen">
             <Spinner size={28} className="text-white" />

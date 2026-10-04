@@ -3,6 +3,7 @@
 /// <reference lib="esnext" />
 /// <reference lib="webworker" />
 import { PUBLIC_DAEMONCLIENT_WORKER_URL } from '$env/static/public';
+import { unreachableResponseFor } from '$lib/utils/worker-unreachable';
 import { installMessageListener } from './messaging';
 import { handleCancel } from './request';
 import {
@@ -132,9 +133,12 @@ async function resetMediaState() {
 }
 
 async function persistToken(token: string | null) {
-  // User switch or logout → wipe per-user media caches.
-  if (cachedToken && token !== cachedToken) await resetMediaState();
+  // User switch or logout → wipe per-user media caches. Switch the token first:
+  // requests that arrive while the caches are being cleared must already see
+  // the new (or no) session, not the old one.
+  const previous = cachedToken;
   cachedToken = token;
+  if (previous && token !== previous) await resetMediaState();
   const cache = await caches.open('dc-auth-v3');
   if (token) {
     await cache.put(TOKEN_CACHE_KEY, new Response(token));
@@ -266,6 +270,14 @@ async function directWorkerFetch(request: Request, cacheable: boolean, pathname:
       return cached;
     }
   }
+  // Logout forgets the session BEFORE contacting the worker: if the worker is
+  // unreachable the request below fails, and the user must still be signed out
+  // here (the token for this request is already in `headers`).
+  if (pathname === '/api/auth/logout') {
+    await persistToken(null);
+    await persistWorkerUrl(null);
+  }
+
   if (request.headers.get('range')) headers['Range'] = request.headers.get('range')!;
   if (request.headers.get('content-type')) headers['Content-Type'] = request.headers.get('content-type')!;
 
@@ -302,10 +314,7 @@ async function directWorkerFetch(request: Request, cacheable: boolean, pathname:
         if (cached) return cached;
       }
       console.error('[SW] Network error, no cache available:', err);
-      return new Response(
-        JSON.stringify({ message: 'Service temporarily unavailable' }),
-        { status: 503, headers: { 'Content-Type': 'application/json', 'Retry-After': '5' } }
-      );
+      return unreachableResponseFor(base, DEFAULT_WORKER_URL);
     }
   } else {
     try {
@@ -324,10 +333,7 @@ async function directWorkerFetch(request: Request, cacheable: boolean, pathname:
         if (cached) return cached;
       }
       console.error('[SW] Network error, no cache available:', err);
-      return new Response(
-        JSON.stringify({ message: 'Service temporarily unavailable' }),
-        { status: 503, headers: { 'Content-Type': 'application/json', 'Retry-After': '5' } }
-      );
+      return unreachableResponseFor(base, DEFAULT_WORKER_URL);
     }
   }
 
@@ -340,10 +346,6 @@ async function directWorkerFetch(request: Request, cacheable: boolean, pathname:
     } catch {}
   }
 
-  if (pathname === '/api/auth/logout') {
-    await persistToken(null);
-    await persistWorkerUrl(null);
-  }
 
   if (cacheable && response.ok) {
     const cache = await caches.open('dc-assets-v4');
@@ -684,6 +686,18 @@ sw.addEventListener('message', (event) => {
   }
   if (event.data?.type === 'SET_WORKER_URL') {
     persistWorkerUrl(event.data.workerUrl || null);
+  }
+  // Forget the session completely, then say so on the reply port — used by the
+  // "can't reach your cloud" screen's Sign out, which must not navigate until the
+  // stored worker URL is gone (or the next page would hit the dead worker again).
+  if (event.data?.type === 'RESET_SESSION') {
+    event.waitUntil(
+      (async () => {
+        await persistToken(null);
+        await persistWorkerUrl(null);
+        event.ports?.[0]?.postMessage({ type: 'SESSION_RESET' });
+      })(),
+    );
   }
 });
 

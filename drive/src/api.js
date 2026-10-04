@@ -11,6 +11,8 @@
 // side) is kept in localStorage so reloads stay logged in — same model as the
 // Photos (Immich) web client.
 
+import { fetchWorker } from './worker-unreachable.js';
+
 // The worker this app logs in through. Hosted builds use the shared central
 // worker; a self-hosted build points at the operator's OWN worker via
 // VITE_API_BASE (the setup script writes this at build time). Mirrors the
@@ -89,7 +91,9 @@ export async function driveApi(path, opts = {}) {
   if (!s.workerUrl) { const e = new Error('No storage provisioned'); e.code = 'NO_WORKER'; throw e; }
   const headers = { 'Authorization': 'Bearer ' + s.token, ...(opts.headers || {}) };
   if (opts.body && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
-  const res = await fetch(`${s.workerUrl}${path}`, { ...opts, headers });
+  // A brand-new account's worker can't be reached for its first minute or two
+  // (no TLS certificate yet) — fetchWorker flags that as WORKER_UNREACHABLE.
+  const res = await fetchWorker(fetch, `${s.workerUrl}${path}`, { ...opts, headers });
   if (res.status === 401) { logout(); throw new Error('Session expired — please sign in again'); }
   const text = await res.text();
   let body;

@@ -71,7 +71,9 @@ export async function endSharedSession(): Promise<void> {
   const hub = PUBLIC_DAEMONCLIENT_AUTH_URL?.replace(/\/+$/, '');
   if (!hub) return;
   try {
-    await fetch(`${hub}/logout`, { credentials: 'include', redirect: 'manual' });
+    // keepalive: a navigation right after this call must not cancel it, or the
+    // shared cookie survives and the next page signs the user straight back in.
+    await fetch(`${hub}/logout`, { credentials: 'include', redirect: 'manual', keepalive: true });
   } catch {
     /* best effort — the local session is cleared regardless */
   }

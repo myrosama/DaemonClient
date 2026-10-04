@@ -22,3 +22,11 @@ async function _init(fetch: Fetch) {
 }
 
 export const init = memoize(_init, () => 'singlevalue');
+
+// `init` ran once, before login, against the shared entry point. After a login
+// the user's own worker is the one to ask — forget the memoized run so the next
+// root load re-initialises against it (and, if that worker can't be reached yet,
+// shows "your private cloud is still being created" instead of a stuck spinner).
+export const resetInit = () => {
+  init.cache.clear?.();
+};
