@@ -51,6 +51,7 @@ because of it (Cloudflare body and CPU limits).
 | D13 | One Cargo workspace at `mobile/`; both apps import the same core through one Flutter plugin package. | 2026-10-04 | plan |
 | D14 | **No preview upload from the apps.** Viewer order: blur (thumbhash, from D1) → thumbnail → original. An existing preview (`telegramPreviewId`, e.g. from the web's HEIC fix) is used when present. Supersedes the preview in §5.1's first version and the worker change it needed. | 2026-10-04 | operator |
 | D15 | **Smart loading:** what is on screen loads first; requests for what scrolled away are dropped; concurrency and Telegram's limits are respected (§4.9). | 2026-10-04 | operator |
+| D17 | **What the user opened always goes first.** While the opened photo/video part loads, nothing else starts — no thumbnails, no prefetch, no new upload part; everything resumes once it has loaded or the viewer closes (§4.9). | 2026-10-04 | operator |
 | D16 | One shared engine with two thin adapters — Photos (`/api/assets`, Photos key, thumbnails, checksum) and Drive (`/api/drive/files`, Drive key, ordered `messages`). | 2026-10-04 | plan, confirmed by operator |
 
 ---
@@ -217,8 +218,20 @@ Every Telegram read goes through one scheduler in the core:
 - **Bounded.** A fixed number of concurrent Telegram downloads; `getFile`
   results are cached for their validity window so each thumbnail costs one
   round-trip, not two; a `429` pauses all reads for `retry_after`.
-- **Classes:** thumbnails, then the photo/video being viewed, then prefetch.
-  Uploads have their own queue and never starve the screen.
+- **Priority classes (D17), highest first:**
+  1. **Opened** — the photo the user tapped, or the video part at the
+     playhead. While any opened request is loading, **nothing else starts**:
+     queued thumbnails, prefetch and new upload parts wait. Thumbnails already
+     in flight are tiny and finish; in-flight prefetch is cancelled and
+     re-queued; an upload part already in flight finishes (aborting it would
+     throw away up to 19 MB already sent).
+  2. **Next** — the next video part ahead of the playhead; the photos either
+     side of the opened one, so a swipe is instant.
+  3. **Visible** — thumbnails on screen, newest request first.
+  4. **Background** — upload parts, off-screen prefetch, cache warming.
+  Lower classes resume, in order, the moment the opened item has loaded or the
+  viewer closes. Uploads never starve: they run whenever nothing above them
+  is waiting.
 
 ---
 
@@ -389,3 +402,4 @@ into tasks.
 | 2026-10-04 | First draft | operator, 2026-10-04 |
 | 2026-10-04 | D11–D13: priorities, clean-up, workspace at `mobile/`; §5.1, §5.2, §5.7 | operator (priorities), plan (layout) |
 | 2026-10-04 | D14–D16: no preview upload (§5.1 rewritten, worker change dropped), smart loading (§4.9), shared engine + two adapters | operator |
+| 2026-10-04 | D17: the opened item pre-empts everything (§4.9 priority classes) | operator |

@@ -85,10 +85,12 @@ is pinned by a test in the task named.
    2 GB file → correct `206`/`416`, memory bounded. → 0.3 (arithmetic), 1.6
 4. **Missing or wrong key** — no zke config, wrong password, truncated part →
    a clear error, never plaintext written, never a crash. → 1.1, 1.5
-5. **Telegram's limits under load** — a fast scroll through 10,000 photos, or
-   a `429` flood: what is on screen loads first, scrolled-away requests are
-   dropped, reads pause for `retry_after`, and a removed bot gives a clear
-   message instead of endless retries. → 1.3, 1.4
+5. **Telegram's limits under load** — a fast scroll through 10,000 photos,
+   tapping a photo while 200 thumbnails and a backup are queued, or a `429`
+   flood: the tapped photo's request goes out next, ahead of everything; what
+   is on screen loads before what was scrolled past; reads pause for
+   `retry_after`; a removed bot gives a clear message instead of endless
+   retries. → 1.3, 1.4
 
 ---
 
@@ -122,7 +124,8 @@ Detailed: `plans/P0-toolchain-and-skeleton.md`.
       exercised in P3.
 - [ ] **1.3** Telegram client — `sendDocument`, `getFile` (with its result
       cached), download, `deleteMessage`; `429` and fatal errors.
-- [ ] **1.4** Fetch scheduler (SPEC §4.9) — newest-first thumbnails,
+- [ ] **1.4** Fetch scheduler (SPEC §4.9) — four priority classes with the
+      opened item pre-empting everything (D17), newest-first thumbnails,
       cancellation when nobody waits, one fetch per file, bounded concurrency,
       global pause on `429`.
 - [ ] **1.5** Read path — thumbnail, existing preview, original and byte
