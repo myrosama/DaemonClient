@@ -2121,7 +2121,6 @@ const DashboardView = () => {
                 when it opens, and a Save from stale defaults ("Automatic") would
                 replace a custom password and orphan every file under it. */}
             {isSettingsOpen && config && !zkeLoading && <SettingsModal
-                key={`${zkeEnabled}-${zkeMode}`}
                 initialConfig={config}
                 onSave={handleSaveSettings}
                 onClose={() => setIsSettingsOpen(false)}

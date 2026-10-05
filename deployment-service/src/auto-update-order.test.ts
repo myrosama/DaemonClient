@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import worker, { encryptToken } from './index';
+import worker, { encryptToken, decryptToken } from './index';
 
 // Auto-update re-deploys a user's worker.
 // - A newly minted session secret is recorded as PENDING before the deploy and
@@ -20,7 +20,7 @@ const env = {
   ALLOWED_ORIGINS: 'https://photos.daemonclient.uz',
 } as any;
 
-type Call = { url: string; method: string; body?: string };
+type Call = { url: string; method: string; body?: string; metadata?: any };
 type World = { cfg: Record<string, string>; patchStatus?: number | number[]; deployOk?: boolean; rotate?: boolean };
 
 async function stubWorld(world: World) {
@@ -29,7 +29,12 @@ async function stubWorld(world: World) {
   vi.stubGlobal('fetch', async (input: any, init: RequestInit = {}) => {
     const url = typeof input === 'string' ? input : input.url;
     const method = (init.method || 'GET').toUpperCase();
-    calls.push({ url, method, body: typeof init.body === 'string' ? init.body : undefined });
+    const call: Call = { url, method, body: typeof init.body === 'string' ? init.body : undefined };
+    if (init.body instanceof FormData) {
+      const md = init.body.get('metadata');
+      call.metadata = JSON.parse(typeof md === 'string' ? md : md ? await (md as Blob).text() : '{}');
+    }
+    calls.push(call);
     if (url.includes('identitytoolkit.googleapis.com')) {
       return new Response(JSON.stringify({ users: [{ localId: 'uid1', email: 'u@example.com' }] }));
     }
@@ -99,6 +104,9 @@ describe('auto-update: a new session secret goes live only once the worker runs 
     expect(calls.indexOf(all[0])).toBeGreaterThan(deployIndex(calls));
     expect(fieldsOf(all[0]).sessionSecret?.stringValue).toBe(earlier);
     expect(fieldsOf(all[0]).pendingSessionSecret).toBeUndefined();
+    // …and it is the secret the worker was deployed with.
+    const deployed = calls[deployIndex(calls)].metadata?.bindings?.find((b: any) => b.name === 'SESSION_SECRET');
+    expect(deployed?.text).toBe(earlier);
   });
 
   it('if recording a newly minted secret fails, nothing is deployed', async () => {
@@ -130,8 +138,7 @@ describe('auto-update: a rotated refresh token', () => {
     expect((await autoUpdate()).status).toBe(200);
     const first = saves(calls)[0];
     expect(calls.indexOf(first)).toBeLessThan(deployIndex(calls));
-    expect(fieldsOf(first).refreshToken?.stringValue).toBeTruthy();
-    expect(fieldsOf(first).refreshToken.stringValue).not.toBe((await oauthCfg()).refreshToken);
+    expect(await decryptToken(fieldsOf(first).refreshToken.stringValue, MASTER)).toBe('rotated-refresh');
   });
 
   it('a failed first save does not stop the deploy (it does not depend on it), and it is saved again after', async () => {
@@ -140,6 +147,14 @@ describe('auto-update: a rotated refresh token', () => {
     expect(deployIndex(calls)).toBeGreaterThan(-1);
     const last = saves(calls).at(-1)!;
     expect(calls.indexOf(last)).toBeGreaterThan(deployIndex(calls));
-    expect(fieldsOf(last).refreshToken?.stringValue).toBeTruthy();
+    expect(await decryptToken(fieldsOf(last).refreshToken.stringValue, MASTER)).toBe('rotated-refresh');
+  });
+
+  it('is saved again when the deploy fails after a failed first save', async () => {
+    const calls = await stubWorld({ cfg: await oauthCfg(), rotate: true, patchStatus: [403, 200], deployOk: false });
+    expect((await autoUpdate()).status).toBe(500);
+    const last = saves(calls).at(-1)!;
+    expect(calls.indexOf(last)).toBeGreaterThan(deployIndex(calls));
+    expect(await decryptToken(fieldsOf(last).refreshToken.stringValue, MASTER)).toBe('rotated-refresh');
   });
 });

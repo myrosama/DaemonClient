@@ -20,7 +20,7 @@ export async function encryptToken(token: string, masterKeyString: string): Prom
   return btoa(String.fromCharCode(...combined));
 }
 
-async function decryptToken(combinedB64: string, masterKeyString: string): Promise<string> {
+export async function decryptToken(combinedB64: string, masterKeyString: string): Promise<string> {
   const key = await crypto.subtle.importKey(
     'raw',
     new TextEncoder().encode(masterKeyString),
