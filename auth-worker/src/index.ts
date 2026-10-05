@@ -1,3 +1,12 @@
+import {
+  SESSION_CREATOR_ORIGIN,
+  corsOriginFor,
+  isAppOrigin,
+  isJsonRequest,
+  safeReturnUrl,
+  turnstileResultOk,
+} from './policy'
+
 export interface Env {
   SESSION_SECRET: string
   FIREBASE_API_KEY: string
@@ -8,8 +17,9 @@ export interface Env {
 
 /**
  * Canonical Turnstile siteverify. Fails CLOSED: a network error, a non-2xx, a
- * non-JSON body or `success !== true` all deny the request, because the point
- * is to refuse traffic we cannot prove is human.
+ * non-JSON body, or anything short of a success on our own page for our own
+ * widget (turnstileResultOk) denies the request, because the point is to refuse
+ * traffic we cannot prove is human.
  */
 async function verifyTurnstile(token: string, clientIp: string | null, secret: string): Promise<boolean> {
   if (!secret) return false // unconfigured server must not silently allow everything
@@ -23,8 +33,7 @@ async function verifyTurnstile(token: string, clientIp: string | null, secret: s
       body,
     })
     if (!res.ok) return false
-    const result = await res.json() as { success?: boolean }
-    return result.success === true
+    return turnstileResultOk(await res.json())
   } catch {
     return false
   }
@@ -110,19 +119,10 @@ export default {
     const url = new URL(request.url)
 
     // CORS — must echo an exact origin when credentials are included, but ONLY
-    // for our own origins. Reflecting arbitrary Origins with credentials:true
-    // let any website read a visitor's login state / CSRF the logout.
-    const ALLOWED_ORIGINS = new Set([
-      'https://daemonclient.uz',
-      'https://www.daemonclient.uz',
-      'https://accounts.daemonclient.uz',
-      'https://photos.daemonclient.uz',
-      'https://drive.daemonclient.uz',
-    ])
+    // for our own origins, and per route: the marketing site may ask whether the
+    // browser is signed in, while only the three apps may read an ID token.
     const requestOrigin = request.headers.get('Origin')
-    const origin = requestOrigin && ALLOWED_ORIGINS.has(requestOrigin)
-      ? requestOrigin
-      : 'https://accounts.daemonclient.uz'
+    const origin = corsOriginFor(url.pathname, requestOrigin)
 
     const corsHeaders = {
       'Access-Control-Allow-Origin': origin,
@@ -137,6 +137,21 @@ export default {
 
     // Create session endpoint
     if (url.pathname === '/create-session' && request.method === 'POST') {
+      // Only the accounts portal creates sessions, and only with a JSON body —
+      // a cross-site form can send neither, so another site cannot sign a
+      // visitor in to an account of its choosing.
+      if (requestOrigin !== SESSION_CREATOR_ORIGIN) {
+        return new Response(JSON.stringify({ error: 'Forbidden' }), {
+          status: 403,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        })
+      }
+      if (!isJsonRequest(request.headers.get('Content-Type'))) {
+        return new Response(JSON.stringify({ error: 'Expected JSON' }), {
+          status: 415,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        })
+      }
       try {
         const body = await request.json() as {
           idToken: string; refreshToken: string; returnUrl: string; 'cf-turnstile-response'?: string
@@ -198,7 +213,8 @@ export default {
         headers.set('Content-Type', 'application/json')
         headers.set('Set-Cookie', `__session=${sessionToken}; Domain=.daemonclient.uz; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${400 * 24 * 60 * 60}`)
 
-        return new Response(JSON.stringify({ redirectUrl: body.returnUrl }), {
+        // Only our own paths and origins; anything else lands on the dashboard.
+        return new Response(JSON.stringify({ redirectUrl: safeReturnUrl(body.returnUrl) ?? '/dashboard' }), {
           status: 200,
           headers
         })
@@ -292,8 +308,16 @@ export default {
       }
     }
 
-    // Logout endpoint
+    // Logout endpoint. Our apps call it with fetch, which always carries an
+    // Origin; requiring one of theirs stops other sites from signing visitors
+    // out of every app.
     if (url.pathname === '/logout') {
+      if (!isAppOrigin(requestOrigin)) {
+        return new Response(JSON.stringify({ error: 'Forbidden' }), {
+          status: 403,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        })
+      }
       const headers = new Headers(corsHeaders)
       headers.set('Set-Cookie', `__session=; Domain=.daemonclient.uz; Path=/; Max-Age=0`)
       headers.set('Location', 'https://daemonclient.uz')

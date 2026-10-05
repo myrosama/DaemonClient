@@ -4,7 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy"
+    "deploy": "wrangler deploy",
+    "test": "node --experimental-strip-types --no-warnings --test src/policy.test.mjs"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20241127.0",
