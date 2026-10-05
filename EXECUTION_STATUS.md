@@ -19,10 +19,10 @@
 |---|---|
 | **Date** | 2026-10-05 |
 | **Phase** | **Self-host installer PAUSED.** Shipped before the pause: P11, P8, P6, P0, P1/P2/P4, P5, P9, P10; Phase 0 done. |
-| **Just finished** | Bug 1 **shipped**: a brand-new account could not use Photos or Drive for its first minutes (see "Live-product bugs" at the end). Two machines share memory; the MacBook owns the iOS section below. |
-| **Live on the web** | Firebase Hosting `photos`, `drive`, `accounts` deployed 2026-10-04 from `main` `6dacd43`; checked on the live sites (Photos service worker, portal banner, Drive screen). Update this row on every deploy. |
-| **Working on now** | Bug 2, slow thumbnails when scrolling far (see "Live-product bugs"): a cloud session is building it as a draft PR. Also: a Photos slowness audit (cloud, report only), and the Drive-on-File-Browser spec (draft PR #1) in Gate 3 review. |
-| **Next up** | Bug 1's last check: a real new account on the live sites. Then bug 2's review and ship, the audit's approved removals, and the Drive spec's open questions to the operator. Self-host resumes only when asked; where it resumes is in the pause section below, deliberately not here. |
+| **Just finished** | Security hardening across the sign-in hub, accounts portal, Drive, the deployment service and the Firestore rules (see "Security hardening — 2026-10-05" at the end). Bug 1 verified by the operator with a brand-new account. |
+| **Live on the web** | 2026-10-05: auth hub `daemonclient-auth` (version fb3b7c32), Firebase Hosting `accounts` and `drive`, `daemonclient-deployment` (version abb34a6e), Firestore rules (released 13:16 UTC) — all from `main` `9b498b4`, each checked live. `photos` is still the 2026-10-04 build from `6dacd43`. Update this row on every deploy. |
+| **Working on now** | Photos speed: the thumbnail scheduler (draft PR #3) is being reworked to the priority model the mobile apps use (docs/mobile/SPEC.md §4.9); the boot debloat (draft PR #4) is in review. Then the Drive-on-File-Browser spec, rewritten with the operator's decisions. |
+| **Next up** | PR #3 rework → review → deploy; PR #4 review → deploy; the clean Drive spec. Self-host resumes only when asked; where it resumes is in the pause section below, deliberately not here. |
 | **Blocked on** | *(self-host, on resume)* **Creating a real Firebase project has never been run.** Every read path is verified against the live CLI, but `projects:create` needs a Google account and burns project quota, so only the operator can prove it. That is the one thing standing between here and a release. |
 | **Staging** | None exists yet. Phase 3 creates one — throwaway Telegram + Cloudflare + Firebase accounts. Until then no self-host change has been proven on real infrastructure. |
 
@@ -329,7 +329,8 @@ more cheaply by reading the code.
 
 **Status.** Shipped: `main` `6dacd43` (fix `cbc372c`), deployed 2026-10-04 to
 Firebase Hosting `photos`, `drive`, `accounts` and checked on the live sites.
-CI green on every job this touches. Open: G2 on a real new account.
+CI green on every job this touches. G2 done: the operator signed up a brand-new
+account on 2026-10-05 and both apps worked.
 
 **Symptom.** Every brand-new account, for 1–3 minutes after setup: Photos showed
 `Error: 503` (from `loadServerConfig`), Drive "Configuration Error … Failed to
@@ -398,4 +399,26 @@ goes first and pauses new thumbnail work until it loads; thumbnails run newest
 first, capped, and are dropped once the page cancels them; the manifest fetch
 moves inside the slot. Built by a cloud session as a draft PR from
 `feat/photos-media-scheduler`; then all four gates here before it ships.
+
+## Security hardening — 2026-10-05
+
+Operator-ordered after a review of the Drive redesign spec. Implemented
+locally, every change through the gates, deployed, verified live, then pushed.
+
+| Component | What it does now |
+|---|---|
+| Sign-in hub (`auth-worker`) | Sessions are created only from the accounts portal with a JSON body; logout only from our apps; a fresh ID token is readable only by the three apps (the landing page may only ask whether the browser is signed in); Turnstile results must come from our page and widget (hostname + action); after sign-in it returns only a path on our site or one of our https origins; `Vary: Origin`. Rules in `src/policy.ts`, `npm test`. |
+| Accounts portal | `return_url` goes through `safeReturnUrl` — only our own pages. |
+| Drive | Uploads never go out unencrypted by accident: they wait while the encryption settings load and pause while the key is locked (a banner explains, with Unlock / Cancel). Custom-password users can unlock again: the same password re-derives the key from the stored salt, after a test decrypt of their own files; Settings opens only once the settings are known, and a new key is saved before it is used. `/stream` serves only types that cannot run script as themselves; everything else is text, sandboxed, or a download, with `nosniff`. |
+| Deployment service | Writes `config/cloudflare` with its own service account. A newly minted session secret is recorded as pending and goes live only after the worker runs with it; overlapping auto-updates can't split it (conditional write); a rotated refresh token is saved before the deploy. |
+| Firestore rules | `config/cloudflare` is read-only for its owner (`scripts/test-firestore-rules.sh`, 14 cases via the Rules API). |
+
+**Gate evidence.** G1: tests first — hub 9, portal 28, Drive 39, deployment
+service 29, rules 14/14; deliberate-breakage check 12/13 caught (the 13th is
+redundant). G2: each component checked live after deploy (hub status codes and
+CORS headers, live bundles, live `sw.js`, the production log line
+`[config-write] saved with the service account` on a real signup before the
+rules went out, the live ruleset compared with the repo). G3: five rounds of
+separate security and correctness agents; every HIGH/MEDIUM fixed and
+re-reviewed. G4: code and docs in separate commits, no AI trailers.
 
