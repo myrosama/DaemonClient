@@ -1,40 +1,19 @@
 <script lang="ts">
   import { authManager } from '$lib/managers/auth-manager.svelte';
   import { releaseManager } from '$lib/managers/release-manager.svelte';
-  import ServerAboutModal from '$lib/modals/ServerAboutModal.svelte';
-  import { userInteraction } from '$lib/stores/user.svelte';
   import { websocketStore } from '$lib/stores/websocket';
   import type { ReleaseEvent } from '$lib/types';
   import { semverToName } from '$lib/utils';
-  import { requestServerInfo } from '$lib/utils/auth';
-  import {
-    getAboutInfo,
-    getVersionHistory,
-    type ServerAboutResponseDto,
-    type ServerVersionHistoryResponseDto,
-  } from '@immich/sdk';
-  import { Icon, modalManager, Text } from '@immich/ui';
-  import { mdiAlert, mdiNewBox } from '@mdi/js';
-  import { onMount } from 'svelte';
+  import { Icon, Text } from '@immich/ui';
+  import { mdiNewBox } from '@mdi/js';
   import { t } from 'svelte-i18n';
 
+  // The DaemonClient API has no live server version or version history, so
+  // show the static build version instead of calling /api/server/about and
+  // /api/server/version-history (and /api/users/me/storage, which
+  // StorageSpace already loads) on every page load.
   const { serverVersion, connected } = websocketStore;
 
-  let info: ServerAboutResponseDto | undefined = $state();
-  let versions: ServerVersionHistoryResponseDto[] = $state([]);
-
-  onMount(async () => {
-    if (userInteraction.aboutInfo && userInteraction.versions && $serverVersion) {
-      info = userInteraction.aboutInfo;
-      versions = userInteraction.versions;
-      return;
-    }
-    await requestServerInfo();
-    [info, versions] = await Promise.all([getAboutInfo(), getVersionHistory()]);
-    userInteraction.aboutInfo = info;
-    userInteraction.versions = versions;
-  });
-  let isMain = $derived(info?.sourceRef === 'main' && info.repository === 'immich-app/immich');
   let version = $derived(
     $serverVersion ? `v${$serverVersion.major}.${$serverVersion.minor}.${$serverVersion.patch}` : null,
   );
@@ -74,17 +53,7 @@
 
   <div class="flex justify-between justify-items-center">
     {#if $connected && version}
-      <button
-        type="button"
-        onclick={() => info && modalManager.show(ServerAboutModal, { versions, info })}
-        class="dark:text-immich-gray flex gap-1 place-items-center place-content-center"
-      >
-        {#if isMain}
-          <Icon icon={mdiAlert} size="1.5em" color="#ffcc4d" /> {info?.sourceRef}
-        {:else}
-          {version}
-        {/if}
-      </button>
+      <p class="dark:text-immich-gray">{version}</p>
     {:else}
       <p class="text-red-500">{$t('unknown')}</p>
     {/if}
