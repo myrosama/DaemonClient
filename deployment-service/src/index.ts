@@ -4,7 +4,7 @@ import { MIGRATION_SQL } from '../../schema/schema.mjs';
 
 // Inline encryption helpers
 const IV_LENGTH = 12;
-async function encryptToken(token: string, masterKeyString: string): Promise<string> {
+export async function encryptToken(token: string, masterKeyString: string): Promise<string> {
   const key = await crypto.subtle.importKey(
     'raw',
     new TextEncoder().encode(masterKeyString),
@@ -579,15 +579,6 @@ async function handleAutoUpdate(request: Request, env: Env): Promise<Response> {
       apiToken = refreshed.accessToken;
       if (refreshed.refreshToken && refreshed.refreshToken !== refresh) {
         rotatedRefresh = await encryptToken(refreshed.refreshToken, env.ENCRYPTION_MASTER_KEY);
-        // Persist the rotated refresh token IMMEDIATELY — before deploy. CF OAuth
-        // refresh tokens are single-use (rotated on every refresh), so the old one
-        // is already spent. If we defer saving until after a successful deploy and
-        // the deploy fails, the new token is lost and every future refresh returns
-        // invalid_grant → auto-update is permanently bricked. Save first, deploy
-        // second. (This was the root cause of workers stuck on old shim versions.)
-        await saveWorkerConfig(uid, {
-          ...cfg, refreshToken: rotatedRefresh, lastUpdatedAt: new Date().toISOString(),
-        }, env, idToken).catch((e) => console.error('Rotated-refresh persist failed:', e?.message));
       }
     }
     const cfApi = new CloudflareAPI();
@@ -597,6 +588,28 @@ async function handleAutoUpdate(request: Request, env: Env): Promise<Response> {
     const sessionSecret = (typeof cfg.sessionSecret === 'string' && cfg.sessionSecret.length >= 32)
       ? cfg.sessionSecret
       : newSessionSecret();
+
+    // Save first, deploy second. CF OAuth refresh tokens are single-use (rotated
+    // on every refresh), so the old one is already spent: deferring the save
+    // past a failed deploy lost the new one and bricked auto-update for good
+    // (the root cause of workers stuck on old shim versions). And a freshly
+    // minted session secret must be on record before a worker starts verifying
+    // sessions with it. If this save fails, stop — deploying anyway would run a
+    // worker whose secret nobody has.
+    if (rotatedRefresh || sessionSecret !== cfg.sessionSecret) {
+      try {
+        await saveWorkerConfig(uid, {
+          ...cfg,
+          ...(rotatedRefresh ? { refreshToken: rotatedRefresh } : {}),
+          sessionSecret,
+          lastUpdatedAt: new Date().toISOString(),
+        }, env, idToken);
+      } catch (e: any) {
+        console.error('[auto-update] pre-deploy config save failed; not deploying:', e?.message);
+        return corsResponse(JSON.stringify({ updated: false, reason: 'config-save-failed' }), { status: 500 });
+      }
+    }
+
     const deployResult = await cfApi.deployWorker({
       accountId: cfg.accountId,
       workerName: cfg.workerName,
@@ -779,7 +792,7 @@ async function fetchWorkerConfig(uid: string, idToken: string, env: Env): Promis
 // signs their sessions. The user may read it, but only this service writes it,
 // with its own service account: firestore.rules refuses the owner's writes, so
 // nothing running as the user (a script on one of our pages included) can point
-// their sessions at another worker or mint its own.
+// their sessions at another worker.
 //
 // Because this write bypasses the rules, `uid` must be the one Google returned
 // for the caller's verified ID token (validateFirebaseToken) — never a value
