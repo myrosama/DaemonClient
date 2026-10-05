@@ -6,26 +6,17 @@
   import ErrorLayout from './ErrorLayout.svelte';
   import CloudStartingLayout from './CloudStartingLayout.svelte';
   import { clearWait, isWorkerUnreachable, sessionStore } from '$lib/utils/worker-unreachable';
-  import OnEvents from '$lib/components/OnEvents.svelte';
   import NavigationLoadingBar from './NavigationLoadingBar.svelte';
   import UploadPanel from './UploadPanel.svelte';
-  import VersionAnnouncement from './VersionAnnouncement.svelte';
-  import { authManager } from '$lib/managers/auth-manager.svelte';
   import { eventManager } from '$lib/managers/event-manager.svelte';
   import { serverConfigManager } from '$lib/managers/server-config-manager.svelte';
-  import ServerRestartingModal from '$lib/modals/ServerRestartingModal.svelte';
-  import { Route } from '$lib/route';
   import { locale } from '$lib/stores/preferences.store';
   import { sidebarStore } from '$lib/stores/sidebar.svelte';
-  import { closeWebsocketConnection, openWebsocketConnection, websocketStore } from '$lib/stores/websocket';
-  import { maintenanceShouldRedirect } from '$lib/utils/maintenance';
-  import { getServerConfig } from '@immich/sdk';
   import {
     CommandPaletteProvider,
     CORE_PAGE_COMMANDS,
     defaultProvider,
     MOBILE_APP_COMMANDS,
-    modalManager,
     OTHER_SITE_COMMANDS,
     PROJECT_SUPPORT_COMMANDS,
     ScreencastOverlay,
@@ -39,7 +30,6 @@
   } from '@immich/ui';
   import { onMount, type Snippet } from 'svelte';
   import { t } from 'svelte-i18n';
-  import { get } from 'svelte/store';
   import '../app.css';
 
   interface Props {
@@ -115,36 +105,6 @@
     showNavigationLoadingBar = false;
   });
 
-  const { serverRestarting } = websocketStore;
-
-  $effect.pre(() => {
-    if (authManager.authenticated || $serverRestarting || page.url.pathname.startsWith(Route.maintenanceMode())) {
-      openWebsocketConnection();
-    } else {
-      closeWebsocketConnection();
-    }
-  });
-
-  serverRestarting.subscribe((isRestarting) => {
-    if (!isRestarting) {
-      return;
-    }
-
-    if (maintenanceShouldRedirect(isRestarting.isMaintenanceMode, location)) {
-      modalManager.show(ServerRestartingModal, {}).catch((error) => console.error('Error [ServerRestartBox]:', error));
-    }
-  });
-
-  const onWebsocketConnect = async () => {
-    const isRestarting = get(serverRestarting);
-    if (isRestarting && maintenanceShouldRedirect(isRestarting.isMaintenanceMode, location)) {
-      const { maintenanceMode } = await getServerConfig();
-      if (maintenanceMode === isRestarting.isMaintenanceMode) {
-        location.reload();
-      }
-    }
-  };
-
   // Reached the app (or failed for some other reason): end any capped "still
   // being created" wait, so a later outage starts with a fresh clock.
   $effect(() => {
@@ -154,10 +114,6 @@
     }
   });
 </script>
-
-<OnEvents {onWebsocketConnect} />
-
-<VersionAnnouncement />
 
 <svelte:head>
   <title>{page.data.meta?.title || 'Web'} - Immich</title>
