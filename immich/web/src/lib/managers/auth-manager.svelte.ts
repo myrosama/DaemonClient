@@ -1,5 +1,4 @@
 import {
-  getAboutInfo,
   getMyPreferences,
   getMyUser,
   logout,
@@ -66,15 +65,10 @@ class AuthManager {
       this.#preferences = preferences;
       this.#user = user;
 
-      if (user.license?.activatedAt) {
-        this.isPurchased = true;
-      } else {
-        // check server status
-        const serverInfo = await getAboutInfo().catch(() => {});
-        if (serverInfo?.licensed) {
-          this.isPurchased = true;
-        }
-      }
+      // The DaemonClient API always reports the server as licensed
+      // (/api/server/about returns licensed: true), so skip that round trip,
+      // which only delayed AuthUserLoaded, and keep the same result.
+      this.isPurchased = true;
 
       eventManager.emit('AuthUserLoaded', user);
     } catch {
