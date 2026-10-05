@@ -21,7 +21,7 @@ const env = {
 } as any;
 
 type Call = { url: string; method: string; body?: string; metadata?: any };
-type World = { cfg: Record<string, string>; patchStatus?: number | number[]; deployOk?: boolean; rotate?: boolean };
+type World = { cfg: Record<string, string>; patchStatus?: number | number[]; deployOk?: boolean; rotate?: boolean; changedSinceRead?: boolean };
 
 async function stubWorld(world: World) {
   const calls: Call[] = [];
@@ -40,9 +40,14 @@ async function stubWorld(world: World) {
     }
     if (url.includes('firestore.googleapis.com') && method === 'GET') {
       const fields = Object.fromEntries(Object.entries(world.cfg).map(([k, v]) => [k, { stringValue: v }]));
-      return new Response(JSON.stringify({ fields }));
+      return new Response(JSON.stringify({ fields, updateTime: '2026-10-05T08:00:00.123456Z' }));
     }
     if (url.includes('firestore.googleapis.com') && method === 'PATCH') {
+      // Someone else wrote the document after our read: a conditional write fails.
+      if (world.changedSinceRead && url.includes('currentDocument.updateTime=')) {
+        patches++;
+        return new Response('{"error":{"status":"FAILED_PRECONDITION"}}', { status: 400 });
+      }
       const s = world.patchStatus ?? 200;
       const status = Array.isArray(s) ? s[Math.min(patches, s.length - 1)] : s;
       patches++;
@@ -156,5 +161,39 @@ describe('auto-update: a rotated refresh token', () => {
     const last = saves(calls).at(-1)!;
     expect(calls.indexOf(last)).toBeGreaterThan(deployIndex(calls));
     expect(await decryptToken(fieldsOf(last).refreshToken.stringValue, MASTER)).toBe('rotated-refresh');
+  });
+});
+
+describe('auto-update: two runs at once (login and first sync both trigger one)', () => {
+  it('the pending-secret save only succeeds if nobody wrote the config since it was read', async () => {
+    const calls = await stubWorld({ cfg: await legacyCfg() });
+    expect((await autoUpdate()).status).toBe(200);
+    const pendingSave = saves(calls)[0];
+    expect(pendingSave.url).toContain('currentDocument.updateTime=' + encodeURIComponent('2026-10-05T08:00:00.123456Z'));
+  });
+
+  it('the run that loses the race deploys nothing, so the record and the worker cannot disagree', async () => {
+    const calls = await stubWorld({ cfg: await legacyCfg(), changedSinceRead: true });
+    const res = await autoUpdate();
+    expect(res.status).toBe(500);
+    expect(await res.json()).toMatchObject({ updated: false, reason: 'config-save-failed' });
+    expect(deployIndex(calls)).toBe(-1);
+  });
+
+  it('a save after a successful deploy is retried once', async () => {
+    const calls = await stubWorld({ cfg: await legacyCfg({ sessionSecret: 's'.repeat(40) }), patchStatus: [500, 200] });
+    expect((await autoUpdate()).status).toBe(200);
+    expect(saves(calls).length).toBe(2);
+    expect(saves(calls).every((c) => calls.indexOf(c) > deployIndex(calls))).toBe(true);
+  });
+
+  it('when recording a new secret fails, a rotated refresh token is still saved on its own', async () => {
+    const cfg = { accountId: 'acc', workerName: 'dc-x', databaseId: 'db', refreshToken: await encryptToken('old-refresh', MASTER) };
+    const calls = await stubWorld({ cfg, rotate: true, patchStatus: [503, 200] });
+    expect((await autoUpdate()).status).toBe(500);
+    expect(deployIndex(calls)).toBe(-1);
+    const last = saves(calls).at(-1)!;
+    expect(await decryptToken(fieldsOf(last).refreshToken.stringValue, MASTER)).toBe('rotated-refresh');
+    expect(fieldsOf(last).pendingSessionSecret).toBeUndefined();
   });
 });

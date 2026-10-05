@@ -551,7 +551,8 @@ async function handleAutoUpdate(request: Request, env: Env): Promise<Response> {
     if (!auth) return corsResponse(JSON.stringify({ error: 'Unauthorized' }), { status: 401 });
     const { uid, idToken } = auth;
 
-    const cfg = await fetchWorkerConfig(uid, idToken, env);
+    const read = await readWorkerConfig(uid, idToken, env);
+    const cfg = read?.cfg ?? null;
     if (!cfg || !cfg.accountId || !cfg.workerName || (!cfg.apiToken && !cfg.refreshToken)) {
       return corsResponse(JSON.stringify({ updated: false, reason: 'no-config' }));
     }
@@ -603,6 +604,11 @@ async function handleAutoUpdate(request: Request, env: Env): Promise<Response> {
     // secret must be on record (as pending) before any worker runs with it; if
     // that save fails, stop. The deploy does not depend on the refresh token,
     // so a failed save of only that one is retried instead.
+    //
+    // Login and the first sync each start an auto-update within a second; two
+    // runs minting two secrets would leave the record and the worker
+    // disagreeing. So the pending secret is written only if the config is
+    // still the version this run read — the run that loses deploys nothing.
     let refreshSaved = !rotatedRefresh;
     if (rotatedRefresh || newlyMinted) {
       try {
@@ -611,11 +617,17 @@ async function handleAutoUpdate(request: Request, env: Env): Promise<Response> {
           ...(rotatedRefresh ? { refreshToken: rotatedRefresh } : {}),
           ...(newlyMinted ? { pendingSessionSecret: sessionSecret } : {}),
           lastUpdatedAt: new Date().toISOString(),
-        }, env, idToken);
+        }, env, idToken, newlyMinted ? { ifUpdateTime: read?.updateTime } : {});
         refreshSaved = true;
       } catch (e: any) {
         if (newlyMinted) {
           console.error('[auto-update] pre-deploy config save failed; not deploying:', e?.message);
+          if (rotatedRefresh) {
+            // The spent token must not stay on record; keep at least the new one.
+            await saveWorkerConfig(uid, { ...cfg, refreshToken: rotatedRefresh, lastUpdatedAt: new Date().toISOString() },
+              env, idToken, { ifUpdateTime: read?.updateTime })
+              .catch((err) => console.error('[auto-update] rotated refresh token not saved:', err?.message));
+          }
           return corsResponse(JSON.stringify({ updated: false, reason: 'config-save-failed' }), { status: 500 });
         }
         console.error('[auto-update] rotated refresh token save failed; saving again after the deploy:', e?.message);
@@ -637,15 +649,18 @@ async function handleAutoUpdate(request: Request, env: Env): Promise<Response> {
       return corsResponse(JSON.stringify({ updated: false, reason: 'deploy-failed', error: deployResult.error }), { status: 500 });
     }
 
-    // The worker now runs with `sessionSecret`: make it the live one.
+    // The worker now runs with `sessionSecret`: make it the live one. Retried
+    // once — until it lands, sign-in signs with the old secret.
     const { pendingSessionSecret: _promoted, ...settled } = cfg;
-    await saveWorkerConfig(uid, {
+    const settledConfig = {
       ...settled,
       ...(rotatedRefresh ? { refreshToken: rotatedRefresh } : {}),
       sessionSecret,
       lastDeployedVersion: SHIM_VERSION,
       lastUpdatedAt: new Date().toISOString(),
-    }, env, idToken);
+    };
+    await saveWorkerConfig(uid, settledConfig, env, idToken)
+      .catch(() => saveWorkerConfig(uid, settledConfig, env, idToken));
 
     return corsResponse(JSON.stringify({ updated: true, from: cfg.lastDeployedVersion || 'unknown', to: SHIM_VERSION }));
   } catch (error: any) {
@@ -793,17 +808,23 @@ async function validateFirebaseToken(request: Request, env: Env): Promise<{ uid:
 }
 
 async function fetchWorkerConfig(uid: string, idToken: string, env: Env): Promise<Record<string, string> | null> {
+  return (await readWorkerConfig(uid, idToken, env))?.cfg ?? null;
+}
+
+// The config plus the document's version (`updateTime`), for a write that must
+// only land if nobody else wrote in between (see handleAutoUpdate).
+async function readWorkerConfig(uid: string, idToken: string, env: Env): Promise<{ cfg: Record<string, string>; updateTime?: string } | null> {
   const path = `artifacts/default-daemon-client/users/${uid}/config/cloudflare`;
   const url = `https://firestore.googleapis.com/v1/projects/${env.FIREBASE_PROJECT_ID}/databases/(default)/documents/${path}`;
   const res = await fetch(url, { headers: { 'Authorization': `Bearer ${idToken}` } });
   if (!res.ok) return null;
   const data = await res.json() as any;
   if (!data.fields) return null;
-  const out: Record<string, string> = {};
+  const cfg: Record<string, string> = {};
   for (const [k, v] of Object.entries<any>(data.fields)) {
-    if (v.stringValue !== undefined) out[k] = v.stringValue;
+    if (v.stringValue !== undefined) cfg[k] = v.stringValue;
   }
-  return out;
+  return { cfg, updateTime: typeof data.updateTime === 'string' ? data.updateTime : undefined };
 }
 
 // config/cloudflare holds the address of the user's worker and the secret that
@@ -816,12 +837,18 @@ async function fetchWorkerConfig(uid: string, idToken: string, env: Env): Promis
 // for the caller's verified ID token (validateFirebaseToken) — never a value
 // from the request — and it must be a plain id, so it cannot address another
 // document path.
-export async function saveWorkerConfig(uid: string, config: any, env: Env, userIdToken?: string): Promise<void> {
+export async function saveWorkerConfig(
+  uid: string, config: any, env: Env, userIdToken?: string,
+  opts: { ifUpdateTime?: string } = {},
+): Promise<void> {
   if (typeof uid !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(uid)) {
     throw new Error('saveWorkerConfig: refusing a malformed uid');
   }
   const path = `artifacts/default-daemon-client/users/${uid}/config/cloudflare`;
-  const url = `https://firestore.googleapis.com/v1/projects/${env.FIREBASE_PROJECT_ID}/databases/(default)/documents/${path}`;
+  // With ifUpdateTime, Firestore applies the write only if the document is
+  // still the version that was read (FAILED_PRECONDITION otherwise).
+  const url = `https://firestore.googleapis.com/v1/projects/${env.FIREBASE_PROJECT_ID}/databases/(default)/documents/${path}`
+    + (opts.ifUpdateTime ? `?currentDocument.updateTime=${encodeURIComponent(opts.ifUpdateTime)}` : '');
   const fields: any = {};
   for (const [key, value] of Object.entries(config)) {
     fields[key] = { stringValue: String(value) };
