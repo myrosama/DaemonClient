@@ -102,7 +102,13 @@ async function handleTelegramConfig(request: Request, env: Env): Promise<Respons
   const { getCachedConfig } = await import('./cached-config');
   const session = await requireAuth(request, env);
   // The relay checks the bot token against the local copy, so it must exist.
-  const config = await getCachedConfig<any>(env, session.uid, session.idToken, 'telegram', { requireLocalCopy: true });
+  let config: any;
+  try {
+    config = await getCachedConfig<any>(env, session.uid, session.idToken, 'telegram', { requireLocalCopy: true });
+  } catch (error: any) {
+    console.error('[telegram-config] could not keep the local copy:', error?.message);
+    return json({ message: 'Temporarily unavailable' }, 503); // clients retry
+  }
   // Each user's own worker provides the CORS proxy. Falls back to env value (central
   // shim) if this worker has no D1 binding (i.e., it IS the central worker).
   const selfProxy = `${new URL(request.url).origin}/proxy`;

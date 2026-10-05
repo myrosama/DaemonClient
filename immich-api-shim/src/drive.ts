@@ -58,7 +58,13 @@ export async function handleDrive(request: Request, env: Env, path: string, url:
   // Firestore). Server already exposes the same via /api/server/storage.
   if (path === '/api/drive/config' && request.method === 'GET') {
     // The relay checks the bot token against the local copy, so it must exist.
-    const config = await getCachedConfig<any>(env, uid, session.idToken, 'telegram', { requireLocalCopy: true });
+    let config: any;
+    try {
+      config = await getCachedConfig<any>(env, uid, session.idToken, 'telegram', { requireLocalCopy: true });
+    } catch (error: any) {
+      console.error('[drive/config] could not keep the local copy:', error?.message);
+      return json({ message: 'Temporarily unavailable' }, 503);
+    }
     const botToken = config?.botToken || config?.bot_token || null;
     const channelId = config?.channelId || config?.channel_id || null;
     return json({

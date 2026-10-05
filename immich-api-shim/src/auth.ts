@@ -200,19 +200,7 @@ async function handleLogin(request: Request, env: Env): Promise<Response> {
     workerUrl,
   };
 
-  // Fire-and-forget auto-update of the user's per-user worker. The deployment
-  // service compares the embedded shim version against the user's worker and
-  // silently redeploys if they've drifted, so shim fixes reach existing users
-  // without them touching anything. Login response isn't blocked on this.
-  if (env.DEPLOYMENT_SERVICE_URL && env.waitUntil && workerUrl) {
-    env.waitUntil(
-      fetch(env.DEPLOYMENT_SERVICE_URL.replace(/\/$/, '') + '/auto-update', {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${data.idToken}`, 'Content-Type': 'application/json' },
-        body: '{}',
-      }).catch(err => console.error('[auto-update] dispatch failed:', err))
-    );
-  }
+  dispatchAutoUpdate(env, data.idToken, workerUrl);
 
   const response = json(userResponse, 201);
   
@@ -291,7 +279,26 @@ async function handleExchange(request: Request, env: Env): Promise<Response> {
     quotaUsageInBytes: null,
     workerUrl,
   };
+  // The shared sign-in path (Photos web) must keep the worker current too —
+  // including finishing an update whose last step failed — or a user who only
+  // ever signs in this way could never recover.
+  dispatchAutoUpdate(env, session.idToken, workerUrl);
   return new Response(JSON.stringify(body), { status: 200, headers: sessionCookieHeaders(sessionToken) });
+}
+
+// Fire-and-forget auto-update of the user's per-user worker. The deployment
+// service compares the embedded shim version against the user's worker and
+// silently redeploys if they've drifted, so shim fixes reach existing users
+// without them touching anything. The sign-in response isn't blocked on this.
+function dispatchAutoUpdate(env: Env, idToken: string, workerUrl: string | null): void {
+  if (!env.DEPLOYMENT_SERVICE_URL || !env.waitUntil || !workerUrl) return;
+  env.waitUntil(
+    fetch(env.DEPLOYMENT_SERVICE_URL.replace(/\/$/, '') + '/auto-update', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${idToken}`, 'Content-Type': 'application/json' },
+      body: '{}',
+    }).catch(err => console.error('[auto-update] dispatch failed:', err))
+  );
 }
 
 // Shared cookie set for both auth modes.
