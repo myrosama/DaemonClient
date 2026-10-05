@@ -1,7 +1,6 @@
 import { createSession, type SessionCreateResponseDto } from '@immich/sdk';
 import { DateTime, Duration } from 'luxon';
 import { eventManager } from '$lib/managers/event-manager.svelte';
-import { GCastDestination } from '$lib/utils/cast/gcast-destination.svelte';
 
 // follows chrome.cast.media.PlayerState
 export enum CastState {
@@ -54,8 +53,11 @@ class CastManager {
 
   constructor() {
     // load each cast destination
+    // GCastDestination is not registered: Google Cast cannot play DaemonClient
+    // media (it is decrypted and served by the service worker, which a Chromecast
+    // cannot reach), and initializing it loads cast_sender.js from gstatic on
+    // every boot.
     this.castDestinations = [
-      new GCastDestination(),
       // Add other cast destinations here (ie FCast)
     ];
 
