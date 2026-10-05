@@ -1,5 +1,5 @@
 import type { Handle } from '@sveltejs/kit';
-import GoogleSans from '$lib/assets/fonts/GoogleSans/GoogleSans.ttf?url';
+import GoogleSans from '$lib/assets/fonts/GoogleSans/GoogleSans.woff2?url';
 import GoogleSansCode from '$lib/assets/fonts/GoogleSansCode/GoogleSansCode.ttf?url';
 
 // only used during the build to replace the variables from app.html

@@ -13,10 +13,6 @@ export const load = (async ({ fetch }) => {
   try {
     await init(fetch);
 
-    if (serverConfigManager.value.maintenanceMode) {
-      redirect(307, Route.maintenanceMode());
-    }
-
     await authManager.load();
     if (authManager.authenticated) {
       redirect(307, Route.photos());

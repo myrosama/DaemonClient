@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { page } from '$app/state';
   import { focusTrap } from '$lib/actions/focus-trap';
   import { authManager } from '$lib/managers/auth-manager.svelte';
   import AvatarEditModal from '$lib/modals/AvatarEditModal.svelte';
@@ -8,7 +7,7 @@
   import { userInteraction } from '$lib/stores/user.svelte';
   import { getAboutInfo, type ServerAboutResponseDto } from '@immich/sdk';
   import { Button, Icon, IconButton, modalManager } from '@immich/ui';
-  import { mdiCog, mdiLogout, mdiPencil, mdiWrench } from '@mdi/js';
+  import { mdiCog, mdiLogout, mdiPencil } from '@mdi/js';
   import { onMount } from 'svelte';
   import { t } from 'svelte-i18n';
   import { fade } from 'svelte/transition';
@@ -75,23 +74,6 @@
           {$t('account_settings')}
         </div>
       </Button>
-      {#if authManager.user.isAdmin}
-        <Button
-          href={Route.systemSettings()}
-          onclick={onClose}
-          shape="round"
-          variant="ghost"
-          size="small"
-          color="secondary"
-          aria-current={page.url.pathname.includes('/admin') ? 'page' : undefined}
-          class="border dark:border-immich-dark-gray dark:bg-gray-500 dark:hover:bg-immich-dark-primary/50 hover:bg-immich-primary/10 dark:text-white"
-        >
-          <div class="flex place-content-center place-items-center text-center gap-2 px-2">
-            <Icon icon={mdiWrench} size="18" aria-hidden />
-            {$t('administration')}
-          </div>
-        </Button>
-      {/if}
     </div>
   </div>
 

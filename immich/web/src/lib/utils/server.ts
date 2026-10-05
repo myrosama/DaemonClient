@@ -13,11 +13,21 @@ async function _init(fetch: Fetch) {
   // https://github.com/oazapfts/oazapfts/blob/main/README.md#fetch-options
   defaults.fetch = fetch;
   await initLanguage();
+
+  // Feature flags depend on neither the server config nor the user, so fetch
+  // them alongside those instead of after them (one less serial round trip).
+  // Errors are held until the config says whether they matter.
+  const featureFlags = featureFlagsManager.init().then(
+    () => undefined,
+    (error: unknown) => ({ error }),
+  );
+
   await serverConfigManager.init();
   await authManager.load();
 
-  if (!serverConfigManager.value.maintenanceMode) {
-    await featureFlagsManager.init();
+  const featureFlagsFailure = await featureFlags;
+  if (featureFlagsFailure && !serverConfigManager.value.maintenanceMode) {
+    throw featureFlagsFailure.error;
   }
 }
 

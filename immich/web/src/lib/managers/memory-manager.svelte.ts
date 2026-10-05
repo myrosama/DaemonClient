@@ -121,6 +121,13 @@ class MemoryManager {
   }
 
   private initialize() {
+    // Skip /api/memories while the user has memories turned off. Nothing is
+    // cached, so turning them back on loads them on the next call.
+    if (authManager.authenticated && !authManager.preferences.memories.enabled) {
+      this.memories = [];
+      return Promise.resolve();
+    }
+
     if (!this.#loading) {
       this.#loading = this.load();
     }

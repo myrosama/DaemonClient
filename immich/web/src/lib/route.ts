@@ -1,17 +1,6 @@
-import { QueueName, type MetadataSearchDto, type SmartSearchDto } from '@immich/sdk';
+import type { MetadataSearchDto, SmartSearchDto } from '@immich/sdk';
 import { omitBy } from 'lodash-es';
 import { OpenQueryParam, type SharedLinkTab } from '$lib/constants';
-
-const asQueueSlug = (name: QueueName) => {
-  return name.replaceAll(/[A-Z]/g, (m) => '-' + m.toLowerCase());
-};
-
-export const fromQueueSlug = (slug: string): QueueName | undefined => {
-  const name = slug.replaceAll(/-([a-z])/g, (_, c) => c.toUpperCase());
-  if (Object.values(QueueName).includes(name as QueueName)) {
-    return name as QueueName;
-  }
-};
 
 type QueryValue = number | string;
 const asQueryString = (
@@ -52,9 +41,12 @@ export const Route = {
   // auth
   login: (params?: { continue?: string; autoLaunch?: 0 | 1 }) => '/auth/login' + asQueryString(params),
   logout: (params?: { continue?: string }) => '/auth/logout' + asQueryString(params),
-  register: () => '/auth/register',
+  // DaemonClient has no admin registration or onboarding pages: accounts are
+  // created and onboarded by the DaemonClient API. These stay for the login
+  // flow's (unreachable) branches and land somewhere that exists.
+  register: () => '/',
   changePassword: () => '/auth/change-password',
-  onboarding: (params?: { step?: string }) => '/auth/onboarding' + asQueryString(params),
+  onboarding: () => '/photos',
   pinPrompt: (params?: { continue?: string }) => '/auth/pin-prompt' + asQueryString({ continue: params?.continue }),
 
   // albums
@@ -63,8 +55,8 @@ export const Route = {
   viewAlbumAsset: ({ albumId, assetId }: { albumId: string; assetId: string }) =>
     `/albums/${albumId}/photos/${assetId}`,
 
-  // buy
-  buy: () => '/buy',
+  // buy (no purchase page on DaemonClient; license links open the purchase settings)
+  buy: () => '/user-settings' + asQueryString({ isOpen: OpenQueryParam.PURCHASE_SETTINGS }),
 
   // explore
   explore: () => '/explore',
@@ -72,15 +64,6 @@ export const Route = {
 
   // folders
   folders: (params?: { path?: string }) => '/folders' + asQueryString(params),
-
-  // libraries
-  libraries: () => '/admin/library-management',
-  newLibrary: () => '/admin/library-management/new',
-  viewLibrary: ({ id }: { id: string }) => `/admin/library-management/${id}`,
-  editLibrary: ({ id }: { id: string }) => `/admin/library-management/${id}/edit`,
-
-  // maintenance
-  maintenanceMode: (params?: { continue?: string }) => '/maintenance' + asQueryString(params),
 
   // map
   map: (point?: { zoom: number; lat: number; lng: number }) =>
@@ -124,19 +107,8 @@ export const Route = {
   // settings
   userSettings: (params?: { isOpen?: OpenQueryParam }) => '/user-settings' + asQueryString(params),
 
-  // system
-  systemSettings: (params?: { isOpen?: OpenQueryParam }) => '/admin/system-settings' + asQueryString(params),
-  systemStatistics: () => '/admin/server-status',
-  systemMaintenance: (params?: { continue?: string }) => '/admin/maintenance' + asQueryString(params),
-
   // tags
   tags: (params?: { path?: string }) => '/tags' + asQueryString(params),
-
-  // users
-  users: () => '/admin/users',
-  newUser: () => `/admin/users/new`,
-  viewUser: ({ id }: { id: string }) => `/admin/users/${id}`,
-  editUser: ({ id }: { id: string }) => `/admin/users/${id}/edit`,
 
   // utilities
   utilities: () => '/utilities',
@@ -147,8 +119,4 @@ export const Route = {
   // workflows
   workflows: () => '/utilities/workflows',
   viewWorkflow: ({ id }: { id: string }) => `/utilities/workflows/${id}`,
-
-  // queues
-  queues: () => '/admin/queues',
-  viewQueue: ({ name }: { name: QueueName }) => `/admin/queues/${asQueueSlug(name)}`,
 };
