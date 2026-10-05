@@ -146,7 +146,8 @@ function corsResponse(body: string | null, init: ResponseInit = {}): Response {
 // ── Service-account JWT helpers ──────────────────────────────────────────────
 // Generate a short-lived Google OAuth2 access-token from a service account
 // private key (PEM) using only the Web Crypto API available in CF Workers.
-// Used exclusively by the /admin/announce endpoint — no external library needed.
+// Used for the writes users may not make themselves: the global announcement
+// and each user's config/cloudflare — no external library needed.
 
 function pemToDer(pem: string): Uint8Array {
   const b64 = pem.replace(/-----[^-]+-----/g, '').replace(/\s+/g, '');
@@ -254,13 +255,13 @@ async function handleDeployWorker(request: Request, env: Env): Promise<Response>
 
     // Paste flow: persist the long-lived API token (encrypted) for auto-update.
     const encryptedToken = await encryptToken(apiToken, env.ENCRYPTION_MASTER_KEY);
-    await saveWorkerConfig(uid, idToken, {
+    await saveWorkerConfig(uid, {
       apiToken: encryptedToken, accountId, workerName: prov.workerName, workerUrl: prov.workerUrl,
       databaseName: prov.dbName, databaseId: prov.databaseId,
       sessionSecret: prov.sessionSecret,
       setupTimestamp: new Date().toISOString(),
       lastDeployedVersion: SHIM_VERSION, autoUpdateEnabled: true
-    }, env);
+    }, env, idToken);
 
     return corsResponse(JSON.stringify({ success: true, workerUrl: prov.workerUrl, deploymentId: crypto.randomUUID() }));
   } catch (error: any) {
@@ -420,7 +421,7 @@ async function handleOAuthExchange(request: Request, env: Env): Promise<Response
       lastDeployedVersion: SHIM_VERSION, autoUpdateEnabled: true,
     };
     if (refreshToken) config.refreshToken = await encryptToken(refreshToken, env.ENCRYPTION_MASTER_KEY);
-    await saveWorkerConfig(uid, idToken, config, env);
+    await saveWorkerConfig(uid, config, env, idToken);
 
     return corsResponse(JSON.stringify({ success: true, workerUrl: prov.workerUrl }));
   } catch (error: any) {
@@ -584,9 +585,9 @@ async function handleAutoUpdate(request: Request, env: Env): Promise<Response> {
         // the deploy fails, the new token is lost and every future refresh returns
         // invalid_grant → auto-update is permanently bricked. Save first, deploy
         // second. (This was the root cause of workers stuck on old shim versions.)
-        await saveWorkerConfig(uid, idToken, {
+        await saveWorkerConfig(uid, {
           ...cfg, refreshToken: rotatedRefresh, lastUpdatedAt: new Date().toISOString(),
-        }, env).catch((e) => console.error('Rotated-refresh persist failed:', e?.message));
+        }, env, idToken).catch((e) => console.error('Rotated-refresh persist failed:', e?.message));
       }
     }
     const cfApi = new CloudflareAPI();
@@ -607,13 +608,13 @@ async function handleAutoUpdate(request: Request, env: Env): Promise<Response> {
       return corsResponse(JSON.stringify({ updated: false, reason: 'deploy-failed', error: deployResult.error }), { status: 500 });
     }
 
-    await saveWorkerConfig(uid, idToken, {
+    await saveWorkerConfig(uid, {
       ...cfg,
       ...(rotatedRefresh ? { refreshToken: rotatedRefresh } : {}),
       sessionSecret,
       lastDeployedVersion: SHIM_VERSION,
       lastUpdatedAt: new Date().toISOString(),
-    }, env);
+    }, env, idToken);
 
     return corsResponse(JSON.stringify({ updated: true, from: cfg.lastDeployedVersion || 'unknown', to: SHIM_VERSION }));
   } catch (error: any) {
@@ -774,26 +775,58 @@ async function fetchWorkerConfig(uid: string, idToken: string, env: Env): Promis
   return out;
 }
 
-async function saveWorkerConfig(uid: string, idToken: string, config: any, env: Env): Promise<void> {
+// config/cloudflare holds the address of the user's worker and the secret that
+// signs their sessions. The user may read it, but only this service writes it,
+// with its own service account: firestore.rules refuses the owner's writes, so
+// nothing running as the user (a script on one of our pages included) can point
+// their sessions at another worker or mint its own.
+//
+// Because this write bypasses the rules, `uid` must be the one Google returned
+// for the caller's verified ID token (validateFirebaseToken) — never a value
+// from the request — and it must be a plain id, so it cannot address another
+// document path.
+export async function saveWorkerConfig(uid: string, config: any, env: Env, userIdToken?: string): Promise<void> {
+  if (typeof uid !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(uid)) {
+    throw new Error('saveWorkerConfig: refusing a malformed uid');
+  }
   const path = `artifacts/default-daemon-client/users/${uid}/config/cloudflare`;
   const url = `https://firestore.googleapis.com/v1/projects/${env.FIREBASE_PROJECT_ID}/databases/(default)/documents/${path}`;
   const fields: any = {};
   for (const [key, value] of Object.entries(config)) {
     fields[key] = { stringValue: String(value) };
   }
-  // Firestore rules require an authenticated request — without the user's
-  // idToken this PATCH 401s silently and the user gets bounced back through
-  // the CF setup forever because no `cloudflare` doc ever appears.
-  const res = await fetch(url, {
-    method: 'PATCH',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${idToken}`,
-    },
-    body: JSON.stringify({ fields }),
-  });
+  // PATCH without an update mask replaces the whole document, as before.
+  const write = (bearer: string) =>
+    fetch(url, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${bearer}` },
+      body: JSON.stringify({ fields }),
+    });
+
+  let serviceAccountError: string;
+  if (env.FIREBASE_SA_CLIENT_EMAIL && env.FIREBASE_SA_PRIVATE_KEY) {
+    try {
+      const accessToken = await getServiceAccountAccessToken(env.FIREBASE_SA_CLIENT_EMAIL, env.FIREBASE_SA_PRIVATE_KEY);
+      const res = await write(accessToken);
+      if (res.ok) {
+        console.log('[config-write] saved with the service account');
+        return;
+      }
+      serviceAccountError = `Firestore write failed: ${res.status} ${await res.text()}`;
+    } catch (err: any) {
+      serviceAccountError = err?.message || String(err);
+    }
+  } else {
+    serviceAccountError = 'Service-account credentials not configured (FIREBASE_SA_CLIENT_EMAIL / FIREBASE_SA_PRIVATE_KEY)';
+  }
+
+  // Fallback for the changeover only: once firestore.rules refuses the owner's
+  // writes to this document, this attempt is denied too, so it can never do
+  // more than the user could do themselves. The log says which path was taken.
+  console.error(`[config-write] service-account write failed (${serviceAccountError}); trying the user token`);
+  if (!userIdToken) throw new Error(serviceAccountError);
+  const res = await write(userIdToken);
   if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Firestore write failed: ${res.status} ${text}`);
+    throw new Error(`Firestore write failed: ${res.status} ${await res.text()}`);
   }
 }
