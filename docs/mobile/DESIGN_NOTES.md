@@ -140,3 +140,27 @@ stale plan document — all fixed.
   `byte_range`, total coverage and 416 cases. A real device/network run is
   not applicable to pure arithmetic; it happens in P1 1.6 (media server).
 - **G3:** above. **G4:** this commit pair.
+
+---
+
+## — Replan: HEIC previews and the scheduler's source            2026-10-05
+
+**Planned:** D14 said the apps upload no preview.
+
+**Did:** the operator asked what happens when an app-uploaded HEIC is opened
+on the website. Checked the code (RESEARCH §8): the web viewer asks for a
+preview and, with none, gets the HEIC original, which Chrome and Firefox cannot
+draw. So **D18** brings the preview back for HEIC/HEIF/RAW only, through the
+existing `POST /api/assets/:id/thumbnail` route the web's HEIC Fix tool already
+uses — no worker change. The operator also asked to copy an existing
+smart-loading algorithm rather than invent one: no Rust image scheduler exists,
+so **D19** ports Nuke's (MIT) design onto Rust building blocks
+(`governor`, `tokio-util`), keeping the operator's opened-first and
+newest-first rules (RESEARCH §9, SPEC §4.9).
+
+**Decisions:** the preview passes through the worker (a few hundred KB of
+derived JPEG, the same as the web Fix tool) — a small, recorded exception to
+"no file bytes through the worker". A later additive change could let
+`clientUpload` take `telegramPreviewId` directly; not needed now.
+
+**Gate evidence:** docs only.

@@ -124,10 +124,14 @@ Detailed: `plans/P0-toolchain-and-skeleton.md`.
       exercised in P3.
 - [ ] **1.3** Telegram client — `sendDocument`, `getFile` (with its result
       cached), download, `deleteMessage`; `429` and fatal errors.
-- [ ] **1.4** Fetch scheduler (SPEC §4.9) — four priority classes with the
-      opened item pre-empting everything (D17), newest-first thumbnails,
-      cancellation when nobody waits, one fetch per file, bounded concurrency,
-      global pause on `429`.
+- [ ] **1.4** Fetch scheduler (SPEC §4.9, D19) — a Rust port of Nuke's
+      pipeline: coalescing, four priority classes with the opened item
+      suspending the rest (D17) and a reserved slot, newest-first thumbnails,
+      cancellation when nobody waits, `governor` token bucket that cancelled
+      work never spends, global pause on `429`. Credit Nuke in `NOTICE`.
+      **First:** read Nuke's full `TaskQueue`, coalescing/cancellation code,
+      `ImagePrefetcher` and their tests (RESEARCH §9 lists what is still
+      unread), and port the relevant test cases as this task's failing tests.
 - [ ] **1.5** Read path — thumbnail, existing preview, original and byte
       ranges, for every asset shape.
 - [ ] **1.6** Local media server — loopback only, per-launch secret, `Range`,
@@ -148,9 +152,11 @@ Detailed: `plans/P0-toolchain-and-skeleton.md`.
       `workerUrl`; secrets to secure storage.
 - [ ] **2.3** Media through the local server — thumbnails, photos, video, on
       iOS and Android.
-- [ ] **2.4** Thumbnails at upload (SPEC §5.1, D14) — 256 px JPEG +
-      thumbhash from the platform image engine; local thumbnails for assets
-      that have none. No preview, no worker change.
+- [ ] **2.4** Thumbnails at upload (SPEC §5.1, D14, D18) — 256 px JPEG +
+      thumbhash from the platform image engine; for HEIC/HEIF/RAW also a
+      ~1440 px JPEG preview through the existing `POST /api/assets/:id/thumbnail`
+      route; local thumbnails for assets that have none. No worker change.
+      Gate 2 includes opening an app-uploaded HEIC on the website in Chrome.
 - [ ] **2.5** Foreground automatic upload through the core.
 - [ ] **2.6** Background upload — encrypted parts handed to the background
       uploader (SPEC §5.2); Android WorkManager.

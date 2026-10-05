@@ -288,3 +288,89 @@ decrypt with the Photos key. Thumbnails: `thumbId`; originals: `chunks`
   is needed for app uploads.
 - iOS background upload limits: what the core can do while the app is
   suspended.
+
+---
+
+## 8. HEIC on the website — why the apps must upload a preview after all        2026-10-05
+
+**Operator's question:** if the app uploads a HEIC photo with no preview, can
+the website open it?
+
+**No — not in Chrome or Firefox** (only Safari decodes HEIC). From the code:
+
+- The web viewer asks for `/thumbnail?size=preview`; the service worker's
+  `selectFileIds` (`immich/web/src/service-worker/telegram-media.ts`) answers
+  with `previewId` if there is one, otherwise — for a single-part asset — the
+  **original**, i.e. the HEIC bytes, which the browser cannot draw.
+- The service worker has no HEIC conversion (`grep -i heic` in
+  `service-worker/index.ts`: nothing).
+
+**The route already exists, so no worker change is needed:**
+`POST /api/assets/:id/thumbnail` (`immich-api-shim/src/assets.ts:475`,
+`handleThumbnailUpload` at `:1891`) takes a `thumbnail` and an optional
+`preview` JPEG, encrypts each with the Photos key for server-encrypted assets,
+sends them to Telegram, and sets `telegramThumbId` / `telegramPreviewId`. The
+website's HEIC "Fix" tool uses it today. The preview passes through the
+worker, but it is a derived JPEG of a few hundred KB, not the file itself.
+
+**Cost:** one more Telegram message per HEIC photo — and iPhones shoot HEIC by
+default, so that is most iPhone photos. JPEG/PNG/WebP originals need no
+preview: every browser draws them.
+
+---
+
+## 9. Smart loading — what to copy        2026-10-05
+
+**Operator:** find an open-source implementation (Rust preferred) and copy its
+work rather than inventing one.
+
+**Rust:** no image-loading scheduler exists as a library or app (GitHub
+search 2026-10-05: "image loading priority cancellation", "thumbnail loader
+priority", "image pipeline cache coalescing", "prefetch scheduler priority",
+language Rust — zero results). Rust has the **building blocks**, all
+permissively licensed (crates.io, 2026-10-05):
+
+| Need | Crate | Version | License |
+|---|---|---|---|
+| Token-bucket rate limit | `governor` | 0.10.4 | MIT |
+| Cancellation | `tokio-util` (`CancellationToken`) | 0.7.19 | MIT |
+| Concurrency limits, timeouts | `tokio` / `tower` | 1.53 / 0.5.3 | MIT |
+| Cache (optional) | `moka` | 0.12.16 | MIT OR Apache-2.0 |
+
+**The design to copy: Nuke** (`kean/Nuke`, Swift, MIT, 8.7k stars, active
+2026-10-03) — the most widely used iOS image pipeline, built for "large
+(infinite) collections of images".
+
+**How deep this reading went (be honest about it):** read in full —
+`Documentation/Nuke.docc/Performance/performance-guide.md` and the
+`RateLimiter` + `TokenBucket` in `Sources/Nuke/Internal/RateLimiter.swift`.
+Read only its doc comments and declarations — `Sources/Nuke/Pipeline/TaskQueue.swift`.
+**Not yet read:** the coalescing and cancellation code (how a task tracks who
+is still waiting), `ImagePrefetcher`, and Nuke's tests. P1 Task 1.4 reads
+those first and ports their test cases. What the reading shows:
+
+1. **Coalescing** — identical requests share one download
+   (`performance-guide.md` "Coalescing").
+2. **Priority queue** — `Sources/Nuke/Pipeline/TaskQueue.swift`: per-priority
+   buckets, the highest priority dequeued first; a **concurrency limit**;
+   **reserved slots** that low-priority work (prefetch) cannot take, "so that
+   the work added at a higher priority finds a free slot"; priority can be
+   **raised on a running task**; and **`isSuspended`**: "prevents new work from
+   starting. Already-running operations continue to completion."
+3. **Cancellation** — a task is cancelled when nobody is waiting for it any more.
+4. **Rate limiter** — `Sources/Nuke/Internal/RateLimiter.swift`: a token
+   bucket (100/s, burst 25 by default) to stop "thrashing of underlying
+   systems" during fast scrolling. Crucially, **work cancelled while waiting
+   does not spend a token** — so flinging through 10,000 thumbnails costs only
+   what actually gets loaded.
+5. **Prefetching** at low priority; an **aggressive disk cache** for
+   resources whose URL never changes (our Telegram `file_id`s never change).
+
+**What we add for Telegram and the operator's rules:** a global pause on
+`429 retry_after`; newest-first order inside the "visible" class (Nuke is FIFO
+there; the operator wants the rows the user scrolled *to* first); and the
+opened-item rule (D17), which is Nuke's `isSuspended` applied to every class
+below "opened", plus a reserved slot so the opened item never waits for one.
+
+Licence: porting Nuke's design (MIT) into Rust needs its copyright notice
+kept — add it to `NOTICE` and the module header when P1 Task 1.4 lands.

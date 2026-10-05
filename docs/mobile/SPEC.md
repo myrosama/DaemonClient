@@ -52,6 +52,8 @@ because of it (Cloudflare body and CPU limits).
 | D14 | **No preview upload from the apps.** Viewer order: blur (thumbhash, from D1) → thumbnail → original. An existing preview (`telegramPreviewId`, e.g. from the web's HEIC fix) is used when present. Supersedes the preview in §5.1's first version and the worker change it needed. | 2026-10-04 | operator |
 | D15 | **Smart loading:** what is on screen loads first; requests for what scrolled away are dropped; concurrency and Telegram's limits are respected (§4.9). | 2026-10-04 | operator |
 | D17 | **What the user opened always goes first.** While the opened photo/video part loads, nothing else starts — no thumbnails, no prefetch, no new upload part; everything resumes once it has loaded or the viewer closes (§4.9). | 2026-10-04 | operator |
+| D18 | **HEIC/HEIF and RAW uploads also get a ~1440 px JPEG preview**, so the website (Chrome, Firefox) can open them. Stored through the existing `POST /api/assets/:id/thumbnail` route (`preview` field) that the web's HEIC Fix tool already uses — **no worker change**. Formats every browser draws (JPEG, PNG, WebP) get no preview. Narrows D14. (R§8) | 2026-10-05 | operator |
+| D19 | The fetch scheduler is a Rust port of **Nuke's** pipeline design (MIT): coalescing, priority queue with reserved slots and suspension, cancellation, token-bucket rate limit where cancelled work spends no token. (R§9, §4.9) | 2026-10-05 | operator |
 | D16 | One shared engine with two thin adapters — Photos (`/api/assets`, Photos key, thumbnails, checksum) and Drive (`/api/drive/files`, Drive key, ordered `messages`). | 2026-10-04 | plan, confirmed by operator |
 
 ---
@@ -201,37 +203,43 @@ or repurpose them, and every value must survive the app's strict parser
 - Logs never contain tokens, keys, passwords, or Telegram URLs (which embed the
   bot token).
 
-### 4.9 Fetch scheduler — smart loading (D15)
+### 4.9 Fetch scheduler — smart loading (D15, D17, D19)
 
-Every Telegram read goes through one scheduler in the core:
+A Rust port of Nuke's image-pipeline design (R§9) — the most widely used iOS
+image loader, MIT-licensed — plus what Telegram and the operator's rules need.
+Every Telegram read goes through it.
 
-- **Visible first, newest first.** Thumbnail requests are served
-  last-in-first-out, so after a fast scroll the rows now on screen load before
-  the ones the user flew past.
-- **Dropped when nobody waits.** Immich's image loader already cancels a
-  request when its thumbnail scrolls off screen (`RemoteImagesImpl.swift:15-17`,
-  `image_request.dart:29`); the local server sees the connection close and the
-  scheduler cancels that fetch unless another request is waiting for the same
-  file.
-- **One fetch per file.** Concurrent requests for the same `file_id` share one
-  download.
-- **Bounded.** A fixed number of concurrent Telegram downloads; `getFile`
-  results are cached for their validity window so each thumbnail costs one
-  round-trip, not two; a `429` pauses all reads for `retry_after`.
+- **Coalescing:** requests for the same `file_id` share one download.
 - **Priority classes (D17), highest first:**
   1. **Opened** — the photo the user tapped, or the video part at the
-     playhead. While any opened request is loading, **nothing else starts**:
-     queued thumbnails, prefetch and new upload parts wait. Thumbnails already
-     in flight are tiny and finish; in-flight prefetch is cancelled and
-     re-queued; an upload part already in flight finishes (aborting it would
-     throw away up to 19 MB already sent).
+     playhead.
   2. **Next** — the next video part ahead of the playhead; the photos either
      side of the opened one, so a swipe is instant.
-  3. **Visible** — thumbnails on screen, newest request first.
+  3. **Visible** — thumbnails on screen, **newest request first** (Nuke is
+     first-in-first-out here; the operator wants the rows scrolled *to* first).
   4. **Background** — upload parts, off-screen prefetch, cache warming.
-  Lower classes resume, in order, the moment the opened item has loaded or the
-  viewer closes. Uploads never starve: they run whenever nothing above them
-  is waiting.
+- **Opened pre-empts everything.** While an opened request is loading, every
+  class below it is *suspended* (Nuke's `isSuspended`): queued work waits;
+  thumbnails already in flight are tiny and finish; in-flight prefetch is
+  cancelled and re-queued; an upload part already in flight finishes (aborting
+  it would throw away up to 19 MB already sent). One concurrency slot is
+  **reserved** for opened/next work (Nuke's reserved slots), so the opened item
+  never waits for a free one. Lower classes resume, in order, the moment it has
+  loaded or the viewer closes. Uploads never starve: they run whenever nothing
+  above them is waiting.
+- **Cancellation:** a request nobody is waiting for any more is dropped.
+  Immich's image loader already cancels a thumbnail that scrolls off screen
+  (`RemoteImagesImpl.swift:15-17`, `image_request.dart:29`); the local server
+  sees the connection close and the scheduler cancels that fetch unless another
+  request still wants the same file.
+- **Rate limit:** a token bucket (`governor`, MIT). A token is taken only when
+  a job actually starts, so **cancelled work never spends one** — a fast fling
+  through thousands of thumbnails costs only what gets loaded. Starting values
+  (to be measured in P1 1.8 with `dc-cli`): about 20 requests/s, burst 10,
+  6 downloads at once. A `429` pauses **all** reads for `retry_after`.
+- **Fewer round-trips:** each `getFile` result is cached for its validity
+  window, so a thumbnail usually costs one request, not two; decrypted
+  thumbnails go to the disk cache (§4.7) because a `file_id` never changes.
 
 ---
 
@@ -270,7 +278,11 @@ What changes in `immich/mobile`; everything else stays Immich's:
   on iOS, MediaStore/ImageDecoder on Android): it reads HEIC, RAW and video
   frames, applies rotation, and is hardware-accelerated. Rust does not decode
   images; the platform does it better. Per upload: a 256 px JPEG thumbnail (the
-  web's size) and its thumbhash. **No preview** (D14).
+  web's size) and its thumbhash.
+- **A preview only where the website needs one (D18):** HEIC/HEIF and RAW
+  originals also get a ~1440 px JPEG preview, because Chrome and Firefox cannot
+  draw HEIC. It goes through the existing `POST /api/assets/:id/thumbnail`
+  route (`preview` field). JPEG/PNG/WebP originals get none.
 - **What the viewer shows, in order:** the blur (thumbhash, already in D1 and
   synced) → the thumbnail → the original. Where an asset already has a preview
   (`telegramPreviewId`, from the web's HEIC fix), it is used before the
@@ -403,3 +415,4 @@ into tasks.
 | 2026-10-04 | D11–D13: priorities, clean-up, workspace at `mobile/`; §5.1, §5.2, §5.7 | operator (priorities), plan (layout) |
 | 2026-10-04 | D14–D16: no preview upload (§5.1 rewritten, worker change dropped), smart loading (§4.9), shared engine + two adapters | operator |
 | 2026-10-04 | D17: the opened item pre-empts everything (§4.9 priority classes) | operator |
+| 2026-10-05 | D18: previews for HEIC/HEIF/RAW so the website can open them (§5.1); D19: scheduler ported from Nuke (§4.9 rewritten) | operator |
