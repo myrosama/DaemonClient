@@ -175,9 +175,30 @@ describe('auto-update: two runs at once (login and first sync both trigger one)'
   it('the run that loses the race deploys nothing, so the record and the worker cannot disagree', async () => {
     const calls = await stubWorld({ cfg: await legacyCfg(), changedSinceRead: true });
     const res = await autoUpdate();
-    expect(res.status).toBe(500);
-    expect(await res.json()).toMatchObject({ updated: false, reason: 'config-save-failed' });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ updated: false, reason: 'raced' });
     expect(deployIndex(calls)).toBe(-1);
+  });
+
+  it('only the pending-secret save is conditional; the save after the deploy is not', async () => {
+    const calls = await stubWorld({ cfg: await legacyCfg() });
+    expect((await autoUpdate()).status).toBe(200);
+    const [, after] = saves(calls);
+    expect(after.url).not.toContain('currentDocument');
+  });
+
+  it('a worker with a live secret updates even if the config changed since it was read', async () => {
+    const calls = await stubWorld({ cfg: await legacyCfg({ sessionSecret: 's'.repeat(40) }), changedSinceRead: true });
+    expect((await autoUpdate()).status).toBe(200);
+    expect(deployIndex(calls)).toBeGreaterThan(-1);
+  });
+
+  it('a rotated refresh token plus a lost race: no deploy, and the token-only save is conditional too', async () => {
+    const cfg = { accountId: 'acc', workerName: 'dc-x', databaseId: 'db', refreshToken: await encryptToken('old-refresh', MASTER) };
+    const calls = await stubWorld({ cfg, rotate: true, changedSinceRead: true });
+    expect((await autoUpdate()).status).toBe(409);
+    expect(deployIndex(calls)).toBe(-1);
+    expect(saves(calls).every((c) => c.url.includes('currentDocument.updateTime='))).toBe(true);
   });
 
   it('a save after a successful deploy is retried once', async () => {

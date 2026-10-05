@@ -609,6 +609,10 @@ async function handleAutoUpdate(request: Request, env: Env): Promise<Response> {
     // runs minting two secrets would leave the record and the worker
     // disagreeing. So the pending secret is written only if the config is
     // still the version this run read — the run that loses deploys nothing.
+    if (newlyMinted && !read?.updateTime) {
+      // Nothing to make the write conditional on: don't risk it.
+      return corsResponse(JSON.stringify({ updated: false, reason: 'config-version-unknown' }), { status: 500 });
+    }
     let refreshSaved = !rotatedRefresh;
     if (rotatedRefresh || newlyMinted) {
       try {
@@ -621,14 +625,18 @@ async function handleAutoUpdate(request: Request, env: Env): Promise<Response> {
         refreshSaved = true;
       } catch (e: any) {
         if (newlyMinted) {
-          console.error('[auto-update] pre-deploy config save failed; not deploying:', e?.message);
+          const raced = String(e?.message || '').includes('FAILED_PRECONDITION');
+          if (raced) console.log('[auto-update] another update got there first; not deploying');
+          else console.error('[auto-update] pre-deploy config save failed; not deploying:', e?.message);
           if (rotatedRefresh) {
             // The spent token must not stay on record; keep at least the new one.
             await saveWorkerConfig(uid, { ...cfg, refreshToken: rotatedRefresh, lastUpdatedAt: new Date().toISOString() },
               env, idToken, { ifUpdateTime: read?.updateTime })
               .catch((err) => console.error('[auto-update] rotated refresh token not saved:', err?.message));
           }
-          return corsResponse(JSON.stringify({ updated: false, reason: 'config-save-failed' }), { status: 500 });
+          return raced
+            ? corsResponse(JSON.stringify({ updated: false, reason: 'raced' }), { status: 409 })
+            : corsResponse(JSON.stringify({ updated: false, reason: 'config-save-failed' }), { status: 500 });
         }
         console.error('[auto-update] rotated refresh token save failed; saving again after the deploy:', e?.message);
       }
@@ -660,7 +668,10 @@ async function handleAutoUpdate(request: Request, env: Env): Promise<Response> {
       lastUpdatedAt: new Date().toISOString(),
     };
     await saveWorkerConfig(uid, settledConfig, env, idToken)
-      .catch(() => saveWorkerConfig(uid, settledConfig, env, idToken));
+      .catch((e) => {
+        console.error('[auto-update] post-deploy config save failed; retrying once:', e?.message);
+        return saveWorkerConfig(uid, settledConfig, env, idToken);
+      });
 
     return corsResponse(JSON.stringify({ updated: true, from: cfg.lastDeployedVersion || 'unknown', to: SHIM_VERSION }));
   } catch (error: any) {
@@ -862,6 +873,7 @@ export async function saveWorkerConfig(
     });
 
   let serviceAccountError: string;
+  let lostConditionalWrite = false;
   if (env.FIREBASE_SA_CLIENT_EMAIL && env.FIREBASE_SA_PRIVATE_KEY) {
     try {
       const accessToken = await getServiceAccountAccessToken(env.FIREBASE_SA_CLIENT_EMAIL, env.FIREBASE_SA_PRIVATE_KEY);
@@ -870,13 +882,17 @@ export async function saveWorkerConfig(
         console.log('[config-write] saved with the service account');
         return;
       }
-      serviceAccountError = `Firestore write failed: ${res.status} ${await res.text()}`;
+      const body = await res.text();
+      serviceAccountError = `Firestore write failed: ${res.status} ${body}`;
+      lostConditionalWrite = body.includes('FAILED_PRECONDITION');
     } catch (err: any) {
       serviceAccountError = err?.message || String(err);
     }
   } else {
     serviceAccountError = 'Service-account credentials not configured (FIREBASE_SA_CLIENT_EMAIL / FIREBASE_SA_PRIVATE_KEY)';
   }
+  // Lost a conditional write: the user token would lose it too.
+  if (lostConditionalWrite) throw new Error(serviceAccountError);
 
   // Fallback for the changeover only: once firestore.rules refuses the owner's
   // writes to this document, this attempt is denied too, so it can never do
