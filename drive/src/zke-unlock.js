@@ -17,6 +17,26 @@
 
 export class UnlockError extends Error {}
 
+// The key-check value stored with the encryption settings: base64 of
+// encryptChunk(this constant) — 12-byte IV followed by the AES-GCM ciphertext.
+// AES-GCM refuses to decrypt it with any other key, so it tells a right password
+// from a wrong one exactly, without files or clocks. (Same format on mobile.)
+export const KEY_CHECK_PLAINTEXT = 'daemonclient-drive-key-check-v1'
+
+export async function makeKeyCheck(key, { encryptChunk, bytesToBase64 }) {
+  const sealed = await encryptChunk(new TextEncoder().encode(KEY_CHECK_PLAINTEXT).buffer, key)
+  return bytesToBase64(new Uint8Array(sealed))
+}
+
+async function keyOpensCheck(key, check, { decryptChunk, base64ToBytes }) {
+  try {
+    const plain = await decryptChunk(base64ToBytes(check).buffer, key)
+    return new TextDecoder().decode(plain) === KEY_CHECK_PLAINTEXT
+  } catch {
+    return false
+  }
+}
+
 /** Allowance for the uploading device's clock running behind the worker's. */
 export const CLOCK_SKEW_MS = 10 * 60_000
 
@@ -42,9 +62,18 @@ export function pickProbes(items, settingsSavedAt, limit = 3) {
     .map(({ item, canRefute }) => ({ ...item, canRefute }))
 }
 
-export async function unlockCustomKey({ password, salt, deriveKey, probes, fetchFirstChunk, decryptChunk }) {
+/**
+ * Returns { key, verifiedBy }: 'check' (the stored key-check value — exact),
+ * 'file' (a test decrypt of one of the user's files), or 'none' (nothing to
+ * check against yet; the password was typed twice in Settings).
+ */
+export async function unlockCustomKey({ password, salt, deriveKey, check, probes, fetchFirstChunk, decryptChunk, base64ToBytes }) {
   if (!password) throw new UnlockError('Enter your encryption password.')
   const key = await deriveKey(password, salt)
+  if (check) {
+    if (await keyOpensCheck(key, check, { decryptChunk, base64ToBytes })) return { key, verifiedBy: 'check' }
+    throw new UnlockError('That password does not open your files. Use the same password you set before.')
+  }
   let fetchedRefuting = 0
   let refuted = false
   for (const probe of probes || []) {
@@ -57,7 +86,7 @@ export async function unlockCustomKey({ password, salt, deriveKey, probes, fetch
     if (probe.canRefute !== false) fetchedRefuting++
     try {
       await decryptChunk(bytes, key)
-      return key
+      return { key, verifiedBy: 'file' }
     } catch {
       if (probe.canRefute !== false) refuted = true
     }
@@ -72,5 +101,5 @@ export async function unlockCustomKey({ password, salt, deriveKey, probes, fetch
   }
   // Nothing under this password yet (or only files that may predate it): the
   // password was typed twice in Settings, the same check as when it was set.
-  return key
+  return { key, verifiedBy: 'none' }
 }

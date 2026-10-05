@@ -6,8 +6,8 @@
 // Uses the real crypto.js (Web Crypto is built into Node).
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { deriveKey, encryptChunk, decryptChunk, generateSalt } from './crypto.js'
-import { pickProbes, unlockCustomKey, UnlockError, CLOCK_SKEW_MS } from './zke-unlock.js'
+import { deriveKey, encryptChunk, decryptChunk, generateSalt, bytesToBase64, base64ToBytes } from './crypto.js'
+import { pickProbes, unlockCustomKey, UnlockError, CLOCK_SKEW_MS, makeKeyCheck, KEY_CHECK_PLAINTEXT } from './zke-unlock.js'
 
 const enc = new TextEncoder()
 const PASSWORD = 'correct horse battery staple'
@@ -17,7 +17,8 @@ async function encryptedUnder(password, salt) {
   return encryptChunk(enc.encode('hello from an encrypted file').buffer, key)
 }
 const probe = (id) => ({ id, messages: [{ file_id: id }] })
-const run = (overrides) => unlockCustomKey({ password: PASSWORD, deriveKey, decryptChunk, ...overrides })
+const run = async (overrides) => (await unlockCustomKey({ password: PASSWORD, deriveKey, decryptChunk, base64ToBytes, ...overrides })).key
+const runFull = (overrides) => unlockCustomKey({ password: PASSWORD, deriveKey, decryptChunk, base64ToBytes, ...overrides })
 
 test('the right password unlocks after a test decrypt', async () => {
   const salt = generateSalt()
@@ -128,4 +129,36 @@ test('if the files that could prove a password wrong cannot be fetched, it refus
     }),
     (err) => !(err instanceof UnlockError) && /try again/.test(err.message),
   )
+})
+
+test('with a stored key-check value, it alone decides — no files are fetched', async () => {
+  const salt = generateSalt()
+  const check = await makeKeyCheck(await deriveKey(PASSWORD, salt), { encryptChunk, bytesToBase64 })
+  const noFetch = async () => { throw new Error('must not download') }
+  const ok = await runFull({ salt, check, probes: [probe('a')], fetchFirstChunk: noFetch })
+  assert.equal(ok.verifiedBy, 'check')
+  await assert.rejects(runFull({ password: 'not the password', salt, check, probes: [], fetchFirstChunk: noFetch }), UnlockError)
+})
+
+test('a check value from another salt (an earlier password) refuses — it never accepts a wrong key', async () => {
+  const check = await makeKeyCheck(await deriveKey(PASSWORD, generateSalt()), { encryptChunk, bytesToBase64 })
+  await assert.rejects(runFull({ salt: generateSalt(), check, probes: [], fetchFirstChunk: async () => null }), UnlockError)
+})
+
+test('a garbled check value refuses instead of throwing something else', async () => {
+  await assert.rejects(runFull({ salt: generateSalt(), check: 'AAAA', probes: [], fetchFirstChunk: async () => null }), UnlockError)
+})
+
+test('the result says how the password was verified (only a file match may backfill a check value)', async () => {
+  const salt = generateSalt()
+  const mine = await encryptedUnder(PASSWORD, salt)
+  assert.equal((await runFull({ salt, probes: [probe('m')], fetchFirstChunk: async () => mine })).verifiedBy, 'file')
+  assert.equal((await runFull({ salt, probes: [], fetchFirstChunk: async () => null })).verifiedBy, 'none')
+})
+
+test('the key-check format: base64 of a 12-byte IV followed by AES-GCM of the constant', async () => {
+  const key = await deriveKey(PASSWORD, generateSalt())
+  const bytes = base64ToBytes(await makeKeyCheck(key, { encryptChunk, bytesToBase64 }))
+  assert.equal(bytes.length, 12 + new TextEncoder().encode(KEY_CHECK_PLAINTEXT).length + 16)
+  assert.equal(new TextDecoder().decode(await decryptChunk(bytes.buffer, key)), KEY_CHECK_PLAINTEXT)
 })

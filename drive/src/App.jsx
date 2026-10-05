@@ -19,7 +19,7 @@ import {
 } from './api.js';
 import { isWorkerUnreachable, waitStartedAt, waitedTooLong, clearWait, sessionStore } from './worker-unreachable.js';
 import { uploadGate, GATE_MESSAGES } from './upload-gate.js';
-import { pickProbes, unlockCustomKey } from './zke-unlock.js';
+import { pickProbes, unlockCustomKey, makeKeyCheck } from './zke-unlock.js';
 
 // Onboarding (account creation + Telegram/Cloudflare setup) lives entirely on
 // accounts.daemonclient.uz; the Drive app is login → dashboard only.
@@ -1603,11 +1603,13 @@ const DashboardView = () => {
         if (!(zke && zke.enabled && zke.mode === 'custom' && zke.salt)) {
             throw new Error('Encryption is not set to a custom password.');
         }
-        const key = await unlockCustomKey({
+        const { key, verifiedBy } = await unlockCustomKey({
             password,
             salt: base64ToBytes(zke.salt),
             deriveKey,
             decryptChunk,
+            base64ToBytes,
+            check: zke.check || '',
             // The worker's list, not this browser's cache (stale on a new
             // device, and not per account).
             probes: pickProbes(await listForUnlock(), zke.updatedAt),
@@ -1615,6 +1617,21 @@ const DashboardView = () => {
         });
         setEncryptionKey(key);
         setZkeLoadError(false);
+        // Settings saved before the key-check value existed: once a file has
+        // confirmed the password, store the check so future unlocks are exact.
+        if (verifiedBy === 'file') {
+            try {
+                await driveApi('/api/drive/zke', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        enabled: true, mode: 'custom', salt: zke.salt, password: '',
+                        check: await makeKeyCheck(key, { encryptChunk, bytesToBase64 }),
+                    }),
+                });
+            } catch (err) {
+                console.warn('Could not store the key-check value:', err?.message);
+            }
+        }
     };
 
     const handleZkeToggle = async (enabled, mode = 'auto', customPassword = null) => {
@@ -1639,7 +1656,11 @@ const DashboardView = () => {
             // would encrypt files no other device (or reload) could open.
             await driveApi('/api/drive/zke', {
                 method: 'POST',
-                body: JSON.stringify({ enabled: true, mode, salt: saltBase64, password: mode === 'auto' ? password : '' }),
+                body: JSON.stringify({
+                    enabled: true, mode, salt: saltBase64, password: mode === 'auto' ? password : '',
+                    // Lets a later unlock tell a right custom password from a wrong one.
+                    check: mode === 'custom' ? await makeKeyCheck(key, { encryptChunk, bytesToBase64 }) : '',
+                }),
             });
             setEncryptionKey(key);
             setZkeEnabled(true);
