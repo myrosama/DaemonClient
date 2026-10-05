@@ -125,6 +125,7 @@ class MemoryManager {
     // cached, so turning them back on loads them on the next call.
     if (authManager.authenticated && !authManager.preferences.memories.enabled) {
       this.memories = [];
+      this.#loading = undefined; // turning them back on loads afresh
       return Promise.resolve();
     }
 

@@ -1626,6 +1626,8 @@ const DashboardView = () => {
                     body: JSON.stringify({
                         enabled: true, mode: 'custom', salt: zke.salt, password: '',
                         check: await makeKeyCheck(key, { encryptChunk, bytesToBase64 }),
+                        // Only if no other device changed the password meanwhile.
+                        ifSalt: zke.salt,
                     }),
                 });
             } catch (err) {

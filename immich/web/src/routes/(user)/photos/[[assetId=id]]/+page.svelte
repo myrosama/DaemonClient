@@ -53,7 +53,7 @@
   // Memories are skipped while turned off; if they are turned on during this
   // visit, load them now instead of after a reload.
   $effect(() => {
-    if (authManager.preferences.memories.enabled) {
+    if (authManager.authenticated && authManager.preferences.memories.enabled) {
       void memoryManager.ready();
     }
   });
