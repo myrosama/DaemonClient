@@ -50,6 +50,14 @@
   let fixBannerTitle = $state('');
   let fixBannerDismissed = $state(false);
 
+  // Memories are skipped while turned off; if they are turned on during this
+  // visit, load them now instead of after a reload.
+  $effect(() => {
+    if (authManager.preferences.memories.enabled) {
+      void memoryManager.ready();
+    }
+  });
+
   onMount(() => {
     // localStorage persists across page loads; sessionStorage was lost on refresh.
     if (localStorage.getItem('dc-fix-banner-dismissed') === '1') { fixBannerDismissed = true; }
