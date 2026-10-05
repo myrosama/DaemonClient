@@ -1591,6 +1591,13 @@ const DashboardView = () => {
     // ZKE Enable/Disable Handler — config stored on the user's OWN worker.
     // Re-derive the custom-password key from the SAME salt (no new salt, nothing
     // sent), after checking it opens a file the user already encrypted.
+    // A malformed answer must not read as "no files" (which would skip the check).
+    const listForUnlock = async () => {
+        const items = (await driveApi('/api/drive/files'))?.items;
+        if (!Array.isArray(items)) throw new Error("Couldn't check your password right now — please try again in a moment.");
+        return items;
+    };
+
     const handleZkeUnlock = async (password) => {
         const zke = await driveApi('/api/drive/zke');
         if (!(zke && zke.enabled && zke.mode === 'custom' && zke.salt)) {
@@ -1603,7 +1610,7 @@ const DashboardView = () => {
             decryptChunk,
             // The worker's list, not this browser's cache (stale on a new
             // device, and not per account).
-            probes: pickProbes((await driveApi('/api/drive/files')).items, zke.updatedAt),
+            probes: pickProbes(await listForUnlock(), zke.updatedAt),
             fetchFirstChunk: (item) => fetchStoredChunk(item.messages[0], config.botToken),
         });
         setEncryptionKey(key);
@@ -1625,20 +1632,22 @@ const DashboardView = () => {
             const saltBase64 = bytesToBase64(salt);
 
             const key = await deriveKey(password, salt);
-            setEncryptionKey(key);
-            setZkeEnabled(true);
-            setZkeMode(mode);
 
             // Persist salt always; persist the password ONLY in auto mode. Custom
             // passwords are never sent — true zero-knowledge (re-entered per session).
+            // Saved BEFORE the key is used: a key that never reached the settings
+            // would encrypt files no other device (or reload) could open.
             await driveApi('/api/drive/zke', {
                 method: 'POST',
                 body: JSON.stringify({ enabled: true, mode, salt: saltBase64, password: mode === 'auto' ? password : '' }),
             });
+            setEncryptionKey(key);
+            setZkeEnabled(true);
+            setZkeMode(mode);
         } else {
+            await driveApi('/api/drive/zke', { method: 'POST', body: JSON.stringify({ enabled: false }) });
             setEncryptionKey(null);
             setZkeEnabled(false);
-            await driveApi('/api/drive/zke', { method: 'POST', body: JSON.stringify({ enabled: false }) });
         }
     };
 
