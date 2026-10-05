@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node --test src/utils/waitForWorker.test.mjs src/utils/cloudStartup.test.mjs"
+    "test": "node --test src/utils/waitForWorker.test.mjs src/utils/cloudStartup.test.mjs src/utils/safeReturnUrl.test.mjs"
   },
   "dependencies": {
     "@fontsource/inter": "^5.2.8",

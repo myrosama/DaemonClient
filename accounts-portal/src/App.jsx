@@ -13,6 +13,7 @@ import { SetupWorker } from './pages/SetupWorker'
 import { SetupProcessor } from './pages/SetupProcessor'
 import { consumeOAuthState, CF_OAUTH_REDIRECT_URI, DEPLOYMENT_WORKER } from './config/cloudflareOauth'
 import { waitForWorker } from './utils/waitForWorker'
+import { safeReturnUrl, isAbsoluteUrl } from './utils/safeReturnUrl'
 import { isFreshSetup, shouldHoldLink, appHosts } from './utils/cloudStartup'
 import { thumbHashToDataURL } from 'thumbhash'
 
@@ -422,16 +423,18 @@ function LoginPage() {
       const idToken = await userCredential.user.getIdToken()
       const refreshToken = userCredential.user.refreshToken
 
+      // Only ever our own pages — `return_url` comes from the address bar.
       const params = new URLSearchParams(window.location.search)
-      const returnUrl = params.get('return_url') || '/dashboard'
+      const returnUrl = safeReturnUrl(params.get('return_url')) || '/dashboard'
 
       // Create cross-domain session (non-blocking — Firebase Auth handles core auth)
       try {
         const res = await createSession(idToken, refreshToken, returnUrl, turnstileToken)
         if (res.ok) {
           const data = await res.json()
-          if (data.redirectUrl && data.redirectUrl.startsWith('http')) {
-            window.location.href = data.redirectUrl
+          const next = safeReturnUrl(data.redirectUrl)
+          if (isAbsoluteUrl(next)) {
+            window.location.href = next
             return
           }
         }
@@ -439,7 +442,12 @@ function LoginPage() {
         console.warn('Session creation failed (non-critical):', sessionErr)
       }
 
-      // Navigate — route guards will redirect to correct step
+      // Navigate — route guards will redirect to correct step. Another of our
+      // apps is a page load; the router only knows this app's paths.
+      if (isAbsoluteUrl(returnUrl)) {
+        window.location.href = returnUrl
+        return
+      }
       navigate(returnUrl)
     } catch (err) {
       const msg = err.code === 'auth/user-not-found'
