@@ -128,7 +128,9 @@ export default {
       'Access-Control-Allow-Origin': origin,
       'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
       'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-      'Access-Control-Allow-Credentials': 'true'
+      'Access-Control-Allow-Credentials': 'true',
+      // The allowed origin depends on the request, so no cache may reuse it.
+      'Vary': 'Origin'
     }
 
     if (request.method === 'OPTIONS') {
