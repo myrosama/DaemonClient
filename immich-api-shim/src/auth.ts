@@ -72,6 +72,17 @@ async function verifyTurnstile(token: string, clientIp: string | null, secret?: 
 }
 
 /**
+ * The key a new session is signed with. A user's own worker (it has a
+ * database) signs with the secret it verifies with, so it never issues a token
+ * it would refuse; the central worker signs for the user's worker with that
+ * worker's secret from its config.
+ */
+function signingKeyFor(env: Env, userSessionSecret: string | null): string {
+  if (env.DB) return sessionScope(env);
+  return userSessionSecret || env.APP_IDENTIFIER || 'default';
+}
+
+/**
  * What a failed password sign-in answers. Every credential failure gets the
  * same reply, so the endpoint never tells a caller which accounts exist;
  * Firebase's own throttling is passed on as a 429.
@@ -173,7 +184,7 @@ async function handleLogin(request: Request, env: Env): Promise<Response> {
     refreshToken: data.refreshToken,
     workerUrl,
     exp: Date.now() + SESSION_TTL_SECONDS * 1000,
-  }, userSessionSecret || env.APP_IDENTIFIER || 'default');
+  }, signingKeyFor(env, userSessionSecret));
 
   const userResponse = {
     accessToken: sessionToken,
@@ -265,7 +276,7 @@ async function handleExchange(request: Request, env: Env): Promise<Response> {
     refreshToken: '',
     workerUrl,
     exp: Date.now() + SESSION_TTL_SECONDS * 1000,
-  }, userSessionSecret || env.APP_IDENTIFIER || 'default');
+  }, signingKeyFor(env, userSessionSecret));
 
   const body = {
     accessToken: sessionToken,

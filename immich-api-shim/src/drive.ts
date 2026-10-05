@@ -106,6 +106,7 @@ export async function handleDrive(request: Request, env: Env, path: string, url:
       // settings) lands only on the salt it was made for — never over a
       // password another device set in the meantime.
       if (typeof body.ifSalt === 'string') {
+        if (body.salt !== body.ifSalt) return json({ message: 'ifSalt must equal salt' }, 400);
         const current = await db.getJsonConfig<any>('drive_zke');
         if ((current?.salt || '') !== body.ifSalt) return json({ message: 'Encryption settings changed' }, 409);
       }

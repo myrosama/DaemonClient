@@ -117,7 +117,16 @@ export async function requireAuth(request: Request, env?: Env): Promise<SessionD
     return session;
   }
 
-  session = await verifySignedSessionToken(token, sessionScope(env || ({} as Env)));
+  let scope: string;
+  try {
+    scope = sessionScope(env || ({} as Env));
+  } catch (error: any) {
+    // A worker without its own secret can verify nothing: to the caller that is
+    // simply "signed out" (401), and the real cause goes to the log.
+    console.error('[auth]', error?.message);
+    throw new Error('Session expired');
+  }
+  session = await verifySignedSessionToken(token, scope);
   if (!session) throw new Error('Session expired');
 
   // One install, one owner. Enforced HERE rather than per route, so a route
@@ -134,7 +143,10 @@ export async function requireAuth(request: Request, env?: Env): Promise<SessionD
   } catch { idTokenExpired = true; }
 
   if (idTokenExpired && env?.FIREBASE_API_KEY && session.refreshToken) {
-    const cacheKey = session.uid;
+    // Keyed by the refresh token too, never by uid alone: a token refreshed for
+    // one session must never be handed to another that merely names the same
+    // uid, and a stranger's failed refresh must not touch the real user's.
+    const cacheKey = `${session.uid}:${await sha256Hex(session.refreshToken)}`;
     const cached = tokenCache.get(cacheKey);
     if (cached && cached.expires > Date.now()) {
       session.idToken = cached.token;
@@ -357,4 +369,9 @@ export function json(data: any, status = 200): Response {
     status,
     headers: { 'Content-Type': 'application/json' },
   });
+}
+
+async function sha256Hex(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 }
