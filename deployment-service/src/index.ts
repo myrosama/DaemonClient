@@ -84,6 +84,16 @@ export interface Env {
   // to write the global announcement to Firestore without requiring a user token.
   FIREBASE_SA_CLIENT_EMAIL?: string;
   FIREBASE_SA_PRIVATE_KEY?: string;
+  // Canary for a new shim release: while set (comma-separated worker names,
+  // e.g. `wrangler deploy --var SHIM_CANARY_WORKERS:dc-abc,dc-def`), auto-update
+  // moves only these workers to the new version; everyone else is held.
+  SHIM_CANARY_WORKERS?: string;
+}
+
+/** Whether auto-update may move this worker to the current shim right now. */
+export function releasedTo(workerName: string, canaryList: string | undefined): boolean {
+  const canary = (canaryList || '').split(',').map((name) => name.trim()).filter(Boolean);
+  return canary.length === 0 || canary.includes(workerName);
 }
 
 // The bindings every per-user shim worker needs. Centralised so deploy,
@@ -561,6 +571,9 @@ async function handleAutoUpdate(request: Request, env: Env): Promise<Response> {
     }
     if (cfg.lastDeployedVersion === SHIM_VERSION) {
       return corsResponse(JSON.stringify({ updated: false, reason: 'current', version: SHIM_VERSION }));
+    }
+    if (!releasedTo(cfg.workerName, env.SHIM_CANARY_WORKERS)) {
+      return corsResponse(JSON.stringify({ updated: false, reason: 'held' }));
     }
 
     // Obtain a usable Bearer credential. Legacy paste users have a stored API

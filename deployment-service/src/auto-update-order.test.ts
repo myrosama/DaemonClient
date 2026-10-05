@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import worker, { encryptToken, decryptToken } from './index';
+import worker, { encryptToken, decryptToken, releasedTo } from './index';
 
 // Auto-update re-deploys a user's worker.
 // - A newly minted session secret is recorded as PENDING before the deploy and
@@ -216,5 +216,36 @@ describe('auto-update: two runs at once (login and first sync both trigger one)'
     const last = saves(calls).at(-1)!;
     expect(await decryptToken(fieldsOf(last).refreshToken.stringValue, MASTER)).toBe('rotated-refresh');
     expect(fieldsOf(last).pendingSessionSecret).toBeUndefined();
+  });
+});
+
+describe('canary: a new shim release reaches only the listed workers first', () => {
+  it('releasedTo: everyone when no list is set; only the listed workers when it is', () => {
+    expect(releasedTo('dc-a', undefined)).toBe(true);
+    expect(releasedTo('dc-a', '')).toBe(true);
+    expect(releasedTo('dc-a', ' dc-a , dc-b ')).toBe(true);
+    expect(releasedTo('dc-c', 'dc-a,dc-b')).toBe(false);
+    expect(releasedTo('dc-a2', 'dc-a')).toBe(false);
+  });
+
+  it('a held worker is not touched at all — no save, no deploy', async () => {
+    const calls = await stubWorld({ cfg: await legacyCfg({ sessionSecret: 's'.repeat(40) }) });
+    const res = await worker.fetch(
+      new Request('https://deploy.example/auto-update', { method: 'POST', headers: { Authorization: 'Bearer user-id-token' } }),
+      { ...env, SHIM_CANARY_WORKERS: 'dc-someone-else' },
+    );
+    expect(await res.json()).toMatchObject({ updated: false, reason: 'held' });
+    expect(deployIndex(calls)).toBe(-1);
+    expect(saves(calls).length).toBe(0);
+  });
+
+  it('a listed worker updates as usual', async () => {
+    const calls = await stubWorld({ cfg: await legacyCfg({ sessionSecret: 's'.repeat(40) }) });
+    const res = await worker.fetch(
+      new Request('https://deploy.example/auto-update', { method: 'POST', headers: { Authorization: 'Bearer user-id-token' } }),
+      { ...env, SHIM_CANARY_WORKERS: 'dc-x' },
+    );
+    expect(res.status).toBe(200);
+    expect(deployIndex(calls)).toBeGreaterThan(-1);
   });
 });
