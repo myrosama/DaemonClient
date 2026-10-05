@@ -24,6 +24,7 @@
   import { authManager } from '$lib/managers/auth-manager.svelte';
   import { memoryManager } from '$lib/managers/memory-manager.svelte';
   import { TimelineManager } from '$lib/managers/timeline-manager/timeline-manager.svelte';
+  import { notificationManager } from '$lib/stores/notification-manager.svelte';
   import { Route } from '$lib/route';
   import { getAssetBulkActions } from '$lib/services/asset.service';
   import { getAssetMediaUrl, memoryLaneTitle } from '$lib/utils';
@@ -49,16 +50,19 @@
   let fixBannerTitle = $state('');
   let fixBannerDismissed = $state(false);
 
-  onMount(async () => {
+  onMount(() => {
     // localStorage persists across page loads; sessionStorage was lost on refresh.
-    if (localStorage.getItem('dc-fix-banner-dismissed') === '1') { fixBannerDismissed = true; return; }
-    try {
-      const res = await fetch('/api/notifications');
-      if (!res.ok) return;
-      const notifs: any[] = await res.json();
-      const w = notifs.find((n: any) => n.id === 'heic-fix');
-      if (w) fixBannerTitle = w.title;
-    } catch { /* silent */ }
+    if (localStorage.getItem('dc-fix-banner-dismissed') === '1') { fixBannerDismissed = true; }
+  });
+
+  // The navigation bar already loads /api/notifications into notificationManager.
+  // Keep the title once seen, so marking the notification read in the panel does
+  // not hide the banner; only its own dismiss button does.
+  $effect(() => {
+    const heicFix = notificationManager.notifications.find((notification) => notification.id === 'heic-fix');
+    if (heicFix) {
+      fixBannerTitle = heicFix.title;
+    }
   });
 
   const dismissFixBanner = () => {
