@@ -18,6 +18,7 @@ import {
     onAuthChange, getDriveConfig, getWorkerUrl, driveApi,
 } from './api.js';
 import { isWorkerUnreachable, waitStartedAt, waitedTooLong, clearWait, sessionStore } from './worker-unreachable.js';
+import { uploadGate, LOCKED_MESSAGE } from './upload-gate.js';
 
 // Onboarding (account creation + Telegram/Cloudflare setup) lives entirely on
 // accounts.daemonclient.uz; the Drive app is login → dashboard only.
@@ -1183,6 +1184,15 @@ const DashboardView = () => {
     // --- EFFECT: PROCESS UPLOAD QUEUE (Uses currentFolderId) ---
     useEffect(() => {
         if (isUploading || uploadQueue.length === 0 || pumpingUploadRef.current) return;
+        // Never send a file unencrypted because the key isn't here yet: wait for
+        // the encryption settings, and hold the queue while the key is locked.
+        // This effect re-runs when either arrives, and the uploads continue.
+        const gate = uploadGate({ zkeLoading, zkeEnabled, hasKey: !!encryptionKey });
+        if (gate === 'wait') return;
+        if (gate === 'locked') {
+            setFeedbackMessage({ type: 'error', text: LOCKED_MESSAGE });
+            return;
+        }
         pumpingUploadRef.current = true;
 
         const startNextUpload = async () => {
@@ -1251,7 +1261,7 @@ const DashboardView = () => {
         };
 
         startNextUpload();
-    }, [uploadQueue, isUploading, currentFolderId]);
+    }, [uploadQueue, isUploading, currentFolderId, zkeLoading, zkeEnabled, encryptionKey]);
 
     // --- HANDLERS ---
     const clearFeedback = (delay = 5000) => setTimeout(() => setFeedbackMessage({ type: '', text: '' }), delay);

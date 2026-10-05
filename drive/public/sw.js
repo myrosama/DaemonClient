@@ -92,6 +92,38 @@ function contentTypeFor(vFile) {
   return 'application/octet-stream';
 }
 
+// ── How a /stream response may be shown. These are the user's own files, served
+//    on the drive origin — the origin that holds their session. Only types that
+//    cannot run script are served as themselves; anything else is shown as
+//    text or sandboxed (no script, no forms, an opaque origin), and unknown
+//    binaries download. `nosniff` stops the browser second-guessing the type. ──
+const INLINE_TYPES = new Set([
+  'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/bmp', 'image/avif',
+  'image/x-icon', 'application/pdf',
+]);
+const SANDBOX_CSP = "sandbox; default-src 'none'; img-src data:; style-src 'unsafe-inline'";
+
+function streamHeadersFor(vFile) {
+  const type = String(contentTypeFor(vFile)).toLowerCase().split(';')[0].trim();
+  const headers = { 'X-Content-Type-Options': 'nosniff' };
+  if (INLINE_TYPES.has(type) || type.startsWith('video/') || type.startsWith('audio/')) {
+    headers['Content-Type'] = type;
+    return headers;
+  }
+  headers['Content-Security-Policy'] = SANDBOX_CSP;
+  if (type === 'image/svg+xml') {
+    headers['Content-Type'] = type; // static in <img>; sandboxed if opened directly
+    return headers;
+  }
+  if (type.startsWith('text/') || type === 'application/json' || type.endsWith('/xml') || type.endsWith('+xml')) {
+    headers['Content-Type'] = 'text/plain; charset=utf-8'; // HTML shows as its source
+    return headers;
+  }
+  headers['Content-Type'] = 'application/octet-stream';
+  headers['Content-Disposition'] = `attachment; filename*=UTF-8''${encodeURIComponent(vFile.fileName || 'download')}`;
+  return headers;
+}
+
 // ── IndexedDB persistence for registration metadata (NEVER the key) ──
 const DB_NAME = 'dc-sw-stream';
 const STORE = 'files';
@@ -434,7 +466,7 @@ async function handleStreamRequest(request, url) {
   return new Response(body, {
     status: isRangeRequest ? 206 : 200,
     headers: {
-      'Content-Type': contentTypeFor(vFile),
+      ...streamHeadersFor(vFile),
       'Content-Length': sliceLen.toString(),
       'Accept-Ranges': 'bytes',
       ...(isRangeRequest ? { 'Content-Range': `bytes ${start}-${chunkEnd}/${fileSize}` } : {}),
