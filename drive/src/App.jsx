@@ -7,7 +7,7 @@ import { getSyncEngine, destroySyncEngine } from './manifest-sync.js';
 import ConnectDriveModal from './ConnectDriveModal.jsx';
 import {
     saveUploadSession, getUploadSession, getIncompleteUploads,
-    deleteUploadSession, getAllUploadSessions, getAllManifestItems
+    deleteUploadSession, getAllUploadSessions
 } from './idb-store.js';
 // Per-user architecture: auth + provisioning stay central (Firebase, via the
 // central worker + accounts.daemonclient.uz), but ALL file data lives on the
@@ -19,7 +19,7 @@ import {
 } from './api.js';
 import { isWorkerUnreachable, waitStartedAt, waitedTooLong, clearWait, sessionStore } from './worker-unreachable.js';
 import { uploadGate, GATE_MESSAGES } from './upload-gate.js';
-import { pickProbe, unlockCustomKey } from './zke-unlock.js';
+import { pickProbes, unlockCustomKey } from './zke-unlock.js';
 
 // Onboarding (account creation + Telegram/Cloudflare setup) lives entirely on
 // accounts.daemonclient.uz; the Drive app is login → dashboard only.
@@ -849,6 +849,170 @@ const AuthView = () => {
 };
 
 // --- DASHBOARD VIEW ---
+// Module scope on purpose: declared inside the dashboard, it was a new component
+// on every render, so a background refresh wiped a half-typed password.
+const SettingsModal = ({ initialConfig, onSave, onClose, isSaving, zkeEnabled, zkeMode, onZkeToggle, zkeLocked, onZkeUnlock }) => {
+    const [botToken, setBotToken] = useState(initialConfig.botToken || '');
+    const [channelId, setChannelId] = useState(initialConfig.channelId || '');
+    const [localZkeEnabled, setLocalZkeEnabled] = useState(zkeEnabled);
+    const [localZkeMode, setLocalZkeMode] = useState(zkeMode);
+    const [customPassword, setCustomPassword] = useState('');
+    const [confirmPassword, setConfirmPassword] = useState('');
+    const [error, setError] = useState('');
+    const [isProcessing, setIsProcessing] = useState(false);
+
+    const handleSave = async () => {
+        if (!botToken.trim() || !channelId.trim()) { setError("Bot Token and Channel ID cannot be empty."); return; }
+
+        // Validate custom password if switching to custom mode
+        if (localZkeEnabled && localZkeMode === 'custom') {
+            if (!customPassword.trim()) { setError("Custom password is required."); return; }
+            if (customPassword !== confirmPassword) { setError("Passwords don't match."); return; }
+            if (customPassword.length < 8) { setError("Password must be at least 8 characters."); return; }
+        }
+
+        setError('');
+        setIsProcessing(true);
+
+        try {
+            // Custom password, unchanged mode, locked on this device: the
+            // password unlocks the existing key (checked against a file).
+            if (zkeLocked && localZkeEnabled && localZkeMode === 'custom' && zkeMode === 'custom') {
+                await onZkeUnlock(customPassword);
+            } else if (localZkeEnabled !== zkeEnabled || localZkeMode !== zkeMode) {
+                await onZkeToggle(
+                    localZkeEnabled,
+                    localZkeMode,
+                    localZkeMode === 'custom' ? customPassword : null
+                );
+            }
+
+            await onSave({ botToken, channelId });
+        } catch (err) {
+            setError(`Save failed: ${err.message}`);
+        } finally {
+            setIsProcessing(false);
+        }
+    };
+
+    return (
+        <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50 font-sans">
+            <div className="bg-gray-800 rounded-xl shadow-2xl p-8 w-full max-w-lg max-h-[90vh] overflow-y-auto">
+                <h2 className="text-2xl font-bold text-indigo-400 mb-4">Settings</h2>
+                <div className="space-y-4">
+                    <div>
+                        <label htmlFor="botToken-settings" className="block text-sm font-medium text-gray-300 mb-1">Telegram Bot Token</label>
+                        <input id="botToken-settings" type="password" value={botToken} onChange={(e) => setBotToken(e.target.value)} className="w-full p-3 bg-gray-700 border border-gray-600 rounded-lg text-white" />
+                    </div>
+                    <div>
+                        <label htmlFor="channelId-settings" className="block text-sm font-medium text-gray-300 mb-1">Private Channel ID</label>
+                        <input id="channelId-settings" type="text" value={channelId} onChange={(e) => setChannelId(e.target.value)} className="w-full p-3 bg-gray-700 border border-gray-600 rounded-lg text-white" />
+                    </div>
+
+                    {/* ZKE Section */}
+                    <div className="border-t border-gray-700 pt-4 mt-4">
+                        <div className="flex items-center justify-between mb-3">
+                            <div>
+                                <h3 className="text-lg font-semibold text-green-400 flex items-center gap-2">
+                                    🔐 ZKE Encryption
+                                </h3>
+                                <p className="text-xs text-gray-400">AES-256-GCM • Client-side only</p>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => setLocalZkeEnabled(!localZkeEnabled)}
+                                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${localZkeEnabled ? 'bg-green-600' : 'bg-gray-600'}`}
+                            >
+                                <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${localZkeEnabled ? 'translate-x-6' : 'translate-x-1'}`} />
+                            </button>
+                        </div>
+
+                        {localZkeEnabled && (
+                            <div className="space-y-3 bg-gray-900/50 p-3 rounded-lg">
+                                <div className="text-xs text-green-400 bg-green-400/10 p-2 rounded">
+                                    ✅ New uploads will be encrypted before reaching Telegram.
+                                </div>
+
+                                {/* Mode Selection */}
+                                <div className="space-y-2">
+                                    <label
+                                        className={`flex items-center gap-3 p-2 rounded cursor-pointer border ${localZkeMode === 'auto' ? 'border-green-600 bg-green-600/10' : 'border-gray-700 hover:border-gray-500'}`}
+                                        onClick={() => setLocalZkeMode('auto')}
+                                    >
+                                        <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${localZkeMode === 'auto' ? 'border-green-500' : 'border-gray-500'}`}>
+                                            {localZkeMode === 'auto' && <div className="w-2 h-2 rounded-full bg-green-500" />}
+                                        </div>
+                                        <div>
+                                            <p className="text-sm text-white font-medium">Automatic <span className="text-xs text-gray-400">(Recommended)</span></p>
+                                            <p className="text-xs text-gray-400">Password auto-generated & stored securely. No hassle.</p>
+                                        </div>
+                                    </label>
+                                    <label
+                                        className={`flex items-center gap-3 p-2 rounded cursor-pointer border ${localZkeMode === 'custom' ? 'border-yellow-600 bg-yellow-600/10' : 'border-gray-700 hover:border-gray-500'}`}
+                                        onClick={() => setLocalZkeMode('custom')}
+                                    >
+                                        <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${localZkeMode === 'custom' ? 'border-yellow-500' : 'border-gray-500'}`}>
+                                            {localZkeMode === 'custom' && <div className="w-2 h-2 rounded-full bg-yellow-500" />}
+                                        </div>
+                                        <div>
+                                            <p className="text-sm text-white font-medium">Custom Password <span className="text-xs text-gray-400">(Advanced)</span></p>
+                                            <p className="text-xs text-gray-400">True zero-knowledge. We never store your password.</p>
+                                        </div>
+                                    </label>
+                                </div>
+
+                                {/* Custom Password Fields */}
+                                {localZkeMode === 'custom' && (
+                                    <div className="space-y-3 mt-2">
+                                        {zkeLocked && zkeMode === 'custom' && (
+                                            <div className="text-xs text-yellow-300 bg-yellow-400/10 p-2 rounded">
+                                                🔒 Locked on this device. Enter the same password you set before and press Save to unlock — a different password cannot open your existing files.
+                                            </div>
+                                        )}
+                                        <div>
+                                            <label htmlFor="zke-password" className="block text-sm font-medium text-gray-300 mb-1">Encryption Password</label>
+                                            <input
+                                                id="zke-password"
+                                                type="password"
+                                                value={customPassword}
+                                                onChange={(e) => setCustomPassword(e.target.value)}
+                                                placeholder="Min 8 characters"
+                                                className="w-full p-3 bg-gray-700 border border-gray-600 rounded-lg text-white"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label htmlFor="zke-confirm" className="block text-sm font-medium text-gray-300 mb-1">Confirm Password</label>
+                                            <input
+                                                id="zke-confirm"
+                                                type="password"
+                                                value={confirmPassword}
+                                                onChange={(e) => setConfirmPassword(e.target.value)}
+                                                placeholder="Re-enter password"
+                                                className="w-full p-3 bg-gray-700 border border-gray-600 rounded-lg text-white"
+                                            />
+                                        </div>
+                                        <div className="text-xs text-red-400 bg-red-400/10 p-2 rounded">
+                                            ⚠️ <strong>Warning:</strong> We will NOT store this password. If you forget it, your encrypted files are permanently lost. Nobody can recover them.
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        )}
+                    </div>
+
+                    {error && <p className="text-red-400 text-sm text-center py-1">{error}</p>}
+                </div>
+                <div className="flex justify-end space-x-4 mt-6">
+                    <button onClick={onClose} disabled={isSaving || isProcessing} className="py-2 px-4 bg-gray-600 hover:bg-gray-500 rounded-lg text-white">Cancel</button>
+                    <button onClick={handleSave} disabled={isSaving || isProcessing} className="py-2 px-6 bg-indigo-600 hover:bg-indigo-700 rounded-lg text-white flex items-center justify-center min-w-24">
+                        {(isSaving || isProcessing) ? <LoaderComponent small={true} /> : 'Save'}
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
 const DashboardView = () => {
     const [config, setConfig] = useState(null);
     const [isLoadingConfig, setIsLoadingConfig] = useState(true);
@@ -1144,15 +1308,18 @@ const DashboardView = () => {
                     const salt = generateSalt();
                     const saltBase64 = bytesToBase64(salt);
                     const key = await deriveKey(password, salt);
-                    setEncryptionKey(key);
-                    setZkeEnabled(true);
-                    setZkeMode('auto');
+                    // Save first: a key that was never stored would encrypt
+                    // files no other device (or reload) could open.
                     await driveApi('/api/drive/zke', {
                         method: 'POST',
                         body: JSON.stringify({ enabled: true, mode: 'auto', password, salt: saltBase64 }),
                     });
+                    setEncryptionKey(key);
+                    setZkeEnabled(true);
+                    setZkeMode('auto');
                 } catch (err) {
                     console.error('Failed to auto-initialize ZKE:', err);
+                    setZkeLoadError(true);
                 }
             }
         }).catch(err => {
@@ -1308,7 +1475,9 @@ const DashboardView = () => {
 
         // Check if file is encrypted and we have the key
         if (fileInfo.encrypted && !encryptionKey) {
-            setFeedbackMessage({ type: 'error', text: 'This file is encrypted. Enable ZKE in Settings and enter your password to decrypt.' });
+            setFeedbackMessage({ type: 'error', text: zkeLoadError
+                ? 'This file is encrypted, and your encryption settings could not be loaded. Reload the page to try again.'
+                : 'This file is encrypted. Open Settings, enter your encryption password and press Save to unlock it.' });
             setDownloadProgress({ active: false });
             clearFeedback();
             return;
@@ -1432,7 +1601,9 @@ const DashboardView = () => {
             salt: base64ToBytes(zke.salt),
             deriveKey,
             decryptChunk,
-            probe: pickProbe(await getAllManifestItems()),
+            // The worker's list, not this browser's cache (stale on a new
+            // device, and not per account).
+            probes: pickProbes((await driveApi('/api/drive/files')).items, zke.updatedAt),
             fetchFirstChunk: (item) => fetchStoredChunk(item.messages[0], config.botToken),
         });
         setEncryptionKey(key);
@@ -1440,6 +1611,11 @@ const DashboardView = () => {
     };
 
     const handleZkeToggle = async (enabled, mode = 'auto', customPassword = null) => {
+        // Without the stored settings we can't tell what is being replaced — a
+        // new salt here would orphan every file encrypted under the old one.
+        if (zkeLoadError) {
+            throw new Error('Your encryption settings could not be loaded. Reload the page before changing them.');
+        }
         if (enabled) {
             const password = mode === 'custom' ? customPassword : generatePassword();
             const salt = generateSalt();
@@ -1686,167 +1862,6 @@ const DashboardView = () => {
         }
     };
 
-    const SettingsModal = ({ initialConfig, onSave, onClose, isSaving, zkeEnabled, zkeMode, onZkeToggle, zkeLocked, onZkeUnlock }) => {
-        const [botToken, setBotToken] = useState(initialConfig.botToken || '');
-        const [channelId, setChannelId] = useState(initialConfig.channelId || '');
-        const [localZkeEnabled, setLocalZkeEnabled] = useState(zkeEnabled);
-        const [localZkeMode, setLocalZkeMode] = useState(zkeMode);
-        const [customPassword, setCustomPassword] = useState('');
-        const [confirmPassword, setConfirmPassword] = useState('');
-        const [error, setError] = useState('');
-        const [isProcessing, setIsProcessing] = useState(false);
-
-        const handleSave = async () => {
-            if (!botToken.trim() || !channelId.trim()) { setError("Bot Token and Channel ID cannot be empty."); return; }
-
-            // Validate custom password if switching to custom mode
-            if (localZkeEnabled && localZkeMode === 'custom') {
-                if (!customPassword.trim()) { setError("Custom password is required."); return; }
-                if (customPassword !== confirmPassword) { setError("Passwords don't match."); return; }
-                if (customPassword.length < 8) { setError("Password must be at least 8 characters."); return; }
-            }
-
-            setError('');
-            setIsProcessing(true);
-
-            try {
-                // Custom password, unchanged mode, locked on this device: the
-                // password unlocks the existing key (checked against a file).
-                if (zkeLocked && localZkeEnabled && localZkeMode === 'custom' && zkeMode === 'custom') {
-                    await onZkeUnlock(customPassword);
-                } else if (localZkeEnabled !== zkeEnabled || localZkeMode !== zkeMode) {
-                    await onZkeToggle(
-                        localZkeEnabled,
-                        localZkeMode,
-                        localZkeMode === 'custom' ? customPassword : null
-                    );
-                }
-
-                await onSave({ botToken, channelId });
-            } catch (err) {
-                setError(`Save failed: ${err.message}`);
-            } finally {
-                setIsProcessing(false);
-            }
-        };
-
-        return (
-            <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50 font-sans">
-                <div className="bg-gray-800 rounded-xl shadow-2xl p-8 w-full max-w-lg max-h-[90vh] overflow-y-auto">
-                    <h2 className="text-2xl font-bold text-indigo-400 mb-4">Settings</h2>
-                    <div className="space-y-4">
-                        <div>
-                            <label htmlFor="botToken-settings" className="block text-sm font-medium text-gray-300 mb-1">Telegram Bot Token</label>
-                            <input id="botToken-settings" type="password" value={botToken} onChange={(e) => setBotToken(e.target.value)} className="w-full p-3 bg-gray-700 border border-gray-600 rounded-lg text-white" />
-                        </div>
-                        <div>
-                            <label htmlFor="channelId-settings" className="block text-sm font-medium text-gray-300 mb-1">Private Channel ID</label>
-                            <input id="channelId-settings" type="text" value={channelId} onChange={(e) => setChannelId(e.target.value)} className="w-full p-3 bg-gray-700 border border-gray-600 rounded-lg text-white" />
-                        </div>
-
-                        {/* ZKE Section */}
-                        <div className="border-t border-gray-700 pt-4 mt-4">
-                            <div className="flex items-center justify-between mb-3">
-                                <div>
-                                    <h3 className="text-lg font-semibold text-green-400 flex items-center gap-2">
-                                        🔐 ZKE Encryption
-                                    </h3>
-                                    <p className="text-xs text-gray-400">AES-256-GCM • Client-side only</p>
-                                </div>
-                                <button
-                                    type="button"
-                                    onClick={() => setLocalZkeEnabled(!localZkeEnabled)}
-                                    className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${localZkeEnabled ? 'bg-green-600' : 'bg-gray-600'}`}
-                                >
-                                    <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${localZkeEnabled ? 'translate-x-6' : 'translate-x-1'}`} />
-                                </button>
-                            </div>
-
-                            {localZkeEnabled && (
-                                <div className="space-y-3 bg-gray-900/50 p-3 rounded-lg">
-                                    <div className="text-xs text-green-400 bg-green-400/10 p-2 rounded">
-                                        ✅ New uploads will be encrypted before reaching Telegram.
-                                    </div>
-
-                                    {/* Mode Selection */}
-                                    <div className="space-y-2">
-                                        <label
-                                            className={`flex items-center gap-3 p-2 rounded cursor-pointer border ${localZkeMode === 'auto' ? 'border-green-600 bg-green-600/10' : 'border-gray-700 hover:border-gray-500'}`}
-                                            onClick={() => setLocalZkeMode('auto')}
-                                        >
-                                            <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${localZkeMode === 'auto' ? 'border-green-500' : 'border-gray-500'}`}>
-                                                {localZkeMode === 'auto' && <div className="w-2 h-2 rounded-full bg-green-500" />}
-                                            </div>
-                                            <div>
-                                                <p className="text-sm text-white font-medium">Automatic <span className="text-xs text-gray-400">(Recommended)</span></p>
-                                                <p className="text-xs text-gray-400">Password auto-generated & stored securely. No hassle.</p>
-                                            </div>
-                                        </label>
-                                        <label
-                                            className={`flex items-center gap-3 p-2 rounded cursor-pointer border ${localZkeMode === 'custom' ? 'border-yellow-600 bg-yellow-600/10' : 'border-gray-700 hover:border-gray-500'}`}
-                                            onClick={() => setLocalZkeMode('custom')}
-                                        >
-                                            <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${localZkeMode === 'custom' ? 'border-yellow-500' : 'border-gray-500'}`}>
-                                                {localZkeMode === 'custom' && <div className="w-2 h-2 rounded-full bg-yellow-500" />}
-                                            </div>
-                                            <div>
-                                                <p className="text-sm text-white font-medium">Custom Password <span className="text-xs text-gray-400">(Advanced)</span></p>
-                                                <p className="text-xs text-gray-400">True zero-knowledge. We never store your password.</p>
-                                            </div>
-                                        </label>
-                                    </div>
-
-                                    {/* Custom Password Fields */}
-                                    {localZkeMode === 'custom' && (
-                                        <div className="space-y-3 mt-2">
-                                            {zkeLocked && zkeMode === 'custom' && (
-                                                <div className="text-xs text-yellow-300 bg-yellow-400/10 p-2 rounded">
-                                                    🔒 Locked on this device. Enter the same password you set before and press Save to unlock — a different password cannot open your existing files.
-                                                </div>
-                                            )}
-                                            <div>
-                                                <label htmlFor="zke-password" className="block text-sm font-medium text-gray-300 mb-1">Encryption Password</label>
-                                                <input
-                                                    id="zke-password"
-                                                    type="password"
-                                                    value={customPassword}
-                                                    onChange={(e) => setCustomPassword(e.target.value)}
-                                                    placeholder="Min 8 characters"
-                                                    className="w-full p-3 bg-gray-700 border border-gray-600 rounded-lg text-white"
-                                                />
-                                            </div>
-                                            <div>
-                                                <label htmlFor="zke-confirm" className="block text-sm font-medium text-gray-300 mb-1">Confirm Password</label>
-                                                <input
-                                                    id="zke-confirm"
-                                                    type="password"
-                                                    value={confirmPassword}
-                                                    onChange={(e) => setConfirmPassword(e.target.value)}
-                                                    placeholder="Re-enter password"
-                                                    className="w-full p-3 bg-gray-700 border border-gray-600 rounded-lg text-white"
-                                                />
-                                            </div>
-                                            <div className="text-xs text-red-400 bg-red-400/10 p-2 rounded">
-                                                ⚠️ <strong>Warning:</strong> We will NOT store this password. If you forget it, your encrypted files are permanently lost. Nobody can recover them.
-                                            </div>
-                                        </div>
-                                    )}
-                                </div>
-                            )}
-                        </div>
-
-                        {error && <p className="text-red-400 text-sm text-center py-1">{error}</p>}
-                    </div>
-                    <div className="flex justify-end space-x-4 mt-6">
-                        <button onClick={onClose} disabled={isSaving || isProcessing} className="py-2 px-4 bg-gray-600 hover:bg-gray-500 rounded-lg text-white">Cancel</button>
-                        <button onClick={handleSave} disabled={isSaving || isProcessing} className="py-2 px-6 bg-indigo-600 hover:bg-indigo-700 rounded-lg text-white flex items-center justify-center min-w-24">
-                            {(isSaving || isProcessing) ? <LoaderComponent small={true} /> : 'Save'}
-                        </button>
-                    </div>
-                </div>
-            </div>
-        );
-    };
 
     if (isLoadingConfig) return <FullScreenLoader message="Loading Configuration..." />;
     if (cloudStarting) return <CloudStartingScreen onLogout={handleLogout} />;
@@ -1908,7 +1923,9 @@ const DashboardView = () => {
     const handleFileOpen = async (item) => {
         if (!config?.botToken) return;
         if (item.encrypted && !encryptionKey) {
-            setFeedbackMessage({ type: 'error', text: 'This file is encrypted. Enter your encryption password in Settings to unlock previews.' });
+            setFeedbackMessage({ type: 'error', text: zkeLoadError
+                ? 'This file is encrypted, and your encryption settings could not be loaded. Reload the page to try again.'
+                : 'This file is encrypted. Open Settings, enter your encryption password and press Save to unlock it.' });
             clearFeedback();
             return;
         }
