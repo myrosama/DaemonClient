@@ -709,6 +709,11 @@ async function handleForceUpdate(request: Request, env: Env): Promise<Response> 
     if (!accountId || !workerName || !databaseId || !encApiToken) {
       return corsResponse(JSON.stringify({ error: 'Missing required fields: accountId, workerName, databaseId, apiToken' }), { status: 400 });
     }
+    // A user's worker refuses every session without its own secret, so never
+    // deploy one without it (pass the worker's sessionSecret from its config).
+    if (typeof sessionSecret !== 'string' || sessionSecret.length < 32) {
+      return corsResponse(JSON.stringify({ error: 'Missing required field: sessionSecret (32+ characters)' }), { status: 400 });
+    }
 
     const apiToken = await decryptToken(encApiToken, env.ENCRYPTION_MASTER_KEY);
     const cfApi = new CloudflareAPI();

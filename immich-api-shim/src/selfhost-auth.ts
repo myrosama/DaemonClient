@@ -33,6 +33,15 @@ export function sessionScope(env: Env): string {
   const secret = (env as any).SESSION_SECRET;
   if (typeof secret === 'string' && secret.length >= 32) return secret;
 
+  // A user's own worker (it has a database) is always deployed with its own
+  // secret — at provisioning, and by auto-update, which mints one for workers
+  // that predate per-install secrets. It must never accept the public
+  // constant: refuse instead. Only the central worker, which holds no user
+  // data, keeps the transitional fallback below.
+  if ((env as any).DB) {
+    throw new Error('SESSION_SECRET missing or too short: this worker must be redeployed with its own session secret.');
+  }
+
   if (isSelfHost(env)) {
     // Never fall back on a self-hosted install: the CLI always provisions a
     // secret, so a missing one means something is wrong, and issuing a

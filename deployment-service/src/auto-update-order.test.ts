@@ -249,3 +249,20 @@ describe('canary: a new shim release reaches only the listed workers first', () 
     expect(deployIndex(calls)).toBeGreaterThan(-1);
   });
 });
+
+describe('force-update never deploys a worker without its own session secret', () => {
+  const force = (body: object) =>
+    worker.fetch(
+      new Request('https://deploy.example/admin/force-update', { method: 'POST', headers: { 'X-Admin-Secret': 'admin-secret-value', 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
+      { ...env, ADMIN_SECRET: 'admin-secret-value' },
+    );
+  it('refuses without sessionSecret, before any deploy', async () => {
+    const calls = await stubWorld({ cfg: {} });
+    const base = { accountId: 'acc', workerName: 'dc-x', databaseId: 'db', apiToken: await encryptToken('cf-token', MASTER) };
+    for (const sessionSecret of [undefined, '', 'short']) {
+      const res = await force({ ...base, sessionSecret });
+      expect(res.status).toBe(400);
+    }
+    expect(deployIndex(calls)).toBe(-1);
+  });
+});
