@@ -1,7 +1,7 @@
 <script lang="ts">
   import { afterNavigate, beforeNavigate } from '$app/navigation';
   import { page } from '$app/state';
-  import { getPagesProvider, getSettingsProvider } from '$lib/commands';
+  import { getSettingsProvider } from '$lib/commands';
   import DownloadPanel from './DownloadPanel.svelte';
   import ErrorLayout from './ErrorLayout.svelte';
   import CloudStartingLayout from './CloudStartingLayout.svelte';
@@ -173,7 +173,6 @@
 
   <CommandPaletteProvider
     providers={[
-      getPagesProvider($t),
       getSettingsProvider($t),
       defaultProvider({ name: $t('documentation'), types: ['doc', 'documentation'], actions: CORE_PAGE_COMMANDS }),
       defaultProvider({ name: $t('support'), actions: PROJECT_SUPPORT_COMMANDS }),

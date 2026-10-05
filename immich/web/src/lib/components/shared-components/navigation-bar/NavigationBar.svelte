@@ -3,7 +3,6 @@
 </script>
 
 <script lang="ts">
-  import { page } from '$app/state';
   import { clickOutside } from '$lib/actions/click-outside';
   import NotificationPanel from '$lib/components/shared-components/navigation-bar/NotificationPanel.svelte';
   import SearchBar from '$lib/components/shared-components/search-bar/SearchBar.svelte';
@@ -133,7 +132,7 @@
           />
         {/if}
 
-        {#if !page.url.pathname.includes('/admin') && onUploadClick}
+        {#if onUploadClick}
           <Button
             leadingIcon={mdiTrayArrowUp}
             onclick={onUploadClick}
