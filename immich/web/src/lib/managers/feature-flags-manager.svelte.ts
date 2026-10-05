@@ -23,7 +23,12 @@ class FeatureFlagsManager {
   }
 
   async #loadFeatureFlags() {
-    this.#value = await getServerFeatures();
+    const features = await getServerFeatures();
+    // The DaemonClient API advertises map and smartSearch (the mobile app reads
+    // these flags), but the web app has no map style and smart search is a stub
+    // that always returns nothing. Turn both off here so their menu entries and
+    // buttons stay hidden instead of leading to dead pages.
+    this.#value = { ...features, map: false, smartSearch: false };
   }
 }
 

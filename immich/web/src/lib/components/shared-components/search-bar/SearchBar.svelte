@@ -2,6 +2,7 @@
   import { goto } from '$app/navigation';
   import { focusOutside } from '$lib/actions/focus-outside';
   import { shortcuts } from '$lib/actions/shortcut';
+  import { featureFlagsManager } from '$lib/managers/feature-flags-manager.svelte';
   import SearchFilterModal from '$lib/modals/SearchFilterModal.svelte';
   import { Route } from '$lib/route';
   import { searchStore } from '$lib/stores/search.svelte';
@@ -195,7 +196,10 @@
   function getSearchType() {
     const searchType = localStorage.getItem('searchQueryType');
     switch (searchType) {
-      case 'smart':
+      case 'smart': {
+        currentSearchType = defaultSearchType();
+        return currentSearchType;
+      }
       case 'metadata':
       case 'description':
       case 'ocr': {
@@ -203,10 +207,14 @@
         return searchType;
       }
       default: {
-        currentSearchType = 'smart';
-        return 'smart';
+        currentSearchType = defaultSearchType();
+        return currentSearchType;
       }
     }
+  }
+
+  function defaultSearchType() {
+    return featureFlagsManager.value.smartSearch ? 'smart' : 'metadata';
   }
 
   function getSearchTypeText(): string {
@@ -238,7 +246,7 @@
     { value: 'metadata', label: () => $t('filename') },
     { value: 'description', label: () => $t('description') },
     { value: 'ocr', label: () => $t('ocr') },
-  ] as const;
+  ].filter(({ value }) => value !== 'smart' || featureFlagsManager.value.smartSearch);
 </script>
 
 <svelte:document
