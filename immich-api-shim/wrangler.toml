@@ -18,3 +18,19 @@ DEPLOYMENT_SERVICE_URL = "https://daemonclient-deployment.sadrikov49.workers.dev
 # binding = "DB"
 # database_name = "photos-db"
 # database_id = "placeholder-will-be-replaced-per-user"
+
+# Password sign-in rate limits (src/auth.ts loginRateLimited): per client
+# address and per account (hashed email). Central worker only — user workers
+# are deployed without these bindings and skip the check.
+[[unsafe.bindings]]
+name = "LOGIN_IP_LIMITER"
+type = "ratelimit"
+namespace_id = "1001"
+simple = { limit = 20, period = 60 }
+
+[[unsafe.bindings]]
+name = "LOGIN_EMAIL_LIMITER"
+type = "ratelimit"
+namespace_id = "1002"
+simple = { limit = 8, period = 60 }
+

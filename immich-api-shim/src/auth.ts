@@ -71,9 +71,46 @@ async function verifyTurnstile(token: string, clientIp: string | null, secret?: 
   }
 }
 
+/**
+ * What a failed password sign-in answers. Every credential failure gets the
+ * same reply, so the endpoint never tells a caller which accounts exist;
+ * Firebase's own throttling is passed on as a 429.
+ */
+export function loginFailure(firebaseMessage: string | undefined): { status: number; message: string } {
+  if (typeof firebaseMessage === 'string' && firebaseMessage.startsWith('TOO_MANY_ATTEMPTS')) {
+    return { status: 429, message: 'Too many sign-in attempts. Wait a minute and try again.' };
+  }
+  return { status: 401, message: 'Invalid email or password' };
+}
+
+type RateLimiter = { limit(options: { key: string }): Promise<{ success: boolean }> };
+
+async function emailKey(email: unknown): Promise<string> {
+  const normalised = typeof email === 'string' ? email.trim().toLowerCase() : '';
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(normalised));
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+// Per address and per account (hashed), on the central worker where the
+// bindings exist. Checked before any Firebase call, so a blocked guess costs
+// nothing upstream. Without the bindings (a user's worker, self-host) sign-in
+// behaves as before.
+async function loginRateLimited(request: Request, env: Env, email: unknown): Promise<boolean> {
+  const byAddress = (env as any).LOGIN_IP_LIMITER as RateLimiter | undefined;
+  const byAccount = (env as any).LOGIN_EMAIL_LIMITER as RateLimiter | undefined;
+  const address = request.headers.get('CF-Connecting-IP') || 'unknown';
+  if (byAddress && !(await byAddress.limit({ key: address })).success) return true;
+  if (byAccount && !(await byAccount.limit({ key: await emailKey(email) })).success) return true;
+  return false;
+}
+
 async function handleLogin(request: Request, env: Env): Promise<Response> {
   const body = await request.json() as any;
   const { email, password } = body.loginCredentialDto || body;
+
+  if (await loginRateLimited(request, env, email)) {
+    return json({ message: 'Too many sign-in attempts. Wait a minute and try again.' }, 429);
+  }
 
   // Password login is the one brute-forceable surface here, so gate it on
   // Turnstile before spending a Firebase Identity Toolkit call. Only enforced
@@ -104,7 +141,8 @@ async function handleLogin(request: Request, env: Env): Promise<Response> {
 
   const data = await res.json() as any;
   if (data.error) {
-    return json({ message: data.error.message || 'Invalid credentials' }, 401);
+    const failure = loginFailure(data.error.message);
+    return json({ message: failure.message }, failure.status);
   }
 
   // Look up the user's per-user worker URL up front so we can BAKE it into
