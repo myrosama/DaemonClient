@@ -10,6 +10,7 @@
   import SearchTextSection from '$lib/components/shared-components/search-bar/SearchTextSection.svelte';
   import { MediaType, QueryType, validQueryTypes } from '$lib/constants';
   import { authManager } from '$lib/managers/auth-manager.svelte';
+  import { featureFlagsManager } from '$lib/managers/feature-flags-manager.svelte';
   import type { SearchFilter } from '$lib/types';
   import { parseUtcDate } from '$lib/utils/date-time';
   import { generateId } from '$lib/utils/generate-id';
@@ -42,7 +43,11 @@
 
   function defaultQueryType(): QueryType {
     const storedQueryType = localStorage.getItem('searchQueryType') as QueryType;
-    return validQueryTypes.has(storedQueryType) ? storedQueryType : QueryType.SMART;
+    const smartSearch = featureFlagsManager.value.smartSearch;
+    if (!validQueryTypes.has(storedQueryType) || (storedQueryType === QueryType.SMART && !smartSearch)) {
+      return smartSearch ? QueryType.SMART : QueryType.METADATA;
+    }
+    return storedQueryType;
   }
 
   const asFilter = (searchQuery: SmartSearchDto | MetadataSearchDto): SearchFilter => {
