@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { sessionStore } from '$lib/utils/worker-unreachable';
+  import { mayTrySharedSignIn } from '$lib/utils/shared-signin-guard';
   import { goto } from '$app/navigation';
   import AuthPageLayout from '$lib/components/layouts/AuthPageLayout.svelte';
   import { eventManager } from '$lib/managers/event-manager.svelte';
@@ -44,7 +46,9 @@
     // of asking for the password again. Runs before the OAuth branch so it
     // applies whether or not OAuth is enabled, and silently falls through to
     // the normal form when there is no shared session.
-    const shared = await trySharedSignIn();
+    // At most one shared attempt per tab per minute: if the app sends us back
+    // here, the password form shows instead of a sign-in loop.
+    const shared = mayTrySharedSignIn(sessionStore()) ? await trySharedSignIn() : null;
     if (shared) {
       persistSession(shared);
       resetInit();
