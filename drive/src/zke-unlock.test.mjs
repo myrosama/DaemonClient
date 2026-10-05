@@ -71,30 +71,61 @@ test('an empty password is refused before any work', async () => {
   await assert.rejects(run({ password: '', salt: generateSalt(), probes: [], fetchFirstChunk: async () => null }), UnlockError)
 })
 
-test('probes: only encrypted files with chunks, uploaded since the settings were saved, newest first, at most 3', () => {
+test('probes: only encrypted files with chunks from the allowed window; files since the save first, then smallest; at most 3', () => {
   const saved = '2026-10-05T10:00:00.000Z'
   const at = (min) => new Date(Date.parse(saved) + min * 60_000).toISOString()
   const items = [
-    { id: 'folder', type: 'folder', encrypted: true, messages: [{ file_id: 'x' }], uploadedAt: at(5) },
-    { id: 'plain', encrypted: false, messages: [{ file_id: 'x' }], uploadedAt: at(5) },
-    { id: 'old-key', encrypted: true, messages: [{ file_id: 'x' }], uploadedAt: at(-60) },
-    { id: 'skewed', encrypted: true, messages: [{ file_id: 'x' }], uploadedAt: at(-(CLOCK_SKEW_MS / 60_000) + 1) },
-    { id: 'n1', encrypted: true, messages: [{ file_id: 'x' }], uploadedAt: at(1) },
-    { id: 'n3', encrypted: true, messages: [{ file_id: 'x' }], uploadedAt: at(3) },
-    { id: 'n2', encrypted: true, messages: [{ file_id: 'x' }], uploadedAt: at(2) },
-    { id: 'nochunks', encrypted: true, messages: [], uploadedAt: at(9) },
-    { id: 'nodate', encrypted: true, messages: [{ file_id: 'x' }] },
+    { id: 'folder', type: 'folder', encrypted: true, messages: [{ file_id: 'x' }], uploadedAt: at(5), fileSize: 1 },
+    { id: 'plain', encrypted: false, messages: [{ file_id: 'x' }], uploadedAt: at(5), fileSize: 1 },
+    { id: 'old-key', encrypted: true, messages: [{ file_id: 'x' }], uploadedAt: at(-60), fileSize: 1 },
+    { id: 'skewed', encrypted: true, messages: [{ file_id: 'x' }], uploadedAt: at(-(CLOCK_SKEW_MS / 60_000) + 1), fileSize: 1 },
+    { id: 'big', encrypted: true, messages: [{ file_id: 'x' }], uploadedAt: at(1), fileSize: 900 },
+    { id: 'small', encrypted: true, messages: [{ file_id: 'x' }], uploadedAt: at(3), fileSize: 10 },
+    { id: 'mid', encrypted: true, messages: [{ file_id: 'x' }], uploadedAt: at(2), fileSize: 50 },
+    { id: 'nochunks', encrypted: true, messages: [], uploadedAt: at(9), fileSize: 1 },
+    { id: 'nodate', encrypted: true, messages: [{ file_id: 'x' }], fileSize: 1 },
   ]
-  assert.deepEqual(pickProbes(items, saved).map((i) => i.id), ['n3', 'n2', 'n1'])
-  assert.deepEqual(pickProbes(items, saved, 10).map((i) => i.id), ['n3', 'n2', 'n1', 'skewed'])
+  const picked = pickProbes(items, saved)
+  assert.deepEqual(picked.map((i) => i.id), ['small', 'mid', 'big'])
+  assert.ok(picked.every((p) => p.canRefute === true))
+  const all = pickProbes(items, saved, 10)
+  assert.deepEqual(all.map((i) => [i.id, i.canRefute]), [['small', true], ['mid', true], ['big', true], ['skewed', false]])
   assert.deepEqual(pickProbes([], saved), [])
   assert.deepEqual(pickProbes(undefined, saved), [])
 })
 
-test('probes: with no saved-at time, the newest encrypted files are used', () => {
+test('a file from just before the save (clock allowance) can confirm a password but never refute it', async () => {
+  const salt = generateSalt()
+  const oldKeyFile = await encryptedUnder('the previous password', generateSalt())
+  // Only an allowance-window file exists, under the previous key: the right
+  // new password must not be refused because of it.
+  const key = await run({ salt, probes: [{ ...probe('w'), canRefute: false }], fetchFirstChunk: async () => oldKeyFile })
+  assert.ok(key)
+  // …but a file under THIS password still refutes a wrong one.
+  const mine = await encryptedUnder(PASSWORD, salt)
+  await assert.rejects(
+    run({ password: 'wrong password!', salt, probes: [{ ...probe('m'), canRefute: true }, { ...probe('w'), canRefute: false }],
+      fetchFirstChunk: async (p) => (p.id === 'm' ? mine : oldKeyFile) }),
+    UnlockError,
+  )
+})
+
+test('probes: with no saved-at time, every candidate can refute', () => {
   const items = [
-    { id: 'a', encrypted: true, messages: [{ file_id: 'x' }], uploadedAt: '2026-01-01T00:00:00Z' },
-    { id: 'b', encrypted: true, messages: [{ file_id: 'x' }], uploadedAt: '2026-02-01T00:00:00Z' },
+    { id: 'a', encrypted: true, messages: [{ file_id: 'x' }], uploadedAt: '2026-01-01T00:00:00Z', fileSize: 5 },
+    { id: 'b', encrypted: true, messages: [{ file_id: 'x' }], uploadedAt: '2026-02-01T00:00:00Z', fileSize: 1 },
   ]
-  assert.deepEqual(pickProbes(items, undefined).map((i) => i.id), ['b', 'a'])
+  assert.deepEqual(pickProbes(items, undefined).map((i) => [i.id, i.canRefute]), [['b', true], ['a', true]])
+})
+
+test('if the files that could prove a password wrong cannot be fetched, it refuses — even when an older file was fetched', async () => {
+  const oldKeyFile = await encryptedUnder('the previous password', generateSalt())
+  await assert.rejects(
+    run({
+      salt: generateSalt(),
+      probes: [{ ...probe('mine'), canRefute: true }, { ...probe('w'), canRefute: false }],
+      fetchFirstChunk: async (p) => { if (p.id === 'mine') throw new Error('502'); return oldKeyFile },
+    }),
+    (err) => !(err instanceof UnlockError) && /try again/.test(err.message),
+  )
 })

@@ -1616,6 +1616,9 @@ const DashboardView = () => {
         if (zkeLoadError) {
             throw new Error('Your encryption settings could not be loaded. Reload the page before changing them.');
         }
+        if (zkeLoading) {
+            throw new Error('Your encryption settings are still loading. Try again in a moment.');
+        }
         if (enabled) {
             const password = mode === 'custom' ? customPassword : generatePassword();
             const salt = generateSalt();
@@ -2105,7 +2108,11 @@ const DashboardView = () => {
                 {!isUploading && !isDownloading && !feedbackMessage.text && <div className="h-12 mt-4"></div>}
             </div>
             {isConnectOpen && <ConnectDriveModal onClose={() => setIsConnectOpen(false)} />}
-            {isSettingsOpen && config && <SettingsModal
+            {/* Only once the encryption settings are known: the dialog copies them
+                when it opens, and a Save from stale defaults ("Automatic") would
+                replace a custom password and orphan every file under it. */}
+            {isSettingsOpen && config && !zkeLoading && <SettingsModal
+                key={`${zkeEnabled}-${zkeMode}`}
                 initialConfig={config}
                 onSave={handleSaveSettings}
                 onClose={() => setIsSettingsOpen(false)}

@@ -9,17 +9,24 @@
 //
 // Which files: every change of mode or password mints a new salt, and files
 // from before it stay encrypted under a key that can no longer be derived. So
-// only files uploaded after the settings were last saved count — taken from the
-// worker's list (this browser's cached list may be stale or another account's),
-// newest first. With none, there is nothing to check against; the password was
-// typed twice in Settings, the same check as when it was first set.
+// only files uploaded after the settings were last saved can prove a password
+// wrong — taken from the worker's list (this browser's cached list may be stale
+// or another account's), smallest first. With none, there is nothing to check
+// against; the password was typed twice in Settings, the same check as when it
+// was first set.
 
 export class UnlockError extends Error {}
 
 /** Allowance for the uploading device's clock running behind the worker's. */
 export const CLOCK_SKEW_MS = 10 * 60_000
 
-/** Up to `limit` newest encrypted files uploaded since the settings were saved. */
+/**
+ * Up to `limit` encrypted files to test a password on, smallest first (the test
+ * downloads one chunk of each). Files uploaded since the settings were saved
+ * are under this password and can prove it wrong (`canRefute`). Files from the
+ * few minutes before — allowed for a device clock running behind — may be
+ * under the previous key, so they can confirm a password but never refute it.
+ */
 export function pickProbes(items, settingsSavedAt, limit = 3) {
   const since = Date.parse(settingsSavedAt)
   const time = (item) => Date.parse(item.uploadedAt)
@@ -29,14 +36,17 @@ export function pickProbes(items, settingsSavedAt, limit = 3) {
       Array.isArray(item.messages) && item.messages[0]?.file_id &&
       Number.isFinite(time(item)) &&
       (!Number.isFinite(since) || time(item) >= since - CLOCK_SKEW_MS))
-    .sort((a, b) => time(b) - time(a))
+    .map((item) => ({ item, canRefute: !Number.isFinite(since) || time(item) >= since }))
+    .sort((a, b) => (Number(b.canRefute) - Number(a.canRefute)) || ((a.item.fileSize || 0) - (b.item.fileSize || 0)))
     .slice(0, limit)
+    .map(({ item, canRefute }) => ({ ...item, canRefute }))
 }
 
 export async function unlockCustomKey({ password, salt, deriveKey, probes, fetchFirstChunk, decryptChunk }) {
   if (!password) throw new UnlockError('Enter your encryption password.')
   const key = await deriveKey(password, salt)
-  let fetched = 0
+  let fetchedRefuting = 0
+  let refuted = false
   for (const probe of probes || []) {
     let bytes
     try {
@@ -44,21 +54,23 @@ export async function unlockCustomKey({ password, salt, deriveKey, probes, fetch
     } catch {
       continue // one missing or unreachable file must not decide the answer
     }
-    fetched++
+    if (probe.canRefute !== false) fetchedRefuting++
     try {
       await decryptChunk(bytes, key)
       return key
     } catch {
-      // not this key — try the next file
+      if (probe.canRefute !== false) refuted = true
     }
   }
-  if (fetched > 0) {
+  if (refuted) {
     throw new UnlockError('That password does not open your files. Use the same password you set before.')
   }
-  if ((probes || []).length > 0) {
-    // There were files to check against, but none could be fetched: refuse
-    // rather than accept a password nobody checked.
+  if ((probes || []).some((p) => p.canRefute !== false) && fetchedRefuting === 0) {
+    // There were files that could prove it wrong, but none could be fetched:
+    // refuse rather than accept a password nobody checked.
     throw new Error("Couldn't check your password right now — please try again in a moment.")
   }
+  // Nothing under this password yet (or only files that may predate it): the
+  // password was typed twice in Settings, the same check as when it was set.
   return key
 }
