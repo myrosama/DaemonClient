@@ -1,3 +1,4 @@
+import { sessionTokenFrom } from './relay-policy';
 import type { Env } from './index';
 import { isSelfHost, sessionScope } from './selfhost-auth';
 import { requireOwner } from './owner-gate';
@@ -5,13 +6,9 @@ import { looksLikeFirebaseIdToken, verifyFirebaseIdToken } from './firebase-toke
 
 /** Shared helpers for Firestore REST and auth token extraction */
 
+// An explicit Bearer header wins over cookies (see sessionTokenFrom).
 export function getSessionToken(request: Request): string | null {
-  const cookie = request.headers.get('Cookie') || '';
-  const match = cookie.match(/(?:immich_access_token|__session)=([^;]+)/);
-  if (match) return match[1];
-  const auth = request.headers.get('Authorization') || '';
-  if (auth.startsWith('Bearer ')) return auth.slice(7);
-  return null;
+  return sessionTokenFrom(request.headers.get('Authorization'), request.headers.get('Cookie'));
 }
 
 export interface SessionData {

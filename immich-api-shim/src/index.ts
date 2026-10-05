@@ -16,6 +16,8 @@ import { requireAuth, json } from './helpers';
 import { isSelfHost } from './selfhost-auth';
 import { getUpdateStatus } from './update-check';
 import { getCachedConfig } from './cached-config';
+import { isAllowedOrigin, sameSecret, telegramBotToken } from './relay-policy';
+import { D1Adapter } from './d1-adapter';
 import type { D1Database } from '@cloudflare/workers-types';
 
 // What the self-hosted dashboard renders: is each moving part configured and
@@ -118,10 +120,35 @@ export interface Env {
   EXTERNAL_DOMAIN?: string;
 }
 
+// A user's worker relays only for its owner's bot: the bot token in the
+// Telegram path must be the one this worker has on record — its D1 copy of the
+// Telegram settings, which both apps load (writing that copy) before they relay
+// anything. No token on record, or no way to read it, refuses: the check must
+// fail closed. The central worker has no D1 and keeps the host-only rule.
+async function relaysOwnBot(env: Env, target: URL): Promise<boolean> {
+  if (!env.DB) return true;
+  let onRecord: string | null = null;
+  try {
+    const telegram = await new D1Adapter(env.DB).getJsonConfig<any>('telegram');
+    onRecord = telegram?.botToken || telegram?.bot_token || null;
+  } catch (error: any) {
+    console.error('[proxy] could not read the bot token on record:', error?.message);
+    return false;
+  }
+  if (!onRecord) {
+    console.warn('[proxy] no bot token on record; refusing to relay');
+    return false;
+  }
+  const requested = telegramBotToken(target);
+  return !!requested && sameSecret(requested, onRecord);
+}
+
 function corsHeaders(request: Request, env: Env): Record<string, string> {
   const origin = request.headers.get('Origin') || '';
-  const allowed = env.ALLOWED_ORIGINS.split(',');
-  const isAllowed = allowed.includes(origin) || origin.includes('localhost');
+  const allowed = env.ALLOWED_ORIGINS.split(',').map((entry) => entry.trim());
+  // Exact origins only (local development is listed explicitly); a credentialed
+  // response must never be readable by a look-alike origin.
+  const isAllowed = isAllowedOrigin(origin, env.ALLOWED_ORIGINS);
   return {
     'Access-Control-Allow-Origin': isAllowed ? origin : allowed[0],
     'Access-Control-Allow-Methods': 'GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS',
@@ -196,15 +223,18 @@ export default {
         // `https://api.telegram.org/...`. An empty port means the https
         // default, 443.
         let allowedTarget = false;
+        let targetUrl: URL | null = null;
         try {
-          const t = new URL(target || '');
-          allowedTarget = t.protocol === 'https:' && t.hostname === 'api.telegram.org' && t.port === '';
+          targetUrl = new URL(target || '');
+          allowedTarget = targetUrl.protocol === 'https:' && targetUrl.hostname === 'api.telegram.org' && targetUrl.port === '';
         } catch { allowedTarget = false; }
 
         if (!target) {
           response = new Response('Missing url parameter', { status: 400 });
         } else if (!allowedTarget) {
           response = new Response('This endpoint only relays to api.telegram.org', { status: 403 });
+        } else if (!(await relaysOwnBot(env, targetUrl!))) {
+          response = new Response("This worker only relays its owner's Telegram bot", { status: 403 });
         } else {
           const fwdHeaders = new Headers();
           const ct = request.headers.get('Content-Type');
