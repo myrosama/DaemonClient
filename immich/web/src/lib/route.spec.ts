@@ -19,9 +19,6 @@ describe('Route', () => {
       expect(Route.search({ make: undefined, model: 'Immich' })).toBe('/search?query=%7B%22model%22%3A%22Immich%22%7D');
     });
 
-    it('should support query parameters', () => {
-      expect(Route.systemSettings({ isOpen: OpenQueryParam.OAUTH })).toBe('/admin/system-settings?isOpen=oauth');
-    });
   });
 
   describe(Route.tags.name, () => {
@@ -38,13 +35,19 @@ describe('Route', () => {
     });
   });
 
-  describe(Route.systemSettings.name, () => {
+  describe(Route.userSettings.name, () => {
     it('should work', () => {
-      expect(Route.systemSettings()).toBe('/admin/system-settings');
+      expect(Route.userSettings()).toBe('/user-settings');
     });
 
     it('should support query parameters', () => {
-      expect(Route.systemSettings({ isOpen: OpenQueryParam.OAUTH })).toBe('/admin/system-settings?isOpen=oauth');
+      expect(Route.userSettings({ isOpen: OpenQueryParam.NOTIFICATIONS })).toBe('/user-settings?isOpen=notifications');
+    });
+  });
+
+  describe(Route.buy.name, () => {
+    it('should open the purchase settings', () => {
+      expect(Route.buy()).toBe('/user-settings?isOpen=user-purchase-settings');
     });
   });
 });
