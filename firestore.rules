@@ -2,9 +2,19 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Per-user data — only the owning user may read or write.
+    function isOwner(userId) {
+      return request.auth != null && request.auth.uid == userId;
+    }
+
+    // Per-user data — only the owning user may read or write it, with one
+    // exception: config/cloudflare holds the address of the user's worker and
+    // the secret that signs their sessions. The owner may read it, but only the
+    // deployment service writes it (with its service account, which bypasses
+    // these rules) — so nothing running as the user can repoint their sessions.
     match /artifacts/{appId}/users/{userId}/{document=**} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
+      allow read: if isOwner(userId);
+      allow write: if isOwner(userId)
+        && request.path != /databases/$(database)/documents/artifacts/$(appId)/users/$(userId)/config/cloudflare;
     }
 
     // Operator broadcast announcements — any authenticated user may read.
