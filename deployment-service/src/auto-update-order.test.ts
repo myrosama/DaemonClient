@@ -1,11 +1,14 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import worker, { encryptToken } from './index';
 
-// Auto-update re-deploys a user's worker. Whatever that deploy depends on — a
-// rotated single-use Cloudflare refresh token, or a freshly minted session
-// secret the new worker will verify sessions with — must be on record BEFORE
-// the deploy. If saving it fails, nothing is deployed: a worker running a
-// secret nobody has on record would reject every session.
+// Auto-update re-deploys a user's worker.
+// - A newly minted session secret is recorded as PENDING before the deploy and
+//   becomes the live `sessionSecret` only after the worker runs with it: the
+//   sign-in path signs with `sessionSecret`, and a worker not yet redeployed
+//   still verifies the old way, so promoting it early locks the user out
+//   whenever the deploy fails.
+// - A rotated (single-use) Cloudflare refresh token is saved before the deploy
+//   and again after it.
 
 const MASTER = 'm'.repeat(32);
 const env = {
@@ -18,9 +21,11 @@ const env = {
 } as any;
 
 type Call = { url: string; method: string; body?: string };
+type World = { cfg: Record<string, string>; patchStatus?: number | number[]; deployOk?: boolean; rotate?: boolean };
 
-async function stubWorld(opts: { cfg: Record<string, string>; patchStatus: number }) {
+async function stubWorld(world: World) {
   const calls: Call[] = [];
+  let patches = 0;
   vi.stubGlobal('fetch', async (input: any, init: RequestInit = {}) => {
     const url = typeof input === 'string' ? input : input.url;
     const method = (init.method || 'GET').toUpperCase();
@@ -29,66 +34,112 @@ async function stubWorld(opts: { cfg: Record<string, string>; patchStatus: numbe
       return new Response(JSON.stringify({ users: [{ localId: 'uid1', email: 'u@example.com' }] }));
     }
     if (url.includes('firestore.googleapis.com') && method === 'GET') {
-      const fields = Object.fromEntries(Object.entries(opts.cfg).map(([k, v]) => [k, { stringValue: v }]));
+      const fields = Object.fromEntries(Object.entries(world.cfg).map(([k, v]) => [k, { stringValue: v }]));
       return new Response(JSON.stringify({ fields }));
     }
     if (url.includes('firestore.googleapis.com') && method === 'PATCH') {
-      return new Response(opts.patchStatus === 200 ? '{}' : 'denied', { status: opts.patchStatus });
+      const s = world.patchStatus ?? 200;
+      const status = Array.isArray(s) ? s[Math.min(patches, s.length - 1)] : s;
+      patches++;
+      return new Response(status === 200 ? '{}' : 'denied', { status });
+    }
+    if (url.startsWith('https://dash.cloudflare.com/oauth2/token')) {
+      return new Response(JSON.stringify({ access_token: 'cf-access', refresh_token: world.rotate ? 'rotated-refresh' : undefined }));
     }
     if (url.includes('api.cloudflare.com')) {
-      return new Response(JSON.stringify({ success: true, result: {} }));
+      return world.deployOk === false
+        ? new Response('upstream error', { status: 500 })
+        : new Response(JSON.stringify({ success: true, result: {} }));
     }
     return new Response('{}');
   });
   return calls;
 }
 
+const fieldsOf = (c: Call) => JSON.parse(c.body || '{}').fields as Record<string, { stringValue: string }>;
+const saves = (calls: Call[]) => calls.filter((c) => c.method === 'PATCH');
+const deployIndex = (calls: Call[]) => calls.findIndex((c) => c.url.includes('api.cloudflare.com'));
 const autoUpdate = () =>
   worker.fetch(new Request('https://deploy.example/auto-update', { method: 'POST', headers: { Authorization: 'Bearer user-id-token' } }), env);
+const legacyCfg = async (extra: Record<string, string> = {}) => ({
+  accountId: 'acc', workerName: 'dc-x', databaseId: 'db', apiToken: await encryptToken('cf-token', MASTER), ...extra,
+});
 
 afterEach(() => vi.unstubAllGlobals());
 
-describe('auto-update saves first, deploys second', () => {
-  it('a newly minted session secret is on record before the worker is deployed with it', async () => {
-    const calls = await stubWorld({
-      cfg: { accountId: 'acc', workerName: 'dc-x', databaseId: 'db', apiToken: await encryptToken('cf-token', MASTER) },
-      patchStatus: 200,
-    });
+describe('auto-update: a new session secret goes live only once the worker runs with it', () => {
+  it('records it as pending before the deploy, and promotes it after', async () => {
+    const calls = await stubWorld({ cfg: await legacyCfg() });
     const res = await autoUpdate();
     expect(res.status).toBe(200);
-    const firstSave = calls.findIndex((c) => c.method === 'PATCH');
-    const firstDeploy = calls.findIndex((c) => c.url.includes('api.cloudflare.com'));
-    expect(firstSave, 'a save happened').toBeGreaterThanOrEqual(0);
-    expect(firstDeploy, 'a deploy happened').toBeGreaterThanOrEqual(0);
-    expect(firstSave).toBeLessThan(firstDeploy);
-    expect(calls[firstSave].body).toContain('sessionSecret');
+    const [before, after] = saves(calls);
+    expect(calls.indexOf(before)).toBeLessThan(deployIndex(calls));
+    expect(calls.indexOf(after)).toBeGreaterThan(deployIndex(calls));
+    const pending = fieldsOf(before).pendingSessionSecret?.stringValue;
+    expect(pending && pending.length >= 32).toBe(true);
+    expect(fieldsOf(before).sessionSecret).toBeUndefined();
+    expect(fieldsOf(after).sessionSecret?.stringValue).toBe(pending);
+    expect(fieldsOf(after).pendingSessionSecret).toBeUndefined();
   });
 
-  it('if that save fails, nothing is deployed', async () => {
-    const calls = await stubWorld({
-      cfg: { accountId: 'acc', workerName: 'dc-x', databaseId: 'db', apiToken: await encryptToken('cf-token', MASTER) },
-      patchStatus: 403,
-    });
+  it('if the deploy fails, the live secret on record is unchanged (sign-in keeps working)', async () => {
+    const calls = await stubWorld({ cfg: await legacyCfg(), deployOk: false });
+    const res = await autoUpdate();
+    expect(res.status).toBe(500);
+    for (const save of saves(calls)) expect(fieldsOf(save).sessionSecret).toBeUndefined();
+  });
+
+  it('a pending secret from an earlier failed attempt is reused, not replaced', async () => {
+    const earlier = 'p'.repeat(40);
+    const calls = await stubWorld({ cfg: await legacyCfg({ pendingSessionSecret: earlier }) });
+    const res = await autoUpdate();
+    expect(res.status).toBe(200);
+    const all = saves(calls);
+    expect(all.length).toBe(1); // nothing new to record before the deploy
+    expect(calls.indexOf(all[0])).toBeGreaterThan(deployIndex(calls));
+    expect(fieldsOf(all[0]).sessionSecret?.stringValue).toBe(earlier);
+    expect(fieldsOf(all[0]).pendingSessionSecret).toBeUndefined();
+  });
+
+  it('if recording a newly minted secret fails, nothing is deployed', async () => {
+    const calls = await stubWorld({ cfg: await legacyCfg(), patchStatus: 403 });
     const res = await autoUpdate();
     expect(res.status).toBe(500);
     expect(await res.json()).toMatchObject({ updated: false, reason: 'config-save-failed' });
-    expect(calls.some((c) => c.url.includes('api.cloudflare.com'))).toBe(false);
+    expect(deployIndex(calls)).toBe(-1);
   });
 
-  it('with nothing new to record, it deploys and then records the version', async () => {
-    const calls = await stubWorld({
-      cfg: {
-        accountId: 'acc', workerName: 'dc-x', databaseId: 'db',
-        apiToken: await encryptToken('cf-token', MASTER),
-        sessionSecret: 's'.repeat(40),
-      },
-      patchStatus: 200,
-    });
+  it('with a live secret already, it deploys and then records the version — one save', async () => {
+    const calls = await stubWorld({ cfg: await legacyCfg({ sessionSecret: 's'.repeat(40) }) });
     const res = await autoUpdate();
     expect(res.status).toBe(200);
-    const deploy = calls.findIndex((c) => c.url.includes('api.cloudflare.com'));
-    const saves = calls.map((c, i) => (c.method === 'PATCH' ? i : -1)).filter((i) => i >= 0);
-    expect(saves.length).toBe(1);
-    expect(saves[0]).toBeGreaterThan(deploy);
+    const all = saves(calls);
+    expect(all.length).toBe(1);
+    expect(calls.indexOf(all[0])).toBeGreaterThan(deployIndex(calls));
+  });
+});
+
+describe('auto-update: a rotated refresh token', () => {
+  const oauthCfg = async () => ({
+    accountId: 'acc', workerName: 'dc-x', databaseId: 'db',
+    refreshToken: await encryptToken('old-refresh', MASTER), sessionSecret: 's'.repeat(40),
+  });
+
+  it('is saved before the deploy', async () => {
+    const calls = await stubWorld({ cfg: await oauthCfg(), rotate: true });
+    expect((await autoUpdate()).status).toBe(200);
+    const first = saves(calls)[0];
+    expect(calls.indexOf(first)).toBeLessThan(deployIndex(calls));
+    expect(fieldsOf(first).refreshToken?.stringValue).toBeTruthy();
+    expect(fieldsOf(first).refreshToken.stringValue).not.toBe((await oauthCfg()).refreshToken);
+  });
+
+  it('a failed first save does not stop the deploy (it does not depend on it), and it is saved again after', async () => {
+    const calls = await stubWorld({ cfg: await oauthCfg(), rotate: true, patchStatus: [403, 200] });
+    expect((await autoUpdate()).status).toBe(200);
+    expect(deployIndex(calls)).toBeGreaterThan(-1);
+    const last = saves(calls).at(-1)!;
+    expect(calls.indexOf(last)).toBeGreaterThan(deployIndex(calls));
+    expect(fieldsOf(last).refreshToken?.stringValue).toBeTruthy();
   });
 });

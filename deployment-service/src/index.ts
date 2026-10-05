@@ -582,31 +582,43 @@ async function handleAutoUpdate(request: Request, env: Env): Promise<Response> {
       }
     }
     const cfApi = new CloudflareAPI();
+    const isSecret = (v: unknown): v is string => typeof v === 'string' && v.length >= 32;
     // Workers provisioned before per-user signing secrets existed have none.
-    // Mint one here so the fleet migrates off the shared, publicly-known
-    // APP_IDENTIFIER key; it is stored below and reused from then on.
-    const sessionSecret = (typeof cfg.sessionSecret === 'string' && cfg.sessionSecret.length >= 32)
+    // Mint one so the fleet migrates off the shared, publicly-known
+    // APP_IDENTIFIER key. Until the worker is running with it, it is recorded
+    // only as `pendingSessionSecret`: the sign-in path signs with
+    // `sessionSecret`, and a worker that has not been redeployed still verifies
+    // the old way — promoting it early would lock the user out whenever the
+    // deploy fails. A pending secret from an earlier failed attempt is reused.
+    const hasLiveSecret = isSecret(cfg.sessionSecret);
+    const sessionSecret = hasLiveSecret
       ? cfg.sessionSecret
-      : newSessionSecret();
+      : isSecret(cfg.pendingSessionSecret) ? cfg.pendingSessionSecret : newSessionSecret();
+    const newlyMinted = !hasLiveSecret && sessionSecret !== cfg.pendingSessionSecret;
 
     // Save first, deploy second. CF OAuth refresh tokens are single-use (rotated
     // on every refresh), so the old one is already spent: deferring the save
     // past a failed deploy lost the new one and bricked auto-update for good
-    // (the root cause of workers stuck on old shim versions). And a freshly
-    // minted session secret must be on record before a worker starts verifying
-    // sessions with it. If this save fails, stop — deploying anyway would run a
-    // worker whose secret nobody has.
-    if (rotatedRefresh || sessionSecret !== cfg.sessionSecret) {
+    // (the root cause of workers stuck on old shim versions). A newly minted
+    // secret must be on record (as pending) before any worker runs with it; if
+    // that save fails, stop. The deploy does not depend on the refresh token,
+    // so a failed save of only that one is retried instead.
+    let refreshSaved = !rotatedRefresh;
+    if (rotatedRefresh || newlyMinted) {
       try {
         await saveWorkerConfig(uid, {
           ...cfg,
           ...(rotatedRefresh ? { refreshToken: rotatedRefresh } : {}),
-          sessionSecret,
+          ...(newlyMinted ? { pendingSessionSecret: sessionSecret } : {}),
           lastUpdatedAt: new Date().toISOString(),
         }, env, idToken);
+        refreshSaved = true;
       } catch (e: any) {
-        console.error('[auto-update] pre-deploy config save failed; not deploying:', e?.message);
-        return corsResponse(JSON.stringify({ updated: false, reason: 'config-save-failed' }), { status: 500 });
+        if (newlyMinted) {
+          console.error('[auto-update] pre-deploy config save failed; not deploying:', e?.message);
+          return corsResponse(JSON.stringify({ updated: false, reason: 'config-save-failed' }), { status: 500 });
+        }
+        console.error('[auto-update] rotated refresh token save failed; saving again after the deploy:', e?.message);
       }
     }
 
@@ -618,11 +630,17 @@ async function handleAutoUpdate(request: Request, env: Env): Promise<Response> {
       bindings: buildShimBindings(env, cfg.databaseId, sessionSecret)
     });
     if (!deployResult.success) {
+      if (!refreshSaved) {
+        await saveWorkerConfig(uid, { ...cfg, refreshToken: rotatedRefresh!, lastUpdatedAt: new Date().toISOString() }, env, idToken)
+          .catch((e) => console.error('[auto-update] rotated refresh token lost:', e?.message));
+      }
       return corsResponse(JSON.stringify({ updated: false, reason: 'deploy-failed', error: deployResult.error }), { status: 500 });
     }
 
+    // The worker now runs with `sessionSecret`: make it the live one.
+    const { pendingSessionSecret: _promoted, ...settled } = cfg;
     await saveWorkerConfig(uid, {
-      ...cfg,
+      ...settled,
       ...(rotatedRefresh ? { refreshToken: rotatedRefresh } : {}),
       sessionSecret,
       lastDeployedVersion: SHIM_VERSION,
