@@ -46,27 +46,17 @@ describe('POST /api/auth/login on the central worker', () => {
     const fetchSpy = vi.fn(async () => new Response('{}'));
     vi.stubGlobal('fetch', fetchSpy);
     const ip = limiter(() => false);
-    const email = limiter(() => true);
-    const res = await handleAuth(post({ email: 'a@example.com', password: 'x' }), { FIREBASE_API_KEY: 'k', LOGIN_IP_LIMITER: ip.binding, LOGIN_EMAIL_LIMITER: email.binding } as any, '/api/auth/login');
+    const res = await handleAuth(post({ email: 'a@example.com', password: 'x' }), { FIREBASE_API_KEY: 'k', LOGIN_IP_LIMITER: ip.binding } as any, '/api/auth/login');
     expect(res.status).toBe(429);
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(ip.keys).toEqual(['203.0.113.7']);
   });
 
-  it('stops repeated tries against one account from many addresses; the key is a hash, not the address', async () => {
-    const fetchSpy = vi.fn(async () => new Response('{}'));
-    vi.stubGlobal('fetch', fetchSpy);
+  it("is not keyed on the account — failing on someone's email can't lock them out", async () => {
+    vi.stubGlobal('fetch', async () => new Response(JSON.stringify({ error: { message: 'INVALID_PASSWORD' } }), { status: 400 }));
     const ip = limiter(() => true);
-    const email = limiter(() => false);
-    const res = await handleAuth(post({ email: '  Victim@Example.com ', password: 'x' }), { FIREBASE_API_KEY: 'k', LOGIN_IP_LIMITER: ip.binding, LOGIN_EMAIL_LIMITER: email.binding } as any, '/api/auth/login');
-    expect(res.status).toBe(429);
-    expect(fetchSpy).not.toHaveBeenCalled();
-    expect(email.keys[0]).toMatch(/^[0-9a-f]{64}$/);
-    expect(email.keys[0]).not.toContain('victim');
-    // the same account however it is typed
-    const again = limiter(() => true);
-    await handleAuth(post({ email: 'victim@example.com', password: 'x' }), { FIREBASE_API_KEY: 'k', LOGIN_IP_LIMITER: ip.binding, LOGIN_EMAIL_LIMITER: again.binding } as any, '/api/auth/login').catch(() => {});
-    expect(again.keys[0]).toBe(email.keys[0]);
+    await handleAuth(post({ email: 'victim@example.com', password: 'x' }), { FIREBASE_API_KEY: 'k', LOGIN_IP_LIMITER: ip.binding } as any, '/api/auth/login');
+    expect(ip.keys.every((key) => !/victim|@/.test(key))).toBe(true);
   });
 
   it('without the limiter bindings (a user worker, self-host) sign-in works as before', async () => {

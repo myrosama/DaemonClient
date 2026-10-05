@@ -85,30 +85,22 @@ export function loginFailure(firebaseMessage: string | undefined): { status: num
 
 type RateLimiter = { limit(options: { key: string }): Promise<{ success: boolean }> };
 
-async function emailKey(email: unknown): Promise<string> {
-  const normalised = typeof email === 'string' ? email.trim().toLowerCase() : '';
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(normalised));
-  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
-}
-
-// Per address and per account (hashed), on the central worker where the
-// bindings exist. Checked before any Firebase call, so a blocked guess costs
-// nothing upstream. Without the bindings (a user's worker, self-host) sign-in
-// behaves as before.
-async function loginRateLimited(request: Request, env: Env, email: unknown): Promise<boolean> {
+// Per client address, on the central worker where the binding exists, checked
+// before any Firebase call so a blocked guess costs nothing upstream. Not per
+// account: anyone could then lock a user out by failing on their email —
+// Firebase already throttles repeated failures on one account itself. Without
+// the binding (a user's worker, self-host) sign-in behaves as before.
+async function loginRateLimited(request: Request, env: Env): Promise<boolean> {
   const byAddress = (env as any).LOGIN_IP_LIMITER as RateLimiter | undefined;
-  const byAccount = (env as any).LOGIN_EMAIL_LIMITER as RateLimiter | undefined;
   const address = request.headers.get('CF-Connecting-IP') || 'unknown';
-  if (byAddress && !(await byAddress.limit({ key: address })).success) return true;
-  if (byAccount && !(await byAccount.limit({ key: await emailKey(email) })).success) return true;
-  return false;
+  return !!byAddress && !(await byAddress.limit({ key: address })).success;
 }
 
 async function handleLogin(request: Request, env: Env): Promise<Response> {
   const body = await request.json() as any;
   const { email, password } = body.loginCredentialDto || body;
 
-  if (await loginRateLimited(request, env, email)) {
+  if (await loginRateLimited(request, env)) {
     return json({ message: 'Too many sign-in attempts. Wait a minute and try again.' }, 429);
   }
 
