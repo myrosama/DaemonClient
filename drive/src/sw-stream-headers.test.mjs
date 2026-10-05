@@ -27,14 +27,29 @@ test('every response forbids type sniffing', () => {
   }
 })
 
-test('photos, video, audio and PDF are served as themselves, unsandboxed', () => {
+test('photos, video and audio are served as themselves, under a bare sandbox', () => {
   for (const [name, type] of [['a.jpg', 'image/jpeg'], ['a.png', 'image/png'], ['a.webp', 'image/webp'],
-    ['a.mp4', 'video/mp4'], ['a.mov', 'video/quicktime'], ['a.mp3', 'audio/mpeg'], ['a.pdf', 'application/pdf']]) {
+    ['a.mp4', 'video/mp4'], ['a.mov', 'video/quicktime'], ['a.mp3', 'audio/mpeg']]) {
     const h = headersFor(name)
     assert.equal(h['Content-Type'], type, name)
-    assert.equal(h['Content-Security-Policy'], undefined, name)
+    assert.equal(h['Content-Security-Policy'], 'sandbox', name)
     assert.equal(h['Content-Disposition'], undefined, name)
   }
+})
+
+test('a PDF is served as itself, unsandboxed, so the browser viewer works', () => {
+  const h = headersFor('a.pdf')
+  assert.equal(h['Content-Type'], 'application/pdf')
+  assert.equal(h['Content-Security-Policy'], undefined)
+})
+
+test('a stored type is reduced to one plain token — lists and parameters cannot smuggle HTML in', () => {
+  for (const type of ['video/mp4, text/html', 'audio/ogg,text/html', 'video/mp4;x=1,text/html', 'video/mp4 text/html', 'video/<x>']) {
+    const h = headersFor('clip', type)
+    assert.doesNotMatch(h['Content-Type'], /html|,|<| /, type)
+    assert.ok(h['Content-Security-Policy']?.startsWith('sandbox'), type)
+  }
+  assert.equal(headersFor('clip', 'video/mp4, text/html')['Content-Type'], 'video/mp4')
 })
 
 test('HTML, XML and scripts are shown as plain text, sandboxed', () => {
@@ -70,5 +85,9 @@ test('unknown binaries download instead of rendering, with the file name kept', 
 
 test('a stored media type is honoured only as media — never upgraded to something that runs', () => {
   assert.equal(headersFor('clip', 'video/webm')['Content-Type'], 'video/webm')
-  assert.equal(headersFor('clip', 'video/webm')['Content-Security-Policy'], undefined)
+  assert.equal(headersFor('clip', 'video/webm')['Content-Security-Policy'], 'sandbox')
+})
+
+test('the unused Telegram pass-through is gone', () => {
+  assert.doesNotMatch(source, /tg-proxy/)
 })

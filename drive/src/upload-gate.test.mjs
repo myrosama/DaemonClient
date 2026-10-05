@@ -4,7 +4,7 @@
 // yet. These pin when an upload may start.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { uploadGate } from './upload-gate.js'
+import { uploadGate, GATE_MESSAGES } from './upload-gate.js'
 
 test('while the encryption settings load, uploads wait (the key may be on its way)', () => {
   for (const zkeEnabled of [true, false]) {
@@ -26,6 +26,16 @@ test('a missing or odd enabled flag counts as ON: only an explicit false allows 
 
 test('encryption on with its key — go', () => {
   assert.equal(uploadGate({ zkeLoading: false, zkeEnabled: true, hasKey: true }), 'go')
+})
+
+test('settings that could not be loaded hold the queue, even for auto-mode users', () => {
+  for (const hasKey of [true, false]) {
+    assert.equal(uploadGate({ zkeLoading: false, zkeError: true, zkeEnabled: true, hasKey }), 'unavailable')
+  }
+})
+
+test('every paused state has a message for the user', () => {
+  for (const state of ['locked', 'unavailable']) assert.ok(GATE_MESSAGES[state].length > 20, state)
 })
 
 test('encryption explicitly off — go, unencrypted by the user\'s choice', () => {

@@ -1,9 +1,8 @@
-// public/sw.js — Virtual File System + Telegram Proxy
+// public/sw.js — Virtual File System
 //
-// Three responsibilities:
-//   1. Proxy  /tg-proxy/*  → api.telegram.org (existing)
-//   2. Stream /stream/<id> → fetch chunk from TG, decrypt, serve Range slice
-//   3. Survive its own termination. A service worker is killed after ~30s of
+// Two responsibilities:
+//   1. Stream /stream/<id> → fetch chunk from TG, decrypt, serve Range slice
+//   2. Survive its own termination. A service worker is killed after ~30s of
 //      idleness — on a long video the user only has to pause for a minute and
 //      the old build woke up with an empty Map and 404'd the rest of the file.
 //      Registrations (everything except the key, which must never touch disk)
@@ -93,21 +92,35 @@ function contentTypeFor(vFile) {
 }
 
 // ── How a /stream response may be shown. These are the user's own files, served
-//    on the drive origin — the origin that holds their session. Only types that
-//    cannot run script are served as themselves; anything else is shown as
-//    text or sandboxed (no script, no forms, an opaque origin), and unknown
-//    binaries download. `nosniff` stops the browser second-guessing the type. ──
+//    on the drive origin — the origin that holds their session. The stored type
+//    comes from whoever uploaded the file, so it is reduced to one plain
+//    `type/subtype` token first. Only types that cannot run script are served as
+//    themselves; anything else is shown as text, and unknown binaries download.
+//    Every response except a PDF is also sandboxed (no script, no forms, an
+//    opaque origin) — that changes nothing for <img>/<video>, only for a file
+//    opened as a page; media gets the bare `sandbox` so it still plays in its
+//    own tab. `nosniff` stops the browser second-guessing the type. ──
 const INLINE_TYPES = new Set([
   'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/bmp', 'image/avif',
   'image/x-icon', 'application/pdf',
 ]);
 const SANDBOX_CSP = "sandbox; default-src 'none'; img-src data:; style-src 'unsafe-inline'";
 
+function plainMimeType(raw) {
+  const first = String(raw || '').toLowerCase().split(/[;,]/)[0].trim();
+  return /^[a-z0-9.+-]+\/[a-z0-9.+-]+$/.test(first) ? first : 'application/octet-stream';
+}
+
 function streamHeadersFor(vFile) {
-  const type = String(contentTypeFor(vFile)).toLowerCase().split(';')[0].trim();
+  const type = plainMimeType(contentTypeFor(vFile));
   const headers = { 'X-Content-Type-Options': 'nosniff' };
+  if (type === 'application/pdf') {
+    headers['Content-Type'] = type;
+    return headers;
+  }
   if (INLINE_TYPES.has(type) || type.startsWith('video/') || type.startsWith('audio/')) {
     headers['Content-Type'] = type;
+    headers['Content-Security-Policy'] = 'sandbox';
     return headers;
   }
   headers['Content-Security-Policy'] = SANDBOX_CSP;
@@ -478,24 +491,11 @@ async function handleStreamRequest(request, url) {
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
 
-  // Same-origin only: any other origin could have its own /stream/ or
-  // /tg-proxy/ paths, and the old pathname-only check would hijack them.
+  // Same-origin only: any other origin could have its own /stream/ paths, and
+  // the old pathname-only check would hijack them.
   if (url.origin !== self.location.origin) return;
 
-  // 1. Existing Telegram proxy
-  if (url.pathname.startsWith('/tg-proxy/')) {
-    const tgFilePath = url.pathname.substring('/tg-proxy/'.length) + url.search;
-    const actualUrl = `https://api.telegram.org/${tgFilePath}`;
-    event.respondWith(
-      fetch(actualUrl, {
-        method: event.request.method,
-        headers: event.request.headers,
-      })
-    );
-    return;
-  }
-
-  // 2. Virtual file streamer
+  // Virtual file streamer
   if (url.pathname.startsWith('/stream/')) {
     event.respondWith(handleStreamRequest(event.request, url));
   }

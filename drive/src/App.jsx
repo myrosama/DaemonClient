@@ -7,7 +7,7 @@ import { getSyncEngine, destroySyncEngine } from './manifest-sync.js';
 import ConnectDriveModal from './ConnectDriveModal.jsx';
 import {
     saveUploadSession, getUploadSession, getIncompleteUploads,
-    deleteUploadSession, getAllUploadSessions
+    deleteUploadSession, getAllUploadSessions, getAllManifestItems
 } from './idb-store.js';
 // Per-user architecture: auth + provisioning stay central (Firebase, via the
 // central worker + accounts.daemonclient.uz), but ALL file data lives on the
@@ -18,7 +18,8 @@ import {
     onAuthChange, getDriveConfig, getWorkerUrl, driveApi,
 } from './api.js';
 import { isWorkerUnreachable, waitStartedAt, waitedTooLong, clearWait, sessionStore } from './worker-unreachable.js';
-import { uploadGate, LOCKED_MESSAGE } from './upload-gate.js';
+import { uploadGate, GATE_MESSAGES } from './upload-gate.js';
+import { pickProbe, unlockCustomKey } from './zke-unlock.js';
 
 // Onboarding (account creation + Telegram/Cloudflare setup) lives entirely on
 // accounts.daemonclient.uz; the Drive app is login → dashboard only.
@@ -289,6 +290,19 @@ async function uploadFile(file, botToken, channelId, onProgress, abortSignal, pa
 }
 
 // --- HYBRID DOWNLOAD FUNCTION (With ZKE Decryption) ---
+// One stored chunk's bytes, through the user's own worker. Used to check a
+// custom encryption password against a file the user already encrypted.
+async function fetchStoredChunk(part, botToken) {
+    const fileInfoUrl = `https://api.telegram.org/bot${botToken}/getFile?file_id=${part.file_id}`;
+    const infoRes = await fetch(`${getWorkerUrl()}/proxy?url=${encodeURIComponent(fileInfoUrl)}`);
+    const info = await infoRes.json();
+    if (!info.ok) throw new Error(`TG getFile error: ${info.description || 'Unknown'}`);
+    const telegramUrl = `https://api.telegram.org/file/bot${botToken}/${info.result.file_path}`;
+    const fileRes = await fetch(`${getWorkerUrl()}/proxy?url=${encodeURIComponent(telegramUrl)}`);
+    if (!fileRes.ok) throw new Error(`Proxy fetch failed: ${fileRes.status}`);
+    return await fileRes.arrayBuffer();
+}
+
 async function downloadFile(fileInfo, botToken, onProgress, abortSignal, decryptionKey = null) {
     const { messages, fileName, fileSize, fileType, encrypted } = fileInfo;
     const shouldDecrypt = encrypted && decryptionKey !== null;
@@ -867,6 +881,9 @@ const DashboardView = () => {
     const [zkeMode, setZkeMode] = useState('auto'); // 'auto' or 'custom'
     const [encryptionKey, setEncryptionKey] = useState(null);
     const [zkeLoading, setZkeLoading] = useState(true);
+    // The encryption settings could not be loaded: uploads stay paused rather
+    // than go out unencrypted (see uploadGate).
+    const [zkeLoadError, setZkeLoadError] = useState(false);
 
     const fileInputRef = useRef(null);
     const folderInputRef = useRef(null);
@@ -1115,6 +1132,7 @@ const DashboardView = () => {
                     setZkeMode(zke.mode || 'auto');
                 } catch (err) {
                     console.error('Failed to derive ZKE key:', err);
+                    setZkeLoadError(true);
                 }
             } else if (zke && zke.updatedAt) {
                 // Config exists and encryption is disabled
@@ -1139,6 +1157,7 @@ const DashboardView = () => {
             }
         }).catch(err => {
             console.error('Failed to load ZKE config:', err);
+            setZkeLoadError(true);
         }).finally(() => {
             setZkeLoading(false);
         });
@@ -1187,12 +1206,8 @@ const DashboardView = () => {
         // Never send a file unencrypted because the key isn't here yet: wait for
         // the encryption settings, and hold the queue while the key is locked.
         // This effect re-runs when either arrives, and the uploads continue.
-        const gate = uploadGate({ zkeLoading, zkeEnabled, hasKey: !!encryptionKey });
-        if (gate === 'wait') return;
-        if (gate === 'locked') {
-            setFeedbackMessage({ type: 'error', text: LOCKED_MESSAGE });
-            return;
-        }
+        // The banner above the file list says why, while the queue waits.
+        if (uploadGate({ zkeLoading, zkeError: zkeLoadError, zkeEnabled, hasKey: !!encryptionKey }) !== 'go') return;
         pumpingUploadRef.current = true;
 
         const startNextUpload = async () => {
@@ -1223,7 +1238,7 @@ const DashboardView = () => {
                     })),
                     controller.signal,
                     targetParentId,
-                    zkeEnabled ? encryptionKey : null,
+                    zkeEnabled !== false ? encryptionKey : null,
                     resumeSession   // Pass existing session for resume
                 );
 
@@ -1261,7 +1276,7 @@ const DashboardView = () => {
         };
 
         startNextUpload();
-    }, [uploadQueue, isUploading, currentFolderId, zkeLoading, zkeEnabled, encryptionKey]);
+    }, [uploadQueue, isUploading, currentFolderId, zkeLoading, zkeLoadError, zkeEnabled, encryptionKey]);
 
     // --- HANDLERS ---
     const clearFeedback = (delay = 5000) => setTimeout(() => setFeedbackMessage({ type: '', text: '' }), delay);
@@ -1365,6 +1380,9 @@ const DashboardView = () => {
         } finally { handleCancelRename(); clearFeedback(); }
     };
     const handleLogout = async () => {
+        // Queued uploads belong to this session; never let them run afterwards.
+        setUploadQueue([]);
+        setUploadBatchTotal(0);
         try { await destroySyncEngine(); } catch { }
         // The next account in this tab starts any "isn't ready yet" wait afresh.
         const waitStore = sessionStore();
@@ -1402,6 +1420,25 @@ const DashboardView = () => {
     };
 
     // ZKE Enable/Disable Handler — config stored on the user's OWN worker.
+    // Re-derive the custom-password key from the SAME salt (no new salt, nothing
+    // sent), after checking it opens a file the user already encrypted.
+    const handleZkeUnlock = async (password) => {
+        const zke = await driveApi('/api/drive/zke');
+        if (!(zke && zke.enabled && zke.mode === 'custom' && zke.salt)) {
+            throw new Error('Encryption is not set to a custom password.');
+        }
+        const key = await unlockCustomKey({
+            password,
+            salt: base64ToBytes(zke.salt),
+            deriveKey,
+            decryptChunk,
+            probe: pickProbe(await getAllManifestItems()),
+            fetchFirstChunk: (item) => fetchStoredChunk(item.messages[0], config.botToken),
+        });
+        setEncryptionKey(key);
+        setZkeLoadError(false);
+    };
+
     const handleZkeToggle = async (enabled, mode = 'auto', customPassword = null) => {
         if (enabled) {
             const password = mode === 'custom' ? customPassword : generatePassword();
@@ -1649,7 +1686,7 @@ const DashboardView = () => {
         }
     };
 
-    const SettingsModal = ({ initialConfig, onSave, onClose, isSaving, zkeEnabled, zkeMode, onZkeToggle }) => {
+    const SettingsModal = ({ initialConfig, onSave, onClose, isSaving, zkeEnabled, zkeMode, onZkeToggle, zkeLocked, onZkeUnlock }) => {
         const [botToken, setBotToken] = useState(initialConfig.botToken || '');
         const [channelId, setChannelId] = useState(initialConfig.channelId || '');
         const [localZkeEnabled, setLocalZkeEnabled] = useState(zkeEnabled);
@@ -1673,8 +1710,11 @@ const DashboardView = () => {
             setIsProcessing(true);
 
             try {
-                // Handle ZKE state change
-                if (localZkeEnabled !== zkeEnabled || localZkeMode !== zkeMode) {
+                // Custom password, unchanged mode, locked on this device: the
+                // password unlocks the existing key (checked against a file).
+                if (zkeLocked && localZkeEnabled && localZkeMode === 'custom' && zkeMode === 'custom') {
+                    await onZkeUnlock(customPassword);
+                } else if (localZkeEnabled !== zkeEnabled || localZkeMode !== zkeMode) {
                     await onZkeToggle(
                         localZkeEnabled,
                         localZkeMode,
@@ -1759,6 +1799,11 @@ const DashboardView = () => {
                                     {/* Custom Password Fields */}
                                     {localZkeMode === 'custom' && (
                                         <div className="space-y-3 mt-2">
+                                            {zkeLocked && zkeMode === 'custom' && (
+                                                <div className="text-xs text-yellow-300 bg-yellow-400/10 p-2 rounded">
+                                                    🔒 Locked on this device. Enter the same password you set before and press Save to unlock — a different password cannot open your existing files.
+                                                </div>
+                                            )}
                                             <div>
                                                 <label htmlFor="zke-password" className="block text-sm font-medium text-gray-300 mb-1">Encryption Password</label>
                                                 <input
@@ -2022,6 +2067,23 @@ const DashboardView = () => {
                     </div>
                 </div>
                 {isDownloading && <ProgressBar {...downloadProgress} onCancel={handleCancelTransfer} />}
+                {(() => {
+                    const gate = uploadQueue.length > 0 && !isUploading
+                        ? uploadGate({ zkeLoading, zkeError: zkeLoadError, zkeEnabled, hasKey: !!encryptionKey })
+                        : 'go';
+                    if (gate !== 'locked' && gate !== 'unavailable') return null;
+                    return (
+                        <div role="status" className="mt-4 p-3 rounded-lg text-sm bg-yellow-900/60 text-yellow-100 space-y-2">
+                            <p>{GATE_MESSAGES[gate]}</p>
+                            <div className="flex gap-2 justify-center">
+                                {gate === 'locked'
+                                    ? <button onClick={() => setIsSettingsOpen(true)} className="px-3 py-1 rounded bg-yellow-600 text-white">Unlock</button>
+                                    : <button onClick={() => window.location.reload()} className="px-3 py-1 rounded bg-yellow-600 text-white">Reload</button>}
+                                <button onClick={() => { setUploadQueue([]); setUploadBatchTotal(0); }} className="px-3 py-1 rounded bg-gray-700 text-white">Cancel uploads</button>
+                            </div>
+                        </div>
+                    );
+                })()}
                 {feedbackMessage.text && <div className={`mt-4 p-3 rounded-lg text-sm text-center ${feedbackMessage.type === 'error' ? 'bg-red-900 text-red-200' : feedbackMessage.type === 'success' ? 'bg-green-900 text-green-200' : 'bg-blue-900 text-blue-200'}`}>{feedbackMessage.text}</div>}
                 {!isUploading && !isDownloading && !feedbackMessage.text && <div className="h-12 mt-4"></div>}
             </div>
@@ -2034,6 +2096,8 @@ const DashboardView = () => {
                 zkeEnabled={zkeEnabled}
                 zkeMode={zkeMode}
                 onZkeToggle={handleZkeToggle}
+                zkeLocked={zkeEnabled !== false && !encryptionKey}
+                onZkeUnlock={handleZkeUnlock}
             />}
             {viewingFile && <FileViewerModal file={viewingFile} onClose={() => setViewingFile(null)} onDownload={handleFileDownload} />}
         </div>
