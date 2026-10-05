@@ -3,6 +3,15 @@ import type { D1Database } from '@cloudflare/workers-types';
 import { json, requireAuth } from './helpers';
 import { D1Adapter } from './d1-adapter';
 import { getCachedConfig } from './cached-config';
+
+/**
+ * The key-check value stored with the Drive encryption settings: base64 of the
+ * 12-byte IV followed by the AES-GCM ciphertext of a fixed constant. Only a
+ * plain, bounded base64 string is kept; anything else is dropped.
+ */
+export function driveKeyCheck(raw: unknown): string {
+  return typeof raw === 'string' && raw.length >= 40 && raw.length <= 512 && /^[A-Za-z0-9+/]+={0,2}$/.test(raw) ? raw : '';
+}
 import { hashToken } from './webdav';
 
 // Self-healing schema: per-user workers provisioned before the `files` table
@@ -99,6 +108,9 @@ export async function handleDrive(request: Request, env: Env, path: string, url:
         // user's head and are never sent.
         password: body.enabled && body.mode !== 'custom' ? (body.password || '') : '',
         salt: body.salt || '',
+        // A known constant encrypted under the key (see driveKeyCheck): lets
+        // the app tell a right password from a wrong one without trying files.
+        check: driveKeyCheck(body.check),
         updatedAt: new Date().toISOString(),
       };
       await db.setJsonConfig('drive_zke', cfg);

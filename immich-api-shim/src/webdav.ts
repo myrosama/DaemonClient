@@ -293,6 +293,19 @@ async function tgDelete(botToken: string, channelId: string, messageId: number):
   }).catch(() => {});
 }
 
+/**
+ * Why an upload over WebDAV must be refused, or null. With a custom encryption
+ * password the worker holds no key (the password never leaves the user's
+ * device), and storing the file unencrypted would quietly break the promise
+ * that every new file is encrypted — so it is refused instead.
+ */
+export function webdavUploadRefusal(zke: any): string | null {
+  if (zke?.enabled && !zke.password) {
+    return 'Your files are encrypted with your own password, which this drive mount does not have. Upload from the web app instead.';
+  }
+  return null;
+}
+
 async function getDriveKey(adapter: D1Adapter): Promise<CryptoKey | null> {
   const zke = await adapter.getJsonConfig<any>('drive_zke');
   if (zke?.enabled && zke.password && zke.salt) return deriveDriveKey(zke.password, zke.salt);
@@ -430,6 +443,8 @@ export async function handleWebDav(request: Request, env: { DB?: any }, url: URL
     const parent = resolvePath(rows, segments.slice(0, -1)).node;
     if (!parent) return davText(409, 'Parent folder not found');
     const parentId = parent.id === 'root' ? 'root' : parent.id;
+    const refusal = webdavUploadRefusal(await adapter.getJsonConfig<any>('drive_zke'));
+    if (refusal) return davText(423, refusal);
     const telegram = await adapter.getJsonConfig<any>('telegram');
     const botToken = telegram?.botToken || telegram?.bot_token;
     const channelId = telegram?.channelId || telegram?.channel_id;
