@@ -1,3 +1,4 @@
+import { safeContinue } from '$lib/utils/safe-continue';
 import { getAuthStatus } from '@immich/sdk';
 import { Route } from '$lib/route';
 import { authenticate } from '$lib/utils/auth';
@@ -16,6 +17,6 @@ export const load = (async ({ url }) => {
       title: $t('pin_verification'),
     },
     hasPinCode: !!pinCode,
-    continueUrl: url.searchParams.get('continue') || Route.locked(),
+    continueUrl: safeContinue(url.searchParams.get('continue'), Route.locked()),
   };
 }) satisfies PageLoad;

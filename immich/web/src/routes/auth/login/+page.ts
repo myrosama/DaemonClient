@@ -1,3 +1,4 @@
+import { safeContinue } from '$lib/utils/safe-continue';
 import { redirect } from '@sveltejs/kit';
 import { authManager } from '$lib/managers/auth-manager.svelte';
 import { serverConfigManager } from '$lib/managers/server-config-manager.svelte';
@@ -8,7 +9,7 @@ import type { PageLoad } from './$types';
 export const load = (async ({ parent, url }) => {
   await parent();
 
-  const continueUrl = url.searchParams.get('continue') || Route.photos();
+  const continueUrl = safeContinue(url.searchParams.get('continue'), Route.photos());
   if (authManager.authenticated) {
     redirect(307, continueUrl);
   }

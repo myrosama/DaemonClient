@@ -1,3 +1,4 @@
+import { safeContinue } from '$lib/utils/safe-continue';
 import { getMaintenanceStatus, MaintenanceAction, maintenanceLogin } from '@immich/sdk';
 import { Route } from '$lib/route';
 import { maintenanceStore } from '$lib/stores/maintenance.store';
@@ -8,7 +9,7 @@ export function maintenanceCreateUrl(url: URL) {
 }
 
 export function maintenanceReturnUrl(searchParams: URLSearchParams) {
-  return searchParams.get('continue') ?? '/';
+  return safeContinue(searchParams.get('continue'), '/');
 }
 
 export function maintenanceShouldRedirect(maintenanceMode: boolean, currentUrl: URL | Location) {
