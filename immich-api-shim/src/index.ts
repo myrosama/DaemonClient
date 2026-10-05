@@ -125,22 +125,25 @@ export interface Env {
 // Telegram settings, which both apps load (writing that copy) before they relay
 // anything. No token on record, or no way to read it, refuses: the check must
 // fail closed. The central worker has no D1 and keeps the host-only rule.
-async function relaysOwnBot(env: Env, target: URL): Promise<boolean> {
-  if (!env.DB) return true;
+async function relaysOwnBot(env: Env, target: URL): Promise<'yes' | 'no' | 'unavailable'> {
+  if (!env.DB) {
+    console.warn('[proxy] relayed on the central worker'); // measuring whether anything still uses it
+    return 'yes';
+  }
   let onRecord: string | null = null;
   try {
     const telegram = await new D1Adapter(env.DB).getJsonConfig<any>('telegram');
     onRecord = telegram?.botToken || telegram?.bot_token || null;
   } catch (error: any) {
     console.error('[proxy] could not read the bot token on record:', error?.message);
-    return false;
+    return 'unavailable';
   }
   if (!onRecord) {
     console.warn('[proxy] no bot token on record; refusing to relay');
-    return false;
+    return 'no';
   }
   const requested = telegramBotToken(target);
-  return !!requested && sameSecret(requested, onRecord);
+  return requested && sameSecret(requested, onRecord) ? 'yes' : 'no';
 }
 
 function corsHeaders(request: Request, env: Env): Record<string, string> {
@@ -155,6 +158,8 @@ function corsHeaders(request: Request, env: Env): Record<string, string> {
     'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-api-key, Cookie, Range',
     'Access-Control-Allow-Credentials': 'true',
     'Access-Control-Max-Age': '86400',
+    // The allowed origin depends on the request: no cache may reuse it across origins.
+    'Vary': 'Origin',
     // Expose range/media headers so the browser's video element and SW can read them.
     // Without this, cross-origin 206 responses hide Content-Range and Accept-Ranges,
     // which breaks seek/duration on web and confuses AVPlayer diagnostics.
@@ -224,6 +229,7 @@ export default {
         // default, 443.
         let allowedTarget = false;
         let targetUrl: URL | null = null;
+        let relayDecision: 'yes' | 'no' | 'unavailable' = 'no';
         try {
           targetUrl = new URL(target || '');
           allowedTarget = targetUrl.protocol === 'https:' && targetUrl.hostname === 'api.telegram.org' && targetUrl.port === '';
@@ -233,8 +239,11 @@ export default {
           response = new Response('Missing url parameter', { status: 400 });
         } else if (!allowedTarget) {
           response = new Response('This endpoint only relays to api.telegram.org', { status: 403 });
-        } else if (!(await relaysOwnBot(env, targetUrl!))) {
-          response = new Response("This worker only relays its owner's Telegram bot", { status: 403 });
+        } else if ((relayDecision = await relaysOwnBot(env, targetUrl!)) !== 'yes') {
+          // A database hiccup is temporary (503: clients retry); anything else is a refusal.
+          response = relayDecision === 'unavailable'
+            ? new Response('Temporarily unavailable', { status: 503, headers: { 'Retry-After': '2' } })
+            : new Response("This worker only relays its owner's Telegram bot", { status: 403 });
         } else {
           const fwdHeaders = new Headers();
           const ct = request.headers.get('Content-Type');
@@ -252,7 +261,8 @@ export default {
             init.body = request.body;
             (init as any).duplex = 'half';
           }
-          const upstream = await fetch(target, init);
+          // Fetch exactly the URL that was checked, not the raw string again.
+          const upstream = await fetch(targetUrl!.href, init);
           response = new Response(upstream.body, { status: upstream.status, headers: upstream.headers });
         }
       } else if (path === '/api/selfhost/status') {

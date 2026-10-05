@@ -444,7 +444,7 @@ export async function handleWebDav(request: Request, env: { DB?: any }, url: URL
     if (!parent) return davText(409, 'Parent folder not found');
     const parentId = parent.id === 'root' ? 'root' : parent.id;
     const refusal = webdavUploadRefusal(await adapter.getJsonConfig<any>('drive_zke'));
-    if (refusal) return davText(423, refusal);
+    if (refusal) return davText(403, refusal);
     const telegram = await adapter.getJsonConfig<any>('telegram');
     const botToken = telegram?.botToken || telegram?.bot_token;
     const channelId = telegram?.channelId || telegram?.channel_id;

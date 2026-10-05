@@ -101,7 +101,8 @@ async function handleTelegramConfig(request: Request, env: Env): Promise<Respons
   const { requireAuth } = await import('./helpers');
   const { getCachedConfig } = await import('./cached-config');
   const session = await requireAuth(request, env);
-  const config = await getCachedConfig<any>(env, session.uid, session.idToken, 'telegram');
+  // The relay checks the bot token against the local copy, so it must exist.
+  const config = await getCachedConfig<any>(env, session.uid, session.idToken, 'telegram', { requireLocalCopy: true });
   // Each user's own worker provides the CORS proxy. Falls back to env value (central
   // shim) if this worker has no D1 binding (i.e., it IS the central worker).
   const selfProxy = `${new URL(request.url).origin}/proxy`;

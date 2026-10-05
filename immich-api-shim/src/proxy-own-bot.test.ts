@@ -59,7 +59,6 @@ describe("/proxy on a user's worker relays only the owner's bot", () => {
     ['a call with no bot in the path', fakeD1({ botToken: OWN }), 'https://api.telegram.org/getMe'],
     ['no bot token on record', fakeD1(undefined), `https://api.telegram.org/bot${OWN}/getMe`],
     ['settings on record without a token', fakeD1({ channelId: '-100' }), `https://api.telegram.org/bot${OWN}/getMe`],
-    ['a database it cannot read', fakeD1({ botToken: OWN }, { fail: true }), `https://api.telegram.org/bot${OWN}/getMe`],
   ];
   for (const [name, db, target] of refused) {
     it(`refuses ${name}, and nothing leaves the worker`, async () => {
@@ -68,4 +67,22 @@ describe("/proxy on a user's worker relays only the owner's bot", () => {
       expect(fetchSpy).not.toHaveBeenCalled();
     });
   }
+
+  it('a database it cannot read answers "try again" (503) — and still relays nothing', async () => {
+    const res = await call(envWith(fakeD1({ botToken: OWN }, { fail: true })), `https://api.telegram.org/bot${OWN}/getMe`);
+    expect(res.status).toBe(503);
+    expect(res.headers.get('Retry-After')).toBeTruthy();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('fetches exactly the URL it checked', async () => {
+    const env = envWith(fakeD1({ botToken: OWN }));
+    await call(env, `https://api.telegram.org/bot${OWN}/getFile?file_id=A%20B`);
+    expect(fetchSpy.mock.calls[0][0]).toBe(new URL(`https://api.telegram.org/bot${OWN}/getFile?file_id=A%20B`).href);
+  });
+
+  it('every response varies by Origin', async () => {
+    const res = await call(envWith(fakeD1({ botToken: OWN })), `https://api.telegram.org/bot${OWN}/getMe`);
+    expect(res.headers.get('Vary')).toContain('Origin');
+  });
 });

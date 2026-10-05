@@ -12,7 +12,8 @@ export async function getCachedConfig<T = any>(
   env: Env,
   uid: string,
   idToken: string,
-  key: string
+  key: string,
+  options: { requireLocalCopy?: boolean } = {}
 ): Promise<T | null> {
   if (env.DB) {
     const adapter = new D1Adapter(env.DB);
@@ -20,7 +21,14 @@ export async function getCachedConfig<T = any>(
     if (local !== null) return local;
     const remote = await firestoreGet(env, uid, `config/${key}`, idToken);
     if (remote) {
-      try { await adapter.setJsonConfig(key, remote); } catch { /* best effort */ }
+      try {
+        await adapter.setJsonConfig(key, remote);
+      } catch (error) {
+        // Best effort — unless the caller depends on the local copy (the
+        // Telegram relay checks the bot token against it): then fail, so the
+        // app asks again instead of relaying against a copy that isn't there.
+        if (options.requireLocalCopy) throw error;
+      }
       return remote as T;
     }
     return null;

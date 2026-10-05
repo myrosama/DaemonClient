@@ -57,7 +57,8 @@ export async function handleDrive(request: Request, env: Env, path: string, url:
   // the same trust boundary as the old Drive (which kept the token client-side in
   // Firestore). Server already exposes the same via /api/server/storage.
   if (path === '/api/drive/config' && request.method === 'GET') {
-    const config = await getCachedConfig<any>(env, uid, session.idToken, 'telegram');
+    // The relay checks the bot token against the local copy, so it must exist.
+    const config = await getCachedConfig<any>(env, uid, session.idToken, 'telegram', { requireLocalCopy: true });
     const botToken = config?.botToken || config?.bot_token || null;
     const channelId = config?.channelId || config?.channel_id || null;
     return json({
@@ -101,6 +102,13 @@ export async function handleDrive(request: Request, env: Env, path: string, url:
     }
     if (request.method === 'POST' || request.method === 'PUT') {
       const body = (await request.json().catch(() => ({}))) as any;
+      // A conditional save (the app adding a key-check value to existing
+      // settings) lands only on the salt it was made for — never over a
+      // password another device set in the meantime.
+      if (typeof body.ifSalt === 'string') {
+        const current = await db.getJsonConfig<any>('drive_zke');
+        if ((current?.salt || '') !== body.ifSalt) return json({ message: 'Encryption settings changed' }, 409);
+      }
       const cfg = {
         enabled: !!body.enabled,
         mode: body.mode === 'custom' ? 'custom' : 'auto',

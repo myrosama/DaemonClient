@@ -93,7 +93,15 @@ type RateLimiter = { limit(options: { key: string }): Promise<{ success: boolean
 async function loginRateLimited(request: Request, env: Env): Promise<boolean> {
   const byAddress = (env as any).LOGIN_IP_LIMITER as RateLimiter | undefined;
   const address = request.headers.get('CF-Connecting-IP') || 'unknown';
-  return !!byAddress && !(await byAddress.limit({ key: address })).success;
+  if (!byAddress) return false;
+  try {
+    return !(await byAddress.limit({ key: address })).success;
+  } catch (error: any) {
+    // Defence in depth only (Firebase throttles too): a limiter outage must not
+    // stop everyone signing in.
+    console.error('[login] rate limiter unavailable:', error?.message);
+    return false;
+  }
 }
 
 async function handleLogin(request: Request, env: Env): Promise<Response> {
@@ -133,6 +141,7 @@ async function handleLogin(request: Request, env: Env): Promise<Response> {
 
   const data = await res.json() as any;
   if (data.error) {
+    console.warn('[login] Firebase refused sign-in:', String(data.error.message || '').split(' ')[0]);
     const failure = loginFailure(data.error.message);
     return json({ message: failure.message }, failure.status);
   }
