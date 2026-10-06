@@ -10,3 +10,9 @@ APP_IDENTIFIER = "default-daemon-client"
 TELEGRAM_PROXY = "https://daemonclient-proxy.sadrikov49.workers.dev"
 ALLOWED_ORIGINS = "https://photos.daemonclient.uz,https://drive.daemonclient.uz,https://accounts.daemonclient.uz,https://daemonclient-drive.web.app"
 DEPLOYMENT_SERVICE_URL = "https://daemonclient-deployment.sadrikov49.workers.dev"
+
+# Scheduled fleet update (src/index.ts runFleetUpdate): every 10 minutes, bring
+# one out-of-date user worker to the current shim, rotating through the fleet.
+[triggers]
+crons = ["*/10 * * * *"]
+

@@ -237,6 +237,15 @@ const CF_OAUTH_REDIRECT_URI = 'https://accounts.daemonclient.uz/setup/cloudflare
 const CF_OAUTH_TOKEN_URL = 'https://dash.cloudflare.com/oauth2/token';
 
 export default {
+  // Scheduled fleet update (wrangler.toml [triggers]): keeps every user's
+  // worker current even when its owner never signs in.
+  async scheduled(event: { scheduledTime: number }, env: Env, ctx: { waitUntil(promise: Promise<unknown>): void }): Promise<void> {
+    ctx.waitUntil(
+      runFleetUpdate(env, { slot: Math.floor((event.scheduledTime || Date.now()) / FLEET_PERIOD_MS) })
+        .catch((error) => console.error('[fleet-update] run failed:', error?.message)),
+    );
+  },
+
   async fetch(request: Request, env: Env): Promise<Response> {
     if (request.method === 'OPTIONS') return corsResponse(null, { status: 204 });
     const url = new URL(request.url);
@@ -560,20 +569,109 @@ async function handleAutoUpdate(request: Request, env: Env): Promise<Response> {
     const auth = await validateFirebaseToken(request, env);
     if (!auth) return corsResponse(JSON.stringify({ error: 'Unauthorized' }), { status: 401 });
     const { uid, idToken } = auth;
+    const result = await updateUserWorker(uid, await readWorkerConfig(uid, idToken, env), env, idToken);
+    return corsResponse(JSON.stringify(result.body), { status: result.status });
+  } catch (error: any) {
+    console.error('Auto-update error:', error);
+    return corsResponse(JSON.stringify({ updated: false, error: error.message }), { status: 500 });
+  }
+}
 
-    const read = await readWorkerConfig(uid, idToken, env);
+type UpdateResult = { status: number; body: Record<string, unknown> };
+
+// ── Scheduled fleet update ──────────────────────────────────────────────────
+// Sign-in triggers an update, but a worker whose owner never signs in would stay
+// on an old shim forever. Every FLEET_PERIOD_MS the cron trigger updates a small
+// batch (free-plan CPU and subrequest limits), rotating through the out-of-date
+// workers so one that keeps failing (an expired Cloudflare authorisation, say)
+// can never block the rest.
+const FLEET_PERIOD_MS = 10 * 60_000; // matches the cron in wrangler.toml
+const FLEET_BATCH = 1;
+
+/** The `size` items a run in time slot `slot` takes, rotating through `list`. */
+export function fleetSlice<T>(list: T[], size: number, slot: number): T[] {
+  if (list.length === 0) return [];
+  if (size >= list.length) return [...list];
+  const start = ((slot * size) % list.length + list.length) % list.length;
+  return Array.from({ length: size }, (_, index) => list[(start + index) % list.length]);
+}
+
+export async function runFleetUpdate(
+  env: Env,
+  options: { slot?: number; batch?: number } = {},
+): Promise<Array<{ worker: string; result: UpdateResult }>> {
+  if (!env.FIREBASE_SA_CLIENT_EMAIL || !env.FIREBASE_SA_PRIVATE_KEY) {
+    console.warn('[fleet-update] no service-account credentials; skipped');
+    return [];
+  }
+  const accessToken = await getServiceAccountAccessToken(env.FIREBASE_SA_CLIENT_EMAIL, env.FIREBASE_SA_PRIVATE_KEY);
+  const res = await fetch(
+    `https://firestore.googleapis.com/v1/projects/${env.FIREBASE_PROJECT_ID}/databases/(default)/documents/artifacts/default-daemon-client:runQuery`,
+    {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ structuredQuery: { from: [{ collectionId: 'config', allDescendants: true }] } }),
+    },
+  );
+  if (!res.ok) throw new Error(`fleet query failed: ${res.status}`);
+  const rows = (await res.json()) as any[];
+
+  const outOfDate = rows
+    .map((row) => row?.document)
+    .filter((doc) => typeof doc?.name === 'string' && doc.name.endsWith('/config/cloudflare'))
+    .map((doc) => {
+      const uid = doc.name.split('/users/')[1]?.split('/')[0] ?? '';
+      const cfg: Record<string, string> = {};
+      for (const [key, value] of Object.entries<any>(doc.fields || {})) {
+        if (value?.stringValue !== undefined) cfg[key] = value.stringValue;
+      }
+      return { uid, cfg, updateTime: typeof doc.updateTime === 'string' ? doc.updateTime : undefined };
+    })
+    .filter(({ uid, cfg }) =>
+      /^[A-Za-z0-9_-]{1,128}$/.test(uid) &&
+      !!cfg.accountId && !!cfg.workerName && !!(cfg.apiToken || cfg.refreshToken) &&
+      cfg.autoUpdateEnabled !== 'false' &&
+      cfg.lastDeployedVersion !== SHIM_VERSION &&
+      releasedTo(cfg.workerName, env.SHIM_CANARY_WORKERS))
+    .sort((a, b) => a.uid.localeCompare(b.uid)); // stable order, so the rotation visits everyone
+
+  const results: Array<{ worker: string; result: UpdateResult }> = [];
+  for (const target of fleetSlice(outOfDate, options.batch ?? FLEET_BATCH, options.slot ?? 0)) {
+    let result: UpdateResult;
+    try {
+      result = await updateUserWorker(target.uid, { cfg: target.cfg, updateTime: target.updateTime }, env);
+    } catch (error: any) {
+      result = { status: 500, body: { updated: false, error: error?.message } };
+    }
+    console.log(`[fleet-update] ${target.cfg.workerName}: ${JSON.stringify(result.body)}`);
+    results.push({ worker: target.cfg.workerName, result });
+  }
+  console.log(`[fleet-update] ${outOfDate.length} worker(s) out of date; attempted ${results.length}`);
+  return results;
+}
+
+// Bring one user's worker to the current shim. Shared by the sign-in route
+// (with the user's ID token) and the scheduled fleet update (service account
+// only): the same checks, the same save-before-deploy order, the same pending
+// session secret — so both paths behave identically.
+async function updateUserWorker(
+  uid: string,
+  read: { cfg: Record<string, string>; updateTime?: string } | null,
+  env: Env,
+  idToken?: string,
+): Promise<UpdateResult> {
     const cfg = read?.cfg ?? null;
     if (!cfg || !cfg.accountId || !cfg.workerName || (!cfg.apiToken && !cfg.refreshToken)) {
-      return corsResponse(JSON.stringify({ updated: false, reason: 'no-config' }));
+      return { status: 200, body: { updated: false, reason: 'no-config' } };
     }
     if (cfg.autoUpdateEnabled === 'false') {
-      return corsResponse(JSON.stringify({ updated: false, reason: 'disabled' }));
+      return { status: 200, body: { updated: false, reason: 'disabled' } };
     }
     if (cfg.lastDeployedVersion === SHIM_VERSION) {
-      return corsResponse(JSON.stringify({ updated: false, reason: 'current', version: SHIM_VERSION }));
+      return { status: 200, body: { updated: false, reason: 'current', version: SHIM_VERSION } };
     }
     if (!releasedTo(cfg.workerName, env.SHIM_CANARY_WORKERS)) {
-      return corsResponse(JSON.stringify({ updated: false, reason: 'held' }));
+      return { status: 200, body: { updated: false, reason: 'held' } };
     }
 
     // Obtain a usable Bearer credential. Legacy paste users have a stored API
@@ -588,7 +686,7 @@ async function handleAutoUpdate(request: Request, env: Env): Promise<Response> {
       const refresh = await decryptToken(cfg.refreshToken, env.ENCRYPTION_MASTER_KEY);
       const refreshed = await refreshCloudflareToken(refresh);
       if (!refreshed) {
-        return corsResponse(JSON.stringify({ updated: false, reason: 'refresh-failed' }));
+        return { status: 200, body: { updated: false, reason: 'refresh-failed' } };
       }
       apiToken = refreshed.accessToken;
       if (refreshed.refreshToken && refreshed.refreshToken !== refresh) {
@@ -624,7 +722,7 @@ async function handleAutoUpdate(request: Request, env: Env): Promise<Response> {
     // still the version this run read — the run that loses deploys nothing.
     if (newlyMinted && !read?.updateTime) {
       // Nothing to make the write conditional on: don't risk it.
-      return corsResponse(JSON.stringify({ updated: false, reason: 'config-version-unknown' }), { status: 500 });
+      return { status: 500, body: { updated: false, reason: 'config-version-unknown' } };
     }
     let refreshSaved = !rotatedRefresh;
     if (rotatedRefresh || newlyMinted) {
@@ -648,8 +746,8 @@ async function handleAutoUpdate(request: Request, env: Env): Promise<Response> {
               .catch((err) => console.error('[auto-update] rotated refresh token not saved:', err?.message));
           }
           return raced
-            ? corsResponse(JSON.stringify({ updated: false, reason: 'raced' }), { status: 409 })
-            : corsResponse(JSON.stringify({ updated: false, reason: 'config-save-failed' }), { status: 500 });
+            ? { status: 409, body: { updated: false, reason: 'raced' } }
+            : { status: 500, body: { updated: false, reason: 'config-save-failed' } };
         }
         console.error('[auto-update] rotated refresh token save failed; saving again after the deploy:', e?.message);
       }
@@ -667,7 +765,7 @@ async function handleAutoUpdate(request: Request, env: Env): Promise<Response> {
         await saveWorkerConfig(uid, { ...cfg, refreshToken: rotatedRefresh!, lastUpdatedAt: new Date().toISOString() }, env, idToken)
           .catch((e) => console.error('[auto-update] rotated refresh token lost:', e?.message));
       }
-      return corsResponse(JSON.stringify({ updated: false, reason: 'deploy-failed', error: deployResult.error }), { status: 500 });
+      return { status: 500, body: { updated: false, reason: 'deploy-failed', error: deployResult.error } };
     }
 
     // The worker now runs with `sessionSecret`: make it the live one. Retried
@@ -686,11 +784,7 @@ async function handleAutoUpdate(request: Request, env: Env): Promise<Response> {
         return saveWorkerConfig(uid, settledConfig, env, idToken);
       });
 
-    return corsResponse(JSON.stringify({ updated: true, from: cfg.lastDeployedVersion || 'unknown', to: SHIM_VERSION }));
-  } catch (error: any) {
-    console.error('Auto-update error:', error);
-    return corsResponse(JSON.stringify({ updated: false, error: error.message }), { status: 500 });
-  }
+    return { status: 200, body: { updated: true, from: cfg.lastDeployedVersion || 'unknown', to: SHIM_VERSION } };
 }
 
 // Operator-triggered re-deploy of a single user's worker. Bypasses the
