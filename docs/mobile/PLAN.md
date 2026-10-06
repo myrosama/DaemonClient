@@ -103,12 +103,17 @@ Detailed: `plans/P0-toolchain-and-skeleton.md`.
       flutter_rust_bridge codegen).
 - [ ] **0.2** Run the existing Photos fork in the Simulator; record what it
       does at sign-in.
+- [ ] **0.2a** Make the Photos fork build on Xcode 27 (added 2026-10-06; SPEC §9
+      P0 exit needs a building app): iOS minimum 15.0, upstream Immich's Flutter
+      patch for Swift macros, Xcode-27-ready Swift package pins (RESEARCH §7).
 - [x] **0.3** Cargo workspace at `mobile/` and `dc-core` with `chunk_plan`
       (part count; byte range → parts, with the edge cases of Review focus 3).
 - [ ] **0.4** `dc_core_flutter` plugin; the Photos app shows the core version
       on its sign-in screen, on the iOS Simulator and Android.
 - [ ] **0.5** CI: the core's format, lint and tests on every push touching
-      `mobile/`; the existing mobile build installs Rust and still passes.
+      `mobile/`; the mobile build installs Rust, runs the Flutter patch
+      (`ios/scripts/xcode_flutter_patch.sh`) in the iOS job, and **passes** —
+      its iOS job never has (RESEARCH §7).
 - [ ] **0.6** Clean-up proposal (SPEC §5.7) and the detailed P1 plan, both
       for the operator's review.
 

@@ -191,6 +191,11 @@ flutter run -d "<the iPhone name printed above>"
 Expected: the DaemonClient sign-in screen. If the build fails, record the
 error and stop — the fix becomes its own task in P2, not a detour here.
 
+> **Amended 2026-10-06:** the build failed, and the "stop — fix in P2" rule
+> above was overridden by SPEC §9 (the P0 exit needs the app running on the
+> Simulator for Task 0.4). The fix is **Task 0.2a** in `PLAN.md`; details in
+> RESEARCH §7 and `DESIGN_NOTES.md` 0.2a. Steps 3–5 continue after it.
+
 - [ ] **Step 3: Sign in with the test account** at `https://api.daemonclient.uz`
 and record, with the `flutter run` log:
 
@@ -752,7 +757,7 @@ jobs:
       - run: cargo test -p dc-core
 ```
 
-- [ ] **Step 2: The mobile build now needs Rust**
+- [ ] **Step 2: The mobile build now needs Rust (and the Flutter patch)**
 
 In `.github/workflows/mobile-build.yml`, add `'mobile/**'` to `paths:`. In the
 `android-apk` job, after `setup-java`:
@@ -763,7 +768,16 @@ In `.github/workflows/mobile-build.yml`, add `'mobile/**'` to `paths:`. In the
         run: rustup show
 ```
 
-In the `ios-simulator` job, after `setup-xcode`, the same step. (`rustup show`
+In the `ios-simulator` job, after `setup-xcode`, the same step.
+
+**Added 2026-10-06 (Task 0.2a):** in the `ios-simulator` job, after
+`subosito/flutter-action`, patch Flutter the way mise does locally
+(subosito sets `FLUTTER_ROOT`, which the script reads when mise is absent):
+
+```yaml
+      - name: Patch Flutter for Swift macros (upstream Immich, RESEARCH §7)
+        run: bash ios/scripts/xcode_flutter_patch.sh
+``` (`rustup show`
 installs the toolchain and targets listed in `mobile/rust-toolchain.toml`.)
 
 - [ ] **Step 3: Verify locally what CI will run**

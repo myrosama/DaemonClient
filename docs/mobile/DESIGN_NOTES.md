@@ -188,3 +188,66 @@ derived JPEG, the same as the web Fix tool) — a small, recorded exception to
 `clientUpload` take `telegramPreviewId` directly; not needed now.
 
 **Gate evidence:** docs only.
+
+---
+
+## 0.2a — Make the Photos fork build on Xcode 27            2026-10-06
+
+**Planned:** nothing — Task 0.2 said "if the build fails, record the error and
+stop; the fix becomes its own task in P2". **Deviation:** SPEC §9's P0 exit
+needs the app running on the Simulator for Task 0.4, so the spec wins; added
+as Task 0.2a (`PLAN.md`), with an amendment note under Task 0.2.
+
+**Did:** three causes, each already fixed upstream by Immich, found one after
+another by following the evidence (RESEARCH §7): iOS minimum 13/14 → 15.0;
+Flutter's simulator `-sdk` flag builds Swift macro programs for the Simulator
+(upstream's mise `postinstall` patch, ported); `swift-sharing` 2.7.4 cannot link
+against the iOS 27 SDK (pins moved to upstream's).
+
+**Decisions:**
+- **Follow upstream exactly** wherever it already solved the problem —
+  Podfile and project deployment targets, package pins and commits, the patch
+  script — so future Immich merges stay clean.
+- **Patch script, DaemonClient changes** (from Gate 3): mise's install path is
+  read first, then `FLUTTER_ROOT` (CI), then `mise where flutter`; fails loudly
+  if `mac.dart` is missing or the line is still there afterwards (e.g. a
+  read-only SDK); the mise hook quotes `{{config_root}}`.
+- **The project-level `Package.resolved`** (not used by Flutter's workspace
+  build) carries the same pins as the workspace one, plus GRDB 7.9.0; upstream's
+  copy of that file is stale.
+- **Minimum iOS 15.0** drops no iPhone that iOS 14 supported; the app is not
+  distributed yet.
+
+**Fork files changed by this task** (SPEC §10 asks for this list):
+`immich/mobile/ios/Podfile`, `ios/Podfile.lock` (CocoaPods 1.16.2 → 1.17.0 and
+the Podfile checksum only), `ios/Runner.xcodeproj/project.pbxproj` (six
+deployment-target lines), both `Package.resolved` files, `immich/mobile/mise.toml`,
+new `ios/scripts/xcode_flutter_patch.sh`.
+
+**Security:** security reviewer — 0 HIGH, 0 MEDIUM, 3 LOW (`FLUTTER_ROOT`
+precedence over mise's path; silent success on a read-only SDK; unquoted
+`{{config_root}}`) — all fixed; confirmed the three pins are upstream's commits
+and their tags' commits, and that nothing touches signing, entitlements or ATS.
+Spec reviewer — 0 HIGH, 3 MEDIUM (deviation not recorded; "issue open two
+years" false — flutter#146122 was closed 2024-04-04; CI step and existing
+installs not covered), 6 LOW (CI history detail, "two causes" vs three,
+`-sdk` only for simulator builds, the project-level resolved file, script
+precedence, user-impact wording) — all fixed in code or these records.
+
+**Gate evidence:**
+- **G1:** the build is the test — it failed with each cause in turn
+  (`/tmp/dc-p02/run-*.log`, `xcodebuild*.log`, not kept) and now succeeds
+  (`Xcode build done. 108.5s`). Patch script, five cases on fake SDK trees:
+  mise path wins over `FLUTTER_ROOT` (other SDK untouched); second run is a
+  no-op; read-only SDK exits 1 ("patch not applied"); `FLUTTER_ROOT` alone (CI)
+  works; a hook path with a space works; a missing `mac.dart` exits 1.
+- **G2:** `flutter run` on the iPhone 18 Pro Simulator (iOS 27): the app
+  launched for the first time on iOS — sign-in screen, "immich" logo (iOS is
+  not rebranded yet), server prefilled `https://api.daemonclient.uz`, v2.7.5.
+  The central API answers the discovery calls behind "Next" (`/.well-known/immich`
+  `{}`, `/api/server/ping` pong, version 2.7.5, features, config — all 200).
+- **Pending:** proof that the mise hook fires on a real install — run
+  `mise install --force flutter` in `immich/mobile` before the 0.4 rebuild and
+  paste its output here. (On this Mac the patch was applied by running the
+  script by hand, since Flutter was already installed.)
+- **G3:** above. **G4:** code and docs commits below.

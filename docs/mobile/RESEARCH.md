@@ -418,3 +418,68 @@ server (SPEC §4.6). Read from the fork:
   breaks D17. Remedy to design in P1 Task 1.6: serve the opened item and video
   from a **second listener (another port)** — Chromium pools connections per
   host *and port*, so opened media never queues behind thumbnails.
+
+---
+
+## 7. What the existing Photos fork does today — part 1: it does not build        2026-10-06
+
+P0 Task 0.2. Mac: Xcode 27.0, iOS 27.0 Simulator (iPhone 18 Pro), Flutter
+3.41.7 (the fork's pin), CocoaPods 1.17.0.
+
+**The fork has never built for iOS in CI either.** The four `mobile-build`
+runs (June 2026): `d64da81` — android-apk success, ios-simulator failure;
+`b1a466d` — both failed; `7349bde` — one run failed (both jobs), one was
+cancelled. The logs have expired; the failing iOS step was
+`flutter build ios --simulator`. (Corrected 2026-10-06 at Gate 3: an earlier
+draft said all four failed on iOS while Android passed.)
+
+**Locally, three causes, found in order:**
+
+1. **iOS minimum too low.** Xcode 27 supports deployment targets 15.0–27.0 and
+   treats anything lower as an *error* ("Target Integrity"). The fork had
+   13.0/14.0 in `Runner.xcodeproj` and forced 14.0 onto every pod
+   (`ios/Podfile`: `platform :ios, '14.0'` and the `post_install` override).
+   Upstream Immich already uses 15.0 (16.0 ShareExtension, 17.0 Widget). Fix:
+   the same values as upstream — the target counts now match upstream exactly.
+   No device is lost: iOS 15 supports every iPhone iOS 14 did; anyone still on
+   iOS 14 must update first. The app is not distributed yet.
+2. **Swift macros built for the wrong platform.** `sqlite-data` →
+   `swift-structured-queries` uses Swift macros, which are small programs the
+   compiler runs **on the Mac**. For simulator builds, Flutter passes
+   `-sdk iphonesimulator` (`flutter_tools/lib/src/ios/mac.dart:410` in 3.41.7,
+   `:446` in 3.47.2; not when the app has a watchOS companion), which makes Xcode build those macro programs for
+   the Simulator; the compiler cannot run them (`dyld: DYLD_ROOT_PATH not set
+   for simulator program`) and reports "produced malformed response".
+   Evidence: `vtool -show-build` on the built `StructuredQueriesMacros` →
+   `platform IOSSIMULATOR`. Reported to Flutter as
+   [flutter#146122](https://github.com/flutter/flutter/issues/146122), which
+   was **closed 2024-04-04** — a Flutter maintainer called it an Xcode/SwiftPM
+   problem, and Xcode 16 beta notes listed a related fix — yet it still
+   reproduces with Xcode 27 + Flutter 3.41.7. (Corrected at Gate 3: an earlier
+   draft said the issue was open.) **Upstream Immich's fix** (PR #30821, commit `f88fb628`,
+   2026-08-20): `mobile/ios/scripts/xcode_flutter_patch.sh`, run as a mise
+   `postinstall` hook, deletes that one line from the installed Flutter's
+   `mac.dart` (simulator builds only). Upstream also reported the symptom as
+   issue #28420.
+
+3. **`swift-sharing` 2.7.4 does not link against the iOS 27 SDK** — undefined
+   symbols `variable initialization expression of Sharing.SharedReader…
+   SwiftUI.State<Swift.Int>`. swift-sharing **2.8.1** shipped "Fixed: Xcode 27
+   Beta 1 Support" (pointfreeco/swift-sharing#216). Upstream Immich pins
+   2.9.1. Fix: our three outdated Point-Free pins moved to upstream's exact
+   versions and commits — swift-sharing 2.7.4 → 2.9.1, swift-structured-queries
+   0.31.1 → 0.34.0, combine-schedulers 1.0.3 → 1.1.0 — in the workspace
+   `Package.resolved` (the one Flutter's build uses). The project-level copy
+   (`Runner.xcodeproj/project.xcworkspace/...`) was brought to the same pins,
+   plus GRDB 7.8.0 → 7.9.0; upstream's own project-level copy is stale (still
+   2.7.4 / 0.31.1), so ours is deliberately ahead of upstream there.
+
+How cause 2 was confirmed: the same `xcodebuild` **without** `-sdk` built the
+macro program as `platform MACOS` and the macro errors disappeared, exposing
+cause 3.
+
+**Note on a false lead:** a manual `xcodebuild -sdk iphonesimulator` produced
+the macro error too, and was briefly blamed on the manual command; building
+through Flutter showed the same error, because Flutter passes the same flag.
+
+Part 2 (what the app does after sign-in) follows once it builds.
