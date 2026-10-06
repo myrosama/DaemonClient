@@ -5,6 +5,7 @@
   import type { ClassValue } from 'svelte/elements';
   import { onMount, onDestroy } from 'svelte';
   import { imageRequestQueue } from '$lib/utils/request-queue';
+  import { cancelImageUrl } from '$lib/utils/sw-messaging';
 
   interface Props {
     url: string;
@@ -86,6 +87,10 @@
     let debounceTimer: ReturnType<typeof setTimeout> | null = null;
     let retryCount = 0;
     let queueTicket: { promise: Promise<unknown>; cancel: () => void } | null = null;
+    // URL of a fetch the service worker is still answering. Aborting our fetch
+    // does not reach the SW in any browser, so cancelling also tells it
+    // directly — it then drops the request instead of downloading it.
+    let fetchingUrl: string | null = null;
     const MAX_RETRIES = 3;
 
     const performLoad = async () => {
@@ -107,7 +112,16 @@
           // decrypts when needed, paces against the bot rate limit, and caches
           // the result for a year. Going client-side via daemonDrive would
           // mean 5 sequential fetches per tile and would explode at scale.
-          const res = await fetch(src, { signal: myAbort.signal });
+          const url = src;
+          fetchingUrl = url;
+          let res: Response;
+          try {
+            res = await fetch(url, { signal: myAbort.signal });
+          } finally {
+            if (fetchingUrl === url) {
+              fetchingUrl = null;
+            }
+          }
           if (!res.ok) throw new Error(`Network error: ${res.status}`);
 
           const type = res.headers.get('Content-Type') || '';
@@ -171,6 +185,7 @@
     const cancelInFlight = () => {
       if (debounceTimer) { clearTimeout(debounceTimer); debounceTimer = null; }
       if (queueTicket) { queueTicket.cancel(); queueTicket = null; }
+      if (fetchingUrl) { cancelImageUrl(fetchingUrl); fetchingUrl = null; }
       if (abortController) { abortController.abort(); abortController = null; }
     };
 
