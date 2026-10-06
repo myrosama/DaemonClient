@@ -787,10 +787,11 @@ async function updateUserWorker(
           const raced = String(e?.message || '').includes('FAILED_PRECONDITION');
           if (raced) console.log('[auto-update] another update got there first; not deploying');
           else console.error('[auto-update] pre-deploy config save failed; not deploying:', e?.message);
-          if (rotatedRefresh) {
-            // The spent token must not stay on record; keep at least the new one.
-            // Not conditional: the condition just failed, and this run spent the
-            // old token, so the one it holds is the only live one.
+          // The spent token must not stay on record; keep at least the new one —
+          // unless the save lost a race: then the record was rewritten after
+          // this run read it (a re-provision with a newer grant's token), and
+          // putting this run's token back would undo that.
+          if (rotatedRefresh && !raced) {
             await saveWorkerConfig(uid, { refreshToken: rotatedRefresh, lastUpdatedAt: new Date().toISOString() },
               env, idToken, { onlyFields: ['refreshToken', 'lastUpdatedAt'] })
               .catch((err) => console.error('[auto-update] rotated refresh token not saved:', err?.message));

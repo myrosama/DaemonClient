@@ -205,17 +205,34 @@ describe('auto-update: two runs at once (login and first sync both trigger one)'
     expect(deployIndex(calls)).toBeGreaterThan(-1);
   });
 
-  it('a rotated refresh token plus a lost race: no deploy, and the new token is still kept (it is the only live one)', async () => {
+  it('a rotated refresh token plus a lost race: no deploy, and no write over the newer record', async () => {
+    // A newly minted secret's save loses only to a rewrite of the record (a
+    // re-provision with a newer grant's token); putting this run's token back
+    // would undo it.
     const cfg = { accountId: 'acc', workerName: 'dc-x', databaseId: 'db', refreshToken: await encryptToken('old-refresh', MASTER) };
     const calls = await stubWorld({ cfg, rotate: true, changedSinceRead: true });
     expect((await autoUpdate()).status).toBe(409);
     expect(deployIndex(calls)).toBe(-1);
-    const [pending, rescue] = saves(calls);
-    expect(pending.url).toContain('currentDocument.updateTime=');
-    // The rescue save can't reuse the condition that just failed; it writes the token and nothing else.
-    expect(rescue.url).not.toContain('currentDocument.updateTime=');
-    expect(new URL(rescue.url).searchParams.getAll('updateMask.fieldPaths').sort()).toEqual(['lastUpdatedAt', 'refreshToken']);
-    expect(await decryptToken(fieldsOf(rescue).refreshToken.stringValue, MASTER)).toBe('rotated-refresh');
+    expect(saves(calls).length).toBe(1);
+    expect(saves(calls)[0].url).toContain('currentDocument.updateTime=');
+  });
+
+  it('the second of two runs at once (sign-in + first sync) keeps its rotated token even though the record changed', async () => {
+    // Run A recorded the pending secret and its rotated token; run B read that,
+    // spent A's token, and must keep the one it got — whatever A writes next.
+    const cfg = {
+      accountId: 'acc', workerName: 'dc-x', databaseId: 'db',
+      refreshToken: await encryptToken('token-from-run-a', MASTER), pendingSessionSecret: 'p'.repeat(64),
+    };
+    const calls = await stubWorld({ cfg, rotate: true, changedSinceRead: true });
+    expect((await autoUpdate()).status).toBe(200);
+    expect(deployIndex(calls)).toBeGreaterThan(-1);
+    const tokenSave = saves(calls).find((c) => fieldsOf(c).refreshToken)!;
+    expect(calls.indexOf(tokenSave)).toBeLessThan(deployIndex(calls));
+    expect(tokenSave.url).not.toContain('currentDocument.updateTime=');
+    expect(await decryptToken(fieldsOf(tokenSave).refreshToken.stringValue, MASTER)).toBe('rotated-refresh');
+    // …and the reused pending secret is the one deployed and promoted.
+    expect(fieldsOf(saves(calls).at(-1)!).sessionSecret.stringValue).toBe('p'.repeat(64));
   });
 
   it('a save after a successful deploy is retried once', async () => {
