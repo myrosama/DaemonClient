@@ -601,6 +601,13 @@ type UpdateResult = { status: number; body: Record<string, unknown> };
 // can never block the rest.
 const FLEET_PERIOD_MS = 10 * 60_000; // matches the cron in wrangler.toml
 const FLEET_BATCH = 1;
+const FLEET_FIELDS = [
+  'accountId', 'workerName', 'databaseId', 'apiToken', 'refreshToken', 'sessionSecret',
+  'pendingSessionSecret', 'lastDeployedVersion', 'autoUpdateEnabled', 'lastUpdatedAt',
+];
+// A worker touched this recently is being updated by its owner's sign-in;
+// leave it, so the two never spend the same single-use Cloudflare token.
+const FLEET_QUIET_MS = 15 * 60_000;
 const FLEET_DOC = /^projects\/[^/]+\/databases\/\(default\)\/documents\/artifacts\/default-daemon-client\/users\/([A-Za-z0-9_-]{1,128})\/config\/cloudflare$/;
 
 /** The `size` items a run in time slot `slot` takes, rotating through `list`. */
@@ -625,7 +632,15 @@ export async function runFleetUpdate(
     {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ structuredQuery: { from: [{ collectionId: 'config', allDescendants: true }] } }),
+      // Only the fields an update needs — never, say, a Telegram bot token from
+      // the other config documents (every save is field-masked, so a partial
+      // read can't drop anything).
+      body: JSON.stringify({
+        structuredQuery: {
+          from: [{ collectionId: 'config', allDescendants: true }],
+          select: { fields: FLEET_FIELDS.map((fieldPath) => ({ fieldPath })) },
+        },
+      }),
     },
   );
   if (!res.ok) throw new Error(`fleet query failed: ${res.status}`);
@@ -652,6 +667,7 @@ export async function runFleetUpdate(
       !!cfg.accountId && !!cfg.workerName && !!(cfg.apiToken || cfg.refreshToken) &&
       cfg.autoUpdateEnabled !== 'false' &&
       cfg.lastDeployedVersion !== SHIM_VERSION &&
+      !(Date.parse(cfg.lastUpdatedAt || '') > Date.now() - FLEET_QUIET_MS) &&
       releasedTo(cfg.workerName, env.SHIM_CANARY_WORKERS))
     .sort((a, b) => a.uid.localeCompare(b.uid)); // stable order, so the rotation visits everyone
 

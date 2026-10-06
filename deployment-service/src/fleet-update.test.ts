@@ -154,4 +154,21 @@ describe('runFleetUpdate', () => {
     expect(results).toEqual([]);
     expect(calls.some((c) => c.method === 'PATCH')).toBe(false);
   });
+
+  it('asks Firestore only for the fields an update needs', async () => {
+    const calls = await stubFleet([await outdated('u1')]);
+    await runFleetUpdate(await env(), { slot: 0 });
+    const query = JSON.parse(calls.find((c) => c.url.includes(':runQuery'))!.body!);
+    const fields = query.structuredQuery.select.fields.map((f: { fieldPath: string }) => f.fieldPath);
+    expect(fields).toContain('workerName');
+    expect(fields).not.toContain('botToken');
+  });
+
+  it('leaves a worker its owner touched in the last 15 minutes (a sign-in update may be running)', async () => {
+    const calls = await stubFleet([await outdated('u1', { lastUpdatedAt: new Date().toISOString() })]);
+    const results = await runFleetUpdate(await env(), { slot: 0 });
+    expect(results).toEqual([]);
+    expect(deploys(calls)).toBe(0);
+  });
 });
+
