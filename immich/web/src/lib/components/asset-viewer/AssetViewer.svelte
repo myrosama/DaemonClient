@@ -21,6 +21,7 @@
   import type { OnUndoDelete } from '$lib/utils/actions';
   import { navigateToAsset } from '$lib/utils/asset-utils';
   import { handleError } from '$lib/utils/handle-error';
+  import { clearViewingAsset, setViewingAsset } from '$lib/utils/sw-messaging';
   import { InvocationTracker } from '$lib/utils/invocationTracker';
   import { SlideshowHistory } from '$lib/utils/slideshow-history';
   import { toTimelineAsset } from '$lib/utils/timeline-util';
@@ -176,6 +177,7 @@
     assetViewerManager.resetPanelState();
     syncAssetViewerOpenClass(false);
     preloadManager.destroy();
+    clearViewingAsset(asset.id);
   });
 
   const closeViewer = () => {
@@ -370,6 +372,12 @@
     // eslint-disable-next-line @typescript-eslint/no-unused-expressions
     asset;
     untrack(() => handlePromiseError(refresh()));
+  });
+
+  // Tell the service worker which asset is on screen: its media loads first
+  // and nothing else starts until it has (D17). Neighbour preloads stay NEXT.
+  $effect(() => {
+    setViewingAsset(asset.id);
   });
 
   let lastCursor = $state<AssetCursor>();
