@@ -113,6 +113,16 @@ downloading" possible: a byte range maps to the chunks that cover it.
   worker drops only the row.
 - Key: `GET /api/drive/zke` → `{enabled, mode: 'auto'|'custom', password, salt}`.
   In `custom` mode the password is never stored — the app must ask the user.
+  **Added 2026-10-06 (Linux machine, worker security release):** the response
+  gains `check` = base64 of `encryptChunk(UTF-8 "daemonclient-drive-key-check-v1",
+  key)` in the same `crypto.js` format (12-byte IV ‖ AES-GCM ciphertext+tag).
+  When present it decides whether a custom password is right — the Drive app
+  (P3) and core Task 1.1 verify a typed password by decrypting it. The same
+  release also: limits the worker's `/proxy` to its own bot token (the apps do
+  not use `/proxy`), makes `Bearer` win over a cookie (the apps send `Bearer`),
+  requires exact CORS origins (native apps send no `Origin`), and answers
+  WebDAV `PUT` with `423` in custom-password mode (the apps do not use WebDAV).
+  None of it changes the mobile plan.
 - File names and folder structure are **not** encrypted; they sit in the user's
   own D1.
 - No thumbnails exist for Drive files today, and no "starred" field.

@@ -98,7 +98,7 @@ is pinned by a test in the task named.
 
 Detailed: `plans/P0-toolchain-and-skeleton.md`.
 
-- [ ] **0.1** Free disk space and install the toolchain (Rust, Flutter via
+- [x] **0.1** Free disk space and install the toolchain (Rust, Flutter via
       mise, CocoaPods, iOS Simulator runtime, JDK 21, Android SDK + NDK,
       flutter_rust_bridge codegen).
 - [ ] **0.2** Run the existing Photos fork in the Simulator; record what it
@@ -117,7 +117,8 @@ Detailed: `plans/P0-toolchain-and-skeleton.md`.
 ## P1 — The core
 
 - [ ] **1.1** Crypto — PBKDF2 + AES-GCM parts; vectors from the production
-      JavaScript, both directions.
+      JavaScript, both directions; verify a Drive custom password against the
+      `check` value from `/api/drive/zke` (RESEARCH §2, added 2026-10-06).
 - [ ] **1.2** Session + worker client — sign-in (hosted and self-hosted),
       `telegram-config`, `zke-config`, `dc-manifest`, `bulk-upload-check`,
       `POST /api/assets` (`clientUpload`); the Drive adapter's routes typed but

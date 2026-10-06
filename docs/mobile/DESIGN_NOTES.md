@@ -76,6 +76,30 @@ Mac, which this account cannot read. `mobile/mise.toml` is not created yet
 
 **Gate evidence:** no code; `flutter doctor` pending.
 
+> **Completed 2026-10-06.**
+> - **Disk:** 19 GB → 44 GB free. Removed with the operator's approval: the
+>   Claude desktop VM bundle (11 GB), the Microsoft Office apps + OneDrive
+>   (~11 GB), Autodesk Fusion 360 data in the `macbookair` account (12 GB),
+>   the empty leftover home folder of the already-deleted account
+>   `abdirimovbunyodbek701` (484 KB — the account deletion had worked),
+>   installers and caches. Admin steps ran under the operator's own approval
+>   prompts; the password is stored nowhere.
+> - **Installed at user level (this account is not an administrator):**
+>   Flutter 3.41.7 via mise (`mobile/mise.toml`), CocoaPods 1.17.0
+>   (Homebrew), Java Temurin 21.0.12 via `mise use -g` (the `temurin@21` cask
+>   needs sudo), Android SDK (platform 36, build-tools 36.0.0, platform-tools,
+>   `cmdline-tools;latest`), flutter_rust_bridge_codegen 2.13.0. The iOS 27.0
+>   platform + Simulator runtime came from Xcode → Settings → Components (the
+>   operator), which handles the admin prompt itself.
+> - **Deviation:** no Android emulator image (7 GB) — Android Gate 2 uses the
+>   Samsung over USB.
+> - **`flutter doctor`:** Flutter ✓, Xcode 27.0 ✓, Chrome ✓, devices ✓,
+>   network ✓. Android: SDK and Java found; **"license status unknown"** —
+>   the 2026 cmdline-tools answer `--licenses` with "no longer needed", which
+>   Flutter 3.41.7 cannot parse. License files are present in
+>   `~/Library/Android/sdk/licenses`. Task 0.4's first Android build is the
+>   real check.
+
 ---
 
 ## 0.3 — Cargo workspace and `dc-core` with `chunk_plan`            2026-10-05
