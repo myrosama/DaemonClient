@@ -483,3 +483,28 @@ the macro error too, and was briefly blamed on the manual command; building
 through Flutter showed the same error, because Flutter passes the same flag.
 
 Part 2 (what the app does after sign-in) follows once it builds.
+
+## 7 (part 2). What the fork does after sign-in        2026-10-06
+
+The operator signed in on the iOS 27 Simulator (build from Task 0.2a). From
+the `flutter run` log:
+
+1. **Via `https://api.daemonclient.uz`** (the prefilled hosted address): sign-in
+   succeeds, but the background sync fails at once —
+   `ApiException 400: HTTP connection failed: GET /server/version (… unsupported
+   URL …), uri=/server/version` — a request with **no host**. The sync isolate
+   has no usable server address; the app never learns the per-user
+   `workerUrl` (it reads it nowhere, R§6). A likely contributor, **not yet
+   verified**: the central `/.well-known/immich` answers `{}` (no
+   `api.endpoint`), which is where Immich derives its API address. → P2 Task
+   2.2 (sign-in) owns this.
+2. **Via the per-user worker typed by hand** (`https://dc-…workers.dev/api`):
+   sign-in works; remote sync completes without errors (616 ms, then "Resetting
+   sync state as requested by server", then 475 ms); the websocket connects.
+   **The timeline is empty** — whether that account has photos is being checked
+   with the operator.
+3. The app is still branded "immich" on iOS (logo, name) — P2 Task 2.1.
+
+Conclusion for the plan: the hosted sign-in path is broken today, and media
+loading is untested until an account with photos is used. Both are what P1
+(core) and P2 (sign-in, media through the core) replace.
