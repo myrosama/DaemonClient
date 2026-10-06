@@ -5,8 +5,8 @@
 import { PUBLIC_DAEMONCLIENT_WORKER_URL } from '$env/static/public';
 import { unreachableResponseFor } from '$lib/utils/worker-unreachable';
 import { installMessageListener } from './messaging';
-import { handleCancel } from './request';
-import { classifyMediaRequest, isAbortError, MediaScheduler } from './media-scheduler';
+import { isAbortError, isTrustedMessageSource, MediaScheduler, type MediaTag, parseViewingMessage, RetryAfterError } from './media-scheduler';
+import { CancelHints, MediaSession, pacedFetch } from './media-session';
 import {
   type AssetBinaryKind,
   type AssetManifest,
@@ -61,65 +61,54 @@ let mediaKey: CryptoKey | null | undefined = undefined;
 // extra round-trip on repeat reads of the same file id.
 const filePathCache = new Map<string, { path: string; exp: number }>();
 
-// ── Thumbnail loading algorithm ─────────────────────────────────────────────
-// Goal: Google-Photos-like loading without 503 storms.
+// ── Media loading ───────────────────────────────────────────────────────────
+// Every asset-binary read that can reach the worker or Telegram — manifest,
+// getFile, the download itself, and the worker fallback — runs as a job in the
+// media scheduler (./media-scheduler, a port of Nuke's design; SPEC §4.9, D15,
+// D17 — the mobile core follows the same rules). Cache hits never enter it.
 //
-// Root cause of 503s:
-//   Scrolling fires 20-50 simultaneous thumbnail requests. Each hits the CF
-//   Worker which calls tgGetFileUrl + Telegram CDN. Before the worker fix,
-//   EVERY fetch (including downloads) burned a send-bucket token → 4s wait ×
-//   50 requests → worker wall-clock exceeded → Cloudflare returns HTML 503
-//   (no CORS headers) → SW fetch rejects with CORS TypeError → cascade.
+//   OPENED     the asset the viewer shows (page hint {type:'viewing'})
+//   NEXT       neighbour preloads, grid hover playback, other media
+//   VISIBLE    grid thumbnails, newest request first
+//   BACKGROUND (reserved; nothing uses it yet)
 //
-// Three-layer fix (worker fix already deployed as of bundle e1ab97124127+):
-//   1. Worker: only pace SEND urls, not downloads (isSendUrl guard).
-//   2. SW: media scheduler (./media-scheduler) — the image the user opened
-//      runs first and pauses NEW thumbnail work until it lands; thumbnails are
-//      capped at 6 and served newest-first, and one the page has cancelled
-//      (scrolled past) is dropped before it costs a worker call.
-//   3. SW: in-flight deduplication — same URL requested twice shares one fetch.
-//   4. SW: retry with exponential backoff on 429/503, honouring Retry-After.
-
-const MAX_THUMB_CONCURRENCY = 6;
-const mediaScheduler = new MediaScheduler({ thumbnailConcurrency: MAX_THUMB_CONCURRENCY });
+// Limits (SPEC §4.9 starting values, so web and mobile behave the same):
+//   - 6 jobs at once, 1 slot reserved for OPENED, at most 2 NEXT.
+//   - Token bucket, 20 job starts/s, burst 10. A cold thumbnail job is about
+//     3 worker invocations (manifest, getFile, download) and 2 Telegram calls;
+//     at a typical 300-500 ms per job the 6 slots are the real limiter, and the
+//     bucket only caps the bursts when slots free fast. Cancelled work never
+//     spends a token, so a fling costs only what is loaded — the free tier's
+//     100k invocations a day go to photos someone actually looked at.
+//   - A 429 (HTTP, Telegram JSON retry_after, Retry-After) pauses everyone
+//     once; /proxy's 503 + Retry-After pauses briefly (≤ 5 s).
+const mediaScheduler = new MediaScheduler({
+  maxConcurrent: 6,
+  reservedForOpened: 1,
+  maxNext: 2,
+  rate: 20,
+  burst: 10,
+});
+const media = new MediaSession(mediaScheduler);
+const cancelHints = new CancelHints();
 
 // Answer for a request the page has already cancelled. Nobody reads it; it only
 // has to be a non-ok status so nothing caches it, and to avoid the console
 // noise of a rejected respondWith.
 const cancelledResponse = () => new Response(null, { status: 499, statusText: 'Client Closed Request' });
 
-// Thumbnails the page has given up on (tile scrolled out of view). The spec
-// says FetchEvent.request.signal aborts when the page cancels, but as of 2026
-// no browser implements it (Chromium crbug 823697, Firefox bug 1394102, WebKit
-// bug 246069 — the WPT fetch/api/abort/serviceworker-intercepted test times out
-// in all three). So the page also posts {type:'cancel', url} (cancelImageUrl)
-// and that aborts the matching queued request here; request.signal is still
-// honoured for when browsers catch up. Grid thumbnails only: a false cancel
-// there costs one tile retry, and interactive work never waits in a queue.
-const thumbnailCancels = new Map<string, AbortController[]>();
+// Still rate-limited after the scheduler's retries: tell the page to come back later.
+const rateLimitedResponse = (error: RetryAfterError) =>
+  new Response(null, { status: 503, headers: { 'Retry-After': String(Math.ceil(error.delayMs / 1000)) } });
 
-function thumbnailCancelSignal(request: Request): { signal: AbortSignal; done: () => void } {
-  const controller = new AbortController();
-  const onAbort = () => controller.abort();
-  request.signal?.addEventListener('abort', onAbort, { once: true });
-  const pending = thumbnailCancels.get(request.url) ?? [];
-  pending.push(controller);
-  thumbnailCancels.set(request.url, pending);
-  const done = () => {
-    request.signal?.removeEventListener('abort', onAbort);
-    const list = thumbnailCancels.get(request.url);
-    const index = list?.indexOf(controller) ?? -1;
-    if (index !== -1) list!.splice(index, 1);
-    if (list?.length === 0) thumbnailCancels.delete(request.url);
-  };
-  return { signal: controller.signal, done };
+function mediaTagFor(url: URL): MediaTag | undefined {
+  const parsed = parseAssetBinaryPath(url.pathname);
+  if (!parsed) return undefined;
+  return { ...parsed, size: (url.searchParams.get('size') || '').toLowerCase() };
 }
 
-// One cancel message stands for one page request: abort the oldest one only.
-function cancelThumbnail(url: string) {
-  thumbnailCancels.get(url)?.shift()?.abort();
-}
-
+// Non-media API reads only (server config, timeline JSON). Media reads go
+// through the scheduler and its one shared 429 pause instead.
 async function fetchWithBackoff(url: string, init: RequestInit, maxAttempts = 4): Promise<Response> {
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
@@ -152,8 +141,16 @@ async function persistToken(token: string | null) {
   // User switch or logout → wipe per-user media caches. Switch the token first:
   // requests that arrive while the caches are being cleared must already see
   // the new (or no) session, not the old one.
-  const previous = cachedToken;
+  // Compare against the stored token too: after an SW restart cachedToken is
+  // null, and a page re-sending the same token must not cancel its own loads.
+  const previous = cachedToken ?? (await readStoredToken());
   cachedToken = token;
+  if (token !== previous) {
+    // Queued media fails with AbortError, the viewing hint and any 429 pause
+    // are forgotten, and in-flight jobs of the old session can't write caches.
+    media.reset();
+    cancelHints.clear();
+  }
   if (previous && token !== previous) await resetMediaState();
   const cache = await caches.open('dc-auth-v3');
   if (token) {
@@ -163,15 +160,16 @@ async function persistToken(token: string | null) {
   }
 }
 
+async function readStoredToken(): Promise<string | null> {
+  const cache = await caches.open('dc-auth-v3');
+  const stored = await cache.match(TOKEN_CACHE_KEY);
+  return stored ? stored.text() : null;
+}
+
 async function loadToken(): Promise<string | null> {
   if (cachedToken) return cachedToken;
-  const cache = await caches.open('dc-auth-v3');
-  const res = await cache.match(TOKEN_CACHE_KEY);
-  if (res) {
-    cachedToken = await res.text();
-    return cachedToken;
-  }
-  return null;
+  cachedToken = await readStoredToken();
+  return cachedToken;
 }
 
 async function persistWorkerUrl(url: string | null) {
@@ -307,73 +305,49 @@ async function directWorkerFetch(
     body = await request.arrayBuffer();
   }
 
-  // Asset binaries: scheduled by priority + in-flight deduplication.
-  // Other requests (uploads, API calls) bypass the scheduler entirely.
+  // Asset binaries (the fallback when the direct Telegram path can't serve
+  // one) are media-scheduler jobs; other requests (uploads, API calls) bypass it.
+  const tag = request.method === 'GET' ? mediaTagFor(url) : undefined;
+  const generation = media.generation;
   let response: Response;
-  if (cacheable && (request.method === 'GET' || request.method === 'HEAD')) {
-    const binary = parseAssetBinaryPath(pathname);
-    const size = (url.searchParams.get('size') || '').toLowerCase();
-    const priority = binary ? classifyMediaRequest(binary.kind, size) : 'thumbnail';
-    try {
-      // The shared job owns the cache write, so the bytes are kept even when
-      // every caller has gone. The first caller to get here streams the
-      // response itself; a concurrent duplicate can't (a body has one reader),
-      // so it reads the copy that was cached, or fetches its own if there is none.
-      const shared = await mediaScheduler.schedule({ priority, key: workerUrl, signal }, async () => {
-        const res = await fetchWithBackoff(workerUrl, { method: request.method, headers, body });
-        const copy = res.ok ? res.clone() : null; // clone now, before anyone reads res
-        const stored = copy
-          ? caches.open('dc-assets-v4').then((c) => c.put(workerUrl, copy)).catch(() => {})
-          : Promise.resolve();
-        return { res, stored, claimed: false };
-      });
-      if (!shared.claimed) {
-        shared.claimed = true;
-        response = shared.res;
-      } else {
-        await shared.stored;
-        const cache = await caches.open('dc-assets-v4');
-        response =
-          (await cache.match(workerUrl)) ??
-          (await fetchWithBackoff(workerUrl, { method: request.method, headers, body }));
-      }
-    } catch (err) {
-      if (isAbortError(err)) return cancelledResponse();
-      // Network failure — serve cache or fall back to transparent placeholder
-      if (cacheable) {
-        const cache = await caches.open('dc-assets-v4');
-        const cached = await cache.match(workerUrl);
-        if (cached) return cached;
-      }
-      console.error('[SW] Network error, no cache available:', err);
-      return unreachableResponseFor(base, DEFAULT_WORKER_URL);
-    }
-  } else {
-    try {
+  try {
+    if (tag && cacheable) {
+      // Identical requests share one job and its RESULT: every caller builds
+      // its own Response from the same bytes. The job writes the cache itself,
+      // so the bytes are kept even when every caller has gone — unless the
+      // session changed meanwhile.
+      response = await media.sharedFetch(
+        { tag, key: workerUrl, signal },
+        () => pacedFetch(workerUrl, { method: 'GET', headers }),
+        async (copy) => {
+          const cache = await caches.open('dc-assets-v4');
+          if (media.isCurrent(generation)) await cache.put(workerUrl, copy);
+        },
+      );
+    } else if (tag) {
+      // A ranged read (video the user is playing): never cached or coalesced.
+      response = await media.schedule({ tag, signal }, () => pacedFetch(workerUrl, { method: 'GET', headers }));
+    } else {
       // GET/HEAD are idempotent → retry transient 429/503/network drops with
       // backoff. Without this, ONE flaky-4G packet loss during the app's boot
       // call (/api/server/config) used to surface as a hard "Error 503" page.
       // Mutations (POST/PUT/DELETE) keep single-shot semantics.
       const idempotent = request.method === 'GET' || request.method === 'HEAD';
-      const send = () =>
-        idempotent
-          ? fetchWithBackoff(workerUrl, { method: request.method, headers, body })
-          : fetch(workerUrl, { method: request.method, headers, body });
-      // A ranged asset read is video the user is playing (fallback path).
-      response =
-        request.method === 'GET' && ASSET_BINARY_REGEX.test(pathname)
-          ? await mediaScheduler.schedule({ priority: 'interactive', signal }, send)
-          : await send();
-    } catch (err) {
-      if (isAbortError(err)) return cancelledResponse();
-      if (cacheable) {
-        const cache = await caches.open('dc-assets-v4');
-        const cached = await cache.match(workerUrl);
-        if (cached) return cached;
-      }
-      console.error('[SW] Network error, no cache available:', err);
-      return unreachableResponseFor(base, DEFAULT_WORKER_URL);
+      response = await (idempotent
+        ? fetchWithBackoff(workerUrl, { method: request.method, headers, body })
+        : fetch(workerUrl, { method: request.method, headers, body }));
     }
+  } catch (error) {
+    if (isAbortError(error)) return cancelledResponse();
+    if (error instanceof RetryAfterError) return rateLimitedResponse(error);
+    // Network failure — serve cache or fall back to transparent placeholder
+    if (cacheable) {
+      const cache = await caches.open('dc-assets-v4');
+      const cached = await cache.match(workerUrl);
+      if (cached) return cached;
+    }
+    console.error('[SW] Network error, no cache available:', error);
+    return unreachableResponseFor(base, DEFAULT_WORKER_URL);
   }
 
   if (pathname === '/api/auth/login' && response.ok) {
@@ -389,76 +363,102 @@ async function directWorkerFetch(
 }
 
 // ── Client-direct media path ────────────────────────────────────────────────
+// Everything below either reads a cache or runs INSIDE one scheduler job; no
+// job schedules another and waits on it, so a job never holds a slot while
+// waiting for one. Rate-limit answers surface as RetryAfterError (pacedFetch)
+// and the scheduler pauses everyone instead of each request backing off alone.
+// Writes to shared state check the session generation first, so a previous
+// user's in-flight work can't land in the next user's caches.
+
+type TgConfig = { botToken: string; proxyUrl: string };
+
+const isRetryable = (error: unknown) => isAbortError(error) || error instanceof RetryAfterError;
+
 // Authenticated GET to the user's own worker base (tiny JSON only).
 async function workerGet(request: Request, path: string): Promise<Response> {
   const headers: Record<string, string> = {};
   const token = await extractToken(request);
   if (token) headers['Authorization'] = `Bearer ${token}`;
   const base = await getWorkerUrl();
-  return fetchWithBackoff(base + path, { method: 'GET', headers });
+  return pacedFetch(base + path, { method: 'GET', headers });
 }
 
-async function getTgConfig(request: Request): Promise<{ botToken: string; proxyUrl: string }> {
+async function getTgConfig(request: Request, generation: number): Promise<TgConfig> {
   if (cachedTgConfig) return cachedTgConfig;
   const res = await workerGet(request, '/api/server/telegram-config');
   const cfg = (await res.json()) as any;
   if (!cfg?.botToken || !cfg?.proxyUrl) throw new Error('telegram config unavailable');
-  cachedTgConfig = { botToken: cfg.botToken, proxyUrl: cfg.proxyUrl };
-  return cachedTgConfig;
+  const config = { botToken: cfg.botToken, proxyUrl: cfg.proxyUrl };
+  if (media.isCurrent(generation)) cachedTgConfig = config;
+  return config;
 }
 
 // Returns the AES key when the library is encrypted, else null. The browser
 // handling its own decryption is exactly what keeps the worker off the byte
 // path (the user endorsed this — it's the user's own ZKE password).
-async function getMediaKey(request: Request): Promise<CryptoKey | null> {
+async function getMediaKey(request: Request, generation: number): Promise<CryptoKey | null> {
   if (mediaKey !== undefined) return mediaKey;
+  let key: CryptoKey | null;
   try {
     const res = await workerGet(request, '/api/server/zke-config');
     const zke = (await res.json()) as any;
-    mediaKey = zke?.enabled && zke?.password && zke?.salt ? await deriveKey(zke.password, zke.salt) : null;
-  } catch {
-    mediaKey = null;
+    key = zke?.enabled && zke?.password && zke?.salt ? await deriveKey(zke.password, zke.salt) : null;
+  } catch (error) {
+    if (isRetryable(error)) throw error;
+    key = null;
   }
-  return mediaKey;
+  if (media.isCurrent(generation)) mediaKey = key;
+  return key;
+}
+
+const manifestCacheKey = (assetId: string) => `https://dc-manifest/${assetId}`;
+
+async function cachedManifest(assetId: string): Promise<AssetManifest | undefined> {
+  const cache = await caches.open(MANIFEST_CACHE);
+  const cached = await cache.match(manifestCacheKey(assetId));
+  return cached ? cached.json() : undefined;
 }
 
 // Per-asset manifest, cached forever (Telegram file ids are immutable).
-async function getManifest(request: Request, assetId: string): Promise<AssetManifest> {
-  const cacheKey = `https://dc-manifest/${assetId}`;
-  const cache = await caches.open(MANIFEST_CACHE);
-  const cached = await cache.match(cacheKey);
-  if (cached) return cached.json();
+async function getManifest(request: Request, assetId: string, generation: number): Promise<AssetManifest> {
+  const cached = await cachedManifest(assetId);
+  if (cached) return cached;
   const res = await workerGet(request, `/api/assets/${assetId}/dc-manifest`);
   if (!res.ok) throw new Error(`manifest ${res.status}`);
   const manifest = (await res.clone().json()) as AssetManifest;
-  await cache.put(cacheKey, res);
+  if (media.isCurrent(generation)) {
+    const cache = await caches.open(MANIFEST_CACHE);
+    await cache.put(manifestCacheKey(assetId), res);
+  }
   return manifest;
 }
 
-async function resolveFilePath(tg: { botToken: string; proxyUrl: string }, fileId: string): Promise<string> {
+async function resolveFilePath(tg: TgConfig, fileId: string, generation: number): Promise<string> {
   const hit = filePathCache.get(fileId);
   if (hit && hit.exp > Date.now()) return hit.path;
-  const res = await fetchWithBackoff(buildGetFileUrl(tg.proxyUrl, tg.botToken, fileId), { method: 'GET' });
+  const res = await pacedFetch(buildGetFileUrl(tg.proxyUrl, tg.botToken, fileId), { method: 'GET' });
   const data = (await res.json()) as any;
   if (!data?.ok || !data.result?.file_path) throw new Error(`getFile failed for ${fileId}`);
   const path = data.result.file_path as string;
-  filePathCache.set(fileId, { path, exp: Date.now() + 50 * 60 * 1000 });
+  if (media.isCurrent(generation)) filePathCache.set(fileId, { path, exp: Date.now() + 50 * 60 * 1000 });
   return path;
 }
 
 async function downloadOneFile(
-  tg: { botToken: string; proxyUrl: string },
+  tg: TgConfig,
   fileId: string,
   key: CryptoKey | null,
+  generation: number,
 ): Promise<ArrayBuffer> {
   let filePath: string;
   try {
-    filePath = await resolveFilePath(tg, fileId);
-  } catch {
+    filePath = await resolveFilePath(tg, fileId, generation);
+  } catch (error) {
+    if (isRetryable(error)) throw error;
     filePathCache.delete(fileId);
-    filePath = await resolveFilePath(tg, fileId);
+    filePath = await resolveFilePath(tg, fileId, generation);
   }
-  const res = await fetchWithBackoff(buildDownloadUrl(tg.proxyUrl, tg.botToken, filePath), { method: 'GET' });
+  const res = await pacedFetch(buildDownloadUrl(tg.proxyUrl, tg.botToken, filePath), { method: 'GET' });
   if (!res.ok) {
     filePathCache.delete(fileId); // path may have expired
     throw new Error(`download ${res.status} for ${fileId}`);
@@ -466,6 +466,22 @@ async function downloadOneFile(
   const bytes = await res.arrayBuffer();
   return key ? decryptBytes(bytes, key) : bytes;
 }
+
+// One stored video chunk, as a job of the request's class. Concurrent ranges
+// inside the same chunk share one download.
+function downloadChunk(
+  tag: MediaTag,
+  fileId: string,
+  source: VideoSource,
+  signal: AbortSignal,
+  generation: number,
+): Promise<ArrayBuffer> {
+  return media.schedule({ tag, key: `chunk:${fileId}`, signal }, () =>
+    downloadOneFile(source.tg, fileId, source.key, generation),
+  );
+}
+
+type VideoSource = { manifest: AssetManifest; tg: TgConfig; key: CryptoKey | null };
 
 // Serve a video straight from Telegram, one stored chunk per response.
 //
@@ -479,15 +495,16 @@ async function downloadOneFile(
 // Returns null to fall back to the Worker rather than fail the request.
 async function fetchVideoDirect(
   request: Request,
-  manifest: AssetManifest,
-  kind: AssetBinaryKind,
-  tg: { botToken: string; proxyUrl: string },
-  key: CryptoKey | null,
+  source: VideoSource,
+  tag: MediaTag,
+  signal: AbortSignal,
+  generation: number,
 ): Promise<Response | null> {
+  const { manifest } = source;
   // /video/playback prefers the H.264 rendition when one exists — same swap the
   // Worker's handleOriginal performs. Without this a repaired video would fall
   // back to its HEVC source and stop playing in non-Apple browsers.
-  const usePlayback = kind === 'playback' && !!manifest.playbackChunks?.length;
+  const usePlayback = tag.kind === 'playback' && !!manifest.playbackChunks?.length;
   const chunks = [...(usePlayback ? manifest.playbackChunks! : manifest.chunks)].sort((a, b) => a.index - b.index);
   const totalSize = (usePlayback && manifest.playbackSize) || manifest.fileSize;
   if (chunks.length === 0 || !totalSize) return null;
@@ -515,8 +532,11 @@ async function fetchVideoDirect(
   if (plan.kind === 'full') {
     // No Range header (a direct download, say). Stream chunks in order; `pull`
     // is only called when the consumer has drained, so memory stays at one
-    // chunk instead of buffering the whole file.
+    // chunk instead of buffering the whole file. Each chunk is its own job, so
+    // the stream never holds a slot while the reader is idle.
     let next = 0;
+    const streamAbort = new AbortController();
+    signal.addEventListener('abort', () => streamAbort.abort(), { once: true });
     const stream = new ReadableStream({
       async pull(controller) {
         if (next >= chunks.length) {
@@ -525,13 +545,12 @@ async function fetchVideoDirect(
         }
         const c = byIndex.get(next++);
         if (!c) { controller.error(new Error('manifest gap')); return; }
-        const bytes = await mediaScheduler.schedule({ priority: 'interactive' }, () =>
-          downloadOneFile(tg, c.file_id, key),
-        );
+        const bytes = await downloadChunk(tag, c.file_id, source, streamAbort.signal, generation);
         controller.enqueue(new Uint8Array(bytes));
       },
       cancel() {
         next = chunks.length;
+        streamAbort.abort();
       },
     });
     return new Response(stream, { status: 200, headers: { ...headers, 'Content-Length': String(totalSize) } });
@@ -539,7 +558,7 @@ async function fetchVideoDirect(
 
   const wanted = byIndex.get(plan.chunkIndex);
   if (!wanted) return null; // gap in the manifest → let the Worker answer
-  const plaintext = await downloadOneFile(tg, wanted.file_id, key);
+  const plaintext = await downloadChunk(tag, wanted.file_id, source, signal, generation);
   const chunkStart = plan.chunkIndex * VIDEO_CHUNK_SIZE;
   const localStart = plan.start - chunkStart;
   const localEnd = Math.min(plan.end - chunkStart, plaintext.byteLength - 1);
@@ -559,54 +578,67 @@ async function fetchVideoDirect(
   });
 }
 
-// Read an asset's thumbnail/original straight from Telegram + decrypt locally.
-// Returns null to signal "fall back to the worker path" (missing file id,
-// encrypted-but-no-key, or any failure) so we never regress an image.
-async function fetchAssetDirect(request: Request, pathname: string, signal: AbortSignal): Promise<Response | null> {
-  const parsed = parseAssetBinaryPath(pathname);
-  if (!parsed) return null;
-  const { assetId, kind } = parsed;
-  const size = (new URL(request.url).searchParams.get('size') || '').toLowerCase();
-  // Everything below that can reach the worker or Telegram — manifest included
-  // — runs inside a scheduler slot, so a fast scroll can't flood the worker
-  // and a request the page has cancelled is dropped before it costs anything.
-  const priority = classifyMediaRequest(kind, size);
+// Trust the request kind over the stored mime: /video/playback is video by
+// definition, and containers like .3gp/.mts are often stored as a generic
+// octet-stream. Any multi-chunk asset goes here too — concatenating one is
+// exactly the blow-up the chunked path exists to avoid.
+const looksLikeVideo = (manifest: AssetManifest, kind: AssetBinaryKind) =>
+  kind === 'playback' || !!manifest.mimeType?.startsWith('video/') || (manifest.chunks?.length ?? 0) > 1;
 
-  // Video bytes go to the ranged, chunk-at-a-time path — before the media
-  // cache, because a partial 206 must never be cached and replayed as if it
-  // were the whole asset. Thumbnails of videos are images and fall through.
-  if (kind === 'original' || kind === 'playback') {
-    let video: Response | null | undefined; // undefined = not a video, continue below
+// Video bytes go to the ranged, chunk-at-a-time path — before the media cache,
+// because a partial 206 must never be cached and replayed as if it were the
+// whole asset. Returns undefined when the asset is not a video (continue with
+// the image path), null to fall back to the worker.
+async function fetchVideoIfVideo(
+  request: Request,
+  tag: MediaTag,
+  signal: AbortSignal,
+  generation: number,
+): Promise<Response | null | undefined> {
+  const { assetId, kind } = tag;
+  // Manifest, Telegram config and key in ONE job — or none when all are cached.
+  const setup = async (): Promise<VideoSource | null | undefined> => {
+    let manifest: AssetManifest | undefined;
     try {
-      video = await mediaScheduler.schedule({ priority, signal }, async () => {
-        const manifest = await getManifest(request, assetId).catch(() => null);
-        // Trust the request kind over the stored mime: /video/playback is video by
-        // definition, and containers like .3gp/.mts are often stored as a generic
-        // octet-stream. Any multi-chunk asset goes here too — concatenating one is
-        // exactly the blow-up this path exists to avoid.
-        const looksLikeVideo =
-          kind === 'playback' ||
-          !!manifest?.mimeType?.startsWith('video/') ||
-          (manifest?.chunks?.length ?? 0) > 1;
-        if (!manifest || !looksLikeVideo) return undefined;
-        try {
-          const tg = await getTgConfig(request);
-          const needsKey = isEncrypted(manifest.encryptionMode);
-          const key = needsKey ? await getMediaKey(request) : null;
-          if (needsKey && !key) return null;
-          return await fetchVideoDirect(request, manifest, kind, tg, key);
-        } catch (err: any) {
-          console.warn('[SW] client-direct video failed, falling back to worker:', err?.message);
-          return null;
-        }
-      });
-    } catch (err) {
-      if (isAbortError(err)) return cancelledResponse();
-      throw err;
+      manifest = await getManifest(request, assetId, generation);
+    } catch (error) {
+      if (isRetryable(error)) throw error;
     }
-    if (video !== undefined) return video;
+    if (!manifest || !looksLikeVideo(manifest, kind)) return undefined;
+    try {
+      const tg = await getTgConfig(request, generation);
+      const needsKey = isEncrypted(manifest.encryptionMode);
+      const key = needsKey ? await getMediaKey(request, generation) : null;
+      return needsKey && !key ? null : { manifest, tg, key };
+    } catch (error) {
+      if (isRetryable(error)) throw error;
+      console.warn('[SW] client-direct video failed, falling back to worker:', (error as Error)?.message);
+      return null;
+    }
+  };
+  const known = await cachedManifest(assetId);
+  const offline =
+    !!known &&
+    (!looksLikeVideo(known, kind) ||
+      (!!cachedTgConfig && (mediaKey !== undefined || !isEncrypted(known.encryptionMode))));
+  const source = offline ? await setup() : await media.schedule({ tag, key: `video-setup:${assetId}`, signal }, setup);
+  if (!source) return source;
+  try {
+    return await fetchVideoDirect(request, source, tag, signal, generation);
+  } catch (error: any) {
+    if (isRetryable(error)) throw error;
+    console.warn('[SW] client-direct video failed, falling back to worker:', error?.message);
+    return null;
   }
+}
 
+async function fetchImageDirect(
+  request: Request,
+  tag: MediaTag,
+  signal: AbortSignal,
+  generation: number,
+): Promise<Response> {
+  const { assetId, kind, size } = tag;
   const mediaKeyUrl = `https://dc-media/${assetId}/${kind}/${size || '_'}`;
   const mediaCache = await caches.open(MEDIA_CACHE);
   const cached = await mediaCache.match(mediaKeyUrl);
@@ -623,58 +655,71 @@ async function fetchAssetDirect(request: Request, pathname: string, signal: Abor
   // a Response) so every caller can build its own fresh, independently-readable
   // Response, and it writes the cache itself so the bytes are kept even if every
   // caller has gone by the time they land.
+  const { buffer, contentType } = await media.schedule(
+    { tag, key: mediaKeyUrl, signal },
+    async (): Promise<{ buffer: ArrayBuffer; contentType: string }> => {
+      const manifest = await getManifest(request, assetId, generation);
+
+      // Video bytes never take this path: it concatenates every file id into one
+      // buffer, which is fine for an image and ruinous for a 1 GB video.
+      // fetchVideoIfVideo serves those a chunk at a time, and the caller routes
+      // to it before reaching here. A video *thumbnail* is an image and
+      // continues through normally.
+      if (manifest.mimeType.startsWith('video/') && kind !== 'thumbnail') {
+        throw new Error('FALLBACK');
+      }
+
+      const fileIds = selectFileIds(manifest, kind, size);
+      if (fileIds.length === 0) throw new Error('FALLBACK');
+
+      const tg = await getTgConfig(request, generation);
+      const key = isEncrypted(manifest.encryptionMode) ? await getMediaKey(request, generation) : null;
+      if (isEncrypted(manifest.encryptionMode) && !key) throw new Error('FALLBACK');
+
+      let buffer: ArrayBuffer;
+      if (fileIds.length === 1) {
+        buffer = await downloadOneFile(tg, fileIds[0], key, generation);
+      } else {
+        const parts: ArrayBuffer[] = [];
+        for (const fid of fileIds) parts.push(await downloadOneFile(tg, fid, key, generation));
+        const total = parts.reduce((n, p) => n + p.byteLength, 0);
+        const joined = new Uint8Array(total);
+        let off = 0;
+        for (const p of parts) { joined.set(new Uint8Array(p), off); off += p.byteLength; }
+        buffer = joined.buffer;
+      }
+
+      // Thumb/preview renditions are always JPEG; originals carry their own mime.
+      const renditionId = fileIds[0];
+      const contentType = (renditionId === manifest.thumbId || renditionId === manifest.previewId)
+        ? 'image/jpeg'
+        : manifest.mimeType || 'application/octet-stream';
+      // Cache thumbnails/previews + small images; skip large originals (disk).
+      if ((kind === 'thumbnail' || buffer.byteLength <= 4 * 1024 * 1024) && media.isCurrent(generation)) {
+        await mediaCache.put(mediaKeyUrl, buildResponse(buffer, contentType));
+      }
+      return { buffer, contentType };
+    },
+  );
+  return buildResponse(buffer, contentType);
+}
+
+// Read an asset's thumbnail/original straight from Telegram + decrypt locally.
+// Returns null to signal "fall back to the worker path" (missing file id,
+// encrypted-but-no-key, or any failure) so we never regress an image.
+async function fetchAssetDirect(request: Request, tag: MediaTag, signal: AbortSignal): Promise<Response | null> {
+  const generation = media.generation;
   try {
-    const { buffer, contentType } = await mediaScheduler.schedule(
-      { priority, key: mediaKeyUrl, signal },
-      async (): Promise<{ buffer: ArrayBuffer; contentType: string }> => {
-        const manifest = await getManifest(request, assetId);
-
-        // Video bytes never take this path: it concatenates every file id into one
-        // buffer, which is fine for an image and ruinous for a 1 GB video.
-        // fetchVideoDirect (above) serves those a chunk at a time, and the caller
-        // routes to it before reaching here. A video *thumbnail* is an image and
-        // continues through normally.
-        if (manifest.mimeType.startsWith('video/') && kind !== 'thumbnail') {
-          throw new Error('FALLBACK');
-        }
-
-        const fileIds = selectFileIds(manifest, kind, size);
-        if (fileIds.length === 0) throw new Error('FALLBACK');
-
-        const tg = await getTgConfig(request);
-        const key = isEncrypted(manifest.encryptionMode) ? await getMediaKey(request) : null;
-        if (isEncrypted(manifest.encryptionMode) && !key) throw new Error('FALLBACK');
-
-        let buffer: ArrayBuffer;
-        if (fileIds.length === 1) {
-          buffer = await downloadOneFile(tg, fileIds[0], key);
-        } else {
-          const parts: ArrayBuffer[] = [];
-          for (const fid of fileIds) parts.push(await downloadOneFile(tg, fid, key));
-          const total = parts.reduce((n, p) => n + p.byteLength, 0);
-          const joined = new Uint8Array(total);
-          let off = 0;
-          for (const p of parts) { joined.set(new Uint8Array(p), off); off += p.byteLength; }
-          buffer = joined.buffer;
-        }
-
-        // Thumb/preview renditions are always JPEG; originals carry their own mime.
-        const renditionId = fileIds[0];
-        const contentType = (renditionId === manifest.thumbId || renditionId === manifest.previewId)
-          ? 'image/jpeg'
-          : manifest.mimeType || 'application/octet-stream';
-        // Cache thumbnails/previews + small images; skip large originals (disk).
-        if (kind === 'thumbnail' || buffer.byteLength <= 4 * 1024 * 1024) {
-          await mediaCache.put(mediaKeyUrl, buildResponse(buffer, contentType));
-        }
-        return { buffer, contentType };
-      },
-    );
-    return buildResponse(buffer, contentType);
-  } catch (err: any) {
-    if (isAbortError(err)) return cancelledResponse();
-    if (err?.message !== 'FALLBACK') {
-      console.warn('[SW] client-direct media failed, falling back to worker:', err?.message);
+    if (tag.kind === 'original' || tag.kind === 'playback') {
+      const video = await fetchVideoIfVideo(request, tag, signal, generation);
+      if (video !== undefined) return video;
+    }
+    return await fetchImageDirect(request, tag, signal, generation);
+  } catch (error: any) {
+    if (isAbortError(error)) return cancelledResponse();
+    if (error instanceof RetryAfterError) return rateLimitedResponse(error);
+    if (error?.message !== 'FALLBACK') {
+      console.warn('[SW] client-direct media failed, falling back to worker:', error?.message);
     }
     return null;
   }
@@ -692,17 +737,15 @@ const handleFetch = (event: FetchEvent): void => {
     const cacheable = ASSET_BINARY_REGEX.test(url.pathname) && event.request.method === 'GET' && !hasRange;
     // Asset binaries: read straight from Telegram in the browser; fall back to
     // the worker proxy path only when that can't serve it.
-    if (ASSET_BINARY_REGEX.test(url.pathname) && event.request.method === 'GET') {
-      const binary = parseAssetBinaryPath(url.pathname);
-      const size = (url.searchParams.get('size') || '').toLowerCase();
-      const cancel =
-        binary && classifyMediaRequest(binary.kind, size) === 'thumbnail'
-          ? thumbnailCancelSignal(event.request)
-          : { signal: event.request.signal, done: () => {} };
+    const tag = event.request.method === 'GET' && ASSET_BINARY_REGEX.test(url.pathname) ? mediaTagFor(url) : undefined;
+    if (tag) {
+      // The page's cancel hints (and request.signal, once browsers propagate
+      // it) release this request's claim on its job.
+      const ticket = cancelHints.register(event.request.url, event.request.signal);
       event.respondWith(
-        fetchAssetDirect(event.request, url.pathname, cancel.signal)
-          .then((res) => res ?? directWorkerFetch(event.request, cacheable, url.pathname, cancel.signal))
-          .finally(cancel.done),
+        fetchAssetDirect(event.request, tag, ticket.signal)
+          .then((res) => res ?? directWorkerFetch(event.request, cacheable, url.pathname, ticket.signal))
+          .finally(ticket.done),
       );
       return;
     }
@@ -717,8 +760,18 @@ const handleFetch = (event: FetchEvent): void => {
 };
 
 sw.addEventListener('message', (event) => {
+  // Only our own pages may steer the SW — never another origin or a worker.
+  if (!isTrustedMessageSource(event.source, sw.location.origin)) return;
   if (event.data?.type === 'cancel' && typeof event.data.url === 'string') {
-    cancelThumbnail(new URL(event.data.url, self.location.origin).href);
+    try {
+      cancelHints.cancel(new URL(event.data.url, sw.location.origin).href);
+    } catch {
+      // Not a URL: ignore.
+    }
+  }
+  if (event.data?.type === 'viewing') {
+    const viewing = parseViewingMessage(event.data);
+    if (viewing) media.setViewing(viewing.assetId);
   }
   if (event.data?.type === 'SET_TOKEN') {
     persistToken(event.data.token);

@@ -118,7 +118,9 @@
           try {
             res = await fetch(url, { signal: myAbort.signal });
           } finally {
-            if (fetchingUrl === url) fetchingUrl = null;
+            if (fetchingUrl === url) {
+              fetchingUrl = null;
+            }
           }
           if (!res.ok) throw new Error(`Network error: ${res.status}`);
 
