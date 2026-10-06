@@ -132,4 +132,26 @@ describe('runFleetUpdate', () => {
     await Promise.all(pending);
     expect(deploys(calls)).toBe(1);
   });
+
+  it("ignores look-alike documents deeper in a user's own tree (only users/{uid}/config/cloudflare counts)", async () => {
+    const calls: { url: string; method: string; body?: string }[] = [];
+    const legit = await outdated('u-real');
+    vi.stubGlobal('fetch', async (input: any, init: RequestInit = {}) => {
+      const url = typeof input === 'string' ? input : input.url;
+      calls.push({ url, method: (init.method || 'GET').toUpperCase(), body: typeof init.body === 'string' ? init.body : undefined });
+      if (url.startsWith('https://oauth2.googleapis.com/token')) return new Response(JSON.stringify({ access_token: 'sa' }));
+      if (url.includes(':runQuery')) {
+        const doc = (name: string, fields: Record<string, string>) => ({ document: { name, updateTime: 't', fields: Object.fromEntries(Object.entries(fields).map(([k, v]) => [k, { stringValue: v }])) } });
+        return new Response(JSON.stringify([
+          doc('projects/proj/databases/(default)/documents/artifacts/default-daemon-client/users/u-victim/x/y/config/cloudflare',
+            { ...legit.fields, workerName: 'dc-planted', workerUrl: 'https://evil.example' }),
+          doc('projects/proj/databases/(default)/documents/artifacts/other-app/users/u-victim/config/cloudflare', { ...legit.fields, workerName: 'dc-other-app' }),
+        ]));
+      }
+      return new Response('{}');
+    });
+    const results = await runFleetUpdate(await env(), { slot: 0 });
+    expect(results).toEqual([]);
+    expect(calls.some((c) => c.method === 'PATCH')).toBe(false);
+  });
 });

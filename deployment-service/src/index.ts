@@ -587,6 +587,7 @@ type UpdateResult = { status: number; body: Record<string, unknown> };
 // can never block the rest.
 const FLEET_PERIOD_MS = 10 * 60_000; // matches the cron in wrangler.toml
 const FLEET_BATCH = 1;
+const FLEET_DOC = /^projects\/[^/]+\/databases\/\(default\)\/documents\/artifacts\/default-daemon-client\/users\/([A-Za-z0-9_-]{1,128})\/config\/cloudflare$/;
 
 /** The `size` items a run in time slot `slot` takes, rotating through `list`. */
 export function fleetSlice<T>(list: T[], size: number, slot: number): T[] {
@@ -618,9 +619,14 @@ export async function runFleetUpdate(
 
   const outOfDate = rows
     .map((row) => row?.document)
-    .filter((doc) => typeof doc?.name === 'string' && doc.name.endsWith('/config/cloudflare'))
-    .map((doc) => {
-      const uid = doc.name.split('/users/')[1]?.split('/')[0] ?? '';
+    // Exactly users/{uid}/config/cloudflare — the document only this service can
+    // write. A collection-group query also returns look-alikes deeper in a
+    // user's own tree (users/{uid}/…/config/cloudflare), which the user CAN
+    // write; acting on one would copy its fields into the locked record.
+    .map((doc) => ({ doc, match: typeof doc?.name === 'string' ? FLEET_DOC.exec(doc.name) : null }))
+    .filter(({ match }) => !!match)
+    .map(({ doc, match }) => {
+      const uid = match![1];
       const cfg: Record<string, string> = {};
       for (const [key, value] of Object.entries<any>(doc.fields || {})) {
         if (value?.stringValue !== undefined) cfg[key] = value.stringValue;
