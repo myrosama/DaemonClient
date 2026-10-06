@@ -136,7 +136,9 @@ Detailed: `plans/P0-toolchain-and-skeleton.md`.
 - [ ] **1.5** Read path — thumbnail, existing preview, original and byte
       ranges, for every asset shape.
 - [ ] **1.6** Local media server — loopback only, per-launch secret, `Range`,
-      next-part prefetch, client disconnect cancels through the scheduler.
+      next-part prefetch, client disconnect cancels through the scheduler;
+      a second listener (port) for opened photos and video, because Android's
+      Cronet allows 6 connections per host (RESEARCH §10).
 - [ ] **1.7** Upload engine — prepare encrypted parts on disk, send, resume
       journal, metadata post.
 - [ ] **1.8** `dc-cli` and Gate 2 for the whole core against the test

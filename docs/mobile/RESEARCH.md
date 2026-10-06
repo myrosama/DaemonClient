@@ -384,3 +384,37 @@ below "opened", plus a reserved slot so the opened item never waits for one.
 
 Licence: porting Nuke's design (MIT) into Rust needs its copyright notice
 kept — add it to `NOTICE` and the module header when P1 Task 1.4 lands.
+
+---
+
+## 10. The Immich fork's own photo loaders — what the local server must suit        2026-10-06
+
+The apps keep Immich's native loaders; they will fetch from the core's local
+server (SPEC §4.6). Read from the fork:
+
+**iOS** — `ios/Runner/Images/RemoteImagesImpl.swift`, `Core/URLSessionManager.swift`:
+- One `URLSessionDataTask` per image; `cancel()` cancels the task, which closes
+  the connection — the core sees the hang-up.
+- `httpMaximumConnectionsPerHost = 64` (`URLSessionManager.swift:151`), so up
+  to 64 requests reach the local server at once and **the core's scheduler can
+  order them** (newest first, opened first).
+- `cachePolicy = .returnCacheDataElseLoad` with a 1 GB disk `URLCache`, memory
+  0 (`:49-51`). The cache is keyed by URL: a local server on a random port with
+  a per-launch secret in the URL gets a fresh key every launch, so this cache
+  only helps within one run. **The core's own disk cache (SPEC §4.7) is what
+  survives restarts.**
+- Decoding is ImageIO (`CGImageSourceCreateThumbnailAtIndex`, transform
+  applied) on a background queue of 2 × cores — HEIC decodes natively.
+- No priorities and no rate limit of its own: ordering is entirely the core's job.
+
+**Android** — `android/.../images/RemoteImagesImpl.kt`, `core/HttpClientManager.kt`:
+- Remote images go through **Cronet** (Chromium's network stack), OkHttp only
+  for mTLS. Chromium allows **6 connections per host** over HTTP/1.1, and a
+  plain-HTTP loopback server cannot use HTTP/2. Requests beyond 6 wait inside
+  Cronet, first-in-first-out, where the core cannot see or reorder them.
+- Cancelled requests leave Cronet's queue, so after a fast scroll mostly
+  on-screen thumbnails remain — cancellation does most of the work.
+- **The risk:** an opened photo can wait behind 6 thumbnail downloads, which
+  breaks D17. Remedy to design in P1 Task 1.6: serve the opened item and video
+  from a **second listener (another port)** — Chromium pools connections per
+  host *and port*, so opened media never queues behind thumbnails.
