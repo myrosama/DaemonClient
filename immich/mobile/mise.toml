@@ -1,5 +1,6 @@
-[tools]
-flutter = "3.41.7"
+[tools.flutter]
+version = "3.41.7"
+postinstall = "bash '{{config_root}}/ios/scripts/xcode_flutter_patch.sh'"
 
 [tools."github:CQLabs/homebrew-dcm"]
 version = "1.30.0"
