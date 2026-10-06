@@ -188,6 +188,11 @@ async function getServiceAccountAccessToken(clientEmail: string, privateKeyPem: 
   return token;
 }
 
+/** Forget the cached token (Google rejected it), so the next call mints a new one. */
+function forgetServiceAccountToken(): void {
+  serviceAccountTokenCache = null;
+}
+
 async function mintServiceAccountAccessToken(clientEmail: string, privateKeyPem: string): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
   const header = base64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
@@ -626,12 +631,11 @@ export async function runFleetUpdate(
     console.warn('[fleet-update] no service-account credentials; skipped');
     return [];
   }
-  const accessToken = await getServiceAccountAccessToken(env.FIREBASE_SA_CLIENT_EMAIL, env.FIREBASE_SA_PRIVATE_KEY);
-  const res = await fetch(
+  const query = async () => fetch(
     `https://firestore.googleapis.com/v1/projects/${env.FIREBASE_PROJECT_ID}/databases/(default)/documents/artifacts/default-daemon-client:runQuery`,
     {
       method: 'POST',
-      headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+      headers: { 'Authorization': `Bearer ${await getServiceAccountAccessToken(env.FIREBASE_SA_CLIENT_EMAIL!, env.FIREBASE_SA_PRIVATE_KEY!)}`, 'Content-Type': 'application/json' },
       // Only the fields an update needs — never, say, a Telegram bot token from
       // the other config documents (every save is field-masked, so a partial
       // read can't drop anything).
@@ -643,6 +647,11 @@ export async function runFleetUpdate(
       }),
     },
   );
+  let res = await query();
+  if (res.status === 401 || res.status === 403) {
+    forgetServiceAccountToken();
+    res = await query();
+  }
   if (!res.ok) throw new Error(`fleet query failed: ${res.status}`);
   const rows = (await res.json()) as any[];
 
@@ -780,8 +789,10 @@ async function updateUserWorker(
           else console.error('[auto-update] pre-deploy config save failed; not deploying:', e?.message);
           if (rotatedRefresh) {
             // The spent token must not stay on record; keep at least the new one.
+            // Not conditional: the condition just failed, and this run spent the
+            // old token, so the one it holds is the only live one.
             await saveWorkerConfig(uid, { refreshToken: rotatedRefresh, lastUpdatedAt: new Date().toISOString() },
-              env, idToken, { ifUpdateTime: read?.updateTime, onlyFields: ['refreshToken', 'lastUpdatedAt'] })
+              env, idToken, { onlyFields: ['refreshToken', 'lastUpdatedAt'] })
               .catch((err) => console.error('[auto-update] rotated refresh token not saved:', err?.message));
           }
           return raced
@@ -812,7 +823,10 @@ async function updateUserWorker(
     // the pending copy). Retried once — until it lands, sign-in signs with the
     // old secret. Only these fields change.
     const settledConfig = {
-      ...(rotatedRefresh ? { refreshToken: rotatedRefresh } : {}),
+      // The rotated token only if the save before the deploy failed: once on
+      // record, a concurrent sign-in may already have spent and replaced it,
+      // and writing it again would put a dead token back.
+      ...(rotatedRefresh && !refreshSaved ? { refreshToken: rotatedRefresh } : {}),
       sessionSecret,
       lastDeployedVersion: SHIM_VERSION,
       lastUpdatedAt: new Date().toISOString(),
@@ -1016,6 +1030,8 @@ export async function saveWorkerConfig(
   // older snapshot. Without it the whole document is replaced.
   const query = new URLSearchParams();
   if (opts.ifUpdateTime) query.set('currentDocument.updateTime', opts.ifUpdateTime);
+  // A field-only save is an edit: never let it create a stub record.
+  else if (opts.onlyFields) query.set('currentDocument.exists', 'true');
   for (const field of opts.onlyFields || []) query.append('updateMask.fieldPaths', field);
   const url = `https://firestore.googleapis.com/v1/projects/${env.FIREBASE_PROJECT_ID}/databases/(default)/documents/${path}`
     + (query.toString() ? `?${query.toString()}` : '');
@@ -1035,8 +1051,12 @@ export async function saveWorkerConfig(
   let lostConditionalWrite = false;
   if (env.FIREBASE_SA_CLIENT_EMAIL && env.FIREBASE_SA_PRIVATE_KEY) {
     try {
-      const accessToken = await getServiceAccountAccessToken(env.FIREBASE_SA_CLIENT_EMAIL, env.FIREBASE_SA_PRIVATE_KEY);
-      const res = await write(accessToken);
+      let res = await write(await getServiceAccountAccessToken(env.FIREBASE_SA_CLIENT_EMAIL, env.FIREBASE_SA_PRIVATE_KEY));
+      if (res.status === 401 || res.status === 403) {
+        // A cached token Google no longer accepts: mint a fresh one, once.
+        forgetServiceAccountToken();
+        res = await write(await getServiceAccountAccessToken(env.FIREBASE_SA_CLIENT_EMAIL, env.FIREBASE_SA_PRIVATE_KEY));
+      }
       if (res.ok) {
         console.log('[config-write] saved with the service account');
         return;

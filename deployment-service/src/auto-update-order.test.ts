@@ -7,8 +7,9 @@ import worker, { encryptToken, decryptToken, releasedTo } from './index';
 //   sign-in path signs with `sessionSecret`, and a worker not yet redeployed
 //   still verifies the old way, so promoting it early locks the user out
 //   whenever the deploy fails.
-// - A rotated (single-use) Cloudflare refresh token is saved before the deploy
-//   and again after it.
+// - A rotated (single-use) Cloudflare refresh token is saved before the deploy;
+//   after it only if that first save failed (a concurrent sign-in may already
+//   have spent and replaced it).
 
 const MASTER = 'm'.repeat(32);
 const env = {
@@ -146,6 +147,15 @@ describe('auto-update: a rotated refresh token', () => {
     expect(await decryptToken(fieldsOf(first).refreshToken.stringValue, MASTER)).toBe('rotated-refresh');
   });
 
+  it('once saved before the deploy, it is not written again after it (that could restore a spent token)', async () => {
+    const calls = await stubWorld({ cfg: await oauthCfg(), rotate: true });
+    expect((await autoUpdate()).status).toBe(200);
+    const after = saves(calls).at(-1)!;
+    expect(calls.indexOf(after)).toBeGreaterThan(deployIndex(calls));
+    expect(fieldsOf(after).refreshToken).toBeUndefined();
+    expect(new URL(after.url).searchParams.getAll('updateMask.fieldPaths')).not.toContain('refreshToken');
+  });
+
   it('a failed first save does not stop the deploy (it does not depend on it), and it is saved again after', async () => {
     const calls = await stubWorld({ cfg: await oauthCfg(), rotate: true, patchStatus: [403, 200] });
     expect((await autoUpdate()).status).toBe(200);
@@ -184,7 +194,9 @@ describe('auto-update: two runs at once (login and first sync both trigger one)'
     const calls = await stubWorld({ cfg: await legacyCfg() });
     expect((await autoUpdate()).status).toBe(200);
     const [, after] = saves(calls);
-    expect(after.url).not.toContain('currentDocument');
+    // No version match required (it can't lose a race) — only that the record exists.
+    expect(after.url).not.toContain('currentDocument.updateTime');
+    expect(new URL(after.url).searchParams.get('currentDocument.exists')).toBe('true');
   });
 
   it('a worker with a live secret updates even if the config changed since it was read', async () => {
@@ -193,12 +205,17 @@ describe('auto-update: two runs at once (login and first sync both trigger one)'
     expect(deployIndex(calls)).toBeGreaterThan(-1);
   });
 
-  it('a rotated refresh token plus a lost race: no deploy, and the token-only save is conditional too', async () => {
+  it('a rotated refresh token plus a lost race: no deploy, and the new token is still kept (it is the only live one)', async () => {
     const cfg = { accountId: 'acc', workerName: 'dc-x', databaseId: 'db', refreshToken: await encryptToken('old-refresh', MASTER) };
     const calls = await stubWorld({ cfg, rotate: true, changedSinceRead: true });
     expect((await autoUpdate()).status).toBe(409);
     expect(deployIndex(calls)).toBe(-1);
-    expect(saves(calls).every((c) => c.url.includes('currentDocument.updateTime='))).toBe(true);
+    const [pending, rescue] = saves(calls);
+    expect(pending.url).toContain('currentDocument.updateTime=');
+    // The rescue save can't reuse the condition that just failed; it writes the token and nothing else.
+    expect(rescue.url).not.toContain('currentDocument.updateTime=');
+    expect(new URL(rescue.url).searchParams.getAll('updateMask.fieldPaths').sort()).toEqual(['lastUpdatedAt', 'refreshToken']);
+    expect(await decryptToken(fieldsOf(rescue).refreshToken.stringValue, MASTER)).toBe('rotated-refresh');
   });
 
   it('a save after a successful deploy is retried once', async () => {
@@ -278,6 +295,8 @@ describe('auto-update saves change only their own fields', () => {
     expect(mask).not.toContain('apiToken');
     expect(Object.keys(fieldsOf(after))).not.toContain('apiToken');
     expect(Object.keys(fieldsOf(after))).not.toContain('refreshTokenNote');
+    // An edit, never a create: a missing record is not recreated as a stub.
+    expect(url.searchParams.get('currentDocument.exists')).toBe('true');
   });
 
   it('the pending save is masked and conditional', async () => {

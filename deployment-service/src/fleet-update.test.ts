@@ -170,5 +170,29 @@ describe('runFleetUpdate', () => {
     expect(results).toEqual([]);
     expect(deploys(calls)).toBe(0);
   });
+
+  it('a service-account token Google rejects is replaced once, not reused until it expires', async () => {
+    const calls: { url: string; auth?: string }[] = [];
+    let minted = 0;
+    let rejectNext = true;
+    vi.stubGlobal('fetch', async (input: any, init: RequestInit = {}) => {
+      const url = typeof input === 'string' ? input : input.url;
+      const auth = new Headers(init.headers).get('Authorization') || undefined;
+      calls.push({ url, auth });
+      if (url.startsWith('https://oauth2.googleapis.com/token')) return new Response(JSON.stringify({ access_token: `sa-${++minted}` }));
+      if (url.includes(':runQuery')) {
+        if (rejectNext) {
+          rejectNext = false;
+          return new Response('{"error":{"status":"UNAUTHENTICATED"}}', { status: 401 });
+        }
+        return new Response('[]');
+      }
+      return new Response('{}');
+    });
+    expect(await runFleetUpdate(await env(), { slot: 0 })).toEqual([]);
+    const queries = calls.filter((c) => c.url.includes(':runQuery'));
+    expect(queries.length).toBe(2);
+    expect(queries[0].auth).not.toBe(queries[1].auth);
+  });
 });
 
