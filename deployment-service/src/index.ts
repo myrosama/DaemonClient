@@ -174,7 +174,21 @@ function base64url(data: Uint8Array | string): string {
   return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
+// One RSA signature per isolate per ~50 minutes instead of one per write
+// (free-plan CPU). Keyed by the credentials themselves.
+let serviceAccountTokenCache: { key: string; token: string; expires: number } | null = null;
+
 async function getServiceAccountAccessToken(clientEmail: string, privateKeyPem: string): Promise<string> {
+  const cacheKey = `${clientEmail}\n${privateKeyPem}`;
+  if (serviceAccountTokenCache && serviceAccountTokenCache.key === cacheKey && serviceAccountTokenCache.expires > Date.now()) {
+    return serviceAccountTokenCache.token;
+  }
+  const token = await mintServiceAccountAccessToken(clientEmail, privateKeyPem);
+  serviceAccountTokenCache = { key: cacheKey, token, expires: Date.now() + 50 * 60_000 };
+  return token;
+}
+
+async function mintServiceAccountAccessToken(clientEmail: string, privateKeyPem: string): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
   const header = base64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
   const payload = base64url(JSON.stringify({
@@ -240,10 +254,10 @@ export default {
   // Scheduled fleet update (wrangler.toml [triggers]): keeps every user's
   // worker current even when its owner never signs in.
   async scheduled(event: { scheduledTime: number }, env: Env, ctx: { waitUntil(promise: Promise<unknown>): void }): Promise<void> {
-    ctx.waitUntil(
-      runFleetUpdate(env, { slot: Math.floor((event.scheduledTime || Date.now()) / FLEET_PERIOD_MS) })
-        .catch((error) => console.error('[fleet-update] run failed:', error?.message)),
-    );
+    // Awaited directly (not waitUntil, which is cut off 30 s after the
+    // handler returns); a failed run shows as failed in the cron history.
+    void ctx;
+    await runFleetUpdate(env, { slot: Math.floor((event.scheduledTime || Date.now()) / FLEET_PERIOD_MS) });
   },
 
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -733,12 +747,15 @@ async function updateUserWorker(
     let refreshSaved = !rotatedRefresh;
     if (rotatedRefresh || newlyMinted) {
       try {
-        await saveWorkerConfig(uid, {
-          ...cfg,
+        const changes = {
           ...(rotatedRefresh ? { refreshToken: rotatedRefresh } : {}),
           ...(newlyMinted ? { pendingSessionSecret: sessionSecret } : {}),
           lastUpdatedAt: new Date().toISOString(),
-        }, env, idToken, newlyMinted ? { ifUpdateTime: read?.updateTime } : {});
+        };
+        await saveWorkerConfig(uid, changes, env, idToken, {
+          onlyFields: Object.keys(changes),
+          ...(newlyMinted ? { ifUpdateTime: read?.updateTime } : {}),
+        });
         refreshSaved = true;
       } catch (e: any) {
         if (newlyMinted) {
@@ -747,8 +764,8 @@ async function updateUserWorker(
           else console.error('[auto-update] pre-deploy config save failed; not deploying:', e?.message);
           if (rotatedRefresh) {
             // The spent token must not stay on record; keep at least the new one.
-            await saveWorkerConfig(uid, { ...cfg, refreshToken: rotatedRefresh, lastUpdatedAt: new Date().toISOString() },
-              env, idToken, { ifUpdateTime: read?.updateTime })
+            await saveWorkerConfig(uid, { refreshToken: rotatedRefresh, lastUpdatedAt: new Date().toISOString() },
+              env, idToken, { ifUpdateTime: read?.updateTime, onlyFields: ['refreshToken', 'lastUpdatedAt'] })
               .catch((err) => console.error('[auto-update] rotated refresh token not saved:', err?.message));
           }
           return raced
@@ -768,26 +785,27 @@ async function updateUserWorker(
     });
     if (!deployResult.success) {
       if (!refreshSaved) {
-        await saveWorkerConfig(uid, { ...cfg, refreshToken: rotatedRefresh!, lastUpdatedAt: new Date().toISOString() }, env, idToken)
+        await saveWorkerConfig(uid, { refreshToken: rotatedRefresh!, lastUpdatedAt: new Date().toISOString() }, env, idToken,
+          { onlyFields: ['refreshToken', 'lastUpdatedAt'] })
           .catch((e) => console.error('[auto-update] rotated refresh token lost:', e?.message));
       }
       return { status: 500, body: { updated: false, reason: 'deploy-failed', error: deployResult.error } };
     }
 
-    // The worker now runs with `sessionSecret`: make it the live one. Retried
-    // once — until it lands, sign-in signs with the old secret.
-    const { pendingSessionSecret: _promoted, ...settled } = cfg;
+    // The worker now runs with `sessionSecret`: make it the live one (and drop
+    // the pending copy). Retried once — until it lands, sign-in signs with the
+    // old secret. Only these fields change.
     const settledConfig = {
-      ...settled,
       ...(rotatedRefresh ? { refreshToken: rotatedRefresh } : {}),
       sessionSecret,
       lastDeployedVersion: SHIM_VERSION,
       lastUpdatedAt: new Date().toISOString(),
     };
-    await saveWorkerConfig(uid, settledConfig, env, idToken)
+    const settledFields = { onlyFields: [...Object.keys(settledConfig), 'pendingSessionSecret'] };
+    await saveWorkerConfig(uid, settledConfig, env, idToken, settledFields)
       .catch((e) => {
         console.error('[auto-update] post-deploy config save failed; retrying once:', e?.message);
-        return saveWorkerConfig(uid, settledConfig, env, idToken);
+        return saveWorkerConfig(uid, settledConfig, env, idToken, settledFields);
       });
 
     return { status: 200, body: { updated: true, from: cfg.lastDeployedVersion || 'unknown', to: SHIM_VERSION } };
@@ -968,7 +986,7 @@ async function readWorkerConfig(uid: string, idToken: string, env: Env): Promise
 // document path.
 export async function saveWorkerConfig(
   uid: string, config: any, env: Env, userIdToken?: string,
-  opts: { ifUpdateTime?: string } = {},
+  opts: { ifUpdateTime?: string; onlyFields?: string[] } = {},
 ): Promise<void> {
   if (typeof uid !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(uid)) {
     throw new Error('saveWorkerConfig: refusing a malformed uid');
@@ -976,13 +994,20 @@ export async function saveWorkerConfig(
   const path = `artifacts/default-daemon-client/users/${uid}/config/cloudflare`;
   // With ifUpdateTime, Firestore applies the write only if the document is
   // still the version that was read (FAILED_PRECONDITION otherwise).
+  // With onlyFields, only those fields change (a field named there but missing
+  // from `config` is removed); everything else in the document is left as it
+  // is, so a concurrent writer's newer values are never overwritten from an
+  // older snapshot. Without it the whole document is replaced.
+  const query = new URLSearchParams();
+  if (opts.ifUpdateTime) query.set('currentDocument.updateTime', opts.ifUpdateTime);
+  for (const field of opts.onlyFields || []) query.append('updateMask.fieldPaths', field);
   const url = `https://firestore.googleapis.com/v1/projects/${env.FIREBASE_PROJECT_ID}/databases/(default)/documents/${path}`
-    + (opts.ifUpdateTime ? `?currentDocument.updateTime=${encodeURIComponent(opts.ifUpdateTime)}` : '');
+    + (query.toString() ? `?${query.toString()}` : '');
   const fields: any = {};
   for (const [key, value] of Object.entries(config)) {
     fields[key] = { stringValue: String(value) };
   }
-  // PATCH without an update mask replaces the whole document, as before.
+  // PATCH without an update mask replaces the whole document.
   const write = (bearer: string) =>
     fetch(url, {
       method: 'PATCH',

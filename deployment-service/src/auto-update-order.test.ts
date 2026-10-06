@@ -266,3 +266,25 @@ describe('force-update never deploys a worker without its own session secret', (
     expect(deployIndex(calls)).toBe(-1);
   });
 });
+
+describe('auto-update saves change only their own fields', () => {
+  it('the post-deploy save carries an update mask and never rewrites fields it did not change', async () => {
+    const calls = await stubWorld({ cfg: await legacyCfg({ refreshTokenNote: 'x' }) });
+    expect((await autoUpdate()).status).toBe(200);
+    const after = saves(calls).at(-1)!;
+    const url = new URL(after.url);
+    const mask = url.searchParams.getAll('updateMask.fieldPaths');
+    expect(mask).toEqual(expect.arrayContaining(['sessionSecret', 'lastDeployedVersion', 'lastUpdatedAt', 'pendingSessionSecret']));
+    expect(mask).not.toContain('apiToken');
+    expect(Object.keys(fieldsOf(after))).not.toContain('apiToken');
+    expect(Object.keys(fieldsOf(after))).not.toContain('refreshTokenNote');
+  });
+
+  it('the pending save is masked and conditional', async () => {
+    const calls = await stubWorld({ cfg: await legacyCfg() });
+    await autoUpdate();
+    const url = new URL(saves(calls)[0].url);
+    expect(url.searchParams.getAll('updateMask.fieldPaths')).toEqual(expect.arrayContaining(['pendingSessionSecret', 'lastUpdatedAt']));
+    expect(url.searchParams.get('currentDocument.updateTime')).toBeTruthy();
+  });
+});
