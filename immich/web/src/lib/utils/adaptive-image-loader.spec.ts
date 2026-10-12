@@ -246,14 +246,14 @@ describe('AdaptiveImageLoader', () => {
   });
 
   describe('destroy', () => {
-    it('cancels all image URLs when no imageLoader', () => {
+    it('leaves cancel hints to the <img> elements when no imageLoader', () => {
+      // Each Image component sends its own hint for a load still in flight; a
+      // second one from here would release another identical request.
       const loader = new AdaptiveImageLoader(createQualityList());
 
       loader.destroy();
 
-      expect(cancelImageUrl).toHaveBeenCalledWith('/thumbnail.jpg');
-      expect(cancelImageUrl).toHaveBeenCalledWith('/preview.jpg');
-      expect(cancelImageUrl).toHaveBeenCalledWith('/original.jpg');
+      expect(cancelImageUrl).not.toHaveBeenCalled();
     });
 
     it('calls destroy functions when imageLoader is provided', () => {

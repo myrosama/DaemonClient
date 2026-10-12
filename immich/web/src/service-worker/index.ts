@@ -132,6 +132,7 @@ async function fetchWithBackoff(url: string, init: RequestInit, maxAttempts = 4)
 async function resetMediaState() {
   cachedTgConfig = null;
   mediaKey = undefined;
+  mediaKeyFailedAt = 0;
   filePathCache.clear();
   await Promise.all([caches.delete(MEDIA_CACHE), caches.delete(MANIFEST_CACHE), caches.delete('dc-assets-v4')]);
 }
@@ -328,7 +329,7 @@ async function directWorkerFetch(
       // An original or video: streamed, never buffered or coalesced. A whole
       // file (no Range) is still cached as it streams by; a ranged read isn't.
       response = await media.schedule({ tag, signal }, () => pacedFetch(workerUrl, { method: 'GET', headers }));
-      if (cacheable && response.ok) {
+      if (cacheable && response.status === 200) {
         const cache = await caches.open('dc-assets-v4');
         if (media.isCurrent(generation)) void cache.put(workerUrl, response.clone()).catch(() => {});
       }
@@ -401,8 +402,14 @@ async function getTgConfig(request: Request, generation: number): Promise<TgConf
 // Returns the AES key when the library is encrypted, else null. The browser
 // handling its own decryption is exactly what keeps the worker off the byte
 // path (the user endorsed this — it's the user's own ZKE password).
+// When the encryption settings couldn't be read: for a short while, encrypted
+// assets go straight to the worker instead of each asking again.
+let mediaKeyFailedAt = 0;
+const MEDIA_KEY_RETRY_MS = 30_000;
+
 async function getMediaKey(request: Request, generation: number): Promise<CryptoKey | null> {
   if (mediaKey !== undefined) return mediaKey;
+  if (Date.now() - mediaKeyFailedAt < MEDIA_KEY_RETRY_MS) return null;
   let key: CryptoKey | null;
   try {
     const res = await workerGet(request, '/api/server/zke-config');
@@ -412,8 +419,9 @@ async function getMediaKey(request: Request, generation: number): Promise<Crypto
   } catch (error) {
     if (isRetryable(error)) throw error;
     // A failed fetch is not an answer: this request takes the worker path, and
-    // the next one asks again (remembering null would turn the direct path off
-    // for the rest of the service worker's life).
+    // a request after MEDIA_KEY_RETRY_MS asks again (remembering null would turn
+    // the direct path off for the rest of the service worker's life).
+    if (media.isCurrent(generation)) mediaKeyFailedAt = Date.now();
     return null;
   }
   if (media.isCurrent(generation)) mediaKey = key;

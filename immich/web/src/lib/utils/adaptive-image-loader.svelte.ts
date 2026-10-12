@@ -1,5 +1,4 @@
 import type { LoadImageFunction } from '$lib/actions/image-loader.svelte';
-import { cancelImageUrl } from '$lib/utils/sw-messaging';
 
 export type ImageQuality = 'thumbnail' | 'preview' | 'original';
 export type ImageStatus = 'unloaded' | 'success' | 'error';
@@ -143,12 +142,8 @@ export class AdaptiveImageLoader {
       }
       return;
     }
-    // Cancel only the qualities still loading: a hint for a finished load would
-    // release some other component's identical request instead.
-    for (const [quality, config] of Object.entries(this.qualityConfigs) as [ImageQuality, QualityConfig][]) {
-      if (this.status.urls[quality] && this.status.quality[quality] === 'unloaded') {
-        cancelImageUrl(config.url);
-      }
-    }
+    // Without an imageLoader the URLs are rendered by Image components, and
+    // each sends its own cancel hint for a load still in flight; a second one
+    // from here would release another identical request.
   }
 }

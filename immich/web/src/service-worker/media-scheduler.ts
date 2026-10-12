@@ -313,13 +313,14 @@ export class MediaScheduler {
 
   /** Re-decide the class of every tagged job, e.g. when the viewer changes asset. */
   reclassify(classify: (tag: MediaTag) => MediaClass) {
+    // A new asset in the viewer gets its own suspension window — reset first,
+    // so a running job promoted to OPENED below opens it.
+    this.#suspendFrom = undefined;
     for (const job of [...this.#running, ...CLASSES.flatMap((mediaClass) => this.#queues[mediaClass])]) {
       if (job.tag) {
         this.#setClass(job, classify(job.tag));
       }
     }
-    // A new asset in the viewer gets its own suspension window.
-    this.#suspendFrom = undefined;
     this.#pump();
   }
 
@@ -436,9 +437,10 @@ export class MediaScheduler {
     }
     if (this.#queues.opened.length > 0) {
       // The reserved slot: OPENED starts even when demoted jobs of the previous
-      // asset hold every other slot, so the cap is exceeded by at most
-      // `reservedForOpened`.
-      return this.#running.size < maxConcurrent || opened < reservedForOpened ? this.#queues.opened[0] : undefined;
+      // asset hold every other slot. Hard ceiling: never more than
+      // maxConcurrent + reservedForOpened running, however many swipes demoted.
+      const reserved = opened < reservedForOpened && this.#running.size < maxConcurrent + reservedForOpened;
+      return this.#running.size < maxConcurrent || reserved ? this.#queues.opened[0] : undefined;
     }
     if (this.#running.size >= maxConcurrent || (suspending && opened > 0)) {
       return undefined; // D17: OPENED in flight, nothing lower starts

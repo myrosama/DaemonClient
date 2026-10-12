@@ -317,6 +317,33 @@ describe('MediaScheduler — fast swiping and long OPENED chains', () => {
     expect(log).toEqual(['open-a', 'open-b', 'thumb']);
   });
 
+  it('swiping to a photo whose preload is already running: that load now holds the grid back', async () => {
+    const s = new MediaScheduler({ ...roomy, maxSuspendMs: 5000 });
+    const log: string[] = [];
+    void s.schedule({ class: 'next', tag: tag('b', 'thumbnail', 'preview') }, deferredTask(log, 'preload-b').task);
+    await flush();
+    s.reclassify((t) => classifyMedia(t, 'b')); // the viewer moves to b
+    void s.schedule({ class: 'visible' }, deferredTask(log, 'thumb').task);
+    await flush();
+    expect(log).toEqual(['preload-b']);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(log).toEqual(['preload-b', 'thumb']);
+  });
+
+  it('many fast swipes never push the running count past maxConcurrent + reservedForOpened', async () => {
+    const s = new MediaScheduler({ ...roomy, maxConcurrent: 3, reservedForOpened: 1 });
+    const log: string[] = [];
+    void s.schedule({ class: 'visible' }, deferredTask(log, 'v1').task);
+    void s.schedule({ class: 'visible' }, deferredTask(log, 'v2').task);
+    for (const id of ['a', 'b', 'c', 'd', 'e']) {
+      s.reclassify((t) => classifyMedia(t, id));
+      void s.schedule({ class: 'opened', tag: tag(id, 'thumbnail', 'preview') }, deferredTask(log, `open-${id}`).task);
+      await flush();
+    }
+    const running = Object.values(s.stats().running).reduce((sum, count) => sum + count, 0);
+    expect(running).toBeLessThanOrEqual(4);
+  });
+
   it('a stuck OPENED job past its window counts as a lower-class job, so the reserved slot stays free', async () => {
     const s = new MediaScheduler({ ...roomy, maxConcurrent: 3, reservedForOpened: 1, maxSuspendMs: 5000 });
     const log: string[] = [];

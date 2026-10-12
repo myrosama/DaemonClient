@@ -71,6 +71,8 @@
         if (!destroyed && src) {
           // Force reload by appending a cache-busting timestamp or just resetting intersected
           const currentSrc = capturedSource;
+          // The reload can start (and finish) before the timer below runs.
+          settled = false;
           capturedSource = undefined;
           setTimeout(() => {
             if (!destroyed) {
@@ -89,7 +91,9 @@
   onDestroy(() => {
     destroyed = true;
     if (retryTimer) clearTimeout(retryTimer);
-    if (capturedSource !== undefined && !settled) {
+    // Only a load that actually started (a lazy image may never have) and is
+    // still in flight.
+    if (capturedSource !== undefined && !settled && intersected) {
       cancelImageUrl(capturedSource);
     }
   });
