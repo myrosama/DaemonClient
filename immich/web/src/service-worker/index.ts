@@ -78,8 +78,9 @@ const filePathCache = new Map<string, { path: string; exp: number }>();
 // than the old unlimited loader (measured 2026-10-12 on a real library: grid
 // fill after a fling 1.5-1.8 s unlimited vs 2.3-2.8 s at 6). Hence:
 //   - 12 jobs at once, 2 slots reserved for OPENED, at most 3 NEXT.
-//   - Token bucket, 20 job starts/s, burst 12: a screenful starts at once, and
-//     a long fling can't start more than 20 a second. Cancelled work never
+//   - Token bucket, 20 job starts/s, burst 12: a screenful starts at once;
+//     after that first burst a long fling starts at most 20 jobs a second (the
+//     rate, not the slots, is now the sustained limit). Cancelled work never
 //     spends a token, so a fling costs only what is loaded — the free tier's
 //     100k invocations a day go to photos someone actually looked at.
 //   - A 429 (HTTP, Telegram JSON retry_after, Retry-After) pauses everyone
