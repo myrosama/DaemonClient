@@ -255,6 +255,87 @@ describe('MediaScheduler — classes and slots', () => {
   });
 });
 
+describe('MediaScheduler — fast swiping and long OPENED chains', () => {
+  it('the next opened asset still gets the reserved slot after the previous one was demoted', async () => {
+    const s = new MediaScheduler({ ...roomy, maxConcurrent: 3, reservedForOpened: 1, maxNext: 2 });
+    const log: string[] = [];
+    void s.schedule({ class: 'visible' }, deferredTask(log, 'v1').task);
+    void s.schedule({ class: 'visible' }, deferredTask(log, 'v2').task);
+    void s.schedule({ class: 'opened', tag: tag('a', 'thumbnail', 'preview') }, deferredTask(log, 'open-a').task);
+    await flush();
+    expect(log).toEqual(['v1', 'v2', 'open-a']);
+
+    // The viewer moves on: a's running preview becomes NEXT, and every slot is now held by lower classes.
+    s.reclassify((t) => classifyMedia(t, 'b'));
+    expect(s.stats().running).toMatchObject({ opened: 0, next: 1, visible: 2 });
+
+    void s.schedule({ class: 'opened', tag: tag('b', 'thumbnail', 'preview') }, deferredTask(log, 'open-b').task);
+    await flush();
+    expect(log.at(-1)).toBe('open-b');
+
+    // Only the reserved slot goes over the cap — a second OPENED job waits.
+    void s.schedule({ class: 'opened', tag: tag('b', 'original', '') }, deferredTask(log, 'open-b-2').task);
+    await flush();
+    expect(log).not.toContain('open-b-2');
+  });
+
+  it('a chain of OPENED jobs holds lower classes back for maxSuspendMs in total, not per job', async () => {
+    const s = new MediaScheduler({ ...roomy, maxSuspendMs: 5000 });
+    const log: string[] = [];
+    const first = deferredTask(log, 'chunk-1');
+    void s.schedule({ class: 'opened', tag: tag('a', 'playback', '') }, first.task);
+    void s.schedule({ class: 'visible' }, deferredTask(log, 'thumb').task);
+    await flush();
+    expect(log).toEqual(['chunk-1']);
+
+    await vi.advanceTimersByTimeAsync(3000);
+    // The next chunk of the same video starts while the first is still in
+    // flight, so OPENED work never stops running …
+    void s.schedule({ class: 'opened', tag: tag('a', 'playback', '') }, deferredTask(log, 'chunk-2').task);
+    await flush();
+    first.finish();
+    await flush();
+    expect(log).toEqual(['chunk-1', 'chunk-2']);
+
+    // … but the window counts from chunk-1: the grid resumes 5 s after it, not after chunk-2.
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(log).toEqual(['chunk-1', 'chunk-2', 'thumb']);
+  });
+
+  it('opening another asset starts a fresh suspension window', async () => {
+    const s = new MediaScheduler({ ...roomy, maxSuspendMs: 5000 });
+    const log: string[] = [];
+    void s.schedule({ class: 'opened', tag: tag('a', 'original', '') }, deferredTask(log, 'open-a').task);
+    await vi.advanceTimersByTimeAsync(6000); // a's window is over
+
+    s.reclassify((t) => classifyMedia(t, 'b'));
+    void s.schedule({ class: 'opened', tag: tag('b', 'thumbnail', 'preview') }, deferredTask(log, 'open-b').task);
+    void s.schedule({ class: 'visible' }, deferredTask(log, 'thumb').task);
+    await flush();
+    expect(log).toEqual(['open-a', 'open-b']);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(log).toEqual(['open-a', 'open-b', 'thumb']);
+  });
+
+  it('a stuck OPENED job past its window counts as a lower-class job, so the reserved slot stays free', async () => {
+    const s = new MediaScheduler({ ...roomy, maxConcurrent: 3, reservedForOpened: 1, maxSuspendMs: 5000 });
+    const log: string[] = [];
+    void s.schedule({ class: 'opened' }, deferredTask(log, 'stuck').task);
+    for (let index = 0; index < 4; index++) {
+      void s.schedule({ class: 'visible' }, deferredTask(log, `v${index}`).task);
+    }
+    await vi.advanceTimersByTimeAsync(5000);
+    // 3 slots, 1 reserved: the stuck job and one thumbnail share the other two.
+    expect(log).toHaveLength(2);
+    expect(s.stats().running).toMatchObject({ opened: 1, visible: 1 });
+
+    void s.schedule({ class: 'opened' }, deferredTask(log, 'fresh').task);
+    await flush();
+    expect(log.at(-1)).toBe('fresh');
+    expect(s.stats().running).toMatchObject({ opened: 2, visible: 1 });
+  });
+});
+
 describe('MediaScheduler — coalescing and cancellation', () => {
   it('shares one run between identical requests', async () => {
     const s = new MediaScheduler(roomy);

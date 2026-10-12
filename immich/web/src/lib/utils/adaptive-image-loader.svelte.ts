@@ -143,8 +143,12 @@ export class AdaptiveImageLoader {
       }
       return;
     }
-    for (const config of Object.values(this.qualityConfigs)) {
-      cancelImageUrl(config.url);
+    // Cancel only the qualities still loading: a hint for a finished load would
+    // release some other component's identical request instead.
+    for (const [quality, config] of Object.entries(this.qualityConfigs) as [ImageQuality, QualityConfig][]) {
+      if (this.status.urls[quality] && this.status.quality[quality] === 'unloaded') {
+        cancelImageUrl(config.url);
+      }
     }
   }
 }

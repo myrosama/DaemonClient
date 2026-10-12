@@ -4,7 +4,6 @@
 /// <reference lib="webworker" />
 import { PUBLIC_DAEMONCLIENT_WORKER_URL } from '$env/static/public';
 import { unreachableResponseFor } from '$lib/utils/worker-unreachable';
-import { installMessageListener } from './messaging';
 import { isAbortError, isTrustedMessageSource, MediaScheduler, type MediaTag, parseViewingMessage, RetryAfterError } from './media-scheduler';
 import { CancelHints, MediaSession, pacedFetch } from './media-session';
 import {
@@ -114,7 +113,7 @@ async function fetchWithBackoff(url: string, init: RequestInit, maxAttempts = 4)
     try {
       const res = await fetch(url, init);
       if ((res.status === 429 || res.status === 503) && attempt < maxAttempts - 1) {
-        const retryAfter = parseInt(res.headers.get('Retry-After') || '0') || 0;
+        const retryAfter = Math.min(parseInt(res.headers.get('Retry-After') || '0') || 0, 60);
         const backoff = Math.max(retryAfter * 1000, Math.min(1000 * Math.pow(2, attempt), 16000));
         await new Promise(r => setTimeout(r, backoff));
         continue;
@@ -134,7 +133,7 @@ async function resetMediaState() {
   cachedTgConfig = null;
   mediaKey = undefined;
   filePathCache.clear();
-  await Promise.all([caches.delete(MEDIA_CACHE), caches.delete(MANIFEST_CACHE)]);
+  await Promise.all([caches.delete(MEDIA_CACHE), caches.delete(MANIFEST_CACHE), caches.delete('dc-assets-v4')]);
 }
 
 async function persistToken(token: string | null) {
@@ -311,11 +310,12 @@ async function directWorkerFetch(
   const generation = media.generation;
   let response: Response;
   try {
-    if (tag && cacheable) {
+    if (tag && cacheable && tag.kind === 'thumbnail') {
       // Identical requests share one job and its RESULT: every caller builds
       // its own Response from the same bytes. The job writes the cache itself,
       // so the bytes are kept even when every caller has gone — unless the
-      // session changed meanwhile.
+      // session changed meanwhile. Thumbnails only: they are small enough to
+      // hold in memory.
       response = await media.sharedFetch(
         { tag, key: workerUrl, signal },
         () => pacedFetch(workerUrl, { method: 'GET', headers }),
@@ -325,8 +325,13 @@ async function directWorkerFetch(
         },
       );
     } else if (tag) {
-      // A ranged read (video the user is playing): never cached or coalesced.
+      // An original or video: streamed, never buffered or coalesced. A whole
+      // file (no Range) is still cached as it streams by; a ranged read isn't.
       response = await media.schedule({ tag, signal }, () => pacedFetch(workerUrl, { method: 'GET', headers }));
+      if (cacheable && response.ok) {
+        const cache = await caches.open('dc-assets-v4');
+        if (media.isCurrent(generation)) void cache.put(workerUrl, response.clone()).catch(() => {});
+      }
     } else {
       // GET/HEAD are idempotent → retry transient 429/503/network drops with
       // backoff. Without this, ONE flaky-4G packet loss during the app's boot
@@ -401,11 +406,15 @@ async function getMediaKey(request: Request, generation: number): Promise<Crypto
   let key: CryptoKey | null;
   try {
     const res = await workerGet(request, '/api/server/zke-config');
+    if (!res.ok) throw new Error(`zke-config ${res.status}`);
     const zke = (await res.json()) as any;
     key = zke?.enabled && zke?.password && zke?.salt ? await deriveKey(zke.password, zke.salt) : null;
   } catch (error) {
     if (isRetryable(error)) throw error;
-    key = null;
+    // A failed fetch is not an answer: this request takes the worker path, and
+    // the next one asks again (remembering null would turn the direct path off
+    // for the rest of the service worker's life).
+    return null;
   }
   if (media.isCurrent(generation)) mediaKey = key;
   return key;
@@ -426,10 +435,10 @@ async function getManifest(request: Request, assetId: string, generation: number
   const res = await workerGet(request, `/api/assets/${assetId}/dc-manifest`);
   if (!res.ok) throw new Error(`manifest ${res.status}`);
   const manifest = (await res.clone().json()) as AssetManifest;
-  if (media.isCurrent(generation)) {
-    const cache = await caches.open(MANIFEST_CACHE);
-    await cache.put(manifestCacheKey(assetId), res);
-  }
+  // Open first, check second: a reset during the await must not let the old
+  // session's manifest into the new session's cache.
+  const cache = await caches.open(MANIFEST_CACHE);
+  if (media.isCurrent(generation)) await cache.put(manifestCacheKey(assetId), res);
   return manifest;
 }
 
@@ -621,7 +630,7 @@ async function fetchVideoIfVideo(
     !!known &&
     (!looksLikeVideo(known, kind) ||
       (!!cachedTgConfig && (mediaKey !== undefined || !isEncrypted(known.encryptionMode))));
-  const source = offline ? await setup() : await media.schedule({ tag, key: `video-setup:${assetId}`, signal }, setup);
+  const source = offline ? await setup() : await media.schedule({ tag, key: `video-setup:${kind}:${assetId}`, signal }, setup);
   if (!source) return source;
   try {
     return await fetchVideoDirect(request, source, tag, signal, generation);
@@ -741,7 +750,7 @@ const handleFetch = (event: FetchEvent): void => {
     if (tag) {
       // The page's cancel hints (and request.signal, once browsers propagate
       // it) release this request's claim on its job.
-      const ticket = cancelHints.register(event.request.url, event.request.signal);
+      const ticket = cancelHints.register(event.request.url, event.request.signal, event.clientId);
       event.respondWith(
         fetchAssetDirect(event.request, tag, ticket.signal)
           .then((res) => res ?? directWorkerFetch(event.request, cacheable, url.pathname, ticket.signal))
@@ -764,7 +773,7 @@ sw.addEventListener('message', (event) => {
   if (!isTrustedMessageSource(event.source, sw.location.origin)) return;
   if (event.data?.type === 'cancel' && typeof event.data.url === 'string') {
     try {
-      cancelHints.cancel(new URL(event.data.url, sw.location.origin).href);
+      cancelHints.cancel(new URL(event.data.url, sw.location.origin).href, (event.source as Client).id);
     } catch {
       // Not a URL: ignore.
     }
@@ -799,4 +808,3 @@ sw.addEventListener('message', (event) => {
 sw.addEventListener('install', handleInstall, { passive: true });
 sw.addEventListener('activate', handleActivate, { passive: true });
 sw.addEventListener('fetch', handleFetch, { passive: true });
-installMessageListener();

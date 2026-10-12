@@ -37,7 +37,12 @@
     onLoad?.();
   };
 
+  // Whether the current load has finished (loaded or failed): a cancel hint
+  // goes out only for a load still in flight.
+  let settled = false;
+
   const handleLoad = () => {
+    settled = true;
     if (destroyed || !src) {
       return;
     }
@@ -54,6 +59,7 @@
   let retryTimer: ReturnType<typeof setTimeout>;
 
   const handleError = () => {
+    settled = true;
     if (destroyed || !src) {
       return;
     }
@@ -67,7 +73,10 @@
           const currentSrc = capturedSource;
           capturedSource = undefined;
           setTimeout(() => {
-            if (!destroyed) capturedSource = currentSrc;
+            if (!destroyed) {
+              settled = false;
+              capturedSource = currentSrc;
+            }
           }, 50);
         }
       }, delay);
@@ -80,7 +89,7 @@
   onDestroy(() => {
     destroyed = true;
     if (retryTimer) clearTimeout(retryTimer);
-    if (capturedSource !== undefined) {
+    if (capturedSource !== undefined && !settled) {
       cancelImageUrl(capturedSource);
     }
   });

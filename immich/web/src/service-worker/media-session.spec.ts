@@ -173,6 +173,67 @@ describe('pacedFetch', () => {
     const passed = await pacedFetch('u', undefined, forbidden);
     expect(passed.status).toBe(403);
   });
+
+  it('retries a dropped connection and a bare 503 (no Retry-After) twice, then gives up', async () => {
+    vi.useFakeTimers();
+    try {
+      const flaky = vi
+        .fn<typeof fetch>()
+        .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+        .mockResolvedValueOnce(new Response('cloudflare error page', { status: 503 }))
+        .mockResolvedValueOnce(new Response('ok', { status: 200 }));
+      const ok = pacedFetch('u', undefined, flaky);
+      await vi.advanceTimersByTimeAsync(2000);
+      expect((await ok).status).toBe(200);
+      expect(flaky).toHaveBeenCalledTimes(3);
+
+      const down = vi.fn<typeof fetch>().mockRejectedValue(new TypeError('Failed to fetch'));
+      const failed = pacedFetch('u', undefined, down);
+      const settled = expect(failed).rejects.toBeInstanceOf(TypeError);
+      await vi.advanceTimersByTimeAsync(2000);
+      await settled;
+      expect(down).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not retry once the caller has cancelled', async () => {
+    vi.useFakeTimers();
+    try {
+      const controller = new AbortController();
+      const down = vi.fn<typeof fetch>().mockRejectedValue(new TypeError('Failed to fetch'));
+      const failed = pacedFetch('u', { signal: controller.signal }, down);
+      const settled = expect(failed).rejects.toSatisfy(isAbortError);
+      controller.abort();
+      await vi.advanceTimersByTimeAsync(2000);
+      await settled;
+      expect(down).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('gives up on a request whose answer never starts, and frees the connection', async () => {
+    vi.useFakeTimers();
+    try {
+      let seen: AbortSignal | undefined;
+      const hung = vi.fn<typeof fetch>((_input, init) => {
+        seen = init?.signal ?? undefined;
+        return new Promise<Response>((_resolve, reject) =>
+          init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError'))),
+        );
+      });
+      const failed = pacedFetch('u', undefined, hung);
+      const settled = expect(failed).rejects.toMatchObject({ name: 'TimeoutError' });
+      await vi.advanceTimersByTimeAsync(30_000);
+      await settled;
+      expect(seen?.aborted).toBe(true);
+      expect(hung).toHaveBeenCalledTimes(1); // a hung request is not retried
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('CancelHints (cancel precision)', () => {
@@ -212,6 +273,18 @@ describe('CancelHints (cancel precision)', () => {
     hints.cancel(url);
     for (const waiter of waiters) await expect(waiter).rejects.toSatisfy(isAbortError);
     expect(task).not.toHaveBeenCalled();
+  });
+
+  it("a tab's hint releases that tab's request, never another tab's", () => {
+    const hints = new CancelHints();
+    const url = 'https://photos.example/api/assets/a/thumbnail';
+    const tabA = hints.register(url, undefined, 'client-a');
+    const tabB = hints.register(url, undefined, 'client-b');
+    hints.cancel(url, 'client-b');
+    expect(tabA.signal.aborted).toBe(false);
+    expect(tabB.signal.aborted).toBe(true);
+    hints.cancel(url, 'client-c'); // nothing of that tab's is pending
+    expect(tabA.signal.aborted).toBe(false);
   });
 
   it('follows the request signal when a browser does propagate it', () => {

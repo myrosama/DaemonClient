@@ -15,8 +15,11 @@
 //     preloads, hover playback, other media) > VISIBLE (grid thumbnails) >
 //     BACKGROUND.
 //   - D17: while OPENED work is in flight nothing lower STARTS (running work
-//     finishes); one slot is reserved so OPENED never waits for one. A stuck
-//     OPENED job lifts the suspension after `maxSuspendMs`.
+//     finishes); one slot is reserved so OPENED never waits for one — even when
+//     the previous asset's demoted jobs fill every other slot. The suspension
+//     lasts at most `maxSuspendMs` from the first OPENED start for the asset
+//     (a chain of video chunks can't extend it); after that, OPENED work keeps
+//     its place at the front of the queue but counts as an ordinary job.
 //   - VISIBLE is newest-request-first: after a long scroll the tiles on screen
 //     were requested last.
 //   - NEXT has its own cap, so it can't starve VISIBLE.
@@ -257,6 +260,9 @@ export class MediaScheduler {
   readonly #running = new Set<Job>();
   readonly #byKey = new Map<string, Job>();
   #pausedUntil = 0;
+  // Start of the current D17 suspension window: the first OPENED start since
+  // the viewer last changed asset (reclassify) or the session reset (clear).
+  #suspendFrom: number | undefined;
   #epoch = 0;
   #timer: ReturnType<typeof setTimeout> | undefined;
   #timerAt = 0;
@@ -312,6 +318,8 @@ export class MediaScheduler {
         this.#setClass(job, classify(job.tag));
       }
     }
+    // A new asset in the viewer gets its own suspension window.
+    this.#suspendFrom = undefined;
     this.#pump();
   }
 
@@ -329,6 +337,7 @@ export class MediaScheduler {
     for (const mediaClass of CLASSES) this.#queues[mediaClass] = [];
     this.#byKey.clear();
     this.#pausedUntil = 0;
+    this.#suspendFrom = undefined;
     this.#clearTimer();
     for (const job of jobs) {
       job.settled = true;
@@ -386,8 +395,7 @@ export class MediaScheduler {
     if (queued) {
       this.#queues[mediaClass].push(job);
     } else if (job.started && mediaClass === 'opened') {
-      // Its suspension of lower classes counts from now.
-      job.startedAt = Date.now();
+      this.#suspendFrom ??= Date.now();
     }
   }
 
@@ -409,26 +417,31 @@ export class MediaScheduler {
 
   /** The next job allowed to start now, by class, slots and D17; undefined if none. */
   #pick(now: number): Job | undefined {
-    const { maxConcurrent, reservedForOpened, maxNext, maxSuspendMs } = this.#options;
-    if (this.#running.size >= maxConcurrent) {
-      return undefined;
-    }
-    if (this.#queues.opened.length > 0) {
-      return this.#queues.opened[0];
-    }
-    let lower = 0;
+    const { maxConcurrent, reservedForOpened, maxNext } = this.#options;
+    const suspending = this.#suspending(now);
+    let opened = 0; // every running OPENED job (the reserved slots)
+    let lower = 0; // lower classes, plus OPENED jobs past the suspension window
     let next = 0;
     for (const job of this.#running) {
       if (job.mediaClass === 'opened') {
-        if (now - job.startedAt < maxSuspendMs) {
-          return undefined; // D17: OPENED in flight, nothing lower starts
+        opened++;
+        if (suspending) {
+          continue;
         }
-        continue;
       }
       lower++;
       if (job.mediaClass === 'next') {
         next++;
       }
+    }
+    if (this.#queues.opened.length > 0) {
+      // The reserved slot: OPENED starts even when demoted jobs of the previous
+      // asset hold every other slot, so the cap is exceeded by at most
+      // `reservedForOpened`.
+      return this.#running.size < maxConcurrent || opened < reservedForOpened ? this.#queues.opened[0] : undefined;
+    }
+    if (this.#running.size >= maxConcurrent || (suspending && opened > 0)) {
+      return undefined; // D17: OPENED in flight, nothing lower starts
     }
     if (lower >= Math.max(1, maxConcurrent - reservedForOpened)) {
       return undefined;
@@ -440,6 +453,11 @@ export class MediaScheduler {
       return this.#queues.visible.at(-1); // newest first
     }
     return this.#queues.background[0];
+  }
+
+  /** Whether the D17 window is open (OPENED work, if any is running, holds lower classes back). */
+  #suspending(now: number): boolean {
+    return this.#suspendFrom !== undefined && now - this.#suspendFrom < this.#options.maxSuspendMs;
   }
 
   #pump() {
@@ -464,23 +482,14 @@ export class MediaScheduler {
     }
   }
 
-  // A long-running OPENED job lifts its suspension after maxSuspendMs.
+  // The suspension ends maxSuspendMs after the window opened.
   #wakeForSuspension(now: number) {
     const waiting = CLASSES.some((mediaClass) => mediaClass !== 'opened' && this.#queues[mediaClass].length > 0);
-    if (!waiting) {
+    if (!waiting || !this.#suspending(now) || this.#suspendFrom === undefined) {
       return;
     }
-    let earliest = Infinity;
-    for (const job of this.#running) {
-      if (job.mediaClass === 'opened') {
-        const expiry = job.startedAt + this.#options.maxSuspendMs;
-        if (expiry > now) {
-          earliest = Math.min(earliest, expiry);
-        }
-      }
-    }
-    if (earliest !== Infinity) {
-      this.#wakeAt(earliest);
+    if ([...this.#running].some((job) => job.mediaClass === 'opened')) {
+      this.#wakeAt(this.#suspendFrom + this.#options.maxSuspendMs);
     }
   }
 
@@ -509,6 +518,9 @@ export class MediaScheduler {
   #start(job: Job) {
     job.started = true;
     job.startedAt = Date.now();
+    if (job.mediaClass === 'opened') {
+      this.#suspendFrom ??= job.startedAt;
+    }
     this.#running.add(job);
 
     let run: Promise<unknown>;
