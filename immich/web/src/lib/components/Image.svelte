@@ -75,10 +75,7 @@
           settled = false;
           capturedSource = undefined;
           setTimeout(() => {
-            if (!destroyed) {
-              settled = false;
-              capturedSource = currentSrc;
-            }
+            if (!destroyed) capturedSource = currentSrc;
           }, 50);
         }
       }, delay);

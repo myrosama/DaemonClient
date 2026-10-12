@@ -150,6 +150,7 @@ async function persistToken(token: string | null) {
     // are forgotten, and in-flight jobs of the old session can't write caches.
     media.reset();
     cancelHints.clear();
+    mediaKeyFailedAt = 0;
   }
   if (previous && token !== previous) await resetMediaState();
   const cache = await caches.open('dc-auth-v3');
