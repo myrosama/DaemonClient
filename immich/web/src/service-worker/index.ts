@@ -71,22 +71,25 @@ const filePathCache = new Map<string, { path: string; exp: number }>();
 //   VISIBLE    grid thumbnails, newest request first
 //   BACKGROUND (reserved; nothing uses it yet)
 //
-// Limits (SPEC §4.9 starting values, so web and mobile behave the same):
-//   - 6 jobs at once, 1 slot reserved for OPENED, at most 2 NEXT.
-//   - Token bucket, 20 job starts/s, burst 10. A cold thumbnail job is about
-//     3 worker invocations (manifest, getFile, download) and 2 Telegram calls;
-//     at a typical 300-500 ms per job the 6 slots are the real limiter, and the
-//     bucket only caps the bursts when slots free fast. Cancelled work never
+// Limits. SPEC §4.9's starting values (6 jobs, 1 reserved) suit the phone
+// apps, whose HTTP/1.1 stacks allow ~6 connections per host. In the browser
+// these requests go over HTTP/2, and a cold thumbnail job is three requests in
+// a row (manifest, getFile, download), so 6 slots left the grid filling slower
+// than the old unlimited loader (measured 2026-10-12 on a real library: grid
+// fill after a fling 1.5-1.8 s unlimited vs 2.3-2.8 s at 6). Hence:
+//   - 12 jobs at once, 2 slots reserved for OPENED, at most 3 NEXT.
+//   - Token bucket, 20 job starts/s, burst 12: a screenful starts at once, and
+//     a long fling can't start more than 20 a second. Cancelled work never
 //     spends a token, so a fling costs only what is loaded — the free tier's
 //     100k invocations a day go to photos someone actually looked at.
 //   - A 429 (HTTP, Telegram JSON retry_after, Retry-After) pauses everyone
 //     once; /proxy's 503 + Retry-After pauses briefly (≤ 5 s).
 const mediaScheduler = new MediaScheduler({
-  maxConcurrent: 6,
-  reservedForOpened: 1,
-  maxNext: 2,
+  maxConcurrent: 12,
+  reservedForOpened: 2,
+  maxNext: 3,
   rate: 20,
-  burst: 10,
+  burst: 12,
 });
 const media = new MediaSession(mediaScheduler);
 const cancelHints = new CancelHints();
