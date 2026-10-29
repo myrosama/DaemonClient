@@ -420,3 +420,577 @@ committed separately, nothing pushed without the operator.
 # Part 2 — Tasks, step by step
 
 Each task below is written before its code. Order: 1.0 → 1.8 (section 6).
+
+## Task 1.0 — Foundations
+
+**Delivers:** `Core` (owns the core's tokio runtime and the HTTP client),
+`Secret<T>`, `CoreError`, the core's logger with token scrubbing, and the
+HTTP client of decision C1 — plus a device check: one HTTPS request to
+Telegram from the iOS Simulator and the Android emulator through the bridge.
+
+**Files:**
+- Modify: `mobile/core/dc-core/Cargo.toml`, `mobile/core/dc-core/src/lib.rs`
+- Create: `mobile/core/dc-core/src/{secret,logging,error,http,core}.rs`
+- Modify: `mobile/packages/dc_core_flutter/rust/Cargo.toml`,
+  `rust/src/api/core.rs`; regenerate the bindings
+- Modify: `mobile/packages/dc_core_flutter/example/integration_test/core_test.dart`
+
+**Interfaces (later tasks rely on these names):**
+- `dc_core::Secret<T: Zeroize>` — `new(T)`, `expose(&self) -> &T`; prints `[redacted]`.
+- `dc_core::CoreError` — `Network(String)`, `Internal(String)`; later tasks add variants.
+  `From<reqwest::Error>` strips the URL and scrubs the text.
+- `dc_core::logging::{scrub(&str) -> String, install(Option<Sink>) -> bool, recent_logs() -> Vec<String>, default_level()}`.
+- `dc_core::http::client() -> Result<reqwest::Client, CoreError>` (crate-internal).
+- `dc_core::{Core, CoreConfig}` — `CoreConfig::new(data_dir, cache_dir)` (field
+  `telegram_api`, default `https://api.telegram.org`), `Core::start(config)`,
+  `core.config()`, `core.run(future).await`, `core.check_telegram().await -> Result<u16, CoreError>`.
+- Bridge: `start_core(data_dir, cache_dir)`, `check_telegram() -> u16` (Dart:
+  `startCore(dataDir:, cacheDir:)`, `checkTelegram()`).
+
+- [ ] **Step 1: Dependencies** — `mobile/core/dc-core/Cargo.toml`
+  `[dependencies]` and `[dev-dependencies]` (exact versions, as in the spike):
+
+```toml
+[dependencies]
+log = "=0.4.34"
+reqwest = { version = "=0.13.5", default-features = false, features = ["rustls-no-provider", "http2"] }
+rustls = { version = "=0.23.45", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+thiserror = "=2.0.21"
+tokio = { version = "=1.53.2", features = ["rt-multi-thread", "macros"] }
+webpki-roots = "=1.0.9"
+zeroize = "=1.9.1"
+
+[dev-dependencies]
+tempfile = "=3.27.0"
+wiremock = "=0.6.5"
+```
+
+- [ ] **Step 2: `Secret` — tests first** (`src/secret.rs`, module `tests`):
+
+```rust
+#[test]
+fn never_prints_the_value() {
+    let token = Secret::new(String::from("123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw"));
+    assert_eq!(format!("{token:?}"), "Secret([redacted])");
+    assert_eq!(format!("{token}"), "[redacted]");
+}
+
+#[test]
+fn exposes_the_value_on_purpose_and_clones() {
+    let token = Secret::new(String::from("abc"));
+    let copy = token.clone();
+    assert_eq!(token.expose(), "abc");
+    assert_eq!(copy.expose(), "abc");
+}
+```
+
+Run `cargo test -p dc-core secret` → fails (no `Secret`). Then:
+
+```rust
+//! Values that must never be printed, logged or left behind in memory: the
+//! session token, the bot token, passwords (SPEC §4.1, §4.8). `Debug` and
+//! `Display` print `[redacted]`; the value is zeroed when dropped.
+
+use std::fmt;
+use zeroize::{Zeroize, Zeroizing};
+
+pub struct Secret<T: Zeroize>(Zeroizing<T>);
+
+impl<T: Zeroize> Secret<T> {
+    pub fn new(value: T) -> Self {
+        Self(Zeroizing::new(value))
+    }
+
+    /// The value itself. Use it where it is needed (a header, the URL of a
+    /// request being sent) and never keep or format the result.
+    pub fn expose(&self) -> &T {
+        &self.0
+    }
+}
+
+impl<T: Zeroize + Clone> Clone for Secret<T> {
+    fn clone(&self) -> Self {
+        Self::new((*self.0).clone())
+    }
+}
+
+impl<T: Zeroize> fmt::Debug for Secret<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Secret([redacted])")
+    }
+}
+
+impl<T: Zeroize> fmt::Display for Secret<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("[redacted]")
+    }
+}
+```
+
+Run again → passes.
+
+- [ ] **Step 3: `scrub` and the logger — tests first** (`src/logging.rs`):
+
+```rust
+const TOKEN: &str = "123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw";
+
+#[test]
+fn scrubs_bot_tokens_wherever_they_appear() {
+    let url = format!("GET https://api.telegram.org/bot{TOKEN}/getFile?file_id=x");
+    assert_eq!(scrub(&url), "GET https://api.telegram.org/bot[redacted]/getFile?file_id=x");
+    assert_eq!(scrub(TOKEN), "[redacted]");
+    assert_eq!(scrub(&format!("{TOKEN} and {TOKEN}")), "[redacted] and [redacted]");
+    assert_eq!(scrub(&format!("ошибка {TOKEN} конец")), "ошибка [redacted] конец");
+}
+
+#[test]
+fn leaves_ordinary_colons_alone() {
+    for line in ["12:30:45", "http://localhost:8080/x", "error 404: not found", "123456789:short", ""] {
+        assert_eq!(scrub(line), line);
+    }
+}
+
+fn record_into(logger: &CoreLogger, level: log::Level, text: &str) {
+    log::Log::log(logger, &log::Record::builder().level(level).target("t").args(format_args!("{text}")).build());
+}
+
+#[test]
+fn keeps_recent_lines_scrubbed_and_drops_the_oldest() {
+    let logger = CoreLogger::new(log::LevelFilter::Info, 2, None);
+    record_into(&logger, log::Level::Info, "one");
+    record_into(&logger, log::Level::Info, &format!("two {TOKEN}"));
+    record_into(&logger, log::Level::Warn, "three");
+    assert_eq!(logger.recent(), vec!["INFO t: two [redacted]".to_owned(), "WARN t: three".to_owned()]);
+}
+
+#[test]
+fn ignores_levels_below_its_own() {
+    let logger = CoreLogger::new(log::LevelFilter::Warn, 10, None);
+    record_into(&logger, log::Level::Info, "quiet");
+    assert!(logger.recent().is_empty());
+}
+
+#[test]
+fn hands_each_line_to_the_sink() {
+    let seen = std::sync::Arc::new(Mutex::new(Vec::new()));
+    let into = std::sync::Arc::clone(&seen);
+    let logger = CoreLogger::new(log::LevelFilter::Info, 10, Some(Box::new(move |line: &str| {
+        into.lock().unwrap().push(line.to_owned());
+    })));
+    record_into(&logger, log::Level::Info, TOKEN);
+    assert_eq!(*seen.lock().unwrap(), vec!["INFO t: [redacted]".to_owned()]);
+}
+
+#[test]
+fn installs_once_at_the_build_level() {
+    let _ = install(None);
+    assert!(!install(None));
+    assert_eq!(log::max_level(), default_level());
+}
+```
+
+Run → fails. Then the module:
+
+```rust
+//! The core's logger (SPEC §4.8, P1 decision C9). Warn in release builds,
+//! Info in debug builds. Every line goes through `scrub`, is kept in a small
+//! ring buffer the app can show (P2), and goes to an optional sink (`dc-cli`
+//! prints it). It never writes to the device log by itself.
+
+use std::collections::VecDeque;
+use std::sync::{Mutex, OnceLock};
+
+pub type Sink = Box<dyn Fn(&str) + Send + Sync>;
+
+const RECENT_LINES: usize = 500;
+
+pub fn default_level() -> log::LevelFilter {
+    if cfg!(debug_assertions) { log::LevelFilter::Info } else { log::LevelFilter::Warn }
+}
+
+/// Replaces anything shaped like a Telegram bot token (`<6+ digits>:<30+ of
+/// A-Z a-z 0-9 _ ->`) with `[redacted]`. A second line of defence — code
+/// must not put a token into a message in the first place.
+pub fn scrub(line: &str) -> String {
+    let bytes = line.as_bytes();
+    let is_token_char = |b: &u8| b.is_ascii_alphanumeric() || *b == b'_' || *b == b'-';
+    let mut out = String::with_capacity(line.len());
+    let mut copied = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes.get(i) == Some(&b':') {
+            let digits = bytes.get(..i).unwrap_or_default().iter().rev().take_while(|b| b.is_ascii_digit()).count();
+            let tail = bytes.get(i + 1..).unwrap_or_default().iter().take_while(|b| is_token_char(b)).count();
+            if digits >= 6 && tail >= 30 {
+                // Every index here sits next to an ASCII byte, so on a char boundary.
+                out.push_str(line.get(copied..i - digits).unwrap_or_default());
+                out.push_str("[redacted]");
+                i += 1 + tail;
+                copied = i;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    out.push_str(line.get(copied..).unwrap_or_default());
+    out
+}
+
+pub struct CoreLogger {
+    level: log::LevelFilter,
+    capacity: usize,
+    recent: Mutex<VecDeque<String>>,
+    sink: Option<Sink>,
+}
+
+impl CoreLogger {
+    pub fn new(level: log::LevelFilter, capacity: usize, sink: Option<Sink>) -> Self {
+        Self { level, capacity, recent: Mutex::new(VecDeque::with_capacity(capacity)), sink }
+    }
+
+    pub fn recent(&self) -> Vec<String> {
+        self.recent.lock().map(|r| r.iter().cloned().collect()).unwrap_or_default()
+    }
+}
+
+impl log::Log for CoreLogger {
+    fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
+        metadata.level() <= self.level
+    }
+
+    fn log(&self, record: &log::Record<'_>) {
+        if !self.enabled(record.metadata()) {
+            return;
+        }
+        let line = scrub(&format!("{} {}: {}", record.level(), record.target(), record.args()));
+        if let Some(sink) = &self.sink {
+            sink(&line);
+        }
+        if self.capacity == 0 {
+            return;
+        }
+        if let Ok(mut recent) = self.recent.lock() {
+            if recent.len() >= self.capacity {
+                recent.pop_front();
+            }
+            recent.push_back(line);
+        }
+    }
+
+    fn flush(&self) {}
+}
+
+static LOGGER: OnceLock<&'static CoreLogger> = OnceLock::new();
+
+/// Installs the core's logger for the whole process, once. Returns `false`
+/// when it was already installed, or when another logger got there first.
+pub fn install(sink: Option<Sink>) -> bool {
+    let mut installed = false;
+    LOGGER.get_or_init(|| {
+        let logger: &'static CoreLogger =
+            Box::leak(Box::new(CoreLogger::new(default_level(), RECENT_LINES, sink)));
+        if log::set_logger(logger).is_ok() {
+            log::set_max_level(default_level());
+            installed = true;
+        }
+        logger
+    });
+    installed
+}
+
+/// The most recent log lines, oldest first (for the app's log screen).
+pub fn recent_logs() -> Vec<String> {
+    LOGGER.get().map(|l| l.recent()).unwrap_or_default()
+}
+```
+
+Run → passes.
+
+- [ ] **Step 4: `CoreError` — test first** (`src/error.rs`):
+
+```rust
+#[tokio::test]
+async fn network_errors_never_carry_the_url_or_the_token() {
+    // A port that was free a moment ago: the connection is refused.
+    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let url = format!("http://127.0.0.1:{port}/bot123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw/getMe");
+    let err: CoreError = crate::http::client().unwrap().get(&url).send().await.unwrap_err().into();
+    let text = err.to_string();
+    assert!(text.starts_with("network problem"), "{text}");
+    assert!(!text.contains("AAHdq") && !text.contains("/bot") && !text.contains(&port.to_string()), "{text}");
+}
+```
+
+Run → fails. Then:
+
+```rust
+//! What can go wrong, in words a user can act on (SPEC §4.8). An error never
+//! holds a URL, a token or a key: errors end up in logs and on screen.
+//! Later tasks add variants as they need them.
+
+#[derive(Debug, thiserror::Error)]
+pub enum CoreError {
+    /// The network failed or a server could not be reached.
+    #[error("network problem: {0}")]
+    Network(String),
+    /// A bug or an impossible state.
+    #[error("internal error: {0}")]
+    Internal(String),
+}
+
+impl From<reqwest::Error> for CoreError {
+    fn from(err: reqwest::Error) -> Self {
+        // `without_url` drops the request URL — for Telegram it contains the
+        // bot token. The cause chain is kept for diagnosis and scrubbed.
+        let err = err.without_url();
+        let mut text = err.to_string();
+        let mut source = std::error::Error::source(&err);
+        while let Some(cause) = source {
+            text.push_str(": ");
+            text.push_str(&cause.to_string());
+            source = cause.source();
+        }
+        CoreError::Network(crate::logging::scrub(&text))
+    }
+}
+```
+
+Run → passes (after Step 5 provides `http::client`; write Step 5 before
+running this test).
+
+- [ ] **Step 5: the HTTP client (C1) — tests first** (`src/http.rs`):
+
+```rust
+#[test]
+fn offers_http2_then_http1() {
+    assert_eq!(tls_config().unwrap().alpn_protocols, vec![b"h2".to_vec(), b"http/1.1".to_vec()]);
+}
+```
+
+(Redirects being refused is tested through `Core::check_telegram` in Step 6.)
+Then the module — the spike's, with errors mapped to `CoreError`:
+
+```rust
+//! The one HTTP client for the worker and Telegram (P1 decision C1): rustls
+//! with the `ring` provider and Mozilla's roots compiled in (`webpki-roots`).
+//! No platform verifier, so no CMake and no Android-specific set-up; the
+//! cost is that certificates a user installed on the phone are not trusted.
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use crate::CoreError;
+
+pub(crate) fn tls_config() -> Result<rustls::ClientConfig, rustls::Error> {
+    let mut roots = rustls::RootCertStore::empty();
+    roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    let mut config =
+        rustls::ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+            .with_safe_default_protocol_versions()?
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+    // reqwest uses a preconfigured TLS config as it is, so offer HTTP/2 here.
+    config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+    Ok(config)
+}
+
+pub(crate) fn client() -> Result<reqwest::Client, CoreError> {
+    let tls = tls_config().map_err(|e| CoreError::Internal(format!("TLS set-up failed: {e}")))?;
+    reqwest::Client::builder()
+        .tls_backend_preconfigured(tls)
+        .connect_timeout(Duration::from_secs(10))
+        .read_timeout(Duration::from_secs(30))
+        .user_agent(concat!("DaemonClient-core/", env!("CARGO_PKG_VERSION")))
+        // The worker and Telegram never redirect API calls; following one
+        // could carry the bot token to another host.
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|e| CoreError::Internal(format!("HTTP client set-up failed: {e}")))
+}
+```
+
+- [ ] **Step 6: `Core` — tests first** (`src/core.rs`):
+
+```rust
+fn config_in(dir: &tempfile::TempDir) -> CoreConfig {
+    CoreConfig::new(dir.path().join("data"), dir.path().join("cache"))
+}
+
+#[tokio::test]
+async fn starts_makes_its_folders_runs_work_and_drops_inside_async_code() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = Core::start(config_in(&dir)).unwrap();
+    assert!(dir.path().join("data").is_dir() && dir.path().join("cache").is_dir());
+    assert_eq!(core.run(async { 2 + 2 }).await.unwrap(), 4);
+    drop(core); // inside an async test: must not panic
+}
+
+#[tokio::test]
+async fn checks_telegram_without_following_redirects() {
+    let server = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::path("/"))
+        .respond_with(wiremock::ResponseTemplate::new(302).insert_header("location", "https://core.telegram.org/bots"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = config_in(&dir);
+    config.telegram_api = server.uri();
+    let core = Core::start(config).unwrap();
+    assert_eq!(core.check_telegram().await.unwrap(), 302);
+}
+```
+
+Run → fails. Then:
+
+```rust
+//! `Core`: one per app process. It owns a small tokio runtime of its own
+//! (the app's Dart side never blocks, and the core does not depend on the
+//! bridge's executor) and the shared HTTP client.
+
+use std::future::Future;
+use std::path::PathBuf;
+
+use crate::CoreError;
+
+pub const TELEGRAM_API: &str = "https://api.telegram.org";
+
+#[derive(Debug, Clone)]
+pub struct CoreConfig {
+    /// Private storage that persists (upload journals).
+    pub data_dir: PathBuf,
+    /// Private storage the OS may clear (thumbnails).
+    pub cache_dir: PathBuf,
+    /// Telegram's address: a setting, so tests can use a fake and a fallback
+    /// can be added later (P1 decision C11).
+    pub telegram_api: String,
+}
+
+impl CoreConfig {
+    pub fn new(data_dir: PathBuf, cache_dir: PathBuf) -> Self {
+        Self { data_dir, cache_dir, telegram_api: TELEGRAM_API.to_owned() }
+    }
+}
+
+pub struct Core {
+    runtime: Option<tokio::runtime::Runtime>,
+    handle: tokio::runtime::Handle,
+    http: reqwest::Client,
+    config: CoreConfig,
+}
+
+impl Core {
+    pub fn start(config: CoreConfig) -> Result<Self, CoreError> {
+        crate::logging::install(None);
+        for dir in [&config.data_dir, &config.cache_dir] {
+            std::fs::create_dir_all(dir)
+                .map_err(|e| CoreError::Internal(format!("cannot create the core's folders: {e}")))?;
+        }
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .thread_name("dc-core")
+            .enable_all()
+            .build()
+            .map_err(|e| CoreError::Internal(format!("cannot start the core's runtime: {e}")))?;
+        let handle = runtime.handle().clone();
+        let http = crate::http::client()?;
+        log::info!("core {} started", crate::version());
+        Ok(Self { runtime: Some(runtime), handle, http, config })
+    }
+
+    pub fn config(&self) -> &CoreConfig {
+        &self.config
+    }
+
+    /// Runs `future` on the core's runtime and waits for it.
+    pub async fn run<F>(&self, future: F) -> Result<F::Output, CoreError>
+    where
+        F: Future + Send + 'static,
+        F::Output: Send + 'static,
+    {
+        self.handle
+            .spawn(future)
+            .await
+            .map_err(|e| CoreError::Internal(format!("a core task stopped: {e}")))
+    }
+
+    /// One HTTPS request to Telegram; its HTTP status. The device check of
+    /// task 1.0, later a diagnostics screen.
+    pub async fn check_telegram(&self) -> Result<u16, CoreError> {
+        let http = self.http.clone();
+        let url = format!("{}/", self.config.telegram_api.trim_end_matches('/'));
+        self.run(async move { Ok(http.get(url).send().await?.status().as_u16()) }).await?
+    }
+}
+
+impl Drop for Core {
+    fn drop(&mut self) {
+        // A plain drop of a runtime panics inside async code (Dart's bridge
+        // may drop us there); shutting down in the background does not.
+        if let Some(runtime) = self.runtime.take() {
+            runtime.shutdown_background();
+        }
+    }
+}
+```
+
+`src/lib.rs`:
+
+```rust
+pub mod chunk_plan;
+mod core;
+mod error;
+pub(crate) mod http;
+pub mod logging;
+mod secret;
+
+pub use crate::core::{Core, CoreConfig, TELEGRAM_API};
+pub use crate::error::CoreError;
+pub use crate::secret::Secret;
+```
+
+Run `cargo test -p dc-core` → all pass; `cargo clippy --workspace --all-targets -- -D warnings`; `cargo fmt --all --check`.
+
+- [ ] **Step 7: the bridge and the device check.** `rust/Cargo.toml` gains
+  `anyhow = "=1.0.104"`. In `rust/src/api/core.rs`:
+
+```rust
+use std::sync::OnceLock;
+
+static CORE: OnceLock<dc_core::Core> = OnceLock::new();
+
+/// Starts the core once per app process; later calls do nothing.
+pub fn start_core(data_dir: String, cache_dir: String) -> anyhow::Result<()> {
+    if CORE.get().is_none() {
+        let core = dc_core::Core::start(dc_core::CoreConfig::new(data_dir.into(), cache_dir.into()))?;
+        // If another call won the race, its core stays and this one is dropped.
+        let _ = CORE.set(core);
+    }
+    Ok(())
+}
+
+/// One HTTPS request from the device to Telegram; the HTTP status.
+pub async fn check_telegram() -> anyhow::Result<u16> {
+    let core = CORE.get().ok_or_else(|| anyhow::anyhow!("the core is not started"))?;
+    Ok(core.check_telegram().await?)
+}
+```
+
+Regenerate (`flutter_rust_bridge_codegen generate` in the plugin), then add to
+`example/integration_test/core_test.dart` (`import 'dart:io';`):
+
+```dart
+test('the core reaches Telegram over HTTPS from this device', () async {
+  final base = Directory.systemTemp.createTempSync('dc-core-test').path;
+  await startCore(dataDir: '$base/data', cacheDir: '$base/cache');
+  expect(await checkTelegram(), inInclusiveRange(200, 399));
+});
+```
+
+- [ ] **Step 8: Gate 2** — `flutter test integration_test/core_test.dart -d
+  <device>` from `example/` on the iOS Simulator and on the Android emulator:
+  3/3 each. Paste the output into DESIGN_NOTES.
+
+- [ ] **Step 9: Gate 3** (two review agents), then commit code
+  (`feat(core): foundations — Core, Secret, CoreError, logging, TLS client`)
+  and docs (tick 1.0, DESIGN_NOTES entry, EXECUTION_STATUS, NOW.md).
