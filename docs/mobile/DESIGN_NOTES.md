@@ -444,3 +444,99 @@ Spec reviewer (2026-10-27) — 0 HIGH, 2 MEDIUM, 6 LOW, 1 INFO.
 - **G3:** above. **G4:** code commits (core plugin, Photos wiring, Android
   build fix, branding, `.gitignore`) and docs commits below; not pushed —
   0.4 goes out with 0.5.
+
+> **Correction to the 0.4 entry, 2026-10-29:** its G1 says `cargo fmt --check`
+> passed. That was true before the binding crate moved to edition 2024; after
+> the move, rustfmt orders the generated `frb_generated.rs` imports
+> differently from flutter_rust_bridge_codegen, so the check failed at the
+> 0.4 commits. Found while preparing 0.5 and fixed there (`rustfmt.toml`).
+
+---
+
+## 0.5 — CI            2026-10-29
+
+**Planned:** the core's format, lint and tests on every change under
+`mobile/`; the app builds install Rust and the iOS job applies the Flutter
+patch; the 2026-10-27 amendments (cargokit's `stable` must equal the pinned
+Rust; a dependency audit).
+**Did:**
+- `.github/workflows/mobile-core.yml` (new): `rustup show`, `cargo fmt --all
+  --check`, `cargo clippy --workspace --all-targets --locked -D warnings`,
+  `cargo test --workspace --locked`; a separate `audit` job (cargo-deny,
+  advisories); also weekly (Monday 04:17 UTC).
+- `.github/workflows/mobile-build.yml`: runs on `mobile/**` too; both jobs
+  install Rust and stop with a message when `stable` is not the pinned
+  version; the iOS job runs `ios/scripts/xcode_flutter_patch.sh` before
+  building.
+- **Not foreseen by the plan:** running the CI commands locally showed
+  `cargo fmt --check` failing on the generated bindings (correction above).
+  `mobile/packages/dc_core_flutter/rust/rustfmt.toml` sets `style_edition =
+  "2021"` for that crate so `cargo fmt` and the code generator agree;
+  regenerating twice leaves `fmt --check` clean. The crate still compiles as
+  edition 2024.
+**Decisions:**
+- The audit is its own job (parallel), not a step of `core`.
+- `rustup show` stays in the build jobs as the plan asked, although cargokit
+  builds with `stable`; it costs about a minute.
+- **The pin check will turn the build red on purpose** when Rust stable moves
+  (1.100.0 is expected around 2026-11-12 on the six-week cycle, sooner with a
+  1.99.x point release). Then: edit `mobile/rust-toolchain.toml`, re-run the
+  core's tests, commit.
+**Security:** reviewer — 0 HIGH, 0 MEDIUM, 3 LOW, all fixed (`e9eb128`):
+third-party actions pinned to commits (resolved with `git ls-remote`,
+matching the reviewer's); `permissions: contents: read` and
+`persist-credentials: false` everywhere; the audit also runs weekly. INFO:
+no workflow injection (no `${{ }}` in any `run:`); fork pull requests get a
+read-only token and no secrets; cargokit's environment dump is gone; nothing
+secret is compiled into the artefacts.
+Spec reviewer — 0 HIGH, 0 MEDIUM, 2 LOW, INFO: the 0.4 record (corrected
+above); tokio 1.53.2 carries RUSTSEC-2026-0386 ("unsound", `AsyncFd`) —
+reached only through flutter_rust_bridge today, but P1 task 1.0 makes tokio a
+direct dependency, which cargo-deny would fail → task 1.0 pins `=1.53.3`.
+INFO: CI's Xcode (`latest-stable` on macos-15) is likely 26.x, not the Mac's
+27.1; if the iOS job fails, check the version and consider `macos-26`.
+**Gate evidence:**
+- G1: locally, at the 0.5 commits — fmt check clean, clippy clean, 20 tests
+  pass (`--locked`); the pin-check snippet prints `pinned 1.99.0, stable
+  1.99.0`; both workflow files parse.
+- G2: **pending the push** — the GitHub run URLs for `mobile-core` (core,
+  audit) and `mobile-build` (android-apk, ios-simulator) go here. PLAN 0.5 is
+  ticked only when all four are green (ios-simulator never has been).
+- G3: above. G4: `2db0136`, `206ffc1`, `e9eb128`; not pushed.
+
+---
+
+## Icons — the approved Photos icon            2026-10-29
+
+**Planned:** none — the operator approved app icons for both apps on
+2026-10-29 (made on the Linux machine, `docs/mobile/icons/`, `8a695dc`).
+**Did:** `mobile/tools/brand/install-photos-icon.sh` resizes the Photos set
+("fanned gallery") into all 34 iOS AppIcon slots and the five Android
+densities (legacy, adaptive foreground, and the Android 13 themed monochrome
+icon, wired in `mipmap-anydpi-v26/ic_launcher.xml`) and refreshes the icon
+generator's sources. Launch screens and in-app logos stay the DaemonClient
+logo. The brand README marks the old icon outputs as superseded.
+**Decisions:** assets only (plus one XML line and a resize script), so no
+Gate 3 under GATES.md's proportional rigor.
+**Gate evidence:** G2 — iOS: the built app's `AppIcon60x60@2x.png` is the new
+icon, and the copy installed on the iPhone 18 Pro Simulator is byte-identical
+(the home screen shows it on its second page; the first screenshot showed the
+old icon from a stale build — see below). Android emulator: the home screen
+shows the new icon. The iOS 1024 icon has no alpha. Commit `d52c269`.
+
+---
+
+## Finding — Xcode 27.1 breaks `flutter build ios --simulator`            2026-10-29
+
+Xcode auto-updated to 27.1 on 2026-10-16. Its `lipo` rejects several
+architectures after `-verify_arch` (`lipo: -verify_arch requires exactly one
+input file`; each architecture alone passes). Flutter 3.41.7's
+`debug_unpack_ios` checks `arm64 x86_64` in one call, so a two-architecture
+Simulator build fails with "Binary … Flutter does not contain architectures
+"arm64 x86_64"" although `lipo -info` lists both. `flutter run` and `flutter
+test` build only the running architecture and are unaffected. Workaround for
+local Simulator builds: `FLUTTER_XCODE_ARCHS=arm64 flutter build ios
+--simulator --debug` (Flutter passes `FLUTTER_XCODE_*` to Xcode). CI still uses
+an older Xcode. Also seen: a background build reported success because the
+shell's last command (`echo`) succeeded — check Flutter's own "✓ Built" line,
+not the job's exit code.
