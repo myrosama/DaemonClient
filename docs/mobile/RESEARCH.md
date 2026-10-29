@@ -504,7 +504,115 @@ the `flutter run` log:
    **The timeline is empty** — whether that account has photos is being checked
    with the operator.
 3. The app is still branded "immich" on iOS (logo, name) — P2 Task 2.1.
+   > **Correction, 2026-10-27:** no longer true. P0 task 0.4 renamed it
+   > "Photos" on the home screen and put the DaemonClient logo on the icon,
+   > launch screen and sign-in screen on iOS and Android (SPEC D20). Bundle
+   > ids and the remaining Immich names stay with P2 task 2.1.
 
 Conclusion for the plan: the hosted sign-in path is broken today, and media
-loading is untested until an account with photos is used. Both are what P1
+loading is untested until an account with photos is used.
+
+> **Update, 2026-10-12 (operator):** signed in with their own account, the
+> app showed their photos — through the old worker-heavy path (whole files
+> through the worker), which P1/P2 replace. The empty timeline in item 2 was
+> most likely an account with no photos (asked of the Linux machine). Both are what P1
 (core) and P2 (sign-in, media through the core) replace.
+
+---
+
+## 11. The worker API the core calls — exact shapes        2026-10-12
+
+Read from `immich-api-shim/src` at `main` (`2aec669`). Every call goes to the
+per-user `workerUrl` with `Authorization: Bearer <accessToken>` (R§6). The
+Linux machine's unreleased security work adds `check` to `/api/drive/zke`
+(R§2 note) — nothing else here changes.
+
+| Call | Request | Response | Source |
+|---|---|---|---|
+| Sign-in | `POST {base}/api/auth/login` `{email, password}` | `{accessToken, userId, userEmail, name, workerUrl, isAdmin, …}`; session lives ~10 years | `auth.ts:130-150` |
+| Bot config | `GET /api/server/telegram-config` | `{botToken, channelId, proxyUrl}` (the apps ignore `proxyUrl`) | `server.ts` `handleTelegramConfig` |
+| Photos key | `GET /api/server/zke-config` | `{enabled, password, salt, mode}` | `server.ts:66-97` |
+| Read an asset | `GET /api/assets/:id/dc-manifest` | `{thumbId, previewId, originalId, chunks:[{index,file_id}], playbackChunks?, playbackSize?, encryptionMode, mimeType, fileSize, isHeic}` | `asset-manifest.ts` |
+| Dedupe | `POST /api/assets/bulk-upload-check` `{assets:[{id, checksum}]}` | `{results:[{id, action:'accept'|'reject', assetId, isTrashed}]}` — `reject` means already stored, `assetId` is it | `assets.ts:441-458` |
+| Create asset (no bytes) | `POST /api/assets` multipart: `clientUpload=true`, `telegramChunks` (JSON `[{index,message_id,file_id}]`), `telegramOriginalId`, `telegramThumbId`, `encryptionMode`, `checksum`, `deviceAssetId`, `deviceId`, `fileCreatedAt`, `fileModifiedAt`, `fileName`, `fileSize`, `mimeType`, `width`, `height`, `duration`, `latitude`, `longitude`, `isFavorite`, `livePhotoVideoId`, `thumbhash`, `visibility` | an `AssetResponseDto` (`id` is what the core needs); duplicates — by `deviceAssetId+deviceId` (kind-aware, live-photo safe) or checksum — return the **existing** asset's DTO | `assets.ts:1146-1745` |
+| Thumbnail + preview | `POST /api/assets/:id/thumbnail` multipart `thumbnail` (or `thumbData_base64`), optional `preview`, `thumbhash`, `width`, `height` | `{success, telegramThumbId, preview, thumbhash}`; the worker encrypts and sends to Telegram | `assets.ts:475`, `:1891` |
+| Drive | `/api/drive/{config,zke,files,files/:id,usage}` | R§2 "Drive specifics" | `drive.ts` |
+
+**Consequences for the core:**
+- The no-bytes upload path already takes everything the phone has — device
+  identity, live-photo pairing, GPS, duration, size. The open items in R§6
+  ("deviceAssetId, live photos, EXIF") need **no worker change**; EXIF beyond
+  GPS/size/dates stays a later, additive question.
+- Dedupe has two layers the core must use in order: `bulk-upload-check` by
+  checksum before any byte is sent (saves Telegram traffic), then the
+  server's own `deviceAssetId` check on create (makes retries idempotent).
+- A failed create after the parts were sent leaves orphan Telegram messages;
+  the core's resume journal must keep the part list so a retry re-posts the
+  metadata instead of re-uploading.
+
+---
+
+## 12. Telegram — limits the production worker learned        2026-10-12
+
+From `immich-api-shim/src/assets.ts:3260-3395` (`paceSend`, `isSendUrl`,
+`tgFetchWithRetry`, `tgGetFileUrl`) — rules paid for in production incidents:
+
+| Rule | Value | Why (from the code's own comments) |
+|---|---|---|
+| Pace **sends** per bot (`sendDocument`, `sendPhoto`, …) | token bucket: 1 token / **1.5 s** (~20 per 30 s), burst **8** | Telegram's per-chat flood limit |
+| **Do not** pace downloads (`getFile`, file fetch) with the send bucket | — | "burning a send token for every thumbnail download was the root cause of 503 storms" |
+| `429` / `420` | wait `parameters.retry_after` | the worker caps it at 6 s only because a Worker request cannot hang; **the phone can wait the full time** |
+| `getFile` result (`file_path`) | cache **55 min** | Telegram keeps it valid ~1 h |
+| Logging | **never log a Telegram URL** — it contains the bot token (`/bot<TOKEN>/…`) | the token used to leak into logs on every rate-limit |
+
+**What the send limit means for backup speed.** Every stored artefact is one
+Telegram message: each 19 MiB part, each thumbnail, each HEIC preview. At ~20
+messages per 30 s per bot, a library of small photos (part + thumbnail = 2
+messages) backs up at about **20 photos a minute, ~1,200 an hour**, whatever
+the phone or network can do; large videos are bounded by bandwidth instead.
+The scheduler (SPEC §4.9) must therefore keep sends flowing at exactly that
+rate and never waste a send token — e.g. dedupe by checksum *before* sending.
+This is a property of Telegram bots, not of the app; it belongs in the
+product's expectations (first full backup of a big library takes hours).
+
+---
+
+## 9b. Nuke — the parts read in full for Task 1.4        2026-10-13
+
+Completes R§9's "not yet read" list (`kean/Nuke` `main`, MIT).
+
+**`Sources/Nuke/Tasks/AsyncTask.swift` (395 lines) — sharing and cancellation:**
+- One task per resource; any number of **subscriptions**, each with its own
+  priority. The task's priority is the **maximum** of its subscribers'
+  (`updatePriority`), recomputed on subscribe, `setPriority` and unsubscribe.
+- Removing the **last** subscriber terminates the task as *cancelled*: the
+  running operation is cancelled and the task unsubscribes from its
+  dependency, so cancellation cascades down a chain (image ← data). A task
+  that finished or failed fans the event out to every subscriber, then is
+  disposed (removed from the sharing map via `onDisposed`).
+- Priority changes propagate to the dependency the same way.
+
+**Behaviour list to port as failing tests** (test names from
+`Tests/NukeTests/{TaskQueueTests,TaskQueueLimitTests,RateLimiterTests}.swift`,
+`ImagePipelineTests/{ImagePipelineCoalescingTests,ImagePipelineSharedWorkPriorityTests}.swift`):
+
+- *Queue:* respects max concurrency (1, 2); raising the limit drains pending
+  work highest-priority first; lowering it lets running work finish; high
+  priority first; FIFO within a priority (**we use LIFO for "visible"** —
+  operator rule); raising/lowering a pending item's priority moves it;
+  priority change of running work is a no-op; low-priority work never takes a
+  **reserved** slot but always gets one slot; raising a running item's
+  priority frees its low-priority slot; cancelled pending work never runs and
+  is skipped during drain; **suspended queue starts nothing, running work
+  continues; resume drains pending work**; work added by running work runs
+  when a slot frees.
+- *Rate limiter:* a burst runs immediately; postponed items don't take tokens
+  until they run; deferred work runs in submission order; tokens refill at
+  the set rate and never exceed the burst; **deferred work that was cancelled
+  does not use up a token**.
+- *Sharing:* equivalent requests share one download; **the download is
+  cancelled only when the last task leaves**; a task joining mid-download gets
+  the same result; an error reaches every subscriber; a request after every
+  task was cancelled starts new work; the shared download follows the highest
+  priority of its tasks, drops when that task is cancelled, and pending
+  downloads start in priority order.
