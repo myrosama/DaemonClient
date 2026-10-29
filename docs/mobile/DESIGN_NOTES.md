@@ -251,3 +251,196 @@ precedence, user-impact wording) — all fixed in code or these records.
   paste its output here. (On this Mac the patch was applied by running the
   script by hand, since Flutter was already installed.)
 - **G3:** above. **G4:** code and docs commits below.
+
+> **Hook proof, 2026-10-12 (closes "Pending" above):** `mise install --force
+> flutter` in `immich/mobile` reinstalled Flutter 3.41.7 — the 2.15 GB download
+> needed resumable retries through DNS failures, and the zip's SHA-256
+> (`2e3e6af44d1adccf695deff52e5e4c8beb10e5625066b27ad082b38b83ef805e`) was
+> checked — and the `postinstall` hook removed the line: the patched
+> `buildCommands.addAll(...IPhoneSimulator...)` line occurs 0 times in the
+> installed `mac.dart` (still 0 on 2026-10-29; the file's date is the
+> reinstall's). 0.2a is done.
+
+---
+
+## 0.2 — What the existing Photos fork does at sign-in            2026-10-12
+
+**Planned:** run the fork in the Simulator and record what it does at sign-in.
+**Did:** recorded in RESEARCH §7 part 2 (2026-10-06): the hosted address signs
+in but the sync has no host; the per-user worker address signs in and syncs,
+with an empty timeline on that account. On 2026-10-12 the operator signed in
+with their own account and saw their photos — through the old path that sends
+whole files through the worker, which P1 and P2 replace. (Asked the Linux
+machine whether the first account has photos at all.)
+**Decisions:** none. No code — evidence only, so no Gate 3 (`GATES.md`
+proportional rigor).
+**Gate evidence:** RESEARCH §7 part 2 and its 2026-10-12 update.
+
+---
+
+## 0.4 — `dc_core_flutter` and the first Rust call from the Photos app            2026-10-29
+
+**Planned:** a Flutter plugin over `dc-core` (flutter_rust_bridge 2.13.0);
+the Photos app shows the core version on its sign-in screen, on the iOS
+Simulator and on Android.
+
+**Did:**
+- `mobile/packages/dc_core_flutter/`, generated with `flutter_rust_bridge_codegen
+  create … --template plugin --platforms ios,android`; the desktop platforms and
+  the template's `simple.*` demo removed. Dart API: `coreVersion()` and
+  `partCount({required BigInt fileSize})` — Rust `u64` arrives in Dart as
+  `BigInt`, which keeps sizes above 2^53 exact (P1's API should keep that).
+  The example app is a one-screen check; `example/integration_test/core_test.dart`
+  holds the bridge tests. The binding crate is a workspace member.
+- Photos app: path dependency in `pubspec.yaml`; `await RustLib.init()` is the
+  first line of `initApp()` in `lib/main.dart` (the file uses CRLF line
+  endings — kept; the diff is two lines); the sign-in page shows
+  `v<app> · core <version>`.
+- **Branding (operator, 2026-10-12, SPEC D20):** home-screen name "Photos"
+  (`CFBundleDisplayName`; Android `android:label`, debug build "Photos-Debug"),
+  app icon, launch/splash images and in-app logos drawn from
+  `drive/public/logo.png` on white; the Immich logo no longer spins on the
+  sign-in screen. The drawing scripts are `mobile/tools/brand/` — they
+  reproduce all 58 committed images byte for byte. The icon/splash generator
+  sources (`assets/immich-logo-android-adaptive-icon.png`,
+  `immich-logo-w-bg.png`, `immich-splash*.png`) now hold our images, so
+  re-running `flutter_launcher_icons` / `flutter_native_splash` no longer
+  brings the Immich logo back.
+- **Deviations from the P0 plan:** the template ships `cargokit/`, not
+  `rust_builder/`; Android Gate 2 ran on an emulator (Pixel 8 image, API 36,
+  AVD `dc-test`) instead of the Samsung over USB that the 0.1 entry planned;
+  Android shows `v2.7.5-DEBUG` (Immich's debug suffix) where the plan expected
+  `v2.7.5`.
+
+**Upstream breakages met on the way (each checked, not guessed):**
+- The plugin template targets iOS 13; Xcode 27 needs 15 → podspec, example
+  Podfile and example project raised to 15.0.
+- `libc` 0.2.190 restricted `_dyld_image_count` / `_dyld_get_image_name` to
+  macOS, so `backtrace` 0.3.76 (via flutter_rust_bridge) failed to compile for
+  iOS. Pinned to 0.2.189 on 2026-10-12; on 2026-10-29 0.2.190 still fails
+  and **0.2.191 builds** for `aarch64-apple-ios` and `-sim`, so the lock now
+  holds 0.2.191 and nothing is pinned. The iOS build in CI (0.5) guards it.
+- Android: `home_widget` 0.8.1 declares `androidx.work:work-runtime-ktx:2.+`,
+  which now resolves to WorkManager 2.12.0 — compiled for JVM 11
+  (`OneTimeWorkRequestKt.class` major 55), so its inline
+  `OneTimeWorkRequestBuilder` cannot be inlined into home_widget's JVM 1.8
+  code ("Cannot inline bytecode built with JVM target 11"). Forced 2.11.2 in
+  `android/build.gradle`, next to the June glance pin: still JVM 1.8 (major
+  52), the newest 2.11 fix release; background_downloader asks for 2.11.0.
+  This also lifts the app's catalog pin (`work = "2.9.1"`) — P2 2.6 relies
+  on WorkManager. Remove the force once home_widget pins its own version.
+- The root `.gitignore` rule `lib/` silently ignored the plugin's whole Dart
+  API and cargokit's build tool — a fresh clone could not have built the
+  core (the same trap as `b1a466d`). Fixed with `!mobile/**/lib/`.
+- Two Android build failures went away on a rerun with no change: a Gradle
+  build-cache store error ("Could not get file mode for …/merged.dir/values-in")
+  and a CMake failure in the `jni` package right after Gradle installed CMake
+  3.22.1. A third failure on 2026-10-27 was a full disk (881 MB free); freeing
+  build folders fixed it.
+
+**Decisions:**
+- **Logging off at start.** FRB's template calls `setup_default_user_utils()`,
+  which turns on Trace-level Rust logging to logcat and os_log (`%{public}s`,
+  no redaction) and sets `RUST_BACKTRACE=1`. `init_app` is now empty; the
+  core sets up its own redacting logger in P1 (SPEC §4.8).
+- **Binding crate settings.** It takes the workspace's version, edition 2024
+  and `publish = false` (it builds and tests on 2024 — checked). It does not
+  take the workspace lints, because the generated `frb_generated.rs` needs
+  `unsafe` and unwraps; `src/api/mod.rs` — the hand-written part — forbids
+  `unsafe` and denies unwrap/expect/indexing itself.
+- **cargokit:** `rust/cargokit.yaml` passes `--locked` (app builds use exactly
+  `mobile/Cargo.lock`) and has no `precompiled_binaries` section, so cargokit
+  always builds from source and never downloads a binary. Local patch:
+  `cargokit/build_pod.sh` no longer runs `env`, which printed every
+  environment variable into the Xcode build log.
+- **cargokit ignores `mobile/rust-toolchain.toml`:** it runs `rustup run stable
+  cargo build` (`builder.dart`: `_toolchain ?? 'stable'`; only
+  stable/beta/nightly accepted). Today stable is 1.99.0, the pin. Task 0.5
+  adds a CI check that fails when they differ.
+- **Plugin metadata:** licence pointer to the repo's AGPL-3.0, accurate README,
+  pubspec and podspec text, Android namespace `uz.daemonclient.dc_core_flutter`;
+  the template's unused `ffi`, `ffigen` and `plugin_platform_interface`
+  dependencies removed.
+
+**Fork files changed by this task** (SPEC §10 asks for this list), under
+`immich/mobile/`: `pubspec.yaml`, `pubspec.lock`, `lib/main.dart`,
+`lib/pages/login/login.page.dart`, `lib/widgets/forms/login/login_form.dart`,
+`ios/Podfile.lock`, `ios/Runner/Info.plist`, the iOS `AppIcon` and
+`LaunchImage` PNGs, `assets/immich-{logo,logo-w-bg,logo-android-adaptive-icon,
+splash,splash-android12,text-light,text-dark}.png`,
+`assets/immich-logo-inline-{light,dark}.{png,svg}`, `android/build.gradle`,
+`android/app/src/main/AndroidManifest.xml`,
+`android/app/src/debug/AndroidManifest.xml`,
+`android/app/src/main/res/values/colors.xml`, and the Android `mipmap-*`
+launcher and `drawable{,-night}-*` splash PNGs. Images keep Immich's file
+names so code and generator configs need no change.
+
+**Security:** reviewer (2026-10-27; a first run on 10-13 stopped at a usage
+limit before reporting) — 0 HIGH, 2 MEDIUM, 2 LOW, 4 INFO.
+- MEDIUM: FRB's default init turned on Trace logging to the device log, where
+  an HTTP client's debug line would carry the bot token → `init_app` emptied;
+  test `starting_the_app_turns_on_no_logging` failed first (`left: Trace`).
+- MEDIUM: `!mobile/**/lib/**` re-included `.env` files and keys under any
+  `lib/`, overriding the SECRETS rules (`git check-ignore` proved it) → the
+  `lib/**` lines removed for `mobile/` **and** `immich/mobile/` (same flaw,
+  older); 461 Dart files checked still trackable, secret paths ignored again.
+  A similar rule outside the mobile folders belongs to the Linux machine and
+  was passed to it, not edited here.
+- LOW: cargokit's `env` line → removed. LOW: WorkManager 2.11.0 missed two fix
+  releases → 2.11.2.
+- INFO, taken: `--locked`; module-level lints in the binding; no
+  `cargo-deny` yet → Task 0.5. INFO, confirmed fine: no precompiled-binary
+  download; vendored cargokit identical to the FRB template; the new SVGs
+  hold one embedded PNG and nothing active; PNG metadata has no GPS, author
+  or paths.
+- INFO, recorded for the operator: "Photos" is also the system app's name —
+  the iOS permission prompt will read "“Photos” Would Like to Access Your
+  Photos" (SPEC §10, before P4).
+
+Spec reviewer (2026-10-27) — 0 HIGH, 2 MEDIUM, 6 LOW, 1 INFO.
+- MEDIUM: the example app still called the deleted `greet()` and did not
+  compile → rewritten; `flutter analyze` clean for plugin and example.
+- MEDIUM: "Photos" contradicted SPEC D9/§5 → SPEC D20, §5 item 1, §10 risk,
+  §11 line; PLAN 2.1 narrowed.
+- LOW: libc pin unexplained → resolved upstream, see above. LOW: cargokit
+  ignores the pin → recorded, PLAN tech stack and P0 0.5 amended. LOW: template
+  leftovers → replaced. LOW: generator sources still Immich's → replaced, with
+  `mobile/tools/brand/`. LOW: Dart-side Gate 1 evidence missing → run, below.
+  LOW: commits must be split → done (G4). INFO: binding crate exceptions →
+  recorded above.
+- Records it asked for: 0.2a hook proof (above), 0.2 entry (above), RESEARCH
+  §7 part 2 corrections, EXECUTION_STATUS, NOW.md (the names were sent to
+  Linux on 10-13), and **push 0.4 together with 0.5** — the Photos CI build
+  needs Rust from now on.
+
+**Gate evidence:**
+- **G1:** bridge tests written first (`core_test.dart`: version string; 2 GiB →
+  108 parts; 2^54 → 904,203,642 parts) — 2/2, and a deliberately broken core
+  made them fail. `starting_the_app_turns_on_no_logging` failed before the
+  fix and passes after. Rust: `cargo fmt --check`, `cargo clippy --workspace
+  --all-targets` with the workspace's deny lints, `cargo test --workspace` —
+  21 tests. Dart: `flutter analyze` clean for the plugin and its example; in
+  `immich/mobile`, `flutter analyze lib test` — no issues (a whole-folder
+  `flutter analyze` reports 175 errors, all in upstream's
+  `packages/ui/showcase`, whose packages were never fetched — not app code);
+  `flutter test` — 668 passed, 1 skipped.
+- **G2:**
+  - iOS 27 Simulator (iPhone 18 Pro), 2026-10-12: sign-in screen shows
+    "v2.7.5 · core 0.1.0", the DaemonClient logo and wordmark; home screen
+    shows "Photos" with the cloud icon.
+  - Android emulator (API 36), 2026-10-13: sign-in screen "v2.7.5-DEBUG · core
+    0.1.0"; app list shows "Photos-Deb…" with the cloud icon inside the round
+    mask (a first try at 56% touched the mask; 46% fits); Android 12 splash
+    shows the whole logo; `aapt2 dump badging` → application-label
+    'Photos-Debug'.
+  - After the Gate 3 fixes: bridge tests 2/2 on the Android emulator
+    (2026-10-27) and on the iOS Simulator under Xcode 27.1 (2026-10-29). The
+    rebuilt Photos APK resolves `androidx.work:work-runtime-ktx` → 2.11.2
+    (`gradlew :app:dependencies`), launches and gets past `RustLib.init()`,
+    and logcat shows no Rust log lines. The emulator had meanwhile been signed
+    in to a real account (not the test account), so the app opened on its
+    library — the run was stopped there and the screenshot deleted (D10); the
+    sign-in label was not re-photographed.
+- **G3:** above. **G4:** code commits (core plugin, Photos wiring, Android
+  build fix, branding, `.gitignore`) and docs commits below; not pushed —
+  0.4 goes out with 0.5.

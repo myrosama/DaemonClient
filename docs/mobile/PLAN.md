@@ -11,7 +11,8 @@ on the phone.
 import. Photos is the Immich fork in `immich/mobile`, with its server and byte
 paths moved onto the core; Drive is a new Flutter app in `mobile/drive`.
 
-**Tech stack:** Rust (stable, pinned in `mobile/rust-toolchain.toml`),
+**Tech stack:** Rust (stable, pinned in `mobile/rust-toolchain.toml`; app
+builds go through cargokit, which uses `stable` — CI checks they match, 0.5),
 flutter_rust_bridge 2.13.0, Flutter 3.41.7, Xcode 27, Android SDK + NDK,
 `aes-gcm`, `pbkdf2`, `reqwest`, `axum`, `tokio`.
 
@@ -101,19 +102,23 @@ Detailed: `plans/P0-toolchain-and-skeleton.md`.
 - [x] **0.1** Free disk space and install the toolchain (Rust, Flutter via
       mise, CocoaPods, iOS Simulator runtime, JDK 21, Android SDK + NDK,
       flutter_rust_bridge codegen).
-- [ ] **0.2** Run the existing Photos fork in the Simulator; record what it
+- [x] **0.2** Run the existing Photos fork in the Simulator; record what it
       does at sign-in.
-- [ ] **0.2a** Make the Photos fork build on Xcode 27 (added 2026-10-06; SPEC §9
+- [x] **0.2a** Make the Photos fork build on Xcode 27 (added 2026-10-06; SPEC §9
       P0 exit needs a building app): iOS minimum 15.0, upstream Immich's Flutter
       patch for Swift macros, Xcode-27-ready Swift package pins (RESEARCH §7).
 - [x] **0.3** Cargo workspace at `mobile/` and `dc-core` with `chunk_plan`
       (part count; byte range → parts, with the edge cases of Review focus 3).
-- [ ] **0.4** `dc_core_flutter` plugin; the Photos app shows the core version
-      on its sign-in screen, on the iOS Simulator and Android.
+- [x] **0.4** `dc_core_flutter` plugin; the Photos app shows the core version
+      on its sign-in screen, on the iOS Simulator and Android. (With it, by the
+      operator's decision of 2026-10-12, SPEC D20: home-screen name "Photos" and
+      the DaemonClient logo on both platforms.)
 - [ ] **0.5** CI: the core's format, lint and tests on every push touching
       `mobile/`; the mobile build installs Rust, runs the Flutter patch
       (`ios/scripts/xcode_flutter_patch.sh`) in the iOS job, and **passes** —
-      its iOS job never has (RESEARCH §7).
+      its iOS job never has (RESEARCH §7). Also: cargokit's `stable` must equal
+      the pinned Rust, and a dependency audit. **Push 0.4 together with 0.5**:
+      the Photos build needs Rust from 0.4 on.
 - [ ] **0.6** Clean-up proposal (SPEC §5.7) and the detailed P1 plan, both
       for the operator's review.
 
@@ -153,8 +158,11 @@ Detailed: `plans/P0-toolchain-and-skeleton.md`.
 
 ## P2 — Photos on the core
 
-- [ ] **2.1** Identity — iOS bundle ids `uz.daemonclient.photos*`, names;
-      signing with the operator's Apple ID for device builds.
+- [ ] **2.1** Identity — iOS bundle ids `uz.daemonclient.photos*`; signing
+      with the operator's Apple ID for device builds; the Immich identity still
+      left (`CFBundleName` `immich_mobile`, the Share Extension and Widget names,
+      Android `notification_icon.png`). Home-screen names and app icons were
+      done in 0.4 (SPEC D20).
 - [ ] **2.2** Sign-in (SPEC D8) — server address, "Sign in with a
       DaemonClient account", "Create account" in an in-app browser sheet;
       `workerUrl`; secrets to secure storage.

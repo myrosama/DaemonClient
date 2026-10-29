@@ -44,7 +44,7 @@ because of it (Cloudflare body and CPU limits).
 | D6 | Drive gets **its own UI**, inspired by Apple Files, Google Drive and Documents (R§1, R§1b). No fork. | 2026-10-04 | operator |
 | D7 | Order: core → **Photos** → Drive. | 2026-10-04 | operator |
 | D8 | Sign-in: server address field for self-hosters; "Sign in with a DaemonClient account" for the hosted service; "Create account" opens the sign-up page in an in-app browser sheet. | 2026-10-04 | operator |
-| D9 | Names and ids: **DaemonClient Photos** `uz.daemonclient.photos`, **DaemonClient Drive** `uz.daemonclient.drive`. | 2026-10-04 | operator (accepted default) |
+| D9 | Names and ids: **DaemonClient Photos** `uz.daemonclient.photos`, **DaemonClient Drive** `uz.daemonclient.drive`. (Home-screen name narrowed by D20.) | 2026-10-04 | operator (accepted default) |
 | D10 | Testing uses the test account only, never the operator's library. | 2026-10-04 | operator (accepted default) |
 | D11 | **Top priorities for Photos:** automatic upload that just works (also in the background); excellent thumbnails; HEIC on **both** iPhone and Android; videos that open instantly and seek smoothly. | 2026-10-04 | operator |
 | D12 | Remove what DaemonClient does not use — from a written list the operator approves first (§5.7). | 2026-10-04 | operator |
@@ -55,6 +55,7 @@ because of it (Cloudflare body and CPU limits).
 | D18 | **HEIC/HEIF and RAW uploads also get a ~1440 px JPEG preview**, so the website (Chrome, Firefox) can open them. Stored through the existing `POST /api/assets/:id/thumbnail` route (`preview` field) that the web's HEIC Fix tool already uses — **no worker change**. Formats every browser draws (JPEG, PNG, WebP) get no preview. Narrows D14. (R§8) | 2026-10-05 | operator |
 | D19 | The fetch scheduler is a Rust port of **Nuke's** pipeline design (MIT): coalescing, priority queue with reserved slots and suspension, cancellation, token-bucket rate limit where cancelled work spends no token. (R§9, §4.9) | 2026-10-05 | operator |
 | D16 | One shared engine with two thin adapters — Photos (`/api/assets`, Photos key, thumbnails, checksum) and Drive (`/api/drive/files`, Drive key, ordered `messages`). | 2026-10-04 | plan, confirmed by operator |
+| D20 | The Photos app's **home-screen name is "Photos"** (Android debug builds "Photos-Debug"); its app icon, launch/splash screens and in-app logos are the DaemonClient logo (`drive/public/logo.png` on white); the Immich logo no longer spins on the sign-in screen. Done in P0 task 0.4, ahead of P2 task 2.1. The store name stays "DaemonClient Photos" (D9) unless the operator decides otherwise before P4 (§10). | 2026-10-12 | operator |
 
 ---
 
@@ -237,6 +238,11 @@ Every Telegram read goes through it.
   through thousands of thumbnails costs only what gets loaded. Starting values
   (to be measured in P1 1.8 with `dc-cli`): about 20 requests/s, burst 10,
   6 downloads at once. A `429` pauses **all** reads for `retry_after`.
+  *The website uses its own measured values* (Linux machine, 2026-10-12): 12
+  jobs at once, 2 reserved for the opened photo, at most 3 Next, burst 12, rate
+  20/s — over HTTP/2 a cold thumbnail is 3 sequential requests, and 6 slots
+  filled the grid slower than the old loader. The phone apps keep the values
+  above (HTTP/1.1 to the local server, about 6 connections per host).
 - **Fewer round-trips:** each `getFile` result is cached for its validity
   window, so a thumbnail usually costs one request, not two; decrypted
   thumbnails go to the disk cache (§4.7) because a `file_id` never changes.
@@ -248,8 +254,10 @@ Every Telegram read goes through it.
 What changes in `immich/mobile`; everything else stays Immich's:
 
 1. **Identity on iOS** — bundle ids are still Immich's (R§5). Becomes
-   `uz.daemonclient.photos` (+ `.ShareExtension`, `.Widget`), display name
-   "DaemonClient Photos". Android is already `uz.daemonclient.photos`.
+   `uz.daemonclient.photos` (+ `.ShareExtension`, `.Widget`). Store name
+   "DaemonClient Photos" (D9); the home-screen name "Photos" and the
+   DaemonClient logo arrived early, in P0 task 0.4 (D20). Android is already
+   `uz.daemonclient.photos`.
 2. **Sign-in (D8)**
    - Main form: server address, email, password — the fields Immich already
      has, for self-hosters.
@@ -404,6 +412,7 @@ into tasks.
 | Fields the Immich app sends that the web does not (deviceAssetId, live photos, EXIF) | Backup screen, dedupe, map | P2 — may need an additive worker change |
 | Taking Immich updates later | Every change to the fork makes merges harder | Keep changes in few files; list them in `DESIGN_NOTES.md` |
 | The operator's iPhone for device builds | Needs the operator's Apple ID in Xcode (free, 7-day builds) | P0 |
+| Home-screen name "Photos" (D20) is also the name of Apple's Photos and Google Photos | Users may confuse the two apps; the iOS permission prompt reads "“Photos” Would Like to Access Your Photos"; App Review may object to a name that copies a system app | P4 — the operator confirms the store and home-screen names before submission |
 
 ---
 
@@ -416,3 +425,4 @@ into tasks.
 | 2026-10-04 | D14–D16: no preview upload (§5.1 rewritten, worker change dropped), smart loading (§4.9), shared engine + two adapters | operator |
 | 2026-10-04 | D17: the opened item pre-empts everything (§4.9 priority classes) | operator |
 | 2026-10-05 | D18: previews for HEIC/HEIF/RAW so the website can open them (§5.1); D19: scheduler ported from Nuke (§4.9 rewritten) | operator |
+| 2026-10-27 | D20: home-screen name "Photos" and the DaemonClient logo, done in P0 0.4 (§5 item 1, §10 risk); §4.9 notes the website's measured scheduler values | operator (D20, 2026-10-12); Linux machine (web values) |

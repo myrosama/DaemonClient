@@ -753,8 +753,9 @@ jobs:
       - uses: actions/checkout@v4
       # rustup is preinstalled; it reads mobile/rust-toolchain.toml.
       - run: cargo fmt --all --check
-      - run: cargo clippy -p dc-core --all-targets -- -D warnings
-      - run: cargo test -p dc-core
+      # --workspace: since Task 0.4 the plugin's binding crate is a member too.
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
 ```
 
 - [ ] **Step 2: The mobile build now needs Rust (and the Flutter patch)**
@@ -777,14 +778,44 @@ In the `ios-simulator` job, after `setup-xcode`, the same step.
 ```yaml
       - name: Patch Flutter for Swift macros (upstream Immich, RESEARCH §7)
         run: bash ios/scripts/xcode_flutter_patch.sh
-``` (`rustup show`
-installs the toolchain and targets listed in `mobile/rust-toolchain.toml`.)
+```
+
+(`rustup show` installs the toolchain and targets listed in
+`mobile/rust-toolchain.toml`.)
+
+**Added 2026-10-27 (Task 0.4, Gate 3):** cargokit, which compiles the core
+during the app build, runs `rustup run stable cargo build` and so ignores
+`mobile/rust-toolchain.toml` (`cargokit/build_tool/lib/src/builder.dart`
+`_toolchain ?? 'stable'`; its options accept only stable/beta/nightly). Today
+stable *is* 1.99.0; when it moves, app builds and `cargo test` would use
+different compilers. In both build jobs, after `rustup show`, fail loudly
+instead of drifting silently:
+
+```yaml
+      - name: The app build's Rust (cargokit uses `stable`) must be the pinned one
+        working-directory: mobile
+        run: |
+          rustup toolchain install stable --profile minimal
+          pinned=$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml)
+          stable=$(rustup run stable rustc --version | cut -d' ' -f2)
+          echo "pinned $pinned, stable $stable"
+          test "$pinned" = "$stable" || { echo "Bump mobile/rust-toolchain.toml to $stable (and re-run the core's tests) — cargokit builds apps with stable."; exit 1; }
+```
+
+The core job also gets a dependency audit (Gate 3 security, 2026-10-27):
+
+```yaml
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          manifest-path: mobile/Cargo.toml
+          command: check advisories
+```
 
 - [ ] **Step 3: Verify locally what CI will run**
 
 ```bash
 cd ~/Desktop/DaemonClient/mobile
-cargo fmt --all --check && cargo clippy -p dc-core --all-targets -- -D warnings && cargo test -p dc-core
+cargo fmt --all --check && cargo clippy --workspace --all-targets --locked -- -D warnings && cargo test --workspace --locked
 ```
 
 Expected: PASS.
