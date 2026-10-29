@@ -32,7 +32,7 @@ reviewed by the operator before work starts.
 | Phase | Detailed plan | State |
 |---|---|---|
 | P0 Toolchain and skeleton | `plans/P0-toolchain-and-skeleton.md` | **approved 2026-10-04 — in progress** |
-| P1 The core | `plans/P1-core.md` | written as task 0.6 |
+| P1 The core | `plans/P1-core.md` | **Part 1 (design) in review with the operator, 2026-10-29**; Part 2 (step-by-step tasks) after approval |
 | P2 Photos on the core | `plans/P2-photos.md` | written at the end of P1 |
 | P3 Drive | `plans/P3-drive.md` | written at the end of P2, after Drive's design is approved |
 | P4 Release | `plans/P4-release.md` | written at the end of P3 |
