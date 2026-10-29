@@ -3,7 +3,9 @@
 # iOS: UNSIGNED simulator .app (no Apple account needed) — runs on Appetize.io
 #      in the browser and in CI simulators.
 # Triggers only on mobile changes (or manually) so worker/web pushes never
-# burn minutes.
+# burn minutes. Since P0 task 0.4 the app links the Rust core
+# (mobile/packages/dc_core_flutter), so both jobs install Rust and the core's
+# changes trigger them too.
 name: mobile-build
 
 on:
@@ -12,6 +14,7 @@ on:
     branches: [main]
     paths:
       - 'immich/mobile/**'
+      - 'mobile/**'
       - '.github/workflows/mobile-build.yml'
 
 defaults:
@@ -28,6 +31,18 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
+      # The core is compiled during the app build by cargokit, which runs
+      # `rustup run stable` and ignores mobile/rust-toolchain.toml — so fail
+      # loudly if `stable` is not the pinned version (P0 task 0.5).
+      - name: Rust for the core
+        working-directory: mobile
+        run: |
+          rustup show
+          rustup toolchain install stable --profile minimal
+          pinned=$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml)
+          stable=$(rustup run stable rustc --version | cut -d' ' -f2)
+          echo "pinned $pinned, stable $stable"
+          test "$pinned" = "$stable" || { echo "Bump mobile/rust-toolchain.toml to $stable (and re-run the core's tests): cargokit builds the apps with stable."; exit 1; }
       - uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.41.7'
@@ -58,11 +73,28 @@ jobs:
       - uses: maxim-lobanov/setup-xcode@v1
         with:
           xcode-version: latest-stable
+      # The core is compiled during the app build by cargokit, which runs
+      # `rustup run stable` and ignores mobile/rust-toolchain.toml — so fail
+      # loudly if `stable` is not the pinned version (P0 task 0.5).
+      - name: Rust for the core
+        working-directory: mobile
+        run: |
+          rustup show
+          rustup toolchain install stable --profile minimal
+          pinned=$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml)
+          stable=$(rustup run stable rustc --version | cut -d' ' -f2)
+          echo "pinned $pinned, stable $stable"
+          test "$pinned" = "$stable" || { echo "Bump mobile/rust-toolchain.toml to $stable (and re-run the core's tests): cargokit builds the apps with stable."; exit 1; }
       - uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.41.7'
           channel: stable
           cache: true
+      # Flutter's simulator builds pass `-sdk iphonesimulator`, which builds
+      # Swift macro programs for the Simulator; upstream Immich's patch removes
+      # it (RESEARCH §7). subosito sets FLUTTER_ROOT, which the script reads.
+      - name: Patch Flutter for Swift macros
+        run: bash ios/scripts/xcode_flutter_patch.sh
       - run: flutter pub get
       # lib/generated/* (translations) is gitignored codegen output — main.dart
       # imports it, so generate before building (mirrors `make translation`,

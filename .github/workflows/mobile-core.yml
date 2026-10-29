@@ -1,0 +1,44 @@
+# The Rust core shared by the Photos and Drive apps (docs/mobile/SPEC.md §3):
+# format, lints, tests and a dependency audit on every change under mobile/.
+name: mobile-core
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'mobile/**'
+      - '.github/workflows/mobile-core.yml'
+  pull_request:
+    paths:
+      - 'mobile/**'
+      - '.github/workflows/mobile-core.yml'
+
+defaults:
+  run:
+    working-directory: mobile
+
+jobs:
+  core:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      # rustup is preinstalled; this installs the toolchain, components and
+      # targets that mobile/rust-toolchain.toml pins.
+      - run: rustup show
+      - run: cargo fmt --all --check
+      # --workspace: since P0 task 0.4 the plugin's binding crate is a member too.
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
+
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      # Known vulnerabilities in any crate the core or the bridge depends on.
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          manifest-path: mobile/Cargo.toml
+          command: check advisories
