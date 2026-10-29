@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <clipPath id="front"><rect x="112" y="132" width="288" height="258" rx="40"/></clipPath>
+    <mask id="m" maskUnits="userSpaceOnUse" x="0" y="0" width="512" height="512">
+      <rect width="512" height="512" fill="#000000"/>
+      <rect x="112" y="132" width="288" height="258" rx="40" fill="#FFFFFF" transform="rotate(14 256 261)"/>
+      <rect x="112" y="132" width="288" height="258" rx="40" fill="#FFFFFF" transform="rotate(5 256 261)"/>
+      <g transform="rotate(-6 256 261)">
+        <rect x="112" y="132" width="288" height="258" rx="40" fill="#000000" stroke="#000000" stroke-width="20"/>
+        <rect x="112" y="132" width="288" height="258" rx="40" fill="#FFFFFF"/>
+        <g clip-path="url(#front)" fill="#000000">
+          <circle cx="318" cy="200" r="24"/>
+          <path d="M90 300C150 252 206 256 262 286C312 312 360 300 420 262V280C360 318 312 330 262 304C206 274 150 270 90 318Z"/>
+          <path d="M90 352C140 328 186 334 232 352C258 362 292 364 330 352C366 340 396 344 420 352V370C396 362 366 358 330 370C292 382 258 380 232 370C186 352 140 346 90 370Z"/>
+        </g>
+      </g>
+    </mask>
+  </defs>
+  <g transform="translate(256 256) scale(0.72) translate(-256 -256)">
+    <rect width="512" height="512" fill="#FFFFFF" mask="url(#m)"/>
+  </g>
+</svg>
