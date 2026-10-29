@@ -12,3 +12,13 @@ String coreVersion() => RustLib.instance.api.crateApiCoreCoreVersion();
 /// Number of 19 MiB Telegram parts a file of `file_size` bytes is split into.
 BigInt partCount({required BigInt fileSize}) =>
     RustLib.instance.api.crateApiCorePartCount(fileSize: fileSize);
+
+/// Starts the core once per app process; later calls do nothing.
+Future<void> startCore({required String dataDir, required String cacheDir}) =>
+    RustLib.instance.api.crateApiCoreStartCore(
+      dataDir: dataDir,
+      cacheDir: cacheDir,
+    );
+
+/// One HTTPS request from the device to Telegram; the HTTP status.
+Future<int> checkTelegram() => RustLib.instance.api.crateApiCoreCheckTelegram();
