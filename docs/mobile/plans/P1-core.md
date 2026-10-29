@@ -1015,3 +1015,72 @@ later task):
   of `Core` for sign-out; errors reach Dart as text through `anyhow` until a
   typed error is needed (`SignedOut`, task 1.2).
 
+
+## Task 1.1 — Crypto
+
+**Delivers:** the spike's crypto (proven 2026-10-27/29 against
+`drive/src/crypto.js`, both directions, up to a full 19 MiB part) moved into
+`dc-core`, with the production-JavaScript checks in CI.
+
+**Files:**
+- Create: `mobile/core/compat/{gen-vectors.mjs,verify-rust-output.mjs,vectors.json}`
+  (copied from `~/dc-work/p1-spike/compat/`; `vectors.json` regenerated here)
+- Create: `mobile/core/dc-core/src/crypto.rs`, `mobile/core/dc-core/examples/emit_vectors.rs`
+- Modify: `mobile/core/dc-core/{Cargo.toml,src/lib.rs}`, `.github/workflows/mobile-core.yml`
+
+**Interfaces (later tasks rely on these):** `dc_core::crypto::{Key,
+CryptoError, derive_key(password, salt_b64) -> Result<Key, CryptoError>,
+encrypt_part(&Key, &[u8]) -> Result<Vec<u8>, CryptoError>,
+decrypt_part(&Key, Vec<u8>) -> Result<Bytes, CryptoError>,
+verify_drive_key(&Key, check_b64) -> bool, forgiving_base64, IV_LEN, TAG_LEN,
+PBKDF2_ITERATIONS, DRIVE_KEY_CHECK_PLAINTEXT}`. `CryptoError` = `BadSalt |
+Truncated(usize) | Authentication | Random | PartTooLarge`.
+
+- [ ] **Step 1: Dependencies** — `[dependencies]` gains `aes-gcm = "=0.11.1"`,
+  `base64 = "=0.23.1"`, `bytes = "=1.12.1"`, `getrandom = "=0.4.3"`,
+  `pbkdf2 = { version = "=0.13.0", default-features = false, features = ["hmac"] }`,
+  `sha2 = "=0.11.1"`, `subtle = "=2.6.1"`; `[dev-dependencies]` gains
+  `hex = "=0.4.3"`, `serde = { version = "=1.0.229", features = ["derive"] }`,
+  `serde_json = "=1.0.154"` (the example uses them too).
+- [ ] **Step 2: Vectors** — copy the two scripts to `mobile/core/compat/`
+  (their default repo root is `../../..` from there, which is the repo root)
+  and run `node mobile/core/compat/gen-vectors.mjs > mobile/core/compat/vectors.json`.
+- [ ] **Step 3: Tests first** — `src/crypto.rs` with the spike's eight tests
+  (`derives_the_same_key_as_production_javascript`,
+  `decrypts_parts_production_javascript_encrypted`,
+  `fixed_iv_output_is_byte_identical_to_webcrypto`,
+  `round_trips_and_uses_a_fresh_iv_each_time`,
+  `rejects_wrong_key_tampering_and_truncation`, `verifies_the_drive_key_check`,
+  `salt_decoding_matches_atob`, `debug_output_never_shows_key_bytes`), reading
+  `include_str!("../../compat/vectors.json")`. Run → fails (no module).
+- [ ] **Step 4: The module** — the spike's `crypto.rs` with one change: no
+  `expect`. `encrypt_part_with_iv` returns `Result<Vec<u8>, CryptoError>` and
+  maps AES-GCM's only failure (a plaintext over 64 GiB) to `PartTooLarge`:
+
+```rust
+pub(crate) fn encrypt_part_with_iv(key: &Key, iv: &[u8; IV_LEN], plaintext: &[u8]) -> Result<Vec<u8>, CryptoError> {
+    let mut out = Vec::with_capacity(IV_LEN + plaintext.len() + TAG_LEN);
+    out.extend_from_slice(iv);
+    out.extend_from_slice(plaintext);
+    let (_, body) = out.split_at_mut(IV_LEN);
+    let tag = key
+        .cipher()
+        .encrypt_inout_detached(&Nonce::from(*iv), &[], body.into())
+        .map_err(|_| CryptoError::PartTooLarge)?;
+    out.extend_from_slice(&tag);
+    Ok(out)
+}
+```
+
+  (`encrypt_part` returns `encrypt_part_with_iv(key, &iv, plaintext)`; the
+  fixed-IV test unwraps it.) Run → 8 pass; clippy, fmt.
+- [ ] **Step 5: Rust → JavaScript** — `examples/emit_vectors.rs` (the
+  spike's, `spike::` → `dc_core::`), then
+  `cargo run -q -p dc-core --example emit_vectors | node mobile/core/compat/verify-rust-output.mjs`
+  → five `ok` lines, exit 0. In `mobile-core.yml`'s `core` job add
+  `actions/setup-node` (Node 22) and that command as a step, and add
+  `drive/src/crypto.js` to both `paths:` lists — a change to the production
+  crypto must re-run the check.
+- [ ] **Step 6: Gate 2** — the vectors are the real-conditions check (the
+  production code itself produced and verified them); paste both directions'
+  output into DESIGN_NOTES. Gate 3; commit code, then docs.
