@@ -1,9 +1,10 @@
 # P1 — The Rust core
 
-**Status: Part 1 (design) is IN REVIEW with the operator — 2026-10-29.**
-Part 2 (the task-by-task plan, with failing tests and code for every step) is
-written after the operator approves Part 1, so that it builds on decisions
-that will not change. Nothing in `mobile/core` changes before then.
+**Status: Part 1 (design) APPROVED by the operator, 2026-10-29** — all of
+C1–C11 as recommended ("I approve all of your recommendations, and the
+spec. GO for it!"). Part 2 holds the step-by-step plan: each task's steps,
+with failing tests and code, are written and committed **before** that task's
+code, so the plan always runs ahead of the work.
 
 Read first: `SPEC.md` §3–§4 (the approved core spec), `RESEARCH.md` §2
 (storage format), §6 (the web's client path), §9/§9b (Nuke), §10 (Immich's
@@ -418,4 +419,4 @@ committed separately, nothing pushed without the operator.
 
 # Part 2 — Tasks, step by step
 
-Written after the operator approves Part 1.
+Each task below is written before its code. Order: 1.0 → 1.8 (section 6).

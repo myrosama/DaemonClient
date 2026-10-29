@@ -157,8 +157,9 @@ or repurpose them, and every value must survive the app's strict parser
 ### 4.4 Telegram client
 
 - `sendDocument` (multipart; encrypted parts are named with random hex +
-  `.partNNN` so Telegram never sees real names), `getFile`, file download,
-  `deleteMessage`.
+  `.partNNN` so Telegram never sees real names — in Photos too, where the
+  website still sends the real name; unencrypted libraries keep the real
+  name), `getFile`, file download, `deleteMessage`.
 - `429` → wait `retry_after` and retry. `400/401/403/404` → stop and surface
   Telegram's own message (bad token, bot removed from the channel). Other
   failures → bounded retries with backoff.
@@ -194,6 +195,9 @@ or repurpose them, and every value must survive the app's strict parser
   every photo app does; size-bounded, evicted least-recently-used.
 - Originals and video are fetched on demand through a small bounded cache,
   not kept.
+- Asset manifests are kept in memory for 10 minutes — a manifest can gain a
+  preview or an H.264 rendition later. Decrypted thumbnails and previews are
+  kept on disk (500 MB by default), keyed by `file_id`, which never changes.
 - "Save to phone" is the only thing that writes a full file where the user
   can see it.
 
@@ -233,9 +237,10 @@ Every Telegram read goes through it.
   (`RemoteImagesImpl.swift:15-17`, `image_request.dart:29`); the local server
   sees the connection close and the scheduler cancels that fetch unless another
   request still wants the same file.
-- **Rate limit:** a token bucket (`governor`, MIT). A token is taken only when
-  a job actually starts, so **cancelled work never spends one** — a fast fling
-  through thousands of thumbnails costs only what gets loaded. Starting values
+- **Rate limit:** a token bucket ported from Nuke's (MIT). A token is taken
+  only when a job actually starts, so **cancelled work never spends one** — a
+  fast fling through thousands of thumbnails costs only what gets loaded. The
+  opened item skips the bucket (it still uses its reserved slot). Starting values
   (to be measured in P1 1.8 with `dc-cli`): about 20 requests/s, burst 10,
   6 downloads at once. A `429` pauses **all** reads for `retry_after`.
   *The website uses its own measured values* (Linux machine, 2026-10-12): 12
@@ -426,3 +431,4 @@ into tasks.
 | 2026-10-04 | D17: the opened item pre-empts everything (§4.9 priority classes) | operator |
 | 2026-10-05 | D18: previews for HEIC/HEIF/RAW so the website can open them (§5.1); D19: scheduler ported from Nuke (§4.9 rewritten) | operator |
 | 2026-10-27 | D20: home-screen name "Photos" and the DaemonClient logo, done in P0 0.4 (§5 item 1, §10 risk); §4.9 notes the website's measured scheduler values | operator (D20, 2026-10-12); Linux machine (web values) |
+| 2026-10-29 | The core's design (`plans/P1-core.md` part 1, decisions C1–C11) approved in full; from it: random part names in Photos too (§4.4), manifest and thumbnail caching (§4.7), the token bucket ported from Nuke instead of `governor` and the opened item skipping it (§4.9) | operator, 2026-10-29 |

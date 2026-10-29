@@ -32,7 +32,7 @@ reviewed by the operator before work starts.
 | Phase | Detailed plan | State |
 |---|---|---|
 | P0 Toolchain and skeleton | `plans/P0-toolchain-and-skeleton.md` | **approved 2026-10-04 — in progress** |
-| P1 The core | `plans/P1-core.md` | **Part 1 (design) in review with the operator, 2026-10-29**; Part 2 (step-by-step tasks) after approval |
+| P1 The core | `plans/P1-core.md` | **design approved 2026-10-29 — in progress**; each task's steps written before its code |
 | P2 Photos on the core | `plans/P2-photos.md` | written at the end of P1 |
 | P3 Drive | `plans/P3-drive.md` | written at the end of P2, after Drive's design is approved |
 | P4 Release | `plans/P4-release.md` | written at the end of P3 |
@@ -119,13 +119,19 @@ Detailed: `plans/P0-toolchain-and-skeleton.md`.
       its iOS job never has (RESEARCH §7). Also: cargokit's `stable` must equal
       the pinned Rust, and a dependency audit. **Push 0.4 together with 0.5**:
       the Photos build needs Rust from 0.4 on.
-- [ ] **0.6** Clean-up proposal (SPEC §5.7) and the detailed P1 plan, both
-      for the operator's review.
+- [x] **0.6** Clean-up proposal (SPEC §5.7) and the detailed P1 plan, both
+      for the operator's review. (P1 design approved 2026-10-29; the clean-up
+      proposal still awaits the operator and the Linux machine.)
 
 **Exit:** SPEC §9 P0.
 
 ## P1 — The core
 
+Detailed: `plans/P1-core.md` (design approved 2026-10-29, decisions C1–C11).
+
+- [ ] **1.0** Foundations — `Core` and its runtime, `Secret`, `CoreError`, the
+      core's own logger, the one HTTP client (rustls + ring + Mozilla roots,
+      C1); HTTPS to Telegram proven from the iOS Simulator and Android.
 - [ ] **1.1** Crypto — PBKDF2 + AES-GCM parts; vectors from the production
       JavaScript, both directions; verify a Drive custom password against the
       `check` value from `/api/drive/zke` (RESEARCH §2, added 2026-10-06).
@@ -138,8 +144,9 @@ Detailed: `plans/P0-toolchain-and-skeleton.md`.
 - [ ] **1.4** Fetch scheduler (SPEC §4.9, D19) — a Rust port of Nuke's
       pipeline: coalescing, four priority classes with the opened item
       suspending the rest (D17) and a reserved slot, newest-first thumbnails,
-      cancellation when nobody waits, `governor` token bucket that cancelled
-      work never spends, global pause on `429`. Credit Nuke in `NOTICE`.
+      cancellation when nobody waits, a token bucket ported from Nuke that
+      cancelled work never spends and the opened item skips (C2, C4), global
+      pause on `429`. Credit Nuke in `NOTICE`.
       **First:** read Nuke's full `TaskQueue`, coalescing/cancellation code,
       `ImagePrefetcher` and their tests (RESEARCH §9 lists what is still
       unread), and port the relevant test cases as this task's failing tests.
