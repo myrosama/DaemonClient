@@ -13,6 +13,13 @@ on:
     paths:
       - 'mobile/**'
       - '.github/workflows/mobile-core.yml'
+  # New advisories appear against crates already locked; check weekly too.
+  schedule:
+    - cron: '17 4 * * 1'
+
+# Nothing here writes to the repository.
+permissions:
+  contents: read
 
 defaults:
   run:
@@ -24,6 +31,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       # rustup is preinstalled; this installs the toolchain, components and
       # targets that mobile/rust-toolchain.toml pins.
       - run: rustup show
@@ -37,8 +46,11 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       # Known vulnerabilities in any crate the core or the bridge depends on.
-      - uses: EmbarkStudios/cargo-deny-action@v2
+      # Pinned to a commit: a moved tag must not change what runs.
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2
         with:
           manifest-path: mobile/Cargo.toml
           command: check advisories

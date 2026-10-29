@@ -17,6 +17,10 @@ on:
       - 'mobile/**'
       - '.github/workflows/mobile-build.yml'
 
+# Nothing here writes to the repository.
+permissions:
+  contents: read
+
 defaults:
   run:
     working-directory: immich/mobile
@@ -27,6 +31,8 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -43,7 +49,8 @@ jobs:
           stable=$(rustup run stable rustc --version | cut -d' ' -f2)
           echo "pinned $pinned, stable $stable"
           test "$pinned" = "$stable" || { echo "Bump mobile/rust-toolchain.toml to $stable (and re-run the core's tests): cargokit builds the apps with stable."; exit 1; }
-      - uses: subosito/flutter-action@v2
+      # Third-party actions are pinned to a commit: a moved tag must not change what runs.
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
         with:
           flutter-version: '3.41.7'
           channel: stable
@@ -68,9 +75,11 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       # Default runner Xcode SDK is too old for device_info_plus
       # (NSProcessInfo.isiOSAppOnVision) — pick the newest stable.
-      - uses: maxim-lobanov/setup-xcode@v1
+      - uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1
         with:
           xcode-version: latest-stable
       # The core is compiled during the app build by cargokit, which runs
@@ -85,7 +94,8 @@ jobs:
           stable=$(rustup run stable rustc --version | cut -d' ' -f2)
           echo "pinned $pinned, stable $stable"
           test "$pinned" = "$stable" || { echo "Bump mobile/rust-toolchain.toml to $stable (and re-run the core's tests): cargokit builds the apps with stable."; exit 1; }
-      - uses: subosito/flutter-action@v2
+      # Third-party actions are pinned to a commit: a moved tag must not change what runs.
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
         with:
           flutter-version: '3.41.7'
           channel: stable
