@@ -1,0 +1,5 @@
+# flutter_rust_bridge_codegen formats the files it generates (frb_generated.rs)
+# in the 2021 style; format this crate the same way, or `cargo fmt --check`
+# and the code generator would keep undoing each other. The crate itself
+# still compiles as edition 2024.
+style_edition = "2021"
