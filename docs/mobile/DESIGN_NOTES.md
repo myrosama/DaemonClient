@@ -540,3 +540,55 @@ local Simulator builds: `FLUTTER_XCODE_ARCHS=arm64 flutter build ios
 an older Xcode. Also seen: a background build reported success because the
 shell's last command (`echo`) succeeded — check Flutter's own "✓ Built" line,
 not the job's exit code.
+
+---
+
+## 1.0 — Foundations            2026-10-29
+
+**Planned:** `Core` with its own runtime, `Secret`, `CoreError`, the core's
+logger, the HTTP client of decision C1, and an HTTPS request to Telegram from
+both device types (P1-core.md Part 2, Task 1.0 — written before the code).
+**Did:** as planned. Differences: rustfmt reflowed the plan's code (layout
+only); versions moved for advisories — tokio 1.53.3 (RUSTSEC-2026-0386),
+webpki-roots 1.0.11 (RUSTSEC-2026-0381), rustls 0.23.46 (RUSTSEC-2026-0346
+to -0349); four tests and three small fixes added from Gate 3 (below).
+Also in this sitting: Rust **1.99.1** (`b0dfe2a`) — the 0.4/0.5 push turned
+mobile-build red exactly as the pin check intends (stable became 1.99.1 on
+2026-10-13), and `cargo-deny` 0.20.2 installed on the Mac so advisories are
+checked before a push.
+**Decisions:** a malformed address is `Internal`, not `Network`; a panicking
+task reports only "a core task panicked"; `scrub` also catches the token with
+`%3A` as the separator. Accepted LOWs, each assigned (P1-core.md, end of Part
+2): `https://`-only worker URLs → 1.2; the logger's sink fixed at install →
+1.8 / P2; the process-wide `Core` and text errors over the bridge → P2.
+**Security:** reviewer — **1 HIGH**, 0 MEDIUM, 4 LOW. HIGH: webpki-roots
+1.0.9 still trusted a root with distrusted emSign intermediates whose keys
+are public (RUSTSEC-2026-0381) — on hostile Wi-Fi a forged api.telegram.org
+certificate would have exposed the bot token; fixed (1.0.11). LOW: rustls
+advisories (not exploitable with this config) → 0.23.46; panic messages
+reached Dart unscrubbed → fixed; percent-encoded tokens escaped `scrub` →
+fixed; `http://` allowed → task 1.2. INFO: `scrub` fuzzed with 200k random
+and 300k token-bearing lines — no panic, no leak, linear time; error texts for
+refused/DNS/bad-scheme/unparsable carry no URL; `Secret` really zeroes;
+only reqwest and rustls log through `log`, nothing with URLs at Info/Warn;
+no certificate bypass anywhere; redirects off.
+Spec reviewer — 0 HIGH, 2 MEDIUM (Gate 2 transcript missing; EXECUTION_STATUS
+row stale — both fixed in this docs commit), 4 LOW (weak logger test →
+strengthened; the redirect test needed the internet → now catches it on the
+fake server; builder errors called "network" → fixed; sink fixed at install
+→ assigned), INFO for P2 recorded above.
+**Gate evidence:**
+- G1: tests written first and failing (compile errors for the new modules;
+  then the three Gate 3 tests failed before their fixes). `cargo test -p
+  dc-core` — 33 passed; clippy (deny lints) and fmt clean;
+  `cargo deny check advisories` — "advisories ok".
+- G2 (after all fixes, 2026-10-29), `flutter test
+  integration_test/core_test.dart` from the plugin's example:
+  - iOS 27.0 Simulator, iPhone 18 Pro, Xcode 27.1: "the app reaches the Rust
+    core…", "file sizes above 2^53…", "the core reaches Telegram over HTTPS
+    from this device" → `00:01 +3: All tests passed!`
+  - Android emulator, API 36 (`dc-test`): same three → `00:01 +3: All tests
+    passed!` (A first run failed with "Connect: operation timed out": the
+    emulator had lost its network — `ping` could not resolve any name — while
+    the Mac reached Telegram in 0.12 s; restarting the emulator fixed it.)
+- G3: above. G4: `b0dfe2a` (Rust 1.99.1), `9d9e929` (code), this docs commit.

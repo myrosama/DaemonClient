@@ -129,7 +129,7 @@ Detailed: `plans/P0-toolchain-and-skeleton.md`.
 
 Detailed: `plans/P1-core.md` (design approved 2026-10-29, decisions C1–C11).
 
-- [ ] **1.0** Foundations — `Core` and its runtime, `Secret`, `CoreError`, the
+- [x] **1.0** Foundations — `Core` and its runtime, `Secret`, `CoreError`, the
       core's own logger, the one HTTP client (rustls + ring + Mozilla roots,
       C1); HTTPS to Telegram proven from the iOS Simulator and Android.
 - [ ] **1.1** Crypto — PBKDF2 + AES-GCM parts; vectors from the production

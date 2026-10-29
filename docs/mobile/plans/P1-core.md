@@ -448,16 +448,21 @@ Telegram from the iOS Simulator and the Android emulator through the bridge.
   `startCore(dataDir:, cacheDir:)`, `checkTelegram()`).
 
 - [ ] **Step 1: Dependencies** — `mobile/core/dc-core/Cargo.toml`
-  `[dependencies]` and `[dev-dependencies]` (exact versions, as in the spike):
+  `[dependencies]` and `[dev-dependencies]` (exact versions, as in the spike,
+  except tokio: 1.53.2 carries RUSTSEC-2026-0386, "unsound", fixed in 1.53.3 —
+  `cargo update -p tokio --precise 1.53.3`; found by 0.5's Gate 3. Task 1.0's
+  own Gate 3 then moved webpki-roots 1.0.9 → 1.0.11 (RUSTSEC-2026-0381:
+  distrusted emSign roots) and rustls 0.23.45 → 0.23.46 (RUSTSEC-2026-0346
+  to -0349). From now on Gate 1 includes `cargo deny check advisories`):
 
 ```toml
 [dependencies]
 log = "=0.4.34"
 reqwest = { version = "=0.13.5", default-features = false, features = ["rustls-no-provider", "http2"] }
-rustls = { version = "=0.23.45", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+rustls = { version = "=0.23.46", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 thiserror = "=2.0.21"
-tokio = { version = "=1.53.2", features = ["rt-multi-thread", "macros"] }
-webpki-roots = "=1.0.9"
+tokio = { version = "=1.53.3", features = ["rt-multi-thread", "macros"] }
+webpki-roots = "=1.0.11"
 zeroize = "=1.9.1"
 
 [dev-dependencies]
@@ -994,3 +999,19 @@ test('the core reaches Telegram over HTTPS from this device', () async {
 - [ ] **Step 9: Gate 3** (two review agents), then commit code
   (`feat(core): foundations — Core, Secret, CoreError, logging, TLS client`)
   and docs (tick 1.0, DESIGN_NOTES entry, EXECUTION_STATUS, NOW.md).
+
+**Carried forward from Task 1.0's Gate 3** (accepted LOWs, each owned by a
+later task):
+- **1.2:** the worker URL must be `https://` (or `http://` only to a loopback
+  or local-network address, §5.3) — checked when the URL is accepted, before
+  the session token is ever sent to it. The HTTP client itself allows
+  `http://` because self-hosters on a home network need it.
+- **1.8 and P2:** the logger's sink is fixed when the logger is installed
+  (once per process). `dc-cli` installs its sink before `Core::start`; the
+  app's log stream (§5.9) reads `recent_logs()` or gets a replaceable sink
+  then.
+- **P2:** the bridge's process-wide `Core` lives until the app ends, so
+  per-account state (session, bot token, keys) must sit in a resettable part
+  of `Core` for sign-out; errors reach Dart as text through `anyhow` until a
+  typed error is needed (`SignedOut`, task 1.2).
+
