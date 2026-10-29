@@ -54,7 +54,6 @@ dist/
 lib/
 lib-es6/
 !immich/web/src/lib/
-!immich/web/src/lib/**
 # ...and the Flutter fork's lib/ trees are source too: the app, the generated
 # openapi client it imports, and the workspace UI packages. Without these
 # negations the entire Dart codebase was untracked — CI checked out a skeleton
