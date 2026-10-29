@@ -1,0 +1,28 @@
+PODS:
+  - dc_core_flutter (0.1.0):
+    - Flutter
+  - Flutter (1.0.0)
+  - integration_test (0.0.1):
+    - Flutter
+
+DEPENDENCIES:
+  - dc_core_flutter (from `.symlinks/plugins/dc_core_flutter/ios`)
+  - Flutter (from `Flutter`)
+  - integration_test (from `.symlinks/plugins/integration_test/ios`)
+
+EXTERNAL SOURCES:
+  dc_core_flutter:
+    :path: ".symlinks/plugins/dc_core_flutter/ios"
+  Flutter:
+    :path: Flutter
+  integration_test:
+    :path: ".symlinks/plugins/integration_test/ios"
+
+SPEC CHECKSUMS:
+  dc_core_flutter: 69f7522cd557dab8862a2cd60c7830eea751acda
+  Flutter: cabc95a1d2626b1b06e7179b784ebcf0c0cde467
+  integration_test: 4a889634ef21a45d28d50d622cf412dc6d9f586e
+
+PODFILE CHECKSUM: 795b6769eb7505bba0360c523fa39f66141a662b
+
+COCOAPODS: 1.17.0

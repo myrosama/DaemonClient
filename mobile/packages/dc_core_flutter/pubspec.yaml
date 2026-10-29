@@ -1,0 +1,30 @@
+name: dc_core_flutter
+description: "DaemonClient's shared Rust core (dc-core) for the Photos and Drive Flutter apps."
+version: 0.1.0
+homepage: https://github.com/myrosama/DaemonClient
+publish_to: none
+
+environment:
+  sdk: ^3.11.5
+  flutter: '>=3.3.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_rust_bridge: 2.13.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  integration_test:
+    sdk: flutter
+
+flutter:
+  # An FFI plugin: cargokit builds the Rust crate in rust/ and bundles it.
+  plugin:
+    platforms:
+      android:
+        ffiPlugin: true
+      ios:
+        ffiPlugin: true

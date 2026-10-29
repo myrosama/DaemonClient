@@ -1,0 +1,11 @@
+# cargokit settings for this crate (read by cargokit/build_tool).
+# --locked: app builds use exactly the versions in mobile/Cargo.lock and fail
+# instead of silently resolving new ones. No `precompiled_binaries` section:
+# cargokit always builds the core from source, never downloads a binary.
+cargo:
+  debug:
+    extra_flags: [--locked]
+  release:
+    extra_flags: [--locked]
+  profile:
+    extra_flags: [--locked]

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["core/dc-core"]
+members = ["core/dc-core", "packages/dc_core_flutter/rust"]
 
 [workspace.package]
 version = "0.1.0"

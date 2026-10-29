@@ -1,0 +1,11 @@
+dc_core_flutter is part of DaemonClient.
+
+Copyright (C) DaemonClient contributors
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU Affero General Public License as published by the Free
+Software Foundation, either version 3 of the License, or (at your option) any
+later version. The full licence text is in the LICENSE file at the root of the
+DaemonClient repository (https://github.com/myrosama/DaemonClient).
+
+The vendored cargokit/ folder keeps its own licence (cargokit/LICENSE).

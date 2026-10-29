@@ -17,6 +17,8 @@ dependencies:
   connectivity_plus: ^6.1.5
   crop_image: ^1.0.17
   crypto: ^3.0.7
+  dc_core_flutter:
+    path: ../../mobile/packages/dc_core_flutter
   device_info_plus: ^12.4.0
   drift: ^2.32.1
   drift_flutter: ^0.3.0

@@ -4,6 +4,7 @@ import 'dart:math';
 
 import 'package:auto_route/auto_route.dart';
 import 'package:background_downloader/background_downloader.dart';
+import 'package:dc_core_flutter/dc_core_flutter.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/foundation.dart';
@@ -62,6 +63,7 @@ void main() async {
 }
 
 Future<void> initApp() async {
+  await RustLib.init();
   await initializeDateFormatting();
 
   if (Platform.isAndroid) {

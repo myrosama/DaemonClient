@@ -59,7 +59,11 @@ lib-es6/
 # negations the entire Dart codebase was untracked — CI checked out a skeleton
 # and a fresh clone could not build the mobile app at all.
 !immich/mobile/**/lib/
-!immich/mobile/**/lib/**
+# ...and the same for the shared mobile core's Flutter plugin (and, later, the
+# Drive app) under mobile/: without it the plugin's Dart API is never committed.
+# Re-include the lib/ DIRECTORIES only — a `lib/**` negation would also
+# re-include .env files and keys inside them, overriding the SECRETS rules.
+!mobile/**/lib/
 # ...and these two are checked-in assets that happen to sit under a dist/ path.
 !drive/dist/
 !drive/dist/**

@@ -1,0 +1,20 @@
+[package]
+name = "dc_core_flutter"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+flutter_rust_bridge = "=2.13.0"
+dc-core = { path = "../../../core/dc-core" }
+
+[dev-dependencies]
+log = "=0.4.34"
+
+# Not `lints.workspace = true`: the generated `frb_generated.rs` needs `unsafe`
+# and unwraps. `src/api/mod.rs` applies the strict lints to the code we write.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(frb_expand)'] }
