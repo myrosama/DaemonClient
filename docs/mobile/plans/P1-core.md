@@ -1182,3 +1182,67 @@ the worker's read routes the core needs first — `telegram-config`,
 - **Risk:** if the central login ever enforces Turnstile (`TURNSTILE_SECRET`),
   app sign-in gets 403 "Verification failed" — tell the Linux machine first.
 
+
+## Task 1.3 — The Telegram client
+
+**Delivers:** the user's bot, spoken to directly (design §5.4): `getFile`
+with its answer cached, file download with a size cap, `sendDocument`,
+`sendPhoto`, `deleteMessage`; every answer classified; sends paced per bot.
+Also from 1.2's carried-forward list: a missing Telegram config is
+`NotProvisioned`, and the config is cached per session.
+
+**Files:** create `src/telegram.rs`, `src/sched/{mod,bucket}.rs` (the token
+bucket ported from Nuke now, because sends need it first; 1.4 reuses it),
+`examples/telegram_roundtrip.rs`; modify `src/{error,worker,core,lib}.rs`,
+`Cargo.toml` (`reqwest` gains `multipart`; `tokio` gains `time`).
+
+**Interfaces:**
+- `CoreError` gains `RateLimited { retry_after: u64 }` ("Telegram asked to
+  wait N s") and `TelegramRejected(String)` (Telegram's own description,
+  e.g. "Bad Request: chat not found", with "check the bot in Settings").
+- `sched::bucket::TokenBucket::{new(rate_per_sec, burst, now), try_take(now)
+  -> bool, wait(now) -> Duration}` — a token is taken only when work starts.
+- `telegram::Telegram::new(http, api_base, Secret<String> bot_token,
+  channel_id)`; `get_file(file_id) -> String` (path; cached 55 minutes, at most
+  4,096 entries); `download(file_id) -> Vec<u8>` (getFile, then the file;
+  refuses more than 20 MiB; a `400`/`404` on a cached path drops it and asks
+  once more); `send_document(name, bytes) -> Sent { message_id, file_id }`
+  (paced); `send_photo(jpeg) -> Sent` (largest size's `file_id`; paced);
+  `delete_message(message_id)`.
+- `Worker::telegram_config()` → `NotProvisioned` when the bot token or channel
+  is missing or empty; cached for the life of the `Worker` (a new session is a
+  new `Worker`).
+- `Core::telegram() -> Result<Arc<Telegram>, CoreError>` for the signed-in
+  account (built from the cached config, kept until sign-out).
+
+**Rules the tests pin:**
+- Answers: `ok: true` → the result; `429` (or `error_code` 429/420) →
+  `RateLimited` with `parameters.retry_after`; `400/401/403/404` →
+  `TelegramRejected(description)`; `5xx` and network failures → `Network` /
+  `Server`. The bot token never appears in an error (URLs are dropped, text
+  scrubbed).
+- Sends: one token per send from a bucket of 1 per 1.5 s, bursts of 8
+  (RESEARCH §12); a `RateLimited` send pauses all sends until `retry_after`
+  has passed. Downloads are not paced here (the scheduler, 1.4, owns reads).
+- The bucket (Nuke's tests): a burst runs at once; then one token per
+  1/rate; never more than the burst; time going backwards takes nothing.
+
+- [ ] **Step 1:** dependencies; tests first — `bucket.rs` (burst, refill,
+  cap, wait time) and `telegram.rs` against `wiremock` with
+  `api_base = server.uri()`: `getFile` + download round trip; the second
+  `download` of the same id skips `getFile` (cache); a stale path (`404`)
+  re-asks `getFile` once; an answer over 20 MiB (by `Content-Length` and by
+  streamed bytes) is refused; `sendDocument` sends `chat_id` and the file
+  under the given name and returns `message_id` + `file_id`; `sendPhoto`
+  takes the last (largest) size; `429` with `retry_after: 7` →
+  `RateLimited { retry_after: 7 }`; `403` "bot was kicked" →
+  `TelegramRejected`; an error's text never contains the token; nine sends in
+  a row: eight at once, the ninth waits ~1.5 s (paused tokio clock). Worker:
+  missing `botToken` → `NotProvisioned`; a second `telegram_config()` makes
+  no request. Run → fail.
+- [ ] **Step 2:** implement. Run → pass; clippy, fmt, `cargo deny`.
+- [ ] **Step 3: Gate 2** — `examples/telegram_roundtrip.rs`: sign in to the
+  test account (Keychain), send a small random document named
+  `<16 hex>.part001` to its channel, read it back through `download` and
+  compare, then delete the message. Prints sizes and timings only.
+- [ ] **Step 4:** Gate 3; commit code, then docs.
