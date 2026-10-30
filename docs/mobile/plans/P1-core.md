@@ -162,8 +162,9 @@ and runs off the async threads. CI runs both vector directions with Node
 - Response types accept fields they do not know (the server may add fields)
   and reject wrong types loudly in tests rather than guessing.
 - Routes (RESEARCH §11): `zke-config`, `telegram-config`, `dc-manifest`,
-  `bulk-upload-check`, `POST /api/assets` with `clientUpload=true`,
-  `POST /api/assets/:id/thumbnail`; Drive routes typed for P3.
+  `bulk-upload-check` in 1.2; `POST /api/assets` with `clientUpload=true` and
+  `POST /api/assets/:id/thumbnail` in 1.7; the Drive routes in P3 (moved at
+  Task 1.2 — each is built where it is first used).
 
 ### 5.4 Telegram (task 1.3)
 
@@ -1136,7 +1137,7 @@ the worker's read routes the core needs first — `telegram-config`,
 - `manifest(asset_id)` refuses ids that are not `[0-9a-f-]{1,64}` before
   building a URL (`BadAddress`).
 
-- [ ] **Step 1:** dependencies; tests first in `session.rs` and `worker.rs`
+- [x] **Step 1:** dependencies; tests first in `session.rs` and `worker.rs`
   against `wiremock` (the fake server is `http://127.0.0.1`, which the rules
   allow): address cases (`"x.workers.dev"` → `"https://x.workers.dev"`,
   `"https://x.dev/api/"` → `"https://x.dev"`, `"http://192.168.1.5:2283"` ok,
@@ -1150,9 +1151,9 @@ the worker's read routes the core needs first — `telegram-config`,
   `channelId`; the token absent from `Debug`; zke on/off → key / `None`; a
   manifest with every field; the asset-id guard; bulk check request and reply.
   Run → fail.
-- [ ] **Step 2:** `error.rs`, `session.rs`, `worker.rs`, `Core` methods. Run
+- [x] **Step 2:** `error.rs`, `session.rs`, `worker.rs`, `Core` methods. Run
   → pass; clippy, fmt, `cargo deny check advisories`.
-- [ ] **Step 3: Gate 2** — `examples/sign_in.rs` signs in to the **test
+- [x] **Step 3: Gate 2** — `examples/sign_in.rs` signs in to the **test
   account** with the password from the macOS Keychain (decision C8: the
   operator runs `security add-generic-password -s daemonclient-test -a
   <email> -w` once; the example reads it with `security find-generic-password
@@ -1160,4 +1161,24 @@ the worker's read routes the core needs first — `telegram-config`,
   derives the Photos key. It prints only the worker's host, whether a bot
   token and a channel are present, the encryption mode and how long the key
   took — **never** a token, password or key.
-- [ ] **Step 4:** Gate 3; commit code, then docs.
+- [x] **Step 4:** Gate 3; commit code, then docs.
+
+**Carried forward from Task 1.2's Gate 3** (accepted LOWs and notes, each owned):
+- **1.3:** a missing Telegram config (no `botToken`) → `NotProvisioned`, not a
+  raw decode error; cache the Telegram config per session, clear on sign-out.
+- **1.5:** cache the Photos key per session; treat any `encryptionMode` other
+  than `server`/`client` as plain (the manifest defaults to `""`, the worker's
+  default is `off`); `From<CryptoError> for CoreError`; cap reply sizes.
+- **1.7:** zke `enabled` with empty settings must **refuse to upload** —
+  `photos_key()` returns `None` for both "off" and "incomplete", so 1.7 checks
+  `enabled` itself (the D1 adapter calls a plaintext upload here a fail-open).
+- **P2:** a worker `401` must clear the session (SPEC §4.1); a sign-in that
+  finishes after sign-out signs back in (reset per-account state); P2 stores
+  all five `Session` fields (§5.9's `restore(sessionToken)` is out of date).
+- **Accepted (operator's design §5.3):** plain http to a private-network
+  address stays allowed for **self-hosted** servers only. A phone that later
+  joins a hostile network could send the session token to whatever answers
+  there; hosted workers are always https.
+- **Risk:** if the central login ever enforces Turnstile (`TURNSTILE_SECRET`),
+  app sign-in gets 403 "Verification failed" — tell the Linux machine first.
+

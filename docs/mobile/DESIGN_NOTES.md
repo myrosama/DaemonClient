@@ -641,3 +641,46 @@ key-check constant not from production code — all fixed).
   mobile/core/compat/verify-rust-output.mjs` → `ok 0 / 1 / 16 / 1000 /
   19922944 bytes`, exit 0.
 - G3: above. G4: `6361a35` and this docs commit.
+
+---
+
+## 1.2 — Sign-in and the worker client            2026-10-30
+
+**Planned:** P1-core.md Part 2, Task 1.2 (written before the code).
+**Did:** as planned, with these differences: `POST /api/assets` and the
+thumbnail route moved to 1.7 and the Drive routes to P3 (built where first
+used; PLAN and §5.3 amended); `restore` and `sign_out` return `Result` (the
+session lock); `.local`, link-local and IPv6 unique-local addresses count as
+local; from Gate 3 — hosted workers must be https even on a home network,
+`restore` re-checks the stored worker address, a 404 at sign-in is
+`BadAddress`, empty zke settings give no key, server messages are scrubbed
+**before** being cut and lose control/bidi characters, an undecodable reply
+quotes nothing. Closes Task 1.0's carried-forward LOW (http worker URLs).
+**Decisions:** recorded at the end of P1-core.md Part 2 — each accepted LOW
+with its owning task (1.3, 1.5, 1.7, P2), the accepted self-hosted LAN-http
+risk, and the Turnstile risk on the central login.
+**Security:** reviewer — 0 HIGH, 0 MEDIUM, 4 LOW, all fixed: a token cut at
+the 200-character limit escaped `scrub`; hosted sign-in allowed http to local
+addresses; `restore` skipped the address check; the example could print raw
+Keychain bytes on a decode failure. INFO: password copies in the request body
+are not wiped (accepted); sign-out does not stop in-flight work (→ P2); lock
+poisoning now cannot keep the token; reply sizes uncapped (→ 1.5). Checked
+fine: every `Secret` field redacted in `Debug`; the Bearer header is marked
+sensitive; redirects off; the asset-id guard blocks traversal; address tricks
+(`@`, userinfo, `127.0.0.1.nip.io`, IPv4 forms, IDN) normalise or are refused.
+Spec reviewer — 0 HIGH, 1 MEDIUM (empty zke settings derived a key from "" —
+fixed, test added), 4 LOW (404 untested / sign-in 404 → fixed; decode text
+uncapped → fixed; missing Telegram config → 1.3; moved routes → recorded).
+`HOSTED_API` (`https://api.daemonclient.uz`) confirmed: the fork's prefilled
+address and the openapi spec's "login and worker discovery" server.
+**Gate evidence:**
+- G1: tests first, failing (missing types), then each Gate 3 test failed
+  before its fix. `cargo test -p dc-core` 58 passed; clippy (deny lints) and
+  fmt clean; `cargo deny check advisories` ok.
+- G2 (2026-10-30, `cargo run -p dc-core --example sign_in`, the operator's
+  approved test account, password from the Keychain item `daemonclient-test`):
+  `signed in — worker: dc-…workers.dev` (host withheld here) ·
+  `telegram — bot token: present, channel: present` ·
+  `photos encryption — mode: server, key: derived (derived in 638 ms)` (debug
+  build; includes one network round-trip). Re-run after every Gate 3 fix.
+- G3: above. G4: this code commit and docs commit.

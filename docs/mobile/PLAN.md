@@ -135,10 +135,10 @@ Detailed: `plans/P1-core.md` (design approved 2026-10-29, decisions C1–C11).
 - [x] **1.1** Crypto — PBKDF2 + AES-GCM parts; vectors from the production
       JavaScript, both directions; verify a Drive custom password against the
       `check` value from `/api/drive/zke` (RESEARCH §2, added 2026-10-06).
-- [ ] **1.2** Session + worker client — sign-in (hosted and self-hosted),
-      `telegram-config`, `zke-config`, `dc-manifest`, `bulk-upload-check`,
-      `POST /api/assets` (`clientUpload`); the Drive adapter's routes typed but
-      exercised in P3.
+- [x] **1.2** Session + worker client — sign-in (hosted and self-hosted),
+      `telegram-config`, `zke-config`, `dc-manifest`, `bulk-upload-check`.
+      (`POST /api/assets` and the thumbnail route moved to 1.7, the Drive
+      routes to P3 — built where first used.)
 - [ ] **1.3** Telegram client — `sendDocument`, `getFile` (with its result
       cached), download, `deleteMessage`; `429` and fatal errors.
 - [ ] **1.4** Fetch scheduler (SPEC §4.9, D19) — a Rust port of Nuke's
@@ -157,7 +157,8 @@ Detailed: `plans/P1-core.md` (design approved 2026-10-29, decisions C1–C11).
       a second listener (port) for opened photos and video, because Android's
       Cronet allows 6 connections per host (RESEARCH §10).
 - [ ] **1.7** Upload engine — prepare encrypted parts on disk, send, resume
-      journal, metadata post.
+      journal, metadata post (`POST /api/assets`, `clientUpload`) and, for
+      HEIC/HEIF/RAW, the thumbnail + preview route.
 - [ ] **1.8** `dc-cli` and Gate 2 for the whole core against the test
       account, both directions with photos.daemonclient.uz.
 
@@ -197,7 +198,9 @@ Detailed: `plans/P1-core.md` (design approved 2026-10-29, decisions C1–C11).
 
 - [ ] **3.0** Drive design spec + mockups (Apple Files / Google Drive /
       Documents inspiration), approved by the operator.
-- [ ] Tasks written into `plans/P3-drive.md` after 3.0.
+- [ ] Tasks written into `plans/P3-drive.md` after 3.0. They include typing
+      the Drive routes in the core (`/api/drive/{config,zke (+check),files,
+      files/:id,usage}`), moved out of P1 1.2.
 
 ## P4 — Release
 
