@@ -8,10 +8,16 @@ on:
     branches: [main]
     paths:
       - 'mobile/**'
+      # The core's crypto is checked against these files; a change must re-run it.
+      - 'drive/src/crypto.js'
+      - 'drive/src/zke-unlock.js'
       - '.github/workflows/mobile-core.yml'
   pull_request:
     paths:
       - 'mobile/**'
+      # The core's crypto is checked against these files; a change must re-run it.
+      - 'drive/src/crypto.js'
+      - 'drive/src/zke-unlock.js'
       - '.github/workflows/mobile-core.yml'
   # New advisories appear against crates already locked; check weekly too.
   schedule:
@@ -40,6 +46,12 @@ jobs:
       # --workspace: since P0 task 0.4 the plugin's binding crate is a member too.
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
+      # Rust → JavaScript: the production crypto.js must decrypt what the core
+      # encrypted (the other direction is in the unit tests' vectors).
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: cargo run -q --locked -p dc-core --example emit_vectors | node core/compat/verify-rust-output.mjs
 
   audit:
     runs-on: ubuntu-latest

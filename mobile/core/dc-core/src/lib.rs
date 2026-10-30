@@ -3,6 +3,7 @@
 
 pub mod chunk_plan;
 mod core;
+pub mod crypto;
 mod error;
 pub(crate) mod http;
 pub mod logging;
