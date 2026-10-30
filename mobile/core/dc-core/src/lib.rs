@@ -8,6 +8,8 @@ mod error;
 pub(crate) mod http;
 pub mod logging;
 mod secret;
+pub mod session;
+pub mod worker;
 
 pub use crate::core::{Core, CoreConfig, TELEGRAM_API};
 pub use crate::error::CoreError;

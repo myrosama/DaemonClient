@@ -2,6 +2,7 @@
 //! session token, the bot token, passwords (SPEC §4.1, §4.8). `Debug` and
 //! `Display` print `[redacted]`; the value is zeroed when dropped.
 
+use serde::Deserialize;
 use std::fmt;
 use zeroize::{Zeroize, Zeroizing};
 
@@ -17,6 +18,20 @@ impl<T: Zeroize> Secret<T> {
     pub fn expose(&self) -> &T {
         &self.0
     }
+}
+
+/// `#[serde(deserialize_with = ...)]` for a secret string field.
+pub(crate) fn deserialize<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<Secret<String>, D::Error> {
+    serde::Deserialize::deserialize(d).map(Secret::new)
+}
+
+/// The same for an optional field.
+pub(crate) fn deserialize_option<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<Option<Secret<String>>, D::Error> {
+    Ok(Option::<String>::deserialize(d)?.map(Secret::new))
 }
 
 impl<T: Zeroize + Clone> Clone for Secret<T> {

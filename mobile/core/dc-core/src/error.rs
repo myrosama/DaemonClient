@@ -10,6 +10,22 @@ pub enum CoreError {
     /// A bug or an impossible state.
     #[error("internal error: {0}")]
     Internal(String),
+    /// The worker no longer accepts the saved session.
+    #[error("signed out — please sign in again")]
+    SignedOut,
+    #[error("wrong email or password")]
+    WrongCredentials,
+    /// Signed in, but the account's storage is not set up yet.
+    #[error("this account's storage is not set up yet — finish setup at accounts.daemonclient.uz")]
+    NotProvisioned,
+    /// An address the core will not use: not https, credentials in it, ...
+    #[error("not a usable server address")]
+    BadAddress,
+    #[error("not found")]
+    NotFound,
+    /// The server refused the request or answered nonsense; its own words, scrubbed.
+    #[error("the server said: {0}")]
+    Server(String),
 }
 
 impl From<reqwest::Error> for CoreError {
@@ -17,6 +33,7 @@ impl From<reqwest::Error> for CoreError {
         // A request that could not even be built (a malformed address) is a
         // set-up problem, not the network's.
         let builder = err.is_builder();
+        let decode = err.is_decode();
         // `without_url` drops the request URL — for Telegram it contains the
         // bot token. The cause chain is kept for diagnosis and scrubbed.
         let err = err.without_url();
@@ -30,6 +47,9 @@ impl From<reqwest::Error> for CoreError {
         let text = crate::logging::scrub(&text);
         if builder {
             CoreError::Internal(text)
+        } else if decode {
+            // serde's message can quote a field's value (a password, a token): keep none of it.
+            CoreError::Server("unexpected reply from the server".to_owned())
         } else {
             CoreError::Network(text)
         }
