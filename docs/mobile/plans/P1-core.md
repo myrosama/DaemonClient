@@ -447,7 +447,7 @@ Telegram from the iOS Simulator and the Android emulator through the bridge.
 - Bridge: `start_core(data_dir, cache_dir)`, `check_telegram() -> u16` (Dart:
   `startCore(dataDir:, cacheDir:)`, `checkTelegram()`).
 
-- [ ] **Step 1: Dependencies** — `mobile/core/dc-core/Cargo.toml`
+- [x] **Step 1: Dependencies** — `mobile/core/dc-core/Cargo.toml`
   `[dependencies]` and `[dev-dependencies]` (exact versions, as in the spike,
   except tokio: 1.53.2 carries RUSTSEC-2026-0386, "unsound", fixed in 1.53.3 —
   `cargo update -p tokio --precise 1.53.3`; found by 0.5's Gate 3. Task 1.0's
@@ -470,7 +470,7 @@ tempfile = "=3.27.0"
 wiremock = "=0.6.5"
 ```
 
-- [ ] **Step 2: `Secret` — tests first** (`src/secret.rs`, module `tests`):
+- [x] **Step 2: `Secret` — tests first** (`src/secret.rs`, module `tests`):
 
 ```rust
 #[test]
@@ -534,7 +534,7 @@ impl<T: Zeroize> fmt::Display for Secret<T> {
 
 Run again → passes.
 
-- [ ] **Step 3: `scrub` and the logger — tests first** (`src/logging.rs`):
+- [x] **Step 3: `scrub` and the logger — tests first** (`src/logging.rs`):
 
 ```rust
 const TOKEN: &str = "123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw";
@@ -711,7 +711,7 @@ pub fn recent_logs() -> Vec<String> {
 
 Run → passes.
 
-- [ ] **Step 4: `CoreError` — test first** (`src/error.rs`):
+- [x] **Step 4: `CoreError` — test first** (`src/error.rs`):
 
 ```rust
 #[tokio::test]
@@ -763,7 +763,7 @@ impl From<reqwest::Error> for CoreError {
 Run → passes (after Step 5 provides `http::client`; write Step 5 before
 running this test).
 
-- [ ] **Step 5: the HTTP client (C1) — tests first** (`src/http.rs`):
+- [x] **Step 5: the HTTP client (C1) — tests first** (`src/http.rs`):
 
 ```rust
 #[test]
@@ -814,7 +814,7 @@ pub(crate) fn client() -> Result<reqwest::Client, CoreError> {
 }
 ```
 
-- [ ] **Step 6: `Core` — tests first** (`src/core.rs`):
+- [x] **Step 6: `Core` — tests first** (`src/core.rs`):
 
 ```rust
 fn config_in(dir: &tempfile::TempDir) -> CoreConfig {
@@ -956,7 +956,7 @@ pub use crate::secret::Secret;
 
 Run `cargo test -p dc-core` → all pass; `cargo clippy --workspace --all-targets -- -D warnings`; `cargo fmt --all --check`.
 
-- [ ] **Step 7: the bridge and the device check.** `rust/Cargo.toml` gains
+- [x] **Step 7: the bridge and the device check.** `rust/Cargo.toml` gains
   `anyhow = "=1.0.104"`. In `rust/src/api/core.rs`:
 
 ```rust
@@ -992,11 +992,11 @@ test('the core reaches Telegram over HTTPS from this device', () async {
 });
 ```
 
-- [ ] **Step 8: Gate 2** — `flutter test integration_test/core_test.dart -d
+- [x] **Step 8: Gate 2** — `flutter test integration_test/core_test.dart -d
   <device>` from `example/` on the iOS Simulator and on the Android emulator:
   3/3 each. Paste the output into DESIGN_NOTES.
 
-- [ ] **Step 9: Gate 3** (two review agents), then commit code
+- [x] **Step 9: Gate 3** (two review agents), then commit code
   (`feat(core): foundations — Core, Secret, CoreError, logging, TLS client`)
   and docs (tick 1.0, DESIGN_NOTES entry, EXECUTION_STATUS, NOW.md).
 
@@ -1036,16 +1036,16 @@ verify_drive_key(&Key, check_b64) -> bool, forgiving_base64, IV_LEN, TAG_LEN,
 PBKDF2_ITERATIONS, DRIVE_KEY_CHECK_PLAINTEXT}`. `CryptoError` = `BadSalt |
 Truncated(usize) | Authentication | Random | PartTooLarge`.
 
-- [ ] **Step 1: Dependencies** — `[dependencies]` gains `aes-gcm = "=0.11.1"`,
+- [x] **Step 1: Dependencies** — `[dependencies]` gains `aes-gcm = "=0.11.1"`,
   `base64 = "=0.23.1"`, `bytes = "=1.12.1"`, `getrandom = "=0.4.3"`,
   `pbkdf2 = { version = "=0.13.0", default-features = false, features = ["hmac"] }`,
   `sha2 = "=0.11.1"`, `subtle = "=2.6.1"`; `[dev-dependencies]` gains
   `hex = "=0.4.3"`, `serde = { version = "=1.0.229", features = ["derive"] }`,
   `serde_json = "=1.0.154"` (the example uses them too).
-- [ ] **Step 2: Vectors** — copy the two scripts to `mobile/core/compat/`
+- [x] **Step 2: Vectors** — copy the two scripts to `mobile/core/compat/`
   (their default repo root is `../../..` from there, which is the repo root)
   and run `node mobile/core/compat/gen-vectors.mjs > mobile/core/compat/vectors.json`.
-- [ ] **Step 3: Tests first** — `src/crypto.rs` with the spike's eight tests
+- [x] **Step 3: Tests first** — `src/crypto.rs` with the spike's eight tests
   (`derives_the_same_key_as_production_javascript`,
   `decrypts_parts_production_javascript_encrypted`,
   `fixed_iv_output_is_byte_identical_to_webcrypto`,
@@ -1053,7 +1053,7 @@ Truncated(usize) | Authentication | Random | PartTooLarge`.
   `rejects_wrong_key_tampering_and_truncation`, `verifies_the_drive_key_check`,
   `salt_decoding_matches_atob`, `debug_output_never_shows_key_bytes`), reading
   `include_str!("../../compat/vectors.json")`. Run → fails (no module).
-- [ ] **Step 4: The module** — the spike's `crypto.rs` with one change: no
+- [x] **Step 4: The module** — the spike's `crypto.rs` with one change: no
   `expect`. `encrypt_part_with_iv` returns `Result<Vec<u8>, CryptoError>` and
   maps AES-GCM's only failure (a plaintext over 64 GiB) to `PartTooLarge`:
 
@@ -1074,13 +1074,13 @@ pub(crate) fn encrypt_part_with_iv(key: &Key, iv: &[u8; IV_LEN], plaintext: &[u8
 
   (`encrypt_part` returns `encrypt_part_with_iv(key, &iv, plaintext)`; the
   fixed-IV test unwraps it.) Run → 8 pass; clippy, fmt.
-- [ ] **Step 5: Rust → JavaScript** — `examples/emit_vectors.rs` (the
+- [x] **Step 5: Rust → JavaScript** — `examples/emit_vectors.rs` (the
   spike's, `spike::` → `dc_core::`), then
   `cargo run -q -p dc-core --example emit_vectors | node mobile/core/compat/verify-rust-output.mjs`
   → five `ok` lines, exit 0. In `mobile-core.yml`'s `core` job add
   `actions/setup-node` (Node 22) and that command as a step, and add
   `drive/src/crypto.js` to both `paths:` lists — a change to the production
   crypto must re-run the check.
-- [ ] **Step 6: Gate 2** — the vectors are the real-conditions check (the
+- [x] **Step 6: Gate 2** — the vectors are the real-conditions check (the
   production code itself produced and verified them); paste both directions'
   output into DESIGN_NOTES. Gate 3; commit code, then docs.

@@ -592,3 +592,52 @@ fake server; builder errors called "network" → fixed; sink fixed at install
     emulator had lost its network — `ping` could not resolve any name — while
     the Mac reached Telegram in 0.12 s; restarting the emulator fixed it.)
 - G3: above. G4: `b0dfe2a` (Rust 1.99.1), `9d9e929` (code), this docs commit.
+
+> **0.5, G2 (2026-10-30):** after the push and the Rust 1.99.1 bump, all of
+> CI is green on `3440a3c` — `mobile-core` (core + audit)
+> https://github.com/myrosama/DaemonClient/actions/runs/40887140650 and
+> `mobile-build` (android-apk **and ios-simulator — the first green iOS
+> build ever**) https://github.com/myrosama/DaemonClient/actions/runs/40887140844.
+> 0.5 is done, and with it P0 (SPEC §9 P0 exit).
+
+---
+
+## 1.1 — Crypto            2026-10-30
+
+**Planned:** move the spike's crypto into `dc-core` with the production
+JavaScript checks in CI (P1-core.md Part 2, Task 1.1).
+**Did:** as planned — files, names, `CryptoError` variants and pins match the
+plan; the spike's scripts are byte-identical; `sha1` dropped (not needed
+until 1.7). From Gate 3: aes-gcm's `zeroize` feature (the expanded key is
+wiped); the Rust→JS check refuses an empty part list; salts accept trailing
+bits like `atob`; the Drive key-check vector is made by
+`drive/src/zke-unlock.js`'s `makeKeyCheck`; a test pins the SHA-256 of both
+JavaScript sources, so a change to either fails CI until `vectors.json` is
+regenerated (`node mobile/core/compat/gen-vectors.mjs`). `vectors.json` changes
+on every regeneration (random IVs in two sections); keys and fixed-IV answers
+are reproducible.
+**Decisions / carried forward:** SPEC §7 (worker-encrypted `server` assets) is
+covered by inspection — the worker's `assets.ts` and the web service worker
+use the same `atob` salt, PBKDF2 parameters and part layout as `crypto.js`;
+the real check is reading such an asset in 1.5. `verify_drive_key` returns
+`false` for a malformed check as for a wrong password → P3 (Drive unlock).
+`From<CryptoError> for CoreError` → 1.5. `derive_key` is slow by design → 1.2
+calls it through `spawn_blocking`.
+**Security:** reviewer — 0 HIGH, 0 MEDIUM, 2 LOW (expanded key not zeroized →
+fixed; malformed check reads as wrong password → P3), INFO (atob edge cases →
+fixed; empty check list → fixed; stale vectors → fixed). Confirmed: no
+unauthenticated plaintext leaves `decrypt_part` (aes-gcm checks the tag before
+decrypting), no panic on hostile lengths, fresh random IV per part, PBKDF2
+identical to the JS.
+Spec reviewer — 0 HIGH, 0 MEDIUM, 3 LOW (atob trailing bits, frozen vectors,
+key-check constant not from production code — all fixed).
+**Gate evidence:**
+- G1: the eight tests written first (compile failure), then the Gate 3 tests
+  (trailing bits failed before its fix). `cargo test -p dc-core` 42 passed;
+  clippy and fmt clean; `cargo deny check advisories` ok.
+- G2 (the production code is the real condition): JS→Rust — the vectors were
+  produced by `drive/src/crypto.js` (SHA-256 `aa2a05f2…`) and `zke-unlock.js`,
+  and all crypto tests pass against them; Rust→JS — `emit_vectors | node
+  mobile/core/compat/verify-rust-output.mjs` → `ok 0 / 1 / 16 / 1000 /
+  19922944 bytes`, exit 0.
+- G3: above. G4: `6361a35` and this docs commit.

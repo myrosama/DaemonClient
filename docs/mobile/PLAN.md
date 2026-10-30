@@ -31,7 +31,7 @@ reviewed by the operator before work starts.
 
 | Phase | Detailed plan | State |
 |---|---|---|
-| P0 Toolchain and skeleton | `plans/P0-toolchain-and-skeleton.md` | **approved 2026-10-04 — in progress** |
+| P0 Toolchain and skeleton | `plans/P0-toolchain-and-skeleton.md` | **done 2026-10-30** (CI green on iOS and Android) |
 | P1 The core | `plans/P1-core.md` | **design approved 2026-10-29 — in progress**; each task's steps written before its code |
 | P2 Photos on the core | `plans/P2-photos.md` | written at the end of P1 |
 | P3 Drive | `plans/P3-drive.md` | written at the end of P2, after Drive's design is approved |
@@ -113,7 +113,7 @@ Detailed: `plans/P0-toolchain-and-skeleton.md`.
       on its sign-in screen, on the iOS Simulator and Android. (With it, by the
       operator's decision of 2026-10-12, SPEC D20: home-screen name "Photos" and
       the DaemonClient logo on both platforms.)
-- [ ] **0.5** CI: the core's format, lint and tests on every push touching
+- [x] **0.5** CI: the core's format, lint and tests on every push touching
       `mobile/`; the mobile build installs Rust, runs the Flutter patch
       (`ios/scripts/xcode_flutter_patch.sh`) in the iOS job, and **passes** —
       its iOS job never has (RESEARCH §7). Also: cargokit's `stable` must equal
@@ -132,7 +132,7 @@ Detailed: `plans/P1-core.md` (design approved 2026-10-29, decisions C1–C11).
 - [x] **1.0** Foundations — `Core` and its runtime, `Secret`, `CoreError`, the
       core's own logger, the one HTTP client (rustls + ring + Mozilla roots,
       C1); HTTPS to Telegram proven from the iOS Simulator and Android.
-- [ ] **1.1** Crypto — PBKDF2 + AES-GCM parts; vectors from the production
+- [x] **1.1** Crypto — PBKDF2 + AES-GCM parts; vectors from the production
       JavaScript, both directions; verify a Drive custom password against the
       `check` value from `/api/drive/zke` (RESEARCH §2, added 2026-10-06).
 - [ ] **1.2** Session + worker client — sign-in (hosted and self-hosted),
