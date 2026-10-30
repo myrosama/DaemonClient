@@ -1084,3 +1084,80 @@ pub(crate) fn encrypt_part_with_iv(key: &Key, iv: &[u8; IV_LEN], plaintext: &[u8
 - [x] **Step 6: Gate 2** — the vectors are the real-conditions check (the
   production code itself produced and verified them); paste both directions'
   output into DESIGN_NOTES. Gate 3; commit code, then docs.
+
+## Task 1.2 — Sign-in and the worker client
+
+**Delivers:** sign-in (hosted and self-hosted, §5.3), the address rules, and
+the worker's read routes the core needs first — `telegram-config`,
+`zke-config` (with the Photos key derived off the async threads),
+`dc-manifest`, `bulk-upload-check`. **Moved out (ponytail: built when used):**
+`POST /api/assets` and the thumbnail route → 1.7; the Drive routes → P3.
+
+**Files:** create `mobile/core/dc-core/src/{session,worker}.rs`,
+`examples/sign_in.rs`; modify `src/{error,core,lib}.rs`, `Cargo.toml`
+(`reqwest` gains `json`; `serde` with `derive` and `serde_json` move to
+`[dependencies]`).
+
+**Interfaces:**
+- `CoreError` gains `SignedOut`, `WrongCredentials`, `NotProvisioned`,
+  `BadAddress`, `NotFound`, `Server(String)` (the server's own message,
+  scrubbed, at most 200 characters). A response body that is not the
+  expected JSON is `Server("unexpected reply…")`.
+- `session::{HOSTED_API = "https://api.daemonclient.uz", Deployment::{Hosted,
+  SelfHosted}, Session { worker_url, token: Secret<String>, user_id, email,
+  name }, normalize_server(&str) -> Result<String, CoreError>,
+  sign_in(&reqwest::Client, server, Deployment, email, password) -> Result<Session, CoreError>}`.
+- `worker::{Worker::new(reqwest::Client, Session), Worker::telegram_config()
+  -> TelegramConfig { bot_token: Secret<String>, channel_id: String },
+  Worker::zke_config() -> ZkeConfig { enabled, password: Option<Secret<String>>,
+  salt: Option<String>, mode: Option<String> }, Worker::photos_key() ->
+  Option<crypto::Key>, Worker::manifest(asset_id) -> AssetManifest,
+  Worker::bulk_upload_check(&[(id, checksum)]) -> Vec<UploadCheck>}`.
+- `Core::{sign_in(server, Deployment, email, password) -> Session,
+  restore(Session), sign_out(), worker() -> Result<Arc<Worker>, CoreError>}`.
+
+**Rules the tests pin:**
+- `normalize_server`: trims; adds `https://` when no scheme is given; drops
+  trailing `/` and a trailing `/api`; refuses credentials, a query or a
+  fragment in the address; **`https` only — `http` only to a loopback or
+  private-network address** (self-hosters at home; Task 1.0's carried-forward
+  LOW). It is applied to the address the user types **and** to the
+  `workerUrl` the server returns, before the token is ever sent there.
+- `sign_in`: `POST {base}/api/auth/login` `{email (trimmed), password}`.
+  `401` → `WrongCredentials`; other failures → `Server(message)` (e.g. 429
+  "Too many sign-in attempts…", 403 "Verification failed"). No `workerUrl`:
+  hosted → `NotProvisioned`; self-hosted → the server itself.
+- Worker calls send `Authorization: Bearer` (reqwest marks it sensitive);
+  `401` → `SignedOut`, `404` → `NotFound`, others → `Server(message)`.
+- `TelegramConfig` accepts `channelId` as a string **or** a number; its
+  `Debug` never shows the token. `ZkeConfig`'s password is a `Secret`.
+- `photos_key()` derives the key with `spawn_blocking` (PBKDF2 is slow on
+  purpose) — `None` when encryption is off or incomplete.
+- `manifest(asset_id)` refuses ids that are not `[0-9a-f-]{1,64}` before
+  building a URL (`BadAddress`).
+
+- [ ] **Step 1:** dependencies; tests first in `session.rs` and `worker.rs`
+  against `wiremock` (the fake server is `http://127.0.0.1`, which the rules
+  allow): address cases (`"x.workers.dev"` → `"https://x.workers.dev"`,
+  `"https://x.dev/api/"` → `"https://x.dev"`, `"http://192.168.1.5:2283"` ok,
+  `"http://localhost:8080/api"` ok, `"http://example.com"`, `"ftp://x"`,
+  `"https://u:p@x.dev"`, `"https://x.dev/?a=1"`, `""` → `BadAddress`);
+  hosted sign-in → `Session` with the normalised worker URL and the trimmed
+  email sent; hosted without `workerUrl` → `NotProvisioned`; self-hosted
+  without → the server; a returned `http://` public worker URL →
+  `BadAddress`; `401` → `WrongCredentials`; `429` → `Server` with the
+  message; worker GET carries the Bearer token; `401` → `SignedOut`; numeric
+  `channelId`; the token absent from `Debug`; zke on/off → key / `None`; a
+  manifest with every field; the asset-id guard; bulk check request and reply.
+  Run → fail.
+- [ ] **Step 2:** `error.rs`, `session.rs`, `worker.rs`, `Core` methods. Run
+  → pass; clippy, fmt, `cargo deny check advisories`.
+- [ ] **Step 3: Gate 2** — `examples/sign_in.rs` signs in to the **test
+  account** with the password from the macOS Keychain (decision C8: the
+  operator runs `security add-generic-password -s daemonclient-test -a
+  <email> -w` once; the example reads it with `security find-generic-password
+  -s daemonclient-test -w`), then reads the Telegram and zke config and
+  derives the Photos key. It prints only the worker's host, whether a bot
+  token and a channel are present, the encryption mode and how long the key
+  took — **never** a token, password or key.
+- [ ] **Step 4:** Gate 3; commit code, then docs.
