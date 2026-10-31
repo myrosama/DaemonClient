@@ -1274,3 +1274,79 @@ at a day; 5xx answers are `Network` (transient); user-facing text says
   into a URL path; copies of it inside reqwest/hyper buffers are not zeroized
   (comes with reqwest).
 
+
+## Task 1.4 — Smart loading: the scheduler (Nuke port)
+
+**Delivers:** design §5.5. Every Telegram read and every upload part goes
+through one scheduler: coalescing, four classes with the opened item first,
+reserved slot, per-class caps, cancellation when nobody waits, a token bucket
+that cancelled work never spends, a global pause on `429`.
+
+**Files:** create `src/sched/{state,shell}.rs`; modify `src/sched/mod.rs`,
+`src/error.rs` (`CoreError` derives `Clone` — one result goes to every waiter).
+
+**Interfaces:**
+- `sched::Class::{Background, Visible, Next, Opened}` (ordered, lowest first);
+  `sched::Kind::{Read, Send}`.
+- `sched::Limits { max_running: 6, reserved_high: 1, max_next: 2,
+  max_background: 2, max_sending: 1, reads_per_sec: 20.0, read_burst: 10.0,
+  job_timeout: 300 s }` (`Limits::default()`; measured in 1.8).
+- `sched::state::State` — pure, no I/O, time passed in:
+  `subscribe(key, kind, class, now) -> (SubId, Vec<Action>)`,
+  `unsubscribe(sub, now) -> Vec<Action>`,
+  `finished(job, Outcome::{Done, Failed, RateLimited(secs)}, now) -> Vec<Action>`,
+  `tick(now) -> Vec<Action>`, `next_wakeup() -> Option<Instant>`;
+  `Action::{Start { job, key, kind }, Cancel { job }, Finish { job, subs }}`.
+- `sched::Scheduler::new(Limits, fetch: Arc<dyn Fn(String) -> BoxFuture<Result<Bytes, CoreError>>>)`
+  (spawned on the core's runtime); `read(key, class) -> Ticket` (`Ticket::wait()
+  -> Result<Bytes, CoreError>`; dropping it unsubscribes); `send_slot() ->
+  Permit` future (a Background send slot; dropping the permit frees it).
+
+**Rules the tests pin** (Nuke's — RESEARCH §9b — and ours, SPEC §4.9):
+- Coalescing: one job per key; its class is the highest of its subscribers';
+  it is cancelled only when the last subscriber leaves (a pending job then never
+  runs and spends no token); every subscriber gets the same result or error; a
+  new request after all left starts new work.
+- Order: higher class first; FIFO within Opened/Next/Background, **newest
+  first within Visible**; a pending job moves when its class changes; a running
+  job's class change does not move it.
+- Slots: at most `max_running`; the last `reserved_high` only for Opened/Next;
+  at most 2 Next, 2 Background, 1 Send running.
+- **Opened first (D17):** while an Opened job is pending or running, nothing
+  below it starts; running Visible reads and Sends finish; running Background
+  **reads** are cancelled and re-queued. Everything resumes when it finishes.
+- Rate limit: a Read takes a token only when it starts; Opened skips the
+  bucket; deferred reads start in order as tokens refill; never more than the
+  burst.
+- `429`: the job goes back to the front of its class and **all reads** pause
+  for `retry_after`; sends are paced separately (Task 1.3).
+- Shell: a job is a task with an abort handle — cancelling aborts it (closes
+  the connection); each job is limited to `job_timeout` (a slow trickle, Task
+  1.3's carry-forward); errors are per job (a `400` for one file stops nothing
+  else).
+
+**Not ported (YAGNI, recorded):** changing limits at run time; a running
+job's priority raise freeing its low-priority slot.
+
+- [ ] **Step 1:** tests first on `State` with a fake clock — the rules above,
+  one test each (max concurrency; class order; FIFO vs newest-first; a pending
+  job moving up and down; reserved slot; per-class caps; cancelled pending work
+  never runs and spends no token; Opened suspends, running continues, resume
+  drains; Background read pre-empted and re-queued, Visible/Send not; burst,
+  refill, order of deferred reads, cancelled deferred read spends no token;
+  Opened skips the bucket; coalescing: one start for two subscribers, cancel
+  only after the last leaves, joining mid-run gets the same finish, error
+  reaches all, new work after all left, class follows the highest subscriber
+  and drops when it leaves; 429 pauses reads, re-queues at the front, sends
+  continue). Then the shell (paused tokio clock where no sockets are
+  involved): two tickets for one key → one fetch; dropping the only ticket
+  aborts the fetch; a send permit is exclusive and freed on drop; a job over
+  `job_timeout` fails. Run → fail.
+- [ ] **Step 2:** implement `state.rs`, then `shell.rs`. Run → pass; clippy,
+  fmt, `cargo deny`. Credit Nuke in the module headers (NOTICE done in 1.3).
+- [ ] **Step 3: Gate 2** — the scheduler against fakes is the real condition
+  here (Telegram limits are measured in 1.8): a load run of 10,000 requests
+  from a simulated fast scroll with cancellations — started jobs ≈ what was
+  still wanted, the opened request starts first, and no more than the burst
+  in any instant. Recorded in DESIGN_NOTES.
+- [ ] **Step 4:** Gate 3; commit code, then docs.
