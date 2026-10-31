@@ -107,6 +107,10 @@ impl Telegram {
         if status == reqwest::StatusCode::NOT_FOUND || status == reqwest::StatusCode::BAD_REQUEST {
             return Ok(None);
         }
+        if matches!(status.as_u16(), 429 | 420) {
+            // The file server sends no retry_after; the Bot API's default.
+            return Err(CoreError::RateLimited { retry_after: 5 });
+        }
         if status.is_server_error() {
             return Err(CoreError::Network(format!(
                 "the storage answered {}",
@@ -542,6 +546,20 @@ mod tests {
             "-1".to_owned(),
         );
         assert!(matches!(tg.fetch("big").await, Err(CoreError::Server(_))));
+    }
+
+    #[tokio::test]
+    async fn the_file_server_asking_to_wait_is_a_rate_limit() {
+        let server = MockServer::start().await;
+        Mock::given(path(format!("/file/bot{TOKEN}/busy")))
+            .respond_with(ResponseTemplate::new(429))
+            .mount(&server)
+            .await;
+        let err = telegram(&server).fetch("busy").await.unwrap_err();
+        assert!(
+            matches!(err, CoreError::RateLimited { retry_after: 5 }),
+            "{err}"
+        );
     }
 
     #[tokio::test]

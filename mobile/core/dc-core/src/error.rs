@@ -2,7 +2,7 @@
 //! holds a URL, a token or a key: errors end up in logs and on screen.
 //! Later tasks add variants as they need them.
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum CoreError {
     /// The network failed or a server could not be reached.
     #[error("network problem: {0}")]

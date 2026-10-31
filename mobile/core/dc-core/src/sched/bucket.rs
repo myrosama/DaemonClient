@@ -48,7 +48,9 @@ impl TokenBucket {
         if self.tokens >= 1.0 {
             Duration::ZERO
         } else {
-            Duration::from_secs_f64((1.0 - self.tokens) / self.rate)
+            // Never zero here: a sum a hair under 1.0 would round to 0 ns, and
+            // callers read zero as "a token is there".
+            Duration::from_secs_f64((1.0 - self.tokens) / self.rate).max(Duration::from_nanos(1))
         }
     }
 }
@@ -57,6 +59,27 @@ impl TokenBucket {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    /// Callers treat a zero wait as "take one now": it must never be zero
+    /// while `try_take` would refuse. Found by Task 1.4's fling simulation —
+    /// 0.9 + 20 × 0.005 lands a hair under 1.0, which rounded to 0 ns.
+    #[test]
+    fn a_zero_wait_always_means_a_token_is_there() {
+        for step_ms in 1..=50 {
+            let mut now = Instant::now();
+            let mut bucket = TokenBucket::new(20.0, 10.0, now);
+            while bucket.try_take(now) {}
+            for _ in 0..200 {
+                now += Duration::from_millis(step_ms);
+                if bucket.wait(now).is_zero() {
+                    assert!(
+                        bucket.try_take(now),
+                        "zero wait, no token ({step_ms} ms steps)"
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn a_burst_runs_at_once_then_one_token_per_period() {
