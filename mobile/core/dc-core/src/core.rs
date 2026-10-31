@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
 use crate::session::{Deployment, Session};
+use crate::telegram::Telegram;
 use crate::worker::Worker;
 use crate::{CoreError, Secret};
 
@@ -39,7 +40,14 @@ pub struct Core {
     http: reqwest::Client,
     config: CoreConfig,
     /// The signed-in account; `None` when signed out.
-    worker: RwLock<Option<Arc<Worker>>>,
+    account: RwLock<Option<Account>>,
+}
+
+/// One signed-in session: its worker, and its bot made once on first use.
+/// Both go together, so one account's bot can never outlive it or reach another.
+struct Account {
+    worker: Arc<Worker>,
+    telegram: Arc<tokio::sync::OnceCell<Arc<Telegram>>>,
 }
 
 impl Core {
@@ -64,7 +72,7 @@ impl Core {
             handle,
             http,
             config,
-            worker: RwLock::new(None),
+            account: RwLock::new(None),
         })
     }
 
@@ -119,15 +127,17 @@ impl Core {
             worker_url: crate::session::normalize_server(&session.worker_url)?,
             ..session
         };
-        *self.worker.write().map_err(|_| poisoned())? =
-            Some(Arc::new(Worker::new(self.http.clone(), session)));
+        *self.account.write().map_err(|_| poisoned())? = Some(Account {
+            worker: Arc::new(Worker::new(self.http.clone(), session)),
+            telegram: Arc::default(),
+        });
         Ok(())
     }
 
     pub fn sign_out(&self) -> Result<(), CoreError> {
         // Drop the token even if the lock was poisoned.
         *self
-            .worker
+            .account
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
         Ok(())
@@ -135,11 +145,46 @@ impl Core {
 
     /// The signed-in account's worker, or `SignedOut`.
     pub fn worker(&self) -> Result<Arc<Worker>, CoreError> {
-        self.worker
-            .read()
-            .map_err(|_| poisoned())?
-            .clone()
+        let account = self.account.read().map_err(|_| poisoned())?;
+        account
+            .as_ref()
+            .map(|a| a.worker.clone())
             .ok_or(CoreError::SignedOut)
+    }
+
+    /// The signed-in account's bot, its config fetched once per session even
+    /// when several callers ask at the same moment.
+    pub async fn telegram(&self) -> Result<Arc<Telegram>, CoreError> {
+        let (worker, cell) = {
+            let account = self.account.read().map_err(|_| poisoned())?;
+            let account = account.as_ref().ok_or(CoreError::SignedOut)?;
+            (account.worker.clone(), account.telegram.clone())
+        };
+        let telegram = cell
+            .get_or_try_init(|| async {
+                let config = self
+                    .run(async move { worker.telegram_config().await })
+                    .await??;
+                Ok::<_, CoreError>(Arc::new(Telegram::new(
+                    self.http.clone(),
+                    self.config.telegram_api.clone(),
+                    config.bot_token,
+                    config.channel_id,
+                )))
+            })
+            .await?
+            .clone();
+        // The session may have changed while the config was fetched: hand the
+        // bot out only if its account is still the signed-in one.
+        let account = self.account.read().map_err(|_| poisoned())?;
+        if account
+            .as_ref()
+            .is_some_and(|a| Arc::ptr_eq(&a.telegram, &cell))
+        {
+            Ok(telegram)
+        } else {
+            Err(CoreError::SignedOut)
+        }
     }
 
     /// One HTTPS request to Telegram; its HTTP status. The device check of
@@ -233,6 +278,56 @@ mod tests {
         let mut tampered = session;
         tampered.worker_url = "http://example.com".to_owned();
         assert!(matches!(core.restore(tampered), Err(CoreError::BadAddress)));
+    }
+
+    async fn bot_server(delay_ms: u64, expected_config_fetches: u64) -> wiremock::MockServer {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::path("/api/auth/login"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "accessToken": "tok", "userId": "u1", "workerUrl": null
+                })),
+            )
+            .mount(&server)
+            .await;
+        wiremock::Mock::given(wiremock::matchers::path("/api/server/telegram-config"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"botToken": "1:A", "channelId": "-1"}))
+                    .set_delay(std::time::Duration::from_millis(delay_ms)),
+            )
+            .expect(expected_config_fetches)
+            .mount(&server)
+            .await;
+        server
+    }
+
+    #[tokio::test]
+    async fn the_bot_is_fetched_once_per_session() {
+        let server = bot_server(0, 1).await;
+        let dir = tempfile::tempdir().unwrap();
+        let core = Core::start(config_in(&dir)).unwrap();
+        core.sign_in(&server.uri(), Deployment::SelfHosted, "a@b.uz", "pw")
+            .await
+            .unwrap();
+        let (a, b) = tokio::join!(core.telegram(), core.telegram());
+        assert!(Arc::ptr_eq(&a.unwrap(), &b.unwrap()));
+    }
+
+    #[tokio::test]
+    async fn signing_out_during_a_bot_fetch_keeps_nothing() {
+        let server = bot_server(500, 1).await;
+        let dir = tempfile::tempdir().unwrap();
+        let core = Core::start(config_in(&dir)).unwrap();
+        core.sign_in(&server.uri(), Deployment::SelfHosted, "a@b.uz", "pw")
+            .await
+            .unwrap();
+        let (fetched, ()) = tokio::join!(core.telegram(), async {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            core.sign_out().unwrap();
+        });
+        assert!(matches!(fetched, Err(CoreError::SignedOut)));
+        assert!(matches!(core.telegram().await, Err(CoreError::SignedOut)));
     }
 
     #[tokio::test]

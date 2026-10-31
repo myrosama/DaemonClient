@@ -7,8 +7,10 @@ pub mod crypto;
 mod error;
 pub(crate) mod http;
 pub mod logging;
+pub mod sched;
 mod secret;
 pub mod session;
+pub mod telegram;
 pub mod worker;
 
 pub use crate::core::{Core, CoreConfig, TELEGRAM_API};

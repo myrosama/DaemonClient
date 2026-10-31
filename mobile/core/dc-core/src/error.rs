@@ -26,6 +26,25 @@ pub enum CoreError {
     /// The server refused the request or answered nonsense; its own words, scrubbed.
     #[error("the server said: {0}")]
     Server(String),
+    // User-facing text says "storage", never "Telegram" (SPEC D21).
+    #[error("the storage asked to wait {retry_after} s")]
+    RateLimited { retry_after: u64 },
+    /// The storage refused for good (bad token, bot removed from the channel, ...).
+    #[error("the storage refused: {0} — check your storage setup at accounts.daemonclient.uz")]
+    TelegramRejected(String),
+}
+
+/// A remote party's message made safe to show and log: tokens scrubbed first
+/// (a cut token is no longer recognisable), control and bidi characters
+/// dropped, at most 200 characters.
+pub(crate) fn clean(text: &str) -> String {
+    crate::logging::scrub(text)
+        .chars()
+        .filter(|c| {
+            !c.is_control() && !matches!(c, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+        })
+        .take(200)
+        .collect()
 }
 
 impl From<reqwest::Error> for CoreError {

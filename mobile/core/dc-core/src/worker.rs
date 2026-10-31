@@ -31,8 +31,19 @@ impl Worker {
         read_json(reply).await
     }
 
+    /// The bot and channel; `NotProvisioned` when either is missing.
     pub async fn telegram_config(&self) -> Result<TelegramConfig, CoreError> {
-        self.get("/api/server/telegram-config").await
+        let raw: RawTelegramConfig = self.get("/api/server/telegram-config").await?;
+        match (
+            raw.bot_token.filter(|t| !t.expose().is_empty()),
+            raw.channel_id.filter(|c| !c.is_empty()),
+        ) {
+            (Some(bot_token), Some(channel_id)) => Ok(TelegramConfig {
+                bot_token,
+                channel_id,
+            }),
+            _ => Err(CoreError::NotProvisioned),
+        }
     }
 
     pub async fn zke_config(&self) -> Result<ZkeConfig, CoreError> {
@@ -107,28 +118,25 @@ pub(crate) async fn read_json<T: DeserializeOwned>(
                 .and_then(|v| v.get("message"))
                 .and_then(|m| m.as_str())
                 .unwrap_or_default();
-            // Scrub before cutting (a cut token is no longer recognisable), and
-            // drop control and bidi characters: this text reaches logs and screens.
-            let text: String = crate::logging::scrub(&format!("{} {message}", status.as_u16()))
-                .chars()
-                .filter(|c| {
-                    !c.is_control()
-                        && !matches!(c, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
-                })
-                .take(200)
-                .collect();
+            let text = crate::error::clean(&format!("{} {message}", status.as_u16()));
             Err(CoreError::Server(text))
         }
     }
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone)]
 pub struct TelegramConfig {
-    #[serde(deserialize_with = "crate::secret::deserialize")]
     pub bot_token: Secret<String>,
-    #[serde(deserialize_with = "string_or_number")]
     pub channel_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawTelegramConfig {
+    #[serde(default, deserialize_with = "crate::secret::deserialize_option")]
+    bot_token: Option<Secret<String>>,
+    #[serde(default, deserialize_with = "optional_string_or_number")]
+    channel_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -200,11 +208,12 @@ struct BulkCheckReply {
 
 /// Telegram channel ids arrive as a string or a number, depending on where
 /// the worker read them from.
-fn string_or_number<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error> {
-    match serde_json::Value::deserialize(d)? {
-        serde_json::Value::String(s) => Ok(s),
-        serde_json::Value::Number(n) => Ok(n.to_string()),
-        _ => Err(serde::de::Error::custom("expected a string or a number")),
+fn optional_string_or_number<'de, D: Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
+    match Option::<serde_json::Value>::deserialize(d)? {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(serde_json::Value::String(s)) => Ok(Some(s)),
+        Some(serde_json::Value::Number(n)) => Ok(Some(n.to_string())),
+        Some(_) => Err(serde::de::Error::custom("expected a string or a number")),
     }
 }
 
@@ -252,6 +261,22 @@ mod tests {
         assert_eq!(cfg.bot_token.expose(), "123456789:AAH");
         assert_eq!(cfg.channel_id, "-1001234567890");
         assert!(!format!("{cfg:?}").contains("AAH"));
+    }
+
+    #[tokio::test]
+    async fn an_account_without_a_bot_is_not_provisioned() {
+        let server = MockServer::start().await;
+        let body = json!({"proxyUrl": "https://x/proxy"});
+        serve(
+            &server,
+            "/api/server/telegram-config",
+            ResponseTemplate::new(200).set_body_json(body),
+        )
+        .await;
+        assert!(matches!(
+            worker(&server).telegram_config().await,
+            Err(CoreError::NotProvisioned)
+        ));
     }
 
     #[tokio::test]
