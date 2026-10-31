@@ -204,4 +204,9 @@ Detailed: `plans/P1-core.md` (design approved 2026-10-29, decisions C1–C11).
 
 ## P4 — Release
 
-- [ ] Tasks written into `plans/P4-release.md` at the end of P3.
+- [ ] Tasks written into `plans/P4-release.md` at the end of P3, starting from
+      the App Store checklist `docs/mobile/APP_STORE.md` (2026-10-31): review
+      account, privacy policy and manifest, export-compliance answer
+      (`ITSAppUsesNonExemptEncryption` must become `true`), and the operator's
+      decisions A1–A4 there (Telegram's terms, the "Photos" name, whose
+      developer account, account deletion).
