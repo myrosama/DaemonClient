@@ -139,7 +139,7 @@ Detailed: `plans/P1-core.md` (design approved 2026-10-29, decisions C1–C11).
       `telegram-config`, `zke-config`, `dc-manifest`, `bulk-upload-check`.
       (`POST /api/assets` and the thumbnail route moved to 1.7, the Drive
       routes to P3 — built where first used.)
-- [ ] **1.3** Telegram client — `sendDocument`, `getFile` (with its result
+- [x] **1.3** Telegram client — `sendDocument`, `getFile` (with its result
       cached), download, `deleteMessage`; `429` and fatal errors.
 - [ ] **1.4** Fetch scheduler (SPEC §4.9, D19) — a Rust port of Nuke's
       pipeline: coalescing, four priority classes with the opened item

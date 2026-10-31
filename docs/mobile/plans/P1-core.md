@@ -1227,7 +1227,7 @@ bucket ported from Nuke now, because sends need it first; 1.4 reuses it),
 - The bucket (Nuke's tests): a burst runs at once; then one token per
   1/rate; never more than the burst; time going backwards takes nothing.
 
-- [ ] **Step 1:** dependencies; tests first — `bucket.rs` (burst, refill,
+- [x] **Step 1:** dependencies; tests first — `bucket.rs` (burst, refill,
   cap, wait time) and `telegram.rs` against `wiremock` with
   `api_base = server.uri()`: `getFile` + download round trip; the second
   `download` of the same id skips `getFile` (cache); a stale path (`404`)
@@ -1240,9 +1240,37 @@ bucket ported from Nuke now, because sends need it first; 1.4 reuses it),
   a row: eight at once, the ninth waits ~1.5 s (paused tokio clock). Worker:
   missing `botToken` → `NotProvisioned`; a second `telegram_config()` makes
   no request. Run → fail.
-- [ ] **Step 2:** implement. Run → pass; clippy, fmt, `cargo deny`.
-- [ ] **Step 3: Gate 2** — `examples/telegram_roundtrip.rs`: sign in to the
+- [x] **Step 2:** implement. Run → pass; clippy, fmt, `cargo deny`.
+- [x] **Step 3: Gate 2** — `examples/telegram_roundtrip.rs`: sign in to the
   test account (Keychain), send a small random document named
   `<16 hex>.part001` to its channel, read it back through `download` and
   compare, then delete the message. Prints sizes and timings only.
-- [ ] **Step 4:** Gate 3; commit code, then docs.
+- [x] **Step 4:** Gate 3; commit code, then docs.
+
+**As built (Task 1.3), differences from the steps above:** the Telegram
+config is cached as the `Telegram` client in `Core::telegram()` (one per
+session, so one pacer and one path cache), not in `Worker::telegram_config()`,
+which stays uncached; worker and bot share one lock and the bot is made once
+even under concurrent calls (Gate 3). Pacing is tested on `SendPacer` with a
+paused clock (wiremock's real sockets and a paused clock do not mix); dev
+dependency `tokio` gains `test-util`, `net`, `io-util`. `retry_after` is capped
+at a day; 5xx answers are `Network` (transient); user-facing text says
+"storage" (SPEC D21).
+
+**Carried forward from Task 1.3's Gate 3:**
+- **1.4:** what is left of Nuke's `RateLimiter` — the pending queue (new work
+  waits behind pending work), the drain that skips cancelled work without a
+  token, re-arming the timer, and their tests; the scheduler holds abort
+  handles (`Core::run` detaches tasks, so dropping a caller does not cancel);
+  a `400` from `getFile` is about one file, not the bot — it must not stop all
+  reads; downloads need an overall time limit (a slow trickle resets
+  `read_timeout`).
+- **1.5:** cap the size of JSON answers (`answer()` reads them whole).
+- **1.7:** `RateLimited` / `Network` are the retryable errors; at most one
+  upload part sending at a time (the pacer's waiters are not served in order).
+- **1.8:** measure the burst right after a 429 (the bucket has refilled — the
+  production worker behaves the same).
+- **Noted, not changed:** the bot token is not shape-checked before it goes
+  into a URL path; copies of it inside reqwest/hyper buffers are not zeroized
+  (comes with reqwest).
+

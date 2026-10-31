@@ -20,7 +20,8 @@ Immich itself. It is excellent, and this project would not exist without it.
 ────────────────────────────────────────────────────────────────────────────
 
 The Photos service worker's media scheduler
-(immich/web/src/service-worker/media-scheduler.ts) ports the design of the
+(immich/web/src/service-worker/media-scheduler.ts) and the mobile core's
+scheduler (mobile/core/dc-core/src/sched/) port the design of the
 priority task queue and token-bucket rate limiter of Nuke
 (https://github.com/kean/Nuke), used under the MIT License:
 

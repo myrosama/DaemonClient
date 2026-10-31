@@ -684,3 +684,41 @@ address and the openapi spec's "login and worker discovery" server.
   `photos encryption — mode: server, key: derived (derived in 638 ms)` (debug
   build; includes one network round-trip). Re-run after every Gate 3 fix.
 - G3: above. G4: this code commit and docs commit.
+
+---
+
+## 1.3 — The Telegram client            2026-10-31
+
+**Planned:** P1-core.md Part 2, Task 1.3 (written before the code).
+**Did:** as planned; the differences are listed under "As built (Task 1.3)" in
+P1-core.md — chiefly the bot cached in `Core` (one per session) instead of the
+worker's config. The token bucket ported from Nuke lives in `sched/bucket.rs`;
+NOTICE now credits Nuke for it too. User-facing text says "storage" (SPEC D21,
+decided during this task).
+**Security:** reviewer — 0 HIGH, **2 MEDIUM**, 4 LOW, all fixed. MEDIUM: a
+`retry_after` near 2^63 panicked inside the pacer (`Instant + Duration`
+overflow), poisoned its lock, and every later send went out unpaced — capped
+at a day, `checked_add`, poisoned locks recovered; MEDIUM: a sign-out while the
+bot config was being fetched stored the old bot again — with sign-in as
+another account in between, that account's uploads would have gone to the
+first account's channel — worker and bot now live under one lock, made once
+per session, handed out only to the session they belong to. LOW: Telegram's
+description not cleaned (shared clean-up now), a shorter pause cutting a
+longer one, two pacers under concurrent first calls, the streamed-size cap
+untested. INFO checked fine: a hostile `file_path` cannot move the
+token-bearing request off api.telegram.org; every reqwest error loses its URL.
+Spec reviewer — 0 HIGH, 1 MEDIUM (the same race), 8 LOW: fixed — 5xx is
+transient, a bare 429 still means wait, description cleaned, longer pause
+wins, test gaps (field names, stale-path counts, streamed cap), NOTICE, the
+download buffer sized from the bounded length; assigned — see the
+carried-forward list after Task 1.3.
+**Gate evidence:**
+- G1: tests first, failing (compile, then 5 behavioural failures incl. the
+  reproduced overflow panic). `cargo test -p dc-core` 75 passed; clippy (deny
+  lints) and fmt clean; `cargo deny check advisories` ok.
+- G2 (`cargo run -p dc-core --example telegram_roundtrip`, the approved test
+  account): before Gate 3 — `sent 64 KiB in 1187 ms · read back 64 KiB in
+  1275 ms — identical: true · read again (path cached) in 968 ms · deleted`;
+  after the fixes — `sent 64 KiB in 1227 ms · deleted the test message · read
+  back 64 KiB in 828 ms — identical: true · read again (path cached) in 398 ms`.
+- G3: above. G4: `0af1736` and this docs commit.
