@@ -15,6 +15,21 @@ submission (P4) — they change.
 | A3 | **Whose developer account** | 5.2.1 *"Apps should be submitted by the person or legal entity that owns or has licensed the intellectual property and other relevant rights."* The plan is a friend's paid account. | Own Apple Developer account (best), or a written licence from the operator to the friend, kept on file. |
 | A4 | **Account deletion** | 5.1.1(v) *"If your app supports account creation, you must also offer account deletion within the app."* | The app offers "Create account", so it must offer deletion. Needs a deletion flow on the accounts side (Linux machine) that the app opens or calls — what exactly gets deleted (Firebase account, worker, D1; the Telegram channel stays the user's) is a product decision. |
 
+### The operator's answers (2026-10-31, SPEC D21)
+
+- **A1:** the store listing presents the app as a **self-hosted storage tool**;
+  no "unlimited Telegram storage" claims. Users sign up and set up storage on
+  the website; the app never asks for Telegram data. In code, storage
+  credentials stay inside the core and user-facing text says "storage". The
+  privacy policy still names Telegram, Cloudflare and Google (5.1.1/5.1.2).
+  The 5.2.2 risk remains if Apple asks for authorization.
+- **A2:** the name is **"DaemonClient Photos"** (home screen shows it
+  shortened, about "DaemonClient…"); changed at release.
+- **A3:** the operator opens **their own** Apple Developer account.
+- **A4:** **Delete account** goes into the app (P2 2.9) with a deletion flow on
+  the accounts side (Linux machine).
+- Immich's brand, links and purchase screens are removed at release (P2 2.10).
+
 ## What we must build or change (owned by plan tasks)
 
 | Guideline | Requirement | Our status → action | Task |
