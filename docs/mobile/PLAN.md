@@ -141,7 +141,7 @@ Detailed: `plans/P1-core.md` (design approved 2026-10-29, decisions C1–C11).
       routes to P3 — built where first used.)
 - [x] **1.3** Telegram client — `sendDocument`, `getFile` (with its result
       cached), download, `deleteMessage`; `429` and fatal errors.
-- [ ] **1.4** Fetch scheduler (SPEC §4.9, D19) — a Rust port of Nuke's
+- [x] **1.4** Fetch scheduler (SPEC §4.9, D19) — a Rust port of Nuke's
       pipeline: coalescing, four priority classes with the opened item
       suspending the rest (D17) and a reserved slot, newest-first thumbnails,
       cancellation when nobody waits, a token bucket ported from Nuke that

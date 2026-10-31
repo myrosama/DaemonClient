@@ -1328,7 +1328,7 @@ that cancelled work never spends, a global pause on `429`.
 **Not ported (YAGNI, recorded):** changing limits at run time; a running
 job's priority raise freeing its low-priority slot.
 
-- [ ] **Step 1:** tests first on `State` with a fake clock — the rules above,
+- [x] **Step 1:** tests first on `State` with a fake clock — the rules above,
   one test each (max concurrency; class order; FIFO vs newest-first; a pending
   job moving up and down; reserved slot; per-class caps; cancelled pending work
   never runs and spends no token; Opened suspends, running continues, resume
@@ -1342,11 +1342,54 @@ job's priority raise freeing its low-priority slot.
   involved): two tickets for one key → one fetch; dropping the only ticket
   aborts the fetch; a send permit is exclusive and freed on drop; a job over
   `job_timeout` fails. Run → fail.
-- [ ] **Step 2:** implement `state.rs`, then `shell.rs`. Run → pass; clippy,
+- [x] **Step 2:** implement `state.rs`, then `shell.rs`. Run → pass; clippy,
   fmt, `cargo deny`. Credit Nuke in the module headers (NOTICE done in 1.3).
-- [ ] **Step 3: Gate 2** — the scheduler against fakes is the real condition
+- [x] **Step 3: Gate 2** — the scheduler against fakes is the real condition
   here (Telegram limits are measured in 1.8): a load run of 10,000 requests
   from a simulated fast scroll with cancellations — started jobs ≈ what was
   still wanted, the opened request starts first, and no more than the burst
   in any instant. Recorded in DESIGN_NOTES.
-- [ ] **Step 4:** Gate 3; commit code, then docs.
+- [x] **Step 4:** Gate 3; commit code, then docs.
+
+**As built (Task 1.4), differences from the steps above:**
+- The reserved slot is for the **opened item only** — the rule above said
+  "Opened/Next", which let Next work fill it; SPEC §4.9 ("never waits for a
+  free one") and the web's port win (Gate 3).
+- Slots are counted by the class a job **started** in, so raising or lowering
+  a running job moves no slot (this is the "Not ported" line, now pinned).
+- The opened item never waits for a token but **spends one when there is
+  one** (fast swipes in the viewer are metered); a re-queued pre-empted
+  prefetch spends a second token when it restarts.
+- `429`: the pause is at least 1 s (a `retry_after: 0` spun at 1,000/s) and
+  at most a day; after **3** rate limits the job fails with the rate-limit
+  error. An opened item waiting out a pause does not hold up uploads. A 429
+  from Telegram's file server is now a rate limit too (was a plain error).
+- Interfaces: `Scheduler::start(Limits, Fetch)` spawns on the **current** tokio
+  runtime (1.5 creates it inside the core's); `State::subscribe(sub, key,
+  kind, class, now)` — the caller picks unique `sub` ids; `send_slot()` is
+  `async → Result<Permit>`; `Fetch` returns `Bytes` (`Telegram::download`
+  gives `Vec<u8>` — `Bytes::from` is free). Dropping the `Scheduler` stops it:
+  running jobs aborted, waiting tickets get an error (sign-out). A panicking
+  fetch becomes an `Internal` error instead of a waiter left hanging.
+- Not wired into `Core` yet — that is 1.5.
+- **Bug found in Task 1.3's code:** `TokenBucket::wait()` rounded to 0 ns when
+  the tokens were a float hair under 1.0 while `try_take()` refused, so
+  `SendPacer` let an occasional upload part through unpaced. Fixed in the
+  bucket (wait is never zero without a token), with a test.
+
+**Carried forward from Task 1.4's Gate 3:**
+- **1.5:** create one `Scheduler` per signed-in account inside `Account` (its
+  `Fetch` holds that account's bot) and drop it on sign-out; route every read
+  through it (`Telegram::download` stays `pub` for the examples and dc-cli
+  only); create it on the core's runtime.
+- **1.8:** measure how many pending jobs the O(n) scan copes with on a phone
+  (20k pending = 2.3 s on the Mac); add an ordered index if prefetch or
+  upload queues get that long.
+- **P2 (UI):** during a sustained fast fling every started fetch is cancelled
+  (each tile is on screen less than one fetch) — bounded by the rate, but
+  wasted. Check that Immich's thumbnails defer loading during fast scrolls
+  (Flutter's scroll-aware image loading) so such requests never reach the core.
+- **Before video work:** the web caps how long the opened item may suspend
+  everything (`maxSuspendMs`) because playhead parts chain; the phone has no
+  cap yet — decide then.
+

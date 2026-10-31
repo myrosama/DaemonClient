@@ -722,3 +722,58 @@ carried-forward list after Task 1.3.
   after the fixes — `sent 64 KiB in 1227 ms · deleted the test message · read
   back 64 KiB in 828 ms — identical: true · read again (path cached) in 398 ms`.
 - G3: above. G4: `0af1736` and this docs commit.
+
+---
+
+## 1.4 — Smart loading: the scheduler (Nuke port)            2026-10-31
+
+**Planned:** P1-core.md Part 2, Task 1.4 (written before the code).
+**Did:** `sched::state` — the rules as a pure state machine, time passed in;
+`sched::shell` — one tokio task runs it, each download its own abortable task.
+Differences from the plan are under "As built (Task 1.4)" in P1-core.md.
+**Found on the way — a bug in 1.3's pushed code:** `TokenBucket::wait()`
+rounded to 0 ns when the tokens summed to a hair under 1.0 (0.1 added ten
+times is 0.9999999999999999) while `try_take()` refused. Callers read a zero
+wait as "a token is there": the scheduler started reads without tokens (a
+first fling run started 373 in 1.7 s against a budget of 43), and
+`SendPacer` let an occasional upload part through unpaced. 1.3's pacing
+test used a paused clock that never lands on such sums. Fixed once in the
+bucket, with a test over step sizes 1–50 ms that failed first (4 ms steps).
+**Security:** reviewer — 0 HIGH, **2 MEDIUM**, 3 LOW, all fixed or recorded.
+MEDIUM: a `retry_after: 0` restarted the opened read at once — 1,000 fetches
+a second, never resolving — and rate-limited jobs retried forever (pause
+floored at 1 s, job fails after 3); a 429 from Telegram's file server was a
+plain error, so reads never paused (now a rate limit). LOW: O(n) scan per
+event (recorded for 1.8), opened reads unmetered (they now spend a token
+when there is one), `Limits` unchecked (code constants; contract documented).
+INFO taken: dropping the scheduler now stops everything (sign-out); an opened
+photo waiting out a pause no longer holds up uploads. Checked fine: stale
+results of aborted runs are ignored (attempt numbers), the task ends when
+dropped, nothing in `sched` logs or leaks a token; a randomized run of the
+state machine (400 seeds × 400 steps) kept every invariant.
+Spec reviewer — 0 HIGH, **3 MEDIUM**, 7 LOW. MEDIUM: Next work could take the
+slot reserved for the opened photo (SPEC §4.9 says it never waits) — now the
+opened item's only; a running job's class change moved slots — now counted
+by the class it started in; the first fling test did not show what Gate 2
+claims — replaced by a scroll model (below). LOW: tests added for each rule
+that broke no test when mutated (Opened and the bucket, Opened and the pause,
+newest-first on a repeated request — which also fixed a Background request
+reordering the screen, pre-emption when the opened photo joins a running
+prefetch, new work after a cancel); `is_running` test-only; a debug assert
+that every read but the opened one took a token.
+**Gate evidence:**
+- G1: tests first, each failing before its fix (9 at the Gate 3 round).
+  `cargo test -p dc-core` 103 passed; clippy (deny lints), fmt clean;
+  `cargo deny check advisories` ok.
+- G2: the scheduler against a scroll model of the Photos grid (10,000
+  thumbnails, 30 on screen, 120 Hz frames, Flutter's order: new tiles built,
+  then old disposed; 150 ms per fetch; a photo tapped halfway; then the final
+  screen must load). Steady scroll (1 tile per frame): **1,630 started, 1,625
+  finished, 5 cancelled.** Fast fling (4 per frame — each tile on screen 60
+  ms, less than one fetch): **437 started, 407 cancelled, the final 30
+  loaded** — held to the rate (burst + 20/s), the waste goes to P2 (scroll-
+  aware loading). In both, the tapped photo started at once and alone, and
+  never more than 5 started in one instant. Real Telegram round trip on the
+  test account after the bucket fix: sent 64 KiB in 1017 ms, identical on
+  read-back (632 ms, cached path 219 ms), deleted.
+- G3: above. G4: `e827804` and this docs commit.
