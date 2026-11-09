@@ -218,8 +218,9 @@ that gets an error body crashes on `.length`.
 `GET`/`POST /api/drive/files` (leaves out Trash; `?trashed=1` lists it, with
 `expired` by the worker's clock; `POST` takes an optional
 `thumb: {message_id, file_id}`); `PATCH`/`PUT`/`DELETE /api/drive/files/{id}`;
-`POST /api/drive/files/{id}/trash`, `/restore`, `/purge` (`purge` marks the item
-and everything inside it for deletion, only from Trash, and returns those rows);
+`PATCH` also takes `thumb`; `POST /api/drive/files/{id}/trash`, `/restore`,
+`/purge` (`purge` marks the item and everything inside it for deletion, only
+from Trash, and returns those rows without any message another row still uses);
 409 when the item or its folder is being deleted, or a move would put a folder
 inside itself or a missing or hidden folder; `GET /api/drive/config` reports
 `driveApi: 1` from release W1 on;
