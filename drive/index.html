@@ -3,15 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <script>
-    // Logged-in users skip the marketing landing and go straight to the app.
-    // Mirrors the session check in src/api.js (key + 7-day exp). Runs before
-    // paint to avoid a flash of the landing.
-    try {
-      var dcS = JSON.parse(localStorage.getItem('dc_drive_session') || 'null');
-      if (dcS && (!dcS.exp || dcS.exp > Date.now())) location.replace('/dashboard');
-    } catch (e) {}
-  </script>
+  <!-- A file, not inline: the site's script policy allows no inline scripts. -->
+  <script src="/landing.js"></script>
   <title>DaemonClient Drive — Free Unlimited Encrypted Cloud Storage</title>
   <meta name="description" content="Free, unlimited, end-to-end encrypted file storage on infrastructure you own. A private, self-hosted alternative to Google Drive — no fees, no limits, no snooping.">
   <meta name="keywords" content="DaemonClient Drive, free cloud storage, unlimited storage, encrypted cloud storage, zero-knowledge, private cloud storage, Google Drive alternative, self-hosted storage, end-to-end encryption">
