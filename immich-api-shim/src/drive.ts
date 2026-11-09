@@ -1,7 +1,7 @@
 import type { Env } from './index';
 import { json, requireAuth } from './helpers';
 import { D1Adapter, ensureDriveSchema } from './d1-adapter';
-import { hiddenIds, moveRefusal, parseThumb, sameMessages, TRASH_EXPIRY_MS } from './drive-tree';
+import { hiddenIds, moveRefusal, parseThumb, rowMessageIds, sameMessages, TRASH_EXPIRY_MS } from './drive-tree';
 import { getCachedConfig } from './cached-config';
 
 /**
@@ -71,7 +71,7 @@ export async function handleDrive(request: Request, env: Env, path: string, url:
   // (botUsername, ownership flags) are preserved. The user's bot is shared with
   // Photos; this is the one config for it.
   if (path === '/api/drive/config' && request.method === 'POST') {
-    const body = (await request.json().catch(() => ({}))) as any;
+    const body = ((await request.json().catch(() => null)) || {}) as any;
     const existing = (await db.getJsonConfig<any>('telegram')) || {};
     const merged = { ...existing };
     if (typeof body.botToken === 'string' && body.botToken.trim()) merged.botToken = body.botToken.trim();
@@ -98,7 +98,7 @@ export async function handleDrive(request: Request, env: Env, path: string, url:
       return json(cfg || { enabled: false });
     }
     if (request.method === 'POST' || request.method === 'PUT') {
-      const body = (await request.json().catch(() => ({}))) as any;
+      const body = ((await request.json().catch(() => null)) || {}) as any;
       // A conditional save (the app adding a key-check value to existing
       // settings) lands only on the salt it was made for — never over a
       // password another device set in the meantime.
@@ -128,8 +128,8 @@ export async function handleDrive(request: Request, env: Env, path: string, url:
   // parentId, returns the whole tree (the client filters per folder locally,
   // matching the old local-first sync model).
   // Trashed items, their contents and marked items are hidden (W1); with
-  // ?trashed=1 only those are listed, each top-level one flagged `expired`
-  // after 30 days by this worker's clock.
+  // ?trashed=1 only those are listed, each with its own trashedAt flagged
+  // `expired` after 30 days by this worker's clock.
   if (path === '/api/drive/files' && request.method === 'GET') {
     const rows = await db.listFiles(uid);
     const hidden = hiddenIds(rows);
@@ -155,6 +155,9 @@ export async function handleDrive(request: Request, env: Env, path: string, url:
     }
     // 'root' is the top level's marker in parentId, never a row.
     if (body.id === 'root') return json({ message: 'Invalid id' }, 400);
+    if (Array.isArray(body.messages) && body.messages.some((m: unknown) => !m || typeof m !== 'object')) {
+      return json({ message: 'messages must be objects' }, 400);
+    }
     const type = body.type === 'folder' ? 'folder' : 'file';
     let thumb: string | null | undefined;
     try { thumb = parseThumb(body.thumb); } catch (error: any) { return json({ message: error.message }, 400); }
@@ -226,7 +229,17 @@ export async function handleDrive(request: Request, env: Env, path: string, url:
       // purge: only from Trash (owner decision D1), then the whole subtree.
       if (!hiddenIds(rows).has(fid)) return json({ message: 'Move it to Trash first' }, 409);
       const items = await db.markPurging(uid, fid, now);
-      return json({ items });
+      // The client deletes what this lists, so leave out any message a row
+      // outside the deletion still uses.
+      const marked = new Set(items.map((i) => i.id));
+      const keep = new Set(rows.filter((r) => !marked.has(r.id)).flatMap(rowMessageIds));
+      return json({
+        items: items.map((i) => ({
+          ...i,
+          messages: Array.isArray(i.messages) ? i.messages.filter((m: any) => !keep.has(m?.message_id)) : [],
+          thumb: i.thumb && keep.has(i.thumb.message_id) ? null : i.thumb,
+        })),
+      });
     }
 
     if (!action && (request.method === 'PATCH' || request.method === 'PUT')) {
@@ -234,6 +247,7 @@ export async function handleDrive(request: Request, env: Env, path: string, url:
       const body = ((await request.json().catch(() => null)) || {}) as any;
       const fields: Record<string, any> = { updatedAt: now };
       if (typeof body.fileName === 'string' && body.fileName.trim()) fields.fileName = body.fileName.trim();
+      try { fields.thumb = parseThumb(body.thumb); } catch (error: any) { return json({ message: error.message }, 400); }
       if (typeof body.parentId === 'string' && body.parentId && body.parentId !== existing.parentId) {
         const refusal = moveRefusal(await db.listFiles(uid), fid, body.parentId);
         if (refusal) return json({ message: refusal }, 409);

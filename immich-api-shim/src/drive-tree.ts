@@ -80,6 +80,17 @@ export function parseThumb(raw: unknown): string | null | undefined {
   throw new Error('thumb must be {message_id, file_id}');
 }
 
+/** The Telegram message ids a (normalized) row points at; bad stored data yields none. */
+export function rowMessageIds(row: { messages?: unknown; thumb?: unknown }): number[] {
+  const ids: number[] = [];
+  if (Array.isArray(row.messages)) {
+    for (const m of row.messages) if (Number.isSafeInteger(m?.message_id)) ids.push(m.message_id);
+  }
+  const t = row.thumb as any;
+  if (Number.isSafeInteger(t?.message_id)) ids.push(t.message_id);
+  return ids;
+}
+
 /** Whether two stored `messages` values describe the same parts. */
 export function sameMessages(stored: unknown, incoming: string | null): boolean {
   const norm = (v: unknown) => {

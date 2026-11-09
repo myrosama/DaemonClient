@@ -467,7 +467,7 @@ export class D1Adapter {
   /**
    * Mark an item and everything inside it for deletion (Drive's "delete
    * forever", W1). Owner-scoped at every level; UNION (not UNION ALL) stops on
-   * a cycle in old data; 'root' is the top level's marker, never walked through. Keeps an existing mark, and returns every row of the
+   * a cycle in old data; a row named 'root' (the top level's marker) is never marked. Keeps an existing mark, and returns every row of the
    * subtree so a client can delete their Telegram messages and resume later.
    */
   async markPurging(ownerId: string, id: string, now: string): Promise<any[]> {
@@ -475,7 +475,7 @@ export class D1Adapter {
       `WITH RECURSIVE sub(id) AS (
          SELECT id FROM files WHERE id = ? AND ownerId = ?
          UNION
-         SELECT f.id FROM files f JOIN sub ON f.parentId = sub.id WHERE f.ownerId = ? AND sub.id <> 'root'
+         SELECT f.id FROM files f JOIN sub ON f.parentId = sub.id WHERE f.ownerId = ? AND f.id <> 'root'
        )
        UPDATE files SET purgingAt = COALESCE(purgingAt, ?)
        WHERE ownerId = ? AND id IN (SELECT id FROM sub)

@@ -10,7 +10,7 @@
 // 16-byte salt, 12-byte IV PREPENDED to the ciphertext.
 
 import { D1Adapter, ensureDriveSchema } from './d1-adapter';
-import { hiddenIds, moveRefusal, isTempFileName } from './drive-tree';
+import { hiddenIds, moveRefusal, isTempFileName, rowMessageIds, sameMessages } from './drive-tree';
 
 const PBKDF2_ITERATIONS = 100000;
 const IV_LENGTH = 12;
@@ -304,6 +304,8 @@ async function tgUploadConfirmed(
       const form = new FormData();
       form.append('chat_id', channelId);
       form.append('document', new Blob([data as any], { type: 'application/octet-stream' }), name);
+      // Stored byte for byte, so the size check holds for a .gif or .mp4 too.
+      form.append('disable_content_type_detection', 'true');
       res = await fetch(`https://api.telegram.org/bot${botToken}/sendDocument`, { method: 'POST', body: form });
       j = await res.json().catch(() => null);
     } catch {
@@ -355,34 +357,18 @@ async function getDriveKey(adapter: D1Adapter): Promise<CryptoKey | null> {
 }
 
 function chunksOf(node: DriveRow): Array<{ message_id?: number; file_id: string }> {
-  const m = node.messages;
-  if (Array.isArray(m)) return m;
+  let m: unknown = node.messages;
   if (typeof m === 'string') {
-    try { return JSON.parse(m) || []; } catch { return []; }
+    try { m = JSON.parse(m); } catch { return []; }
   }
-  return [];
-}
-
-function thumbOf(node: DriveRow): number | null {
-  // listFiles returns it parsed, getFile as the stored string.
-  try {
-    const t: any = typeof node.thumb === 'string' ? JSON.parse(node.thumb) : node.thumb;
-    return Number.isSafeInteger(t?.message_id) ? t.message_id : null;
-  } catch { return null; }
+  return Array.isArray(m) ? m.filter((x) => x && typeof x === 'object') : [];
 }
 
 // Deletes a row's parts and thumbnail, skipping any message another row still
 // points at (thumb references come from clients and can't be trusted to be unique).
 async function deleteRowMessages(botToken: string, channelId: string, node: DriveRow, allRows: DriveRow[]): Promise<void> {
-  const keep = new Set<number>();
-  for (const r of allRows) {
-    if (r.id === node.id) continue;
-    for (const m of chunksOf(r)) if (m.message_id) keep.add(m.message_id);
-    const t = thumbOf(r);
-    if (t) keep.add(t);
-  }
-  const mine = [...chunksOf(node).map((m) => m.message_id), thumbOf(node)];
-  for (const id of mine) if (id && !keep.has(id)) await tgDelete(botToken, channelId, id);
+  const keep = new Set(allRows.filter((r) => r.id !== node.id).flatMap(rowMessageIds));
+  for (const id of rowMessageIds(node)) if (!keep.has(id)) await tgDelete(botToken, channelId, id);
 }
 
 function davText(status: number, msg: string): Response {
@@ -511,15 +497,17 @@ export async function handleWebDav(request: Request, env: { DB?: any }, url: URL
     const parent = resolvePath(rows, segments.slice(0, -1)).node;
     if (!parent) return davText(409, 'Parent folder not found');
     const parentId = parent.id === 'root' ? 'root' : parent.id;
-    const refusal = webdavUploadRefusal(await adapter.getJsonConfig<any>('drive_zke'));
-    if (refusal) return davText(403, refusal);
     const telegram = await adapter.getJsonConfig<any>('telegram');
     const botToken = telegram?.botToken || telegram?.bot_token;
     const channelId = telegram?.channelId || telegram?.channel_id;
     if (!botToken || !channelId) return davText(500, 'Telegram not configured');
     const body = new Uint8Array(await request.arrayBuffer());
     if (body.byteLength > PUT_CAP) return davText(507, 'Too large for the mounted drive — use the web app');
-    const key = await getDriveKey(adapter);
+    // Read once, after the body, so a settings change during a slow upload applies.
+    const zke = await adapter.getJsonConfig<any>('drive_zke');
+    const refusal = webdavUploadRefusal(zke);
+    if (refusal) return davText(403, refusal);
+    const key = zke?.enabled ? await deriveDriveKey(zke.password, zke.salt) : null;
     // An empty unencrypted file has nothing to send (Telegram refuses empty
     // documents); encrypted, it still has the IV and tag.
     const totalChunks = !key && body.byteLength === 0 ? 0 : Math.max(1, Math.ceil(body.byteLength / CHUNK_SIZE));
@@ -543,10 +531,11 @@ export async function handleWebDav(request: Request, env: { DB?: any }, url: URL
     const existing = resolvePath(rows, segments).node;
     const replacing = existing && existing.type === 'file' ? existing : null;
     const now = new Date().toISOString();
+    const rowId = replacing ? replacing.id : crypto.randomUUID();
     let saved: boolean;
     try {
       saved = await adapter.saveFile({
-        id: replacing ? replacing.id : crypto.randomUUID(), ownerId: uid, parentId, type: 'file', fileName,
+        id: rowId, ownerId: uid, parentId, type: 'file', fileName,
         fileSize: body.byteLength, fileType: request.headers.get('Content-Type') || 'application/octet-stream',
         messages: JSON.stringify(messages), encrypted: key ? 1 : 0, encryptionMode: key ? 'client' : 'off',
         uploadedAt: now, updatedAt: now,
@@ -554,7 +543,14 @@ export async function handleWebDav(request: Request, env: { DB?: any }, url: URL
         ...(replacing ? { thumb: null } : {}),
       });
     } catch {
-      for (const id of sent) await tgDelete(botToken, channelId, id);
+      // D1 can report an error after the write landed. Remove the parts only if
+      // the row provably doesn't hold them; a leak beats breaking a saved file.
+      try {
+        const stored = await adapter.getFile(rowId);
+        if (!sameMessages(stored?.messages, JSON.stringify(messages))) {
+          for (const id of sent) await tgDelete(botToken, channelId, id);
+        }
+      } catch { /* unknown state: keep the parts */ }
       return new Response('Temporarily unavailable', { status: 503, headers: { 'Retry-After': '2', 'DAV': '1, 2' } });
     }
     if (!saved) {
