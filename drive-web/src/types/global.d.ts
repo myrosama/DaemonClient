@@ -1,9 +1,9 @@
+// Derived from filebrowser/filebrowser@e8a388f (Apache-2.0). Modified by DaemonClient contributors.
 export {};
 
 declare global {
   interface Window {
     FileBrowser: any;
-    grecaptcha: any;
   }
 
   interface HTMLElement {

@@ -1,3 +1,4 @@
+<!-- Derived from filebrowser/filebrowser@e8a388f (Apache-2.0). Modified by DaemonClient contributors. -->
 <template>
   <div>
     <div v-if="uploadStore.totalBytes" class="progress">
@@ -10,11 +11,6 @@
     <sidebar></sidebar>
     <main>
       <router-view></router-view>
-      <shell
-        v-if="
-          enableExec && authStore.isLoggedIn && authStore.user?.perm.execute
-        "
-      />
     </main>
     <prompts></prompts>
     <upload-files></upload-files>
@@ -22,20 +18,16 @@
 </template>
 
 <script setup lang="ts">
-import { useAuthStore } from "@/stores/auth";
 import { useLayoutStore } from "@/stores/layout";
 import { useFileStore } from "@/stores/file";
 import { useUploadStore } from "@/stores/upload";
 import Sidebar from "@/components/Sidebar.vue";
 import Prompts from "@/components/prompts/Prompts.vue";
-import Shell from "@/components/Shell.vue";
 import UploadFiles from "@/components/prompts/UploadFiles.vue";
-import { enableExec } from "@/utils/constants";
 import { computed, watch } from "vue";
 import { useRoute } from "vue-router";
 
 const layoutStore = useLayoutStore();
-const authStore = useAuthStore();
 const fileStore = useFileStore();
 const uploadStore = useUploadStore();
 const route = useRoute();

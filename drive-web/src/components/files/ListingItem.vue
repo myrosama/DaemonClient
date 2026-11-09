@@ -1,3 +1,4 @@
+<!-- Derived from filebrowser/filebrowser@e8a388f (Apache-2.0). Modified by DaemonClient contributors. -->
 <template>
   <div
     class="item"
@@ -195,11 +196,8 @@ const drop = async (event: Event) => {
   const path = el.__vue__.url;
 
   const action = (overwrite?: boolean, rename?: boolean) => {
-    const action =
-      (event as KeyboardEvent).ctrlKey || (event as KeyboardEvent).metaKey
-        ? api.copy
-        : api.move;
-    action(items, overwrite, rename)
+    api
+      .move(items, overwrite, rename)
       .then(() => {
         fileStore.reload = true;
       })

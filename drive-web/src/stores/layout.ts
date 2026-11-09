@@ -1,3 +1,4 @@
+// Derived from filebrowser/filebrowser@e8a388f (Apache-2.0). Modified by DaemonClient contributors.
 import { defineStore } from "pinia";
 // import { useAuthPreferencesStore } from "./auth-preferences";
 // import { useAuthEmailStore } from "./auth-email";
@@ -7,11 +8,9 @@ export const useLayoutStore = defineStore("layout", {
   state: (): {
     loading: boolean;
     prompts: PopupProps[];
-    showShell: boolean | null;
   } => ({
     loading: false,
     prompts: [],
-    showShell: false,
   }),
   getters: {
     currentPrompt(state) {
@@ -26,9 +25,6 @@ export const useLayoutStore = defineStore("layout", {
   },
   actions: {
     // no context as first argument, use `this` instead
-    toggleShell() {
-      this.showShell = !this.showShell;
-    },
     setCloseOnPrompt(closeFunction: () => Promise<string>, onPrompt: string) {
       const prompt = this.prompts.find((prompt) => prompt.prompt === onPrompt);
       if (prompt) {

@@ -1,3 +1,4 @@
+<!-- Derived from filebrowser/filebrowser@e8a388f (Apache-2.0). Modified by DaemonClient contributors. -->
 <template>
   <base-modal v-if="modal != null" :prompt="currentPromptName" @closed="close">
     <keep-alive>
@@ -15,20 +16,15 @@ import BaseModal from "./BaseModal.vue";
 import Help from "./Help.vue";
 import Info from "./Info.vue";
 import Delete from "./Delete.vue";
-import DeleteUser from "./DeleteUser.vue";
 import Download from "./Download.vue";
 import Rename from "./Rename.vue";
 import Move from "./Move.vue";
-import Copy from "./Copy.vue";
 import NewFile from "./NewFile.vue";
 import NewDir from "./NewDir.vue";
 import Replace from "./Replace.vue";
-import Share from "./Share.vue";
-import ShareDelete from "./ShareDelete.vue";
 import Upload from "./Upload.vue";
 import DiscardEditorChanges from "./DiscardEditorChanges.vue";
 import ResolveConflict from "./ResolveConflict.vue";
-import CurrentPassword from "./CurrentPassword.vue";
 
 const layoutStore = useLayoutStore();
 
@@ -40,18 +36,13 @@ const components = new Map<string, any>([
   ["delete", Delete],
   ["rename", Rename],
   ["move", Move],
-  ["copy", Copy],
   ["newFile", NewFile],
   ["newDir", NewDir],
   ["download", Download],
   ["replace", Replace],
-  ["share", Share],
   ["upload", Upload],
-  ["share-delete", ShareDelete],
-  ["deleteUser", DeleteUser],
   ["discardEditorChanges", DiscardEditorChanges],
   ["resolve-conflict", ResolveConflict],
-  ["current-password", CurrentPassword],
 ]);
 
 const modal = computed(() => {

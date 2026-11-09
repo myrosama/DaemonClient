@@ -1,3 +1,4 @@
+<!-- Derived from filebrowser/filebrowser@e8a388f (Apache-2.0). Modified by DaemonClient contributors. -->
 <template>
   <div>
     <header-bar
@@ -98,9 +99,6 @@ onBeforeUnmount(() => {
 
 onUnmounted(() => {
   fileStore.isFiles = false;
-  if (layoutStore.showShell) {
-    layoutStore.toggleShell();
-  }
   fileStore.updateRequest(null);
   fetchDataController.abort();
 });

@@ -1,3 +1,4 @@
+<!-- Derived from filebrowser/filebrowser@e8a388f (Apache-2.0). Modified by DaemonClient contributors. -->
 <template>
   <div>
     <header-bar showMenu showLogo>
@@ -13,23 +14,10 @@
       <template #actions>
         <template v-if="!isMobile">
           <action
-            v-if="headerButtons.share"
-            icon="share"
-            :label="t('buttons.share')"
-            show="share"
-          />
-          <action
             v-if="headerButtons.rename"
             icon="mode_edit"
             :label="t('buttons.rename')"
             show="rename"
-          />
-          <action
-            v-if="headerButtons.copy"
-            id="copy-button"
-            icon="content_copy"
-            :label="t('buttons.copyFile')"
-            show="copy"
           />
           <action
             v-if="headerButtons.move"
@@ -46,13 +34,6 @@
             show="delete"
           />
         </template>
-
-        <action
-          v-if="headerButtons.shell"
-          icon="code"
-          :label="t('buttons.shell')"
-          @action="layoutStore.toggleShell"
-        />
         <action
           :icon="viewIcon"
           :label="t('buttons.switchView')"
@@ -92,22 +73,10 @@
         {{ t("prompts.filesSelected", fileStore.selectedCount) }}
       </span>
       <action
-        v-if="headerButtons.share"
-        icon="share"
-        :label="t('buttons.share')"
-        show="share"
-      />
-      <action
         v-if="headerButtons.rename"
         icon="mode_edit"
         :label="t('buttons.rename')"
         show="rename"
-      />
-      <action
-        v-if="headerButtons.copy"
-        icon="content_copy"
-        :label="t('buttons.copyFile')"
-        show="copy"
       />
       <action
         v-if="headerButtons.move"
@@ -263,23 +232,10 @@
           @hide="hideContextMenu"
         >
           <action
-            v-if="headerButtons.share"
-            icon="share"
-            :label="t('buttons.share')"
-            show="share"
-          />
-          <action
             v-if="headerButtons.rename"
             icon="mode_edit"
             :label="t('buttons.rename')"
             show="rename"
-          />
-          <action
-            v-if="headerButtons.copy"
-            id="copy-button"
-            icon="content_copy"
-            :label="t('buttons.copyFile')"
-            show="copy"
           />
           <action
             v-if="headerButtons.move"
@@ -346,7 +302,6 @@ import { useFileStore } from "@/stores/file";
 import { useLayoutStore } from "@/stores/layout";
 
 import { users, files as api } from "@/api";
-import { enableExec } from "@/utils/constants";
 import * as upload from "@/utils/upload";
 import buttons from "@/utils/buttons";
 import css from "@/utils/css";
@@ -478,15 +433,9 @@ const headerButtons = computed(() => {
   return {
     upload: authStore.user?.perm.create,
     download: authStore.user?.perm.download,
-    shell: authStore.user?.perm.execute && enableExec,
     delete: fileStore.selectedCount > 0 && authStore.user?.perm.delete,
     rename: fileStore.selectedCount === 1 && authStore.user?.perm.rename,
-    share:
-      fileStore.selectedCount === 1 &&
-      authStore.user?.perm.share &&
-      authStore.user?.perm.download,
     move: fileStore.selectedCount > 0 && authStore.user?.perm.rename,
-    copy: fileStore.selectedCount > 0 && authStore.user?.perm.create,
   };
 });
 
@@ -589,9 +538,8 @@ const keyEvent = (event: KeyboardEvent) => {
         layoutStore.showHover("search");
       }
       break;
-    case "c":
     case "x":
-      copyCut(event);
+      cut(event);
       break;
     case "v":
       paste(event);
@@ -621,7 +569,7 @@ const preventDefault = (event: Event) => {
   event.preventDefault();
 };
 
-const copyCut = (event: Event | KeyboardEvent): void => {
+const cut = (event: Event | KeyboardEvent): void => {
   if ((event.target as HTMLElement).tagName?.toLowerCase() === "input") return;
 
   if (fileStore.req === null) return;
@@ -643,7 +591,7 @@ const copyCut = (event: Event | KeyboardEvent): void => {
   }
 
   clipboardStore.$patch({
-    key: (event as KeyboardEvent).key,
+    key: "x",
     items,
     path: route.path,
   });
@@ -676,28 +624,16 @@ const paste = async (event: Event) => {
 
   const preselect = removePrefix(route.path) + items[0].name;
 
-  let action = (overwrite?: boolean, rename?: boolean) => {
+  const action = (overwrite?: boolean, rename?: boolean) => {
     api
-      .copy(items, overwrite, rename)
+      .move(items, overwrite, rename)
       .then(() => {
+        clipboardStore.resetClipboard();
         fileStore.preselect = preselect;
         fileStore.reload = true;
       })
       .catch($showError);
   };
-
-  if (clipboardStore.key === "x") {
-    action = (overwrite, rename) => {
-      api
-        .move(items, overwrite, rename)
-        .then(() => {
-          clipboardStore.resetClipboard();
-          fileStore.preselect = preselect;
-          fileStore.reload = true;
-        })
-        .catch($showError);
-    };
-  }
 
   const path = route.path.endsWith("/") ? route.path : route.path + "/";
   const conflict = await upload.checkConflict(items, path, true);

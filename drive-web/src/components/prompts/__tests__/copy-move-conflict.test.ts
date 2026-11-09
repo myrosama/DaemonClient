@@ -1,12 +1,11 @@
+// Derived from filebrowser/filebrowser@e8a388f (Apache-2.0). Modified by DaemonClient contributors.
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import CopyPrompt from "@/components/prompts/Copy.vue";
 import MovePrompt from "@/components/prompts/Move.vue";
 import { files as api } from "@/api";
 import { checkConflict } from "@/utils/upload";
 
 vi.mock("@/api", () => ({
   files: {
-    copy: vi.fn().mockResolvedValue(undefined),
     move: vi.fn().mockResolvedValue(undefined),
   },
 }));
@@ -68,36 +67,12 @@ const event = {
   preventDefault: vi.fn(),
 };
 
-describe("copy and move conflict prompts", () => {
+describe("move conflict prompt", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(checkConflict).mockResolvedValue(
       conflict as ConflictingResource[]
     );
-  });
-
-  it("waits for copy conflict detection before calling the copy API", async () => {
-    const context = makeContext();
-
-    await (CopyPrompt as any).methods.copy.call(context, event);
-
-    expect(checkConflict).toHaveBeenCalledWith(
-      [
-        expect.objectContaining({
-          to: "/files/target/file.txt",
-          isDir: false,
-        }),
-      ],
-      "/files/target/",
-      true
-    );
-    expect(context.showHover).toHaveBeenCalledWith(
-      expect.objectContaining({
-        prompt: "resolve-conflict",
-        props: { conflict },
-      })
-    );
-    expect(api.copy).not.toHaveBeenCalled();
   });
 
   it("waits for move conflict detection before calling the move API", async () => {

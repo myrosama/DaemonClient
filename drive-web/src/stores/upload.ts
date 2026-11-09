@@ -1,9 +1,9 @@
+// Derived from filebrowser/filebrowser@e8a388f (Apache-2.0). Modified by DaemonClient contributors.
 import { defineStore } from "pinia";
 import { useFileStore } from "./file";
 import { files as api } from "@/api";
 import buttons from "@/utils/buttons";
 import { computed, inject, markRaw, ref } from "vue";
-import * as tus from "@/api/tus";
 
 // TODO: make this into a user setting
 const UPLOADS_LIMIT = 5;
@@ -68,7 +68,6 @@ export const useUploadStore = defineStore("upload", () => {
   const abort = () => {
     // Resets the state by preventing the processing of the remaning uploads
     lastUpload.value = Infinity;
-    tus.abortAllUploads();
   };
 
   //

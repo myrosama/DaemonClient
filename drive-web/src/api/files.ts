@@ -1,7 +1,7 @@
+// Derived from filebrowser/filebrowser@e8a388f (Apache-2.0). Modified by DaemonClient contributors.
 import { useAuthStore } from "@/stores/auth";
 import { useLayoutStore } from "@/stores/layout";
 import { baseURL } from "@/utils/constants";
-import { upload as postTus, useTus } from "./tus";
 import { createURL, fetchURL, removePrefix, StatusError } from "./utils";
 import { isEncodableResponse, makeRawResource } from "@/utils/encodings";
 
@@ -109,26 +109,6 @@ export async function post(
   overwrite = false,
   onupload: any = () => {}
 ) {
-  // Use the pre-existing API if:
-  const useResourcesApi =
-    // a folder is being created
-    url.endsWith("/") ||
-    // We're not using http(s)
-    (content instanceof Blob &&
-      !["http:", "https:"].includes(window.location.protocol)) ||
-    // Tus is disabled / not applicable
-    !(await useTus(content));
-  return useResourcesApi
-    ? postResources(url, content, overwrite, onupload)
-    : postTus(url, content, overwrite, onupload);
-}
-
-async function postResources(
-  url: string,
-  content: ApiContent = "",
-  overwrite = false,
-  onupload: any
-) {
   url = removePrefix(url);
 
   let bufferContent: ArrayBuffer;
@@ -171,12 +151,7 @@ async function postResources(
   });
 }
 
-function moveCopy(
-  items: any[],
-  copy = false,
-  overwrite = false,
-  rename = false
-) {
+export function move(items: any[], overwrite = false, rename = false) {
   const layoutStore = useLayoutStore();
   const promises = [];
 
@@ -186,21 +161,11 @@ function moveCopy(
     const finalOverwrite =
       item.overwrite == undefined ? overwrite : item.overwrite;
     const finalRename = item.rename == undefined ? rename : item.rename;
-    const url = `${from}?action=${
-      copy ? "copy" : "rename"
-    }&destination=${to}&override=${finalOverwrite}&rename=${finalRename}`;
+    const url = `${from}?action=rename&destination=${to}&override=${finalOverwrite}&rename=${finalRename}`;
     promises.push(resourceAction(url, "PATCH"));
   }
   layoutStore.closeHovers();
   return Promise.all(promises);
-}
-
-export function move(items: any[], overwrite = false, rename = false) {
-  return moveCopy(items, false, overwrite, rename);
-}
-
-export function copy(items: any[], overwrite = false, rename = false) {
-  return moveCopy(items, true, overwrite, rename);
 }
 
 export async function checksum(url: string, algo: ChecksumAlg) {
