@@ -31,3 +31,11 @@ test('a full URL is opened as a page load, a path through the router', () => {
   assert.equal(isAbsoluteUrl(safeReturnUrl('/dashboard')), false)
   assert.equal(isAbsoluteUrl(null), false)
 })
+
+test('a signed-in visitor goes back to the app that sent them, never elsewhere', async () => {
+  const { appReturnUrl } = await import('./safeReturnUrl.js')
+  assert.equal(appReturnUrl('https://drive.daemonclient.uz/dashboard?sso=1'), 'https://drive.daemonclient.uz/dashboard?sso=1')
+  assert.equal(appReturnUrl('https://photos.daemonclient.uz'), 'https://photos.daemonclient.uz/')
+  for (const raw of [null, '', '/dashboard', 'https://accounts.daemonclient.uz/setup', 'https://evil.example', '//drive.daemonclient.uz', 'http://drive.daemonclient.uz'])
+    assert.equal(appReturnUrl(raw), null, String(raw))
+})

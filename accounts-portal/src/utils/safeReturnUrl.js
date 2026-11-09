@@ -42,3 +42,10 @@ export function safeReturnUrl(raw) {
 export function isAbsoluteUrl(safe) {
   return typeof safe === 'string' && safe.startsWith('https://')
 }
+
+// The other app (Photos, Drive) a `return_url` points to, or null. Used to send
+// an already signed-in visitor straight back instead of to the dashboard.
+export function appReturnUrl(raw) {
+  const url = safeReturnUrl(raw)
+  return isAbsoluteUrl(url) && !url.startsWith('https://accounts.daemonclient.uz') ? url : null
+}

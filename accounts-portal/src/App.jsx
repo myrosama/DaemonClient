@@ -13,7 +13,7 @@ import { SetupWorker } from './pages/SetupWorker'
 import { SetupProcessor } from './pages/SetupProcessor'
 import { consumeOAuthState, CF_OAUTH_REDIRECT_URI, DEPLOYMENT_WORKER } from './config/cloudflareOauth'
 import { waitForWorker } from './utils/waitForWorker'
-import { safeReturnUrl, isAbsoluteUrl } from './utils/safeReturnUrl'
+import { safeReturnUrl, isAbsoluteUrl, appReturnUrl } from './utils/safeReturnUrl'
 import { isFreshSetup, shouldHoldLink, appHosts } from './utils/cloudStartup'
 import { thumbHashToDataURL } from 'thumbhash'
 
@@ -2870,26 +2870,6 @@ function ProtectedRoute({ children }) {
     return () => unsubscribe()
   }, [])
 
-  // Make sure the shared *.daemonclient.uz session exists for anyone who is
-  // ALREADY signed in. createSession only ran at login and signup, so every
-  // existing session had no shared cookie and Photos/Drive still asked for a
-  // password — the sign-in predated the shared session entirely. Repairing it
-  // here avoids forcing everyone to log out and back in.
-  useEffect(() => {
-    if (IS_SELF_HOST || !user) return
-    let cancelled = false
-    ;(async () => {
-      try {
-        const res = await fetch(`${AUTH_WORKER}/check-session`, { credentials: 'include' })
-        const data = await res.json().catch(() => null)
-        if (cancelled || data?.loggedIn) return
-        const idToken = await user.getIdToken()
-        if (cancelled || !idToken || !user.refreshToken) return
-        await createSession(idToken, user.refreshToken, '/dashboard')
-      } catch { /* SSO is an optimisation; the dashboard works regardless */ }
-    })()
-    return () => { cancelled = true }
-  }, [user?.uid])
 
   const { stage, loading: stageLoading } = useSetupStage(user)
 
@@ -2954,7 +2934,98 @@ function AuthOnly({ children, allowedStage }) {
 // PUBLIC GUARD — Redirect to correct page if already logged in
 // ============================================================================
 
+// A signed-in visitor that another of our apps (Photos, Drive) sent here to sign
+// in goes straight back to it, with the shared session. The hub only creates
+// that session after Turnstile, so when it is missing (or belongs to another
+// account) the visitor confirms once here.
+function ContinueToApp({ user, returnUrl }) {
+  const [needsCheck, setNeedsCheck] = useState(false)
+  const [turnstileToken, setTurnstileToken] = useState('')
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+  const turnstileReset = useRef(null)
+
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        const res = await fetch(`${AUTH_WORKER}/check-session`, { credentials: 'include' })
+        const data = await res.json().catch(() => null)
+        if (cancelled) return
+        if (data?.loggedIn && data.email === user.email) {
+          window.location.replace(returnUrl)
+          return
+        }
+      } catch { /* fall through to the confirmation */ }
+      if (!cancelled) setNeedsCheck(true)
+    })()
+    return () => { cancelled = true }
+  }, [returnUrl, user.email])
+
+  const onContinue = async () => {
+    if (!turnstileToken) { setError('Please complete the verification below.'); return }
+    setBusy(true)
+    setError('')
+    try {
+      const idToken = await user.getIdToken()
+      const res = await createSession(idToken, user.refreshToken, returnUrl, turnstileToken)
+      if (!res.ok) throw new Error(`session ${res.status}`)
+      window.location.replace(returnUrl)
+    } catch {
+      setError("Couldn't continue. Please try again.")
+      setBusy(false)
+      turnstileReset.current?.()
+    }
+  }
+
+  if (!needsCheck) return <FullScreenSpinner />
+  return (
+    <DotGridPage className="items-center justify-center px-4 py-8">
+      <div className="w-full max-w-[400px] relative z-10 bg-[#13151B] border border-white/[0.09] rounded-2xl shadow-2xl shadow-black/60 px-8 py-9 text-center">
+        <div className="flex justify-center mb-4"><DaemonLogo size={64} /></div>
+        <h1 className="text-[21px] font-semibold text-linear-text tracking-tight">Continue as {user.email}</h1>
+        <p className="text-[13px] text-linear-text-secondary mt-2 mb-5">to {new URL(returnUrl).host}</p>
+        <div className="flex justify-center mb-4">
+          <Turnstile onToken={setTurnstileToken} resetRef={turnstileReset} />
+        </div>
+        {error && <p className="text-[13px] text-red-400 mb-3">{error}</p>}
+        <button
+          type="button"
+          onClick={onContinue}
+          disabled={busy}
+          className="w-full h-11 rounded-full bg-daemon-green hover:bg-daemon-green-hover text-white text-[14px] font-semibold transition-all duration-150 disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          {busy ? 'Continuing…' : 'Continue'}
+        </button>
+        <button
+          type="button"
+          onClick={() => auth.signOut()}
+          className="mt-4 text-[13px] text-linear-text-secondary hover:text-linear-text"
+        >
+          Use a different account
+        </button>
+      </div>
+    </DotGridPage>
+  )
+}
+
+// Signing out from another of our apps (Drive): end the portal's own sign-in
+// and the shared session, then go back to that app's page (our own pages only).
+function LogoutRoute() {
+  const location = useLocation()
+  useEffect(() => {
+    const next = safeReturnUrl(new URLSearchParams(location.search).get('return_url')) || '/login'
+    ;(async () => {
+      try { await auth.signOut() } catch { /* still end the shared session */ }
+      try { await destroySession() } catch { /* best effort */ }
+      window.location.replace(next)
+    })()
+  }, [location.search])
+  return <FullScreenSpinner message="Signing out…" />
+}
+
 function PublicOnly({ children }) {
+  const location = useLocation()
   const [user, setUser] = useState(null)
   const [authLoading, setAuthLoading] = useState(true)
 
@@ -2973,6 +3044,8 @@ function PublicOnly({ children }) {
   }
 
   if (user) {
+    const returnUrl = IS_SELF_HOST ? null : appReturnUrl(new URLSearchParams(location.search).get('return_url'))
+    if (returnUrl) return <ContinueToApp user={user} returnUrl={returnUrl} />
     // Send them to wherever they need to be
     return <Navigate to={stageToRoute(stage)} replace />
   }
@@ -3033,6 +3106,7 @@ function App() {
         />
         {/* OAuth return URL — not AuthOnly (it would stage-bounce); guards itself */}
         <Route path="/setup/cloudflare/callback" element={<CloudflareCallback />} />
+        <Route path="/logout" element={<LogoutRoute />} />
         {/* Optional processor step, shown AFTER the worker exists (so setup is
             already 'complete'); NOT AuthOnly, which would bounce it to the
             dashboard. Self-guards for auth, and is skippable. */}
