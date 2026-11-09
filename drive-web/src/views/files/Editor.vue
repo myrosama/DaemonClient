@@ -67,12 +67,15 @@
         </div>
       </div>
 
+      <!-- previewContent is DOMPurify-sanitised in the watchEffect below -->
+      <!-- eslint-disable vue/no-v-html -->
       <div
         v-show="isPreview && isMarkdownFile"
         id="preview-container"
         class="md_preview"
         v-html="previewContent"
       ></div>
+      <!-- eslint-enable vue/no-v-html -->
       <form v-show="!isPreview || !isMarkdownFile" id="editor"></form>
     </template>
   </div>

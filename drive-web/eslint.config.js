@@ -1,3 +1,4 @@
+// Derived from filebrowser/filebrowser@e8a388f (Apache-2.0). Modified by DaemonClient contributors.
 import pluginVue from "eslint-plugin-vue";
 import {
   defineConfigWithVueTs,
@@ -26,6 +27,9 @@ export default defineConfigWithVueTs(
       // TODO: finish the ts conversion
       "vue/block-lang": "off",
       "vue/multi-word-component-names": "off",
+      // Vue sends v-html through its own pass-through Trusted Types policy, so
+      // nothing but this rule stops unsanitised HTML there.
+      "vue/no-v-html": "error",
       "vue/no-mutating-props": [
         "error",
         {

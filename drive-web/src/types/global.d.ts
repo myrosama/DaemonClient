@@ -7,7 +7,9 @@ declare global {
     trustedTypes?: {
       createPolicy(
         name: string,
-        rules: { createHTML?: (input: string) => string }
+        rules: {
+          createHTML?: (input: string, ...context: unknown[]) => string | null;
+        }
       ): unknown;
     };
   }
