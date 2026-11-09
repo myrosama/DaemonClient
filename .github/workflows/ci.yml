@@ -40,6 +40,7 @@ jobs:
       processor: ${{ steps.filter.outputs.processor }}
       accounts: ${{ steps.filter.outputs.accounts }}
       drive: ${{ steps.filter.outputs.drive }}
+      drive_web: ${{ steps.filter.outputs.drive_web }}
       selfhost: ${{ steps.filter.outputs.selfhost }}
     steps:
       - uses: actions/checkout@v4
@@ -71,6 +72,9 @@ jobs:
               - '.github/workflows/ci.yml'
             drive:
               - 'drive/**'
+              - '.github/workflows/ci.yml'
+            drive_web:
+              - 'drive-web/**'
               - '.github/workflows/ci.yml'
 
   # The security-critical core: the per-user worker (263 tests) validates auth,
@@ -221,3 +225,24 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run build
+
+  # The new Drive web app (drive-web/, File Browser's frontend; served at /next/).
+  drive-web:
+    needs: changes
+    if: needs.changes.outputs.drive_web == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: drive-web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      # pnpm at the version package.json's packageManager pins.
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run lint
+      - run: pnpm test
+      - run: pnpm run build

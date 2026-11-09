@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "build:all": "vite build && cd ../drive-web && pnpm install --frozen-lockfile && pnpm exec vite build --outDir ../drive/dist/next --emptyOutDir",
+    "build:all": "vite build && cd ../drive-web && pnpm install --frozen-lockfile && pnpm run build --outDir ../drive/dist/next --emptyOutDir",
     "lint": "eslint .",
     "preview": "vite preview",
     "test": "node --test src/worker-unreachable.test.mjs src/sw-stream-headers.test.mjs src/upload-gate.test.mjs src/zke-unlock.test.mjs"

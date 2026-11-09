@@ -14,11 +14,6 @@ interface ApiOpts {
   signal?: AbortSignal;
 }
 
-interface TusSettings {
-  retryCount: number;
-  chunkSize: number;
-}
-
 type ChecksumAlg = "md5" | "sha1" | "sha256" | "sha512";
 
 interface SearchParams {

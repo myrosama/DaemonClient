@@ -1,3 +1,4 @@
+<!-- Derived from filebrowser/filebrowser@e8a388f (Apache-2.0). Modified by DaemonClient contributors. -->
 <!-- This component taken directly from vue-simple-progress
 since it didnt support Vue 3 but the component itself does
 https://raw.githubusercontent.com/dzwillia/vue-simple-progress/master/src/components/Progress.vue -->
@@ -70,7 +71,7 @@ export default {
     },
     "bar-color": {
       type: String,
-      default: "#2196f3", // match .blue color to Material Design's 'Blue 500' color
+      default: "#1e6bff", // Drive blue, as --blue
     },
     "bar-transition": {
       type: String,

@@ -1,9 +1,9 @@
+/* Derived from filebrowser/filebrowser@e8a388f (Apache-2.0). Modified by DaemonClient contributors. */
 @import "normalize.css/normalize.css";
 @import "vue-toastification/dist/index.css";
 @import "./_variables.css";
 @import "./_buttons.css";
 @import "./_inputs.css";
-@import "./_shell.css";
 @import "./_share.css";
 @import "./fonts.css";
 @import "./base.css";
@@ -12,7 +12,6 @@
 @import "./listing-icons.css";
 @import "./upload-files.css";
 @import "./dashboard.css";
-@import "./login.css";
 @import "./mobile.css";
 @import "./epubReader.css";
 @import "./mdPreview.css";
@@ -273,6 +272,8 @@ main .spinner .bounce2 {
   width: 100%;
   height: 100%;
   padding-top: 4em;
+  border: 0;
+  box-sizing: border-box;
 }
 
 #previewer h2.message {
