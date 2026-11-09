@@ -12,6 +12,7 @@
 // Photos (Immich) web client.
 
 import { fetchWorker } from './worker-unreachable.js';
+import { portalSignOutUrl } from './sign-in.js';
 
 // The worker this app logs in through. Hosted builds use the shared central
 // worker; a self-hosted build points at the operator's OWN worker via
@@ -20,7 +21,9 @@ import { fetchWorker } from './worker-unreachable.js';
 // self-hosting the same way — set VITE_SELF_HOST=1 and VITE_API_BASE=<worker>.
 const IS_SELF_HOST = import.meta.env.VITE_SELF_HOST === '1';
 const CENTRAL_API = (
-  import.meta.env.VITE_API_BASE || (IS_SELF_HOST ? '' : 'https://immich-api.sadrikov49.workers.dev')
+  // api.daemonclient.uz is the same worker as its workers.dev address, which
+  // some mobile carriers block.
+  import.meta.env.VITE_API_BASE || (IS_SELF_HOST ? '' : 'https://api.daemonclient.uz')
 ).replace(/\/+$/, '');
 const SESSION_KEY = 'dc_drive_session';
 // The shared sign-in hub (one HttpOnly cookie for *.daemonclient.uz, set by the
@@ -117,18 +120,22 @@ export async function trySharedSignIn() {
   }
 }
 
-// Ends the shared session too, so one sign-out ends Drive, Photos and the
-// portal. The hub call is awaited (at most 5 s) before the local session goes,
-// so the signed-out screen can't find a live shared session and sign back in.
-export async function logout() {
-  try { sessionStorage.setItem(SIGNED_OUT_KEY, '1'); } catch { /* private mode */ }
+// Sign out. Hosted: the local session goes first, then the portal's /logout
+// ends the portal's own sign-in and the shared session and comes back to Drive's
+// sign-in page, which shows "signed out" (the flag) instead of signing back in.
+// Self-hosted: there is only the local session.
+export function logout() {
   if (AUTH_HUB) {
-    await fetch(`${AUTH_HUB}/logout`, {
-      credentials: 'include', redirect: 'manual', keepalive: true, signal: AbortSignal.timeout(5000),
-    }).catch(() => {});
+    try { sessionStorage.setItem(SIGNED_OUT_KEY, '1'); } catch { /* private mode */ }
   }
   persist(null);
+  if (AUTH_HUB) window.location.replace(portalSignOutUrl());
 }
+
+// How many of this page's sessions the worker has refused (401). Kept in
+// memory: a reload starts over. The sign-in screen re-exchanges silently once.
+let _rejections = 0;
+export function sessionRejections() { return _rejections; }
 
 // Call the user's OWN per-user worker (workerUrl from login) with the session
 // token. Throws { code:'NO_WORKER' } if the account hasn't been provisioned yet
@@ -142,7 +149,13 @@ export async function driveApi(path, opts = {}) {
   // A brand-new account's worker can't be reached for its first minute or two
   // (no TLS certificate yet) — fetchWorker flags that as WORKER_UNREACHABLE.
   const res = await fetchWorker(fetch, `${s.workerUrl}${path}`, { ...opts, headers });
-  if (res.status === 401) { logout(); throw new Error('Session expired — please sign in again'); }
+  if (res.status === 401) {
+    // Only this app's session ends; the shared one may still be good, and the
+    // sign-in screen exchanges it again. Not logout(): that signs out everywhere.
+    _rejections++;
+    persist(null);
+    throw new Error('Session expired — please sign in again');
+  }
   const text = await res.text();
   let body;
   try { body = text ? JSON.parse(text) : {}; } catch { body = text; }

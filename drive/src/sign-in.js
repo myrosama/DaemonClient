@@ -2,19 +2,34 @@
 // (accounts.daemonclient.uz), which has Turnstile and sets the shared session
 // that Photos uses too. Drive itself has no password form there.
 
-export const PORTAL_RETRY_MS = 60_000;
+const DRIVE = 'https://drive.daemonclient.uz';
+const PORTAL = 'https://accounts.daemonclient.uz';
 
-// Where a signed-out visitor goes; the portal sends them back to the dashboard.
+// Where a signed-out visitor goes. The portal sends them back to the dashboard
+// with `sso=1`, so a return trip that still can't sign in shows a retry screen
+// instead of redirecting again (no loop, and no storage needed to know it).
 export function portalSignInUrl() {
-  return `https://accounts.daemonclient.uz/login?return_url=${encodeURIComponent('https://drive.daemonclient.uz/dashboard')}`;
+  return `${PORTAL}/login?return_url=${encodeURIComponent(`${DRIVE}/dashboard?sso=1`)}`;
 }
 
-// The portal redirects a signed-in person straight back. If the shared sign-in
-// then still fails (say the worker is down), redirecting again would loop, so
-// only one automatic redirect per minute. `lastAt` is the stored time of the
-// last one, as a string; anything unreadable or in the future doesn't block.
-export function portalRedirectAllowed(lastAt, now) {
-  const t = Number(lastAt);
-  if (!lastAt || !Number.isFinite(t) || t > now) return true;
-  return now - t >= PORTAL_RETRY_MS;
+// Signing out ends the portal's own session and the shared one, then comes
+// back to Drive's sign-in page.
+export function portalSignOutUrl() {
+  return `${PORTAL}/logout?return_url=${encodeURIComponent(`${DRIVE}/login`)}`;
+}
+
+/**
+ * What the sign-in screen does next.
+ * signedOut: the person just signed out here; don't sign them back in.
+ * rejections: how many of this page's sessions the worker has refused (401);
+ *   one is re-exchanged silently, a second stops, so a bad key can't loop.
+ * sharedSignedIn: the shared-session exchange succeeded.
+ * returnedFromPortal: this page load came back from the portal (sso=1).
+ * → 'signedOut' | 'failed' | 'done' | 'portal'
+ */
+export function signInStep({ signedOut, rejections, sharedSignedIn, returnedFromPortal }) {
+  if (signedOut) return 'signedOut';
+  if (rejections >= 2) return 'failed';
+  if (sharedSignedIn) return 'done';
+  return returnedFromPortal ? 'failed' : 'portal';
 }

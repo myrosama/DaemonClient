@@ -1,31 +1,40 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { portalRedirectAllowed, portalSignInUrl, PORTAL_RETRY_MS } from './sign-in.js';
+import { signInStep, portalSignInUrl, portalSignOutUrl } from './sign-in.js';
 
-test('sends a signed-out visitor to the portal the first time', () => {
-  assert.equal(portalRedirectAllowed(null, 1_000_000), true);
-  assert.equal(portalRedirectAllowed('', 1_000_000), true);
+const base = { signedOut: false, rejections: 0, sharedSignedIn: false, returnedFromPortal: false };
+
+test('a shared session signs the visitor straight in', () => {
+  assert.equal(signInStep({ ...base, sharedSignedIn: true }), 'done');
 });
 
-test('does not bounce back to the portal again within a minute (no redirect loop)', () => {
-  const now = 10_000_000;
-  assert.equal(portalRedirectAllowed(String(now - 1), now), false);
-  assert.equal(portalRedirectAllowed(String(now - PORTAL_RETRY_MS + 1), now), false);
+test('with no shared session, the visitor goes to the portal once', () => {
+  assert.equal(signInStep(base), 'portal');
 });
 
-test('allows the portal again once the minute has passed', () => {
-  const now = 10_000_000;
-  assert.equal(portalRedirectAllowed(String(now - PORTAL_RETRY_MS), now), true);
+test('coming back from the portal still signed out shows a retry screen instead of looping', () => {
+  assert.equal(signInStep({ ...base, returnedFromPortal: true }), 'failed');
 });
 
-test('ignores a garbage or future timestamp instead of blocking sign-in forever', () => {
-  assert.equal(portalRedirectAllowed('banana', 5), true);
-  assert.equal(portalRedirectAllowed(String(10_000), 5), true);
+test('right after signing out, nothing signs the person back in', () => {
+  assert.equal(signInStep({ ...base, signedOut: true, sharedSignedIn: true }), 'signedOut');
 });
 
-test('the portal returns the visitor to the Drive dashboard', () => {
+test('one rejected token is re-exchanged silently; a second rejection stops', () => {
+  assert.equal(signInStep({ ...base, rejections: 1, sharedSignedIn: true }), 'done');
+  assert.equal(signInStep({ ...base, rejections: 2, sharedSignedIn: true }), 'failed');
+});
+
+test('the portal returns the visitor to the Drive dashboard, marked as a return trip', () => {
   const url = new URL(portalSignInUrl());
-  assert.equal(url.origin, 'https://accounts.daemonclient.uz');
-  assert.equal(url.pathname, '/login');
-  assert.equal(url.searchParams.get('return_url'), 'https://drive.daemonclient.uz/dashboard');
+  assert.equal(url.origin + url.pathname, 'https://accounts.daemonclient.uz/login');
+  const back = new URL(url.searchParams.get('return_url'));
+  assert.equal(back.origin + back.pathname, 'https://drive.daemonclient.uz/dashboard');
+  assert.equal(back.searchParams.get('sso'), '1');
+});
+
+test('signing out goes through the portal and comes back to the Drive sign-in page', () => {
+  const url = new URL(portalSignOutUrl());
+  assert.equal(url.origin + url.pathname, 'https://accounts.daemonclient.uz/logout');
+  assert.equal(url.searchParams.get('return_url'), 'https://drive.daemonclient.uz/login');
 });

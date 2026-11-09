@@ -16,9 +16,9 @@ import {
 import {
     login as apiLogin, logout as apiLogout, getSession, getUid, getUserEmail,
     onAuthChange, getDriveConfig, getWorkerUrl, driveApi,
-    trySharedSignIn, isSelfHost, SIGNED_OUT_KEY,
+    trySharedSignIn, isSelfHost, SIGNED_OUT_KEY, sessionRejections,
 } from './api.js';
-import { portalSignInUrl, portalRedirectAllowed } from './sign-in.js';
+import { portalSignInUrl, signInStep } from './sign-in.js';
 import { isWorkerUnreachable, waitStartedAt, waitedTooLong, clearWait, sessionStore } from './worker-unreachable.js';
 import { uploadGate, GATE_MESSAGES } from './upload-gate.js';
 import { pickProbes, unlockCustomKey, makeKeyCheck } from './zke-unlock.js';
@@ -2414,33 +2414,37 @@ const LandingPage = ({ onLaunchApp = () => console.log("Launch") }) => {
 // Turnstile) and sets the shared session; this screen picks that session up, or
 // sends the visitor to the portal, which returns them to the dashboard. A
 // self-hosted build keeps AuthView.
-const PORTAL_REDIRECT_AT = 'dc_drive_portal_redirect_at';
-
 const PortalSignInView = () => {
-    // 'checking' → shared sign-in in progress; 'signedOut' → just signed out;
-    // 'failed' → the portal already sent them back and it still didn't work.
+    // 'checking' → shared sign-in in progress; 'signedOut' → just signed out
+    // here; 'failed' → came back from the portal (or the worker refused twice)
+    // and it still didn't work.
     const [state, setState] = useState(() => {
-        try { return sessionStorage.getItem(SIGNED_OUT_KEY) ? 'signedOut' : 'checking'; } catch { return 'checking'; }
+        let signedOut = false;
+        try {
+            signedOut = !!sessionStorage.getItem(SIGNED_OUT_KEY);
+            sessionStorage.removeItem(SIGNED_OUT_KEY);
+        } catch { /* private mode */ }
+        const step = signInStep({ signedOut, rejections: sessionRejections(), sharedSignedIn: false, returnedFromPortal: false });
+        return step === 'signedOut' || step === 'failed' ? step : 'checking';
     });
 
-    const goToPortal = () => {
-        try {
-            sessionStorage.removeItem(SIGNED_OUT_KEY);
-            sessionStorage.setItem(PORTAL_REDIRECT_AT, String(Date.now()));
-        } catch { /* private mode: the redirect still works */ }
-        window.location.replace(portalSignInUrl());
-    };
+    const goToPortal = () => window.location.replace(portalSignInUrl());
 
     useEffect(() => {
         if (state !== 'checking') return;
         let cancelled = false;
         (async () => {
-            // On success onAuthChange routes to the dashboard.
-            if (await trySharedSignIn() || cancelled) return;
-            let lastAt = null;
-            try { lastAt = sessionStorage.getItem(PORTAL_REDIRECT_AT); } catch { /* ignore */ }
-            if (portalRedirectAllowed(lastAt, Date.now())) goToPortal();
-            else setState('failed');
+            const params = new URLSearchParams(window.location.search);
+            const sharedSignedIn = !!(await trySharedSignIn());
+            if (cancelled) return;
+            const step = signInStep({
+                signedOut: false, rejections: sessionRejections(), sharedSignedIn, returnedFromPortal: params.has('sso'),
+            });
+            if (step === 'done') {
+                // onAuthChange routes to the dashboard; drop the return-trip marker.
+                if (params.has('sso')) window.history.replaceState(null, '', window.location.pathname);
+            } else if (step === 'portal') goToPortal();
+            else setState(step);
         })();
         return () => { cancelled = true; };
     }, [state]);
@@ -2454,7 +2458,7 @@ const PortalSignInView = () => {
                 <p className="text-gray-400 mb-6 text-sm leading-relaxed">
                     {state === 'signedOut'
                         ? 'Sign in again through your DaemonClient account.'
-                        : 'Your account signed in, but Drive could not start your session. Check your connection and try again.'}
+                        : 'Drive could not start your session. Check your connection and try again.'}
                 </p>
                 <button onClick={goToPortal} className="block w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-4 rounded-lg text-lg transition-colors">
                     Sign in
