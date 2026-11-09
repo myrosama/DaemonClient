@@ -19,7 +19,9 @@
 //   form both consume without either of them growing a build.
 //
 //   Anything that creates or repairs a database imports from here. If you add a
-//   column, add it here and nowhere else.
+//   column, add it here and nowhere else (the one exception: a new `files`
+//   column also goes in the worker's self-healing list, ensureDriveSchema in
+//   immich-api-shim/src/d1-adapter.ts; a test keeps the two equal).
 
 /** The full schema a fresh database gets: photos, albums, config, upload
  *  sessions and Drive files.

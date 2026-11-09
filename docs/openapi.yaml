@@ -627,7 +627,14 @@ paths:
     get:
       tags: [drive]
       summary: List a folder
-      description: Requires a database; unavailable on the shared worker.
+      description: |
+        Requires a database; unavailable on the shared worker. Leaves out items
+        in Trash, the contents of trashed folders and items being deleted. With
+        `trashed=1`, lists only those, each with `expired` (30 days by the
+        worker's clock).
+      parameters:
+        - { name: parentId, in: query, schema: { type: string } }
+        - { name: trashed, in: query, schema: { type: string, enum: ['1'] } }
       responses:
         '200': { description: OK }
         '404': { $ref: '#/components/responses/NoDatabase' }
@@ -638,12 +645,41 @@ paths:
         Metadata only. Drive encrypts **in the browser** under its own
         `drive_zke` key — separate from Photos' — and the worker never sees
         plaintext. The one exception is WebDAV, where it must decrypt to serve a
-        file manager that cannot.
-      responses: { '201': { description: Recorded } }
+        file manager that cannot. A save keeps `trashedAt` and `purgingAt`, and
+        keeps `thumb` unless `messages` changed; a supplied `thumb`
+        (`{message_id, file_id}`) wins.
+      responses:
+        '201': { description: Recorded }
+        '400': { description: Invalid id or thumb }
+        '409': { description: The item or its folder is being deleted, or the move is not allowed }
 
   /api/drive/files/{id}:
-    patch: { tags: [drive], parameters: [{ $ref: '#/components/parameters/assetId' }], responses: { '200': { description: Updated } } }
-    delete: { tags: [drive], parameters: [{ $ref: '#/components/parameters/assetId' }], responses: { '204': { description: Deleted } } }
+    patch: { tags: [drive], parameters: [{ $ref: '#/components/parameters/assetId' }], responses: { '200': { description: Updated }, '409': { description: Being deleted, or the move is not allowed } } }
+    delete:
+      tags: [drive]
+      summary: Delete the row
+      description: Telegram messages are deleted by the client first. A marked folder that still has children is refused.
+      parameters: [{ $ref: '#/components/parameters/assetId' }]
+      responses: { '200': { description: Deleted }, '409': { description: Marked folder with children } }
+
+  /api/drive/files/{id}/trash:
+    post: { tags: [drive], summary: Move to Trash, parameters: [{ $ref: '#/components/parameters/assetId' }], responses: { '200': { description: In Trash }, '409': { description: Being deleted } } }
+
+  /api/drive/files/{id}/restore:
+    post:
+      tags: [drive]
+      summary: Restore from Trash
+      description: Back into its folder, or the top level if that folder is gone, trashed or being deleted.
+      parameters: [{ $ref: '#/components/parameters/assetId' }]
+      responses: { '200': { description: Restored }, '409': { description: Being deleted } }
+
+  /api/drive/files/{id}/purge:
+    post:
+      tags: [drive]
+      summary: Mark for deletion
+      description: Only for an item in Trash. Marks it and everything inside it, and returns those rows so the client can delete their Telegram messages, then each row, deepest first.
+      parameters: [{ $ref: '#/components/parameters/assetId' }]
+      responses: { '200': { description: Marked rows }, '409': { description: Not in Trash } }
 
   /api/drive/zke:
     get: { tags: [drive], responses: { '200': { description: OK } } }
@@ -657,7 +693,11 @@ paths:
         The mount itself lives at `/dav` and `/dav/*`, outside `/api`, and uses
         HTTP Basic against a **hashed** token so any file manager can speak to
         it. `OPTIONS /dav` is unauthenticated so clients can discover the
-        endpoint.
+        endpoint. Trashed items are not part of the mount. `DELETE` moves to
+        Trash (a file manager's own temp files are deleted outright); `MOVE`
+        over an existing item puts that item in Trash (`412` with `Overwrite:
+        F`); `PUT` confirms every part's size with Telegram and answers `502`
+        with nothing saved if one can't be confirmed.
       responses: { '200': { description: OK } }
 
   # ── infrastructure ──────────────────────────────────────────────────────

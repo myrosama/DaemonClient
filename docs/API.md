@@ -215,7 +215,14 @@ that gets an error body crashes on `.length`.
 ### Drive — `drive.ts` (requires `env.DB`)
 
 `GET`/`POST /api/drive/config`; `GET`/`POST`/`PUT /api/drive/zke`;
-`GET`/`POST /api/drive/files`; `PATCH`/`PUT`/`DELETE /api/drive/files/{id}`;
+`GET`/`POST /api/drive/files` (leaves out Trash; `?trashed=1` lists it, with
+`expired` by the worker's clock; `POST` takes an optional
+`thumb: {message_id, file_id}`); `PATCH`/`PUT`/`DELETE /api/drive/files/{id}`;
+`POST /api/drive/files/{id}/trash`, `/restore`, `/purge` (`purge` marks the item
+and everything inside it for deletion, only from Trash, and returns those rows);
+409 when the item or its folder is being deleted, or a move would put a folder
+inside itself or a missing or hidden folder; `GET /api/drive/config` reports
+`driveApi: 1` from release W1 on;
 `GET`/`POST`/`DELETE /api/drive/dav`; `GET /api/drive/usage` (uncalled).
 
 Drive encrypts **in the browser** under its own `drive_zke` key, separate from
