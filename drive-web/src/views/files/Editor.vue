@@ -1,3 +1,4 @@
+<!-- Derived from filebrowser/filebrowser@e8a388f (Apache-2.0). Modified by DaemonClient contributors. -->
 <template>
   <div id="editor-container">
     <header-bar>
@@ -81,7 +82,9 @@
 import { files as api } from "@/api";
 import buttons from "@/utils/buttons";
 import url from "@/utils/url";
-import ace, { Ace, version as ace_version } from "ace-builds";
+import ace, { Ace } from "ace-builds";
+// Modes and themes are bundled as lazy chunks instead of fetched from a CDN.
+import "ace-builds/esm-resolver";
 import "ace-builds/src-noconflict/ext-language_tools";
 import modelist from "ace-builds/src-noconflict/ext-modelist";
 import DOMPurify from "dompurify";
@@ -172,11 +175,6 @@ onMounted(() => {
     }
   });
 
-  ace.config.set(
-    "basePath",
-    `https://cdn.jsdelivr.net/npm/ace-builds@${ace_version}/src-min-noconflict/`
-  );
-
   if (!layoutStore.loading) {
     initEditor(fileContent);
   } else {
@@ -229,6 +227,9 @@ const initEditor = (fileContent: string) => {
     enableBasicAutocompletion: true,
     enableLiveAutocompletion: true,
     enableSnippets: true,
+    // Ace starts its syntax checkers from a script URL; without a CDN there
+    // is none, so they stay off. Highlighting and completion still work.
+    useWorker: false,
   });
 
   editor.value.setFontSize(fontSize.value);

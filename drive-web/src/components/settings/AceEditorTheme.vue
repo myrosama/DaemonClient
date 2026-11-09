@@ -1,3 +1,4 @@
+<!-- Derived from filebrowser/filebrowser@e8a388f (Apache-2.0). Modified by DaemonClient contributors. -->
 <template>
   <select
     name="selectAceEditorTheme"
@@ -12,6 +13,8 @@
 
 <script setup lang="ts">
 import { type SelectHTMLAttributes } from "vue";
+// ext-themelist needs the global `ace`; load it first, as utils/theme.ts does.
+import "ace-builds";
 import { themes } from "ace-builds/src-noconflict/ext-themelist";
 
 defineProps<{

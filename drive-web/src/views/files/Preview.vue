@@ -1,3 +1,4 @@
+<!-- Derived from filebrowser/filebrowser@e8a388f (Apache-2.0). Modified by DaemonClient contributors. -->
 <template>
   <div
     id="previewer"
@@ -80,10 +81,11 @@
             :url="previewUrl"
             :get-rendition="getRendition"
             :epubInitOptions="{
-              requestCredentials: true,
+              requestCredentials: false,
             }"
             :epubOptions="{
-              allowPopups: true,
+              allowPopups: false,
+              allowScriptedContent: false,
             }"
             @update:location="locationChange"
           />
