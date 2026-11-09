@@ -1,6 +1,7 @@
+<!-- Derived from filebrowser/filebrowser@e8a388f (Apache-2.0). Modified by DaemonClient contributors. -->
 <template>
   <header>
-    <img v-if="showLogo" :src="logoURL" alt="File Browser" />
+    <img v-if="showLogo" :src="logoURL" alt="DaemonClient Drive" />
     <Action
       v-if="showMenu"
       class="menu-button"

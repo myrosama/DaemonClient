@@ -1,3 +1,4 @@
+<!-- Derived from filebrowser/filebrowser@e8a388f (Apache-2.0). Modified by DaemonClient contributors. -->
 <template>
   <div class="t-container">
     <span>{{ message }}</span>
@@ -15,7 +16,11 @@ defineProps<{
 }>();
 
 const clicked = () => {
-  window.open("https://github.com/filebrowser/filebrowser/issues/new/choose");
+  window.open(
+    "https://github.com/myrosama/DaemonClient/issues/new",
+    "_blank",
+    "noopener"
+  );
 };
 </script>
 

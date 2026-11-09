@@ -8,3 +8,4 @@ generated, so they carry no header:
 
 - `package.json`
 - `pnpm-lock.yaml`
+- `public/manifest.json`

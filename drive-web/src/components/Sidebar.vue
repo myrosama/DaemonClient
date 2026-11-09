@@ -63,15 +63,23 @@
 
     <p class="credits">
       <span>
-        <span v-if="disableExternal">File Browser</span>
+        <!-- AGPL-3.0 §13: always link to the source -->
         <a
-          v-else
+          rel="noopener noreferrer"
+          target="_blank"
+          href="https://github.com/myrosama/DaemonClient"
+          >{{ name }}</a
+        >
+        <span> {{ " " }} {{ version }}</span>
+      </span>
+      <span>
+        Based on
+        <a
           rel="noopener noreferrer"
           target="_blank"
           href="https://github.com/filebrowser/filebrowser"
           >File Browser</a
         >
-        <span> {{ " " }} {{ version }}</span>
       </span>
       <span>
         <a @click="help">{{ $t("sidebar.help") }}</a>
@@ -88,11 +96,7 @@ import { useFileStore } from "@/stores/file";
 import { useLayoutStore } from "@/stores/layout";
 
 import * as auth from "@/utils/auth";
-import {
-  version,
-  disableExternal,
-  disableUsedPercentage,
-} from "@/utils/constants";
+import { name, version, disableUsedPercentage } from "@/utils/constants";
 import { files as api } from "@/api";
 import ProgressBar from "@/components/ProgressBar.vue";
 import prettyBytes from "pretty-bytes";
@@ -117,7 +121,7 @@ export default {
       return this.currentPromptName === "sidebar";
     },
     version: () => version,
-    disableExternal: () => disableExternal,
+    name: () => name,
     disableUsedPercentage: () => disableUsedPercentage,
   },
   methods: {
