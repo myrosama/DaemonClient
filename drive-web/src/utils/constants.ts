@@ -1,14 +1,16 @@
 // Derived from filebrowser/filebrowser@e8a388f (Apache-2.0). Modified by DaemonClient contributors.
-const name: string = window.FileBrowser.Name || "File Browser";
-const disableExternal: boolean = window.FileBrowser.DisableExternal;
-const disableUsedPercentage: boolean = window.FileBrowser.DisableUsedPercentage;
-const baseURL: string = window.FileBrowser.BaseURL;
-const staticURL: string = window.FileBrowser.StaticURL;
-const version: string = window.FileBrowser.Version;
-const logoURL = `${staticURL}/img/logo.svg`;
-const theme: UserTheme = window.FileBrowser.Theme;
-const enableThumbs: boolean = window.FileBrowser.EnableThumbs;
-const resizePreview: boolean = window.FileBrowser.ResizePreview;
+// Static build: these were filled in by File Browser's Go server.
+const name = "DaemonClient Drive";
+const disableExternal = false;
+// Storage has no fixed total, so a "used of total" bar means nothing.
+const disableUsedPercentage = true;
+// Vite's base is "/next/"; the router and URLs want it without the slash.
+const baseURL: string = import.meta.env.BASE_URL.replace(/\/$/, "");
+const version = "beta";
+const logoURL = `${baseURL}/img/logo.svg`;
+const theme: UserTheme = "";
+const enableThumbs = true;
+const resizePreview = true;
 const origin = window.location.origin;
 
 export {
