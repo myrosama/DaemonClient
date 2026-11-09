@@ -152,10 +152,11 @@ export async function driveApi(path, opts = {}) {
   if (res.status === 401) {
     // Only this app's session ends; the shared one may still be good, and the
     // sign-in screen exchanges it again. Not logout(): that signs out everywhere.
-    _rejections++;
-    persist(null);
+    // A late refusal of an older token must not end a newer session.
+    if (_session?.token === s.token) { _rejections++; persist(null); }
     throw new Error('Session expired — please sign in again');
   }
+  _rejections = 0;
   const text = await res.text();
   let body;
   try { body = text ? JSON.parse(text) : {}; } catch { body = text; }

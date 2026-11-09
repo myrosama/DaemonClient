@@ -2420,34 +2420,36 @@ const PortalSignInView = () => {
     // and it still didn't work.
     const [state, setState] = useState(() => {
         let signedOut = false;
-        try {
-            signedOut = !!sessionStorage.getItem(SIGNED_OUT_KEY);
-            sessionStorage.removeItem(SIGNED_OUT_KEY);
-        } catch { /* private mode */ }
+        try { signedOut = !!sessionStorage.getItem(SIGNED_OUT_KEY); } catch { /* private mode */ }
         const step = signInStep({ signedOut, rejections: sessionRejections(), sharedSignedIn: false, returnedFromPortal: false });
         return step === 'signedOut' || step === 'failed' ? step : 'checking';
     });
 
-    const goToPortal = () => window.location.replace(portalSignInUrl());
+    // Read here, once: the app rewrites the URL to /login or /dashboard.
+    const [returnedFromPortal] = useState(() => new URLSearchParams(window.location.search).has('sso'));
+
+    const goToPortal = () => {
+        // Cleared only on the way out: signing out shows this screen once while
+        // the browser leaves for the portal, and again when it comes back.
+        try { sessionStorage.removeItem(SIGNED_OUT_KEY); } catch { /* private mode */ }
+        window.location.replace(portalSignInUrl());
+    };
 
     useEffect(() => {
         if (state !== 'checking') return;
         let cancelled = false;
         (async () => {
-            const params = new URLSearchParams(window.location.search);
             const sharedSignedIn = !!(await trySharedSignIn());
             if (cancelled) return;
             const step = signInStep({
-                signedOut: false, rejections: sessionRejections(), sharedSignedIn, returnedFromPortal: params.has('sso'),
+                signedOut: false, rejections: sessionRejections(), sharedSignedIn, returnedFromPortal,
             });
-            if (step === 'done') {
-                // onAuthChange routes to the dashboard; drop the return-trip marker.
-                if (params.has('sso')) window.history.replaceState(null, '', window.location.pathname);
-            } else if (step === 'portal') goToPortal();
-            else setState(step);
+            // 'done': onAuthChange routes to the dashboard.
+            if (step === 'portal') goToPortal();
+            else if (step !== 'done') setState(step);
         })();
         return () => { cancelled = true; };
-    }, [state]);
+    }, [state, returnedFromPortal]);
 
     if (state === 'checking') return <FullScreenLoader message="Signing you in…" />;
     return (
@@ -2527,7 +2529,9 @@ function App() {
             if (!session) { if (active) setAppState(isAppDomain ? 'auth' : 'landing'); return; }
             if (active) setAppState('loading');
             const next = await resolveAuthed();
-            if (active) setAppState(next);
+            // A refused token ends the session while the check above runs, and
+            // that routed to sign-in already; don't overwrite it.
+            if (active && getSession() === session) setAppState(next);
         };
         apply(getSession());
         const unsub = onAuthChange((s) => apply(s));
