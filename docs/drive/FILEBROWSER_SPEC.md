@@ -175,8 +175,9 @@ stream answers within one chunk; tested in Gate 1). Opening a file takes
 priority over thumbnails, with the same scheduler rules as Photos
 (`immich/web/src/service-worker/media-scheduler.ts`): the opened file first,
 then thumbnails on screen, newest first; thumbnails scrolled away are dropped
-before they cost a request. Phase 1 moves the scheduler into a small module
-both service workers import.
+before they cost a request. Phase 3 moves the scheduler into a small module
+both service workers import, before the new service worker uses it (owner,
+2026-11-09: it has no second user until then).
 
 **Integrity.**
 - *Upload:* after each part is sent, Telegram's reply is checked: the stored
@@ -428,12 +429,12 @@ Every phase passes all four gates in `docs/plan/GATES.md`.
 
 **Phases**
 1. Import `e8a388f` unmodified. Then: license and `NOTICE`, rebrand, strip,
-   static config, the `/next/` build and hosting, the shared scheduler module
-   (Photos imports it too), the CSP and the `v-html`
+   static config, the `/next/` build and hosting, the CSP and the `v-html`
    audit (the beta shares the origin, so these come first).
 2. Worker release W1 (§6), rolled out to the fleet.
-3. Read-only adapter (browse, search, preview, download, zip) with the new
-   stream and integrity checks; thumbnails shown in grid view; sign-in through
+3. First the shared scheduler module (Photos imports it too; Photos gets its
+   own Gate 2). Then the read-only adapter (browse, search, preview, download,
+   zip) with the new stream and integrity checks; thumbnails shown in grid view; sign-in through
    the portal (including the sign-up `return_url` change); sign-out
    everywhere; the unreachable screen.
 4. Writes (upload with part confirmation and thumbnails, the one-time
