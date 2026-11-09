@@ -448,6 +448,31 @@ export class D1Adapter {
     await this.db.prepare('DELETE FROM files WHERE id = ?').bind(id).run();
   }
 
+  /**
+   * Mark an item and everything inside it for deletion (Drive's "delete
+   * forever", W1). Owner-scoped at every level; UNION (not UNION ALL) stops on
+   * a cycle in old data. Keeps an existing mark, and returns every row of the
+   * subtree so a client can delete their Telegram messages and resume later.
+   */
+  async markPurging(ownerId: string, id: string, now: string): Promise<any[]> {
+    const result = await this.db.prepare(
+      `WITH RECURSIVE sub(id) AS (
+         SELECT id FROM files WHERE id = ? AND ownerId = ?
+         UNION
+         SELECT f.id FROM files f JOIN sub ON f.parentId = sub.id WHERE f.ownerId = ?
+       )
+       UPDATE files SET purgingAt = COALESCE(purgingAt, ?)
+       WHERE ownerId = ? AND id IN (SELECT id FROM sub)
+       RETURNING *`
+    ).bind(id, ownerId, ownerId, now, ownerId).all<any>();
+    return (result.results || []).map(D1Adapter.normalizeFile);
+  }
+
+  async hasChildren(ownerId: string, id: string): Promise<boolean> {
+    const row = await this.db.prepare('SELECT 1 AS x FROM files WHERE ownerId = ? AND parentId = ? LIMIT 1').bind(ownerId, id).first<any>();
+    return !!row;
+  }
+
   // ────────────────────────────────────────────────────────────
   // Deduplication lookup
   // ────────────────────────────────────────────────────────────
@@ -532,4 +557,37 @@ export class D1Adapter {
     ).bind(ownerId).first<{ total: number }>();
     return result?.total || 0;
   }
+}
+
+// ────────────────────────────────────────────────────────────
+// Drive schema, self-healing
+// ────────────────────────────────────────────────────────────
+// Auto-update ships code only, never a migration, so the Drive handlers create
+// their own table, and release W1's columns on a table made before it. Done
+// once per database binding (one per isolate in production). An ALTER that
+// fails for any reason other than "duplicate column" throws, so the step is
+// retried on the next request instead of queries hitting missing columns.
+const W1_FILE_COLUMNS = ['trashedAt', 'purgingAt', 'thumb'];
+const driveSchemaReady = new WeakSet<object>();
+
+export async function ensureDriveSchema(db: D1Database): Promise<void> {
+  if (driveSchemaReady.has(db)) return;
+  await db.batch([
+    db.prepare(`CREATE TABLE IF NOT EXISTS files (
+      id TEXT PRIMARY KEY, ownerId TEXT NOT NULL, parentId TEXT NOT NULL DEFAULT 'root',
+      type TEXT NOT NULL DEFAULT 'file', fileName TEXT NOT NULL, fileSize INTEGER DEFAULT 0,
+      fileType TEXT, messages TEXT, encrypted INTEGER DEFAULT 0,
+      encryptionMode TEXT DEFAULT 'off', uploadedAt TEXT NOT NULL, updatedAt TEXT,
+      trashedAt TEXT, purgingAt TEXT, thumb TEXT
+    )`),
+    db.prepare('CREATE INDEX IF NOT EXISTS idx_files_owner_parent ON files(ownerId, parentId)'),
+  ]);
+  for (const column of W1_FILE_COLUMNS) {
+    try {
+      await db.prepare(`ALTER TABLE files ADD COLUMN ${column} TEXT`).run();
+    } catch (error: any) {
+      if (!/duplicate column/i.test(String(error?.message ?? error))) throw error;
+    }
+  }
+  driveSchemaReady.add(db);
 }

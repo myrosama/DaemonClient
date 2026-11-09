@@ -90,7 +90,8 @@ CREATE TABLE IF NOT EXISTS files (
   id TEXT PRIMARY KEY, ownerId TEXT NOT NULL, parentId TEXT NOT NULL DEFAULT 'root',
   type TEXT NOT NULL DEFAULT 'file', fileName TEXT NOT NULL, fileSize INTEGER DEFAULT 0,
   fileType TEXT, messages TEXT, encrypted INTEGER DEFAULT 0,
-  encryptionMode TEXT DEFAULT 'off', uploadedAt TEXT NOT NULL, updatedAt TEXT
+  encryptionMode TEXT DEFAULT 'off', uploadedAt TEXT NOT NULL, updatedAt TEXT,
+  trashedAt TEXT, purgingAt TEXT, thumb TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_files_owner_parent ON files(ownerId, parentId);`;
 
@@ -103,7 +104,8 @@ export const DRIVE_MIGRATION_SQL = `CREATE TABLE IF NOT EXISTS files (
   id TEXT PRIMARY KEY, ownerId TEXT NOT NULL, parentId TEXT NOT NULL DEFAULT 'root',
   type TEXT NOT NULL DEFAULT 'file', fileName TEXT NOT NULL, fileSize INTEGER DEFAULT 0,
   fileType TEXT, messages TEXT, encrypted INTEGER DEFAULT 0,
-  encryptionMode TEXT DEFAULT 'off', uploadedAt TEXT NOT NULL, updatedAt TEXT
+  encryptionMode TEXT DEFAULT 'off', uploadedAt TEXT NOT NULL, updatedAt TEXT,
+  trashedAt TEXT, purgingAt TEXT, thumb TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_files_owner_parent ON files(ownerId, parentId);`;
 

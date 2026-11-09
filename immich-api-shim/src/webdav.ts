@@ -9,7 +9,8 @@
 // Crypto matches drive/src/crypto.js exactly: AES-256-GCM, PBKDF2 SHA-256 100k,
 // 16-byte salt, 12-byte IV PREPENDED to the ciphertext.
 
-import { D1Adapter } from './d1-adapter';
+import { D1Adapter, ensureDriveSchema } from './d1-adapter';
+import { hiddenIds, moveRefusal, isTempFileName } from './drive-tree';
 
 const PBKDF2_ITERATIONS = 100000;
 const IV_LENGTH = 12;
@@ -98,6 +99,9 @@ export interface DriveRow {
   encryptionMode: string; // 'off' | 'client'
   uploadedAt: string;
   updatedAt: string | null;
+  trashedAt?: string | null;
+  purgingAt?: string | null;
+  thumb?: string | null;
 }
 
 /** Strip the leading `/dav`, split on `/`, decode each segment, drop empties. */
@@ -276,14 +280,41 @@ async function tgDownload(botToken: string, fileId: string): Promise<ArrayBuffer
   return buf;
 }
 
-async function tgUpload(botToken: string, channelId: string, data: BufferSource, name: string): Promise<{ message_id: number; file_id: string }> {
-  const form = new FormData();
-  form.append('chat_id', channelId);
-  form.append('document', new Blob([data as any], { type: 'application/octet-stream' }), name);
-  const res = await fetch(`https://api.telegram.org/bot${botToken}/sendDocument`, { method: 'POST', body: form });
-  const j = (await res.json()) as any;
-  if (!j?.ok || !j.result?.document?.file_id) throw new Error('sendDocument failed');
-  return { message_id: j.result.message_id, file_id: j.result.document.file_id };
+// A part counts as stored only when Telegram reports the exact size sent (the
+// ciphertext when encrypted); a missing size counts as unconfirmed. Up to 4
+// sends per part (1 + 3 resends), waiting as long as a 429 asks, 30 s in all.
+// Every message id sent is pushed to `sent`; unconfirmed ones are deleted here.
+// Worst case per PUT (5 parts): 20 sends + 20 deletes + 5 old parts + 1 old
+// thumbnail = 46 subrequests, under the Workers limit of 50.
+const PART_SENDS = 4;
+const MAX_429_WAIT_S = 30;
+
+async function tgUploadConfirmed(
+  botToken: string, channelId: string, data: Uint8Array | ArrayBuffer, name: string, sent: number[],
+): Promise<{ message_id: number; file_id: string }> {
+  let waited = 0;
+  for (let attempt = 0; attempt < PART_SENDS; attempt++) {
+    const form = new FormData();
+    form.append('chat_id', channelId);
+    form.append('document', new Blob([data as any], { type: 'application/octet-stream' }), name);
+    const res = await fetch(`https://api.telegram.org/bot${botToken}/sendDocument`, { method: 'POST', body: form });
+    const j = (await res.json().catch(() => null)) as any;
+    const messageId = j?.ok ? j.result?.message_id : undefined;
+    if (typeof messageId === 'number') {
+      sent.push(messageId);
+      const doc = j.result.document;
+      if (doc?.file_id && doc.file_size === data.byteLength) return { message_id: messageId, file_id: doc.file_id };
+      await tgDelete(botToken, channelId, messageId);
+      sent.splice(sent.indexOf(messageId), 1);
+      continue;
+    }
+    const retryAfter = Number(j?.parameters?.retry_after);
+    if (res.status === 429 && Number.isFinite(retryAfter) && retryAfter >= 0 && waited + retryAfter <= MAX_429_WAIT_S) {
+      waited += retryAfter;
+      await new Promise((r) => setTimeout(r, retryAfter * 1000));
+    }
+  }
+  throw new Error('part not confirmed by Telegram');
 }
 
 async function tgDelete(botToken: string, channelId: string, messageId: number): Promise<void> {
@@ -321,12 +352,11 @@ function chunksOf(node: DriveRow): Array<{ message_id?: number; file_id: string 
   return [];
 }
 
-function collectSubtree(rows: DriveRow[], node: DriveRow): DriveRow[] {
-  const out: DriveRow[] = [node];
-  if (node.type === 'folder') {
-    for (const child of rows.filter((r) => r.parentId === node.id)) out.push(...collectSubtree(rows, child));
-  }
-  return out;
+function thumbOf(node: DriveRow): number | null {
+  try {
+    const t = typeof node.thumb === 'string' ? JSON.parse(node.thumb) : null;
+    return Number.isSafeInteger(t?.message_id) ? t.message_id : null;
+  } catch { return null; }
 }
 
 function davText(status: number, msg: string): Response {
@@ -356,8 +386,17 @@ export async function handleWebDav(request: Request, env: { DB?: any }, url: URL
     return new Response('Unauthorized', { status: 401, headers: { 'WWW-Authenticate': 'Basic realm="DaemonClient Drive"', 'DAV': '1, 2' } });
   }
   const uid = auth.uid;
+  try {
+    await ensureDriveSchema(env.DB);
+  } catch {
+    return new Response('Temporarily unavailable', { status: 503, headers: { 'Retry-After': '2', 'DAV': '1, 2' } });
+  }
   const adapter = new D1Adapter(env.DB);
-  const rows = (await adapter.listFiles(uid)) as DriveRow[];
+  // Every path lookup sees only visible items: Trash and its contents are not
+  // part of the mounted drive (W1).
+  const allRows = (await adapter.listFiles(uid)) as DriveRow[];
+  const hidden = hiddenIds(allRows);
+  const rows = allRows.filter((r) => !hidden.has(r.id));
   const segments = decodePath(url.pathname);
   const basePath = '/dav' + (segments.length ? '/' + segments.map(encodeURIComponent).join('/') : '');
 
@@ -454,26 +493,37 @@ export async function handleWebDav(request: Request, env: { DB?: any }, url: URL
     const key = await getDriveKey(adapter);
     const totalChunks = Math.max(1, Math.ceil(body.byteLength / CHUNK_SIZE));
     const messages: Array<{ message_id: number; file_id: string }> = [];
-    for (let i = 0; i < totalChunks; i++) {
-      const view = body.subarray(i * CHUNK_SIZE, Math.min((i + 1) * CHUNK_SIZE, body.byteLength));
-      const payload: BufferSource = key ? await encryptChunkAes(view, key) : view;
-      const partName = key
-        ? (totalChunks === 1 ? 'blob.bin' : `blob.bin.part${String(i + 1).padStart(3, '0')}`)
-        : (totalChunks === 1 ? fileName : `${fileName}.part${String(i + 1).padStart(3, '0')}`);
-      messages.push(await tgUpload(botToken, channelId, payload, partName));
+    const sent: number[] = [];
+    try {
+      for (let i = 0; i < totalChunks; i++) {
+        const view = body.subarray(i * CHUNK_SIZE, Math.min((i + 1) * CHUNK_SIZE, body.byteLength));
+        const payload = key ? new Uint8Array(await encryptChunkAes(view, key)) : view;
+        const partName = key
+          ? (totalChunks === 1 ? 'blob.bin' : `blob.bin.part${String(i + 1).padStart(3, '0')}`)
+          : (totalChunks === 1 ? fileName : `${fileName}.part${String(i + 1).padStart(3, '0')}`);
+        messages.push(await tgUploadConfirmed(botToken, channelId, payload, partName, sent));
+      }
+    } catch {
+      // Nothing is saved; remove every part this upload stored.
+      for (const id of sent) await tgDelete(botToken, channelId, id);
+      return davText(502, 'Telegram did not confirm every part; nothing was saved. Try again.');
     }
     const existing = resolvePath(rows, segments).node;
-    const id = existing && existing.type === 'file' ? existing.id : crypto.randomUUID();
+    const replacing = existing && existing.type === 'file' ? existing : null;
     const now = new Date().toISOString();
     await adapter.saveFile({
-      id, ownerId: uid, parentId, type: 'file', fileName,
+      id: replacing ? replacing.id : crypto.randomUUID(), ownerId: uid, parentId, type: 'file', fileName,
       fileSize: body.byteLength, fileType: request.headers.get('Content-Type') || 'application/octet-stream',
       messages: JSON.stringify(messages), encrypted: key ? 1 : 0, encryptionMode: key ? 'client' : 'off',
       uploadedAt: now, updatedAt: now,
+      // New contents: the old thumbnail no longer matches.
+      ...(replacing ? { thumb: null } : {}),
     });
-    // Overwrite: best-effort delete the old chunks now that the new ones are committed.
-    if (existing && existing.type === 'file') {
-      for (const m of chunksOf(existing)) if (m.message_id) await tgDelete(botToken, channelId, m.message_id);
+    // Overwrite: best-effort delete the old parts and thumbnail now that the new ones are committed.
+    if (replacing) {
+      for (const m of chunksOf(replacing)) if (m.message_id) await tgDelete(botToken, channelId, m.message_id);
+      const oldThumb = thumbOf(replacing);
+      if (oldThumb) await tgDelete(botToken, channelId, oldThumb);
     }
     return new Response(null, { status: existing ? 204 : 201 });
   }
@@ -495,14 +545,21 @@ export async function handleWebDav(request: Request, env: { DB?: any }, url: URL
   if (method === 'DELETE') {
     const { node } = resolvePath(rows, segments);
     if (!node || node.id === 'root') return davText(404, 'Not Found');
-    const telegram = await adapter.getJsonConfig<any>('telegram');
-    const botToken = telegram?.botToken || telegram?.bot_token;
-    const channelId = telegram?.channelId || telegram?.channel_id;
-    for (const f of collectSubtree(rows, node)) {
-      if (f.type === 'file' && botToken && channelId) {
-        for (const m of chunksOf(f)) if (m.message_id) await tgDelete(botToken, channelId, m.message_id);
+    // A file manager's own temp file goes for good (owner decision D5);
+    // everything else goes to Trash, where its contents follow it.
+    if (node.type === 'file' && isTempFileName(node.fileName)) {
+      const telegram = await adapter.getJsonConfig<any>('telegram');
+      const botToken = telegram?.botToken || telegram?.bot_token;
+      const channelId = telegram?.channelId || telegram?.channel_id;
+      if (botToken && channelId) {
+        for (const m of chunksOf(node)) if (m.message_id) await tgDelete(botToken, channelId, m.message_id);
+        const oldThumb = thumbOf(node);
+        if (oldThumb) await tgDelete(botToken, channelId, oldThumb);
       }
-      await adapter.deleteFile(f.id);
+      await adapter.deleteFile(node.id);
+    } else {
+      const now = new Date().toISOString();
+      await adapter.updateFile(node.id, { trashedAt: now, updatedAt: now });
     }
     return new Response(null, { status: 204 });
   }
@@ -517,7 +574,18 @@ export async function handleWebDav(request: Request, env: { DB?: any }, url: URL
     if (destSegs.length === 0) return davText(400, 'Bad Destination');
     const newParent = resolvePath(rows, destSegs.slice(0, -1)).node;
     if (!newParent) return davText(409, 'Destination parent not found');
-    const overwrite = resolvePath(rows, destSegs).node;
+    const newParentId = newParent.id === 'root' ? 'root' : newParent.id;
+    const refusal = moveRefusal(allRows, node.id, newParentId, hidden);
+    if (refusal) return davText(409, refusal);
+    const target = resolvePath(rows, destSegs).node;
+    const overwrite = target && target.id !== node.id ? target : null;
+    if (overwrite) {
+      if ((request.headers.get('Overwrite') || 'T').toUpperCase() === 'F') return davText(412, 'Destination exists');
+      // Saving over a file (how Finder and GNOME save): the old one goes to
+      // Trash rather than staying beside the new one (owner decision D4).
+      const now = new Date().toISOString();
+      await adapter.updateFile(overwrite.id, { trashedAt: now, updatedAt: now });
+    }
     await adapter.updateFile(node.id, {
       fileName: destSegs[destSegs.length - 1],
       parentId: newParent.id === 'root' ? 'root' : newParent.id,
