@@ -23,6 +23,12 @@ const CENTRAL_API = (
   import.meta.env.VITE_API_BASE || (IS_SELF_HOST ? '' : 'https://immich-api.sadrikov49.workers.dev')
 ).replace(/\/+$/, '');
 const SESSION_KEY = 'dc_drive_session';
+// The shared sign-in hub (one HttpOnly cookie for *.daemonclient.uz, set by the
+// accounts portal). Hosted only; a self-hosted build signs in with its own form.
+const AUTH_HUB = IS_SELF_HOST ? '' : 'https://auth.daemonclient.uz';
+// Set on sign-out so the next screen doesn't sign the person straight back in.
+export const SIGNED_OUT_KEY = 'dc_drive_signed_out';
+export const isSelfHost = IS_SELF_HOST;
 
 let _session = loadSession();
 const _listeners = new Set();
@@ -63,6 +69,11 @@ export async function login(email, password) {
   let data = {};
   try { data = await res.json(); } catch {}
   if (!res.ok) throw new Error(data.message || 'Invalid email or password');
+  return persistAuthResponse(data, email.trim());
+}
+
+// A login or exchange response → the stored session.
+function persistAuthResponse(data, emailFallback) {
   const session = {
     token: data.accessToken,
     // Hosted: the central worker returns the user's per-user workerUrl. Self-host:
@@ -72,7 +83,7 @@ export async function login(email, password) {
     // login worker there (no DB), so a null workerUrl must surface as an error.
     workerUrl: data.workerUrl || (IS_SELF_HOST ? CENTRAL_API : null),
     uid: data.userId,
-    email: data.userEmail || email.trim(),
+    email: data.userEmail || emailFallback,
     name: data.name || '',
     exp: Date.now() + 7 * 24 * 60 * 60 * 1000,
   };
@@ -80,7 +91,44 @@ export async function login(email, password) {
   return session;
 }
 
-export function logout() { persist(null); }
+/**
+ * Sign in from the shared session the accounts portal set (as Photos does):
+ * the hub hands out a short-lived Firebase ID token, the central worker trades
+ * it for a Drive session. Returns the session, or null when there is no shared
+ * session or anything fails; never throws.
+ */
+export async function trySharedSignIn() {
+  if (!AUTH_HUB) return null;
+  try {
+    const hubRes = await fetch(`${AUTH_HUB}/session-token`, { credentials: 'include' });
+    if (!hubRes.ok) return null;
+    const { idToken } = await hubRes.json();
+    if (!idToken) return null;
+    const res = await fetch(`${CENTRAL_API}/api/auth/exchange`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${idToken}` },
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!data.accessToken) return null;
+    return persistAuthResponse(data, '');
+  } catch {
+    return null;
+  }
+}
+
+// Ends the shared session too, so one sign-out ends Drive, Photos and the
+// portal. The hub call is awaited (at most 5 s) before the local session goes,
+// so the signed-out screen can't find a live shared session and sign back in.
+export async function logout() {
+  try { sessionStorage.setItem(SIGNED_OUT_KEY, '1'); } catch { /* private mode */ }
+  if (AUTH_HUB) {
+    await fetch(`${AUTH_HUB}/logout`, {
+      credentials: 'include', redirect: 'manual', keepalive: true, signal: AbortSignal.timeout(5000),
+    }).catch(() => {});
+  }
+  persist(null);
+}
 
 // Call the user's OWN per-user worker (workerUrl from login) with the session
 // token. Throws { code:'NO_WORKER' } if the account hasn't been provisioned yet
