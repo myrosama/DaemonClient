@@ -227,6 +227,10 @@
           "destination": "/app.html"
         },
         {
+          "source": "/next/assets/**",
+          "destination": "/next/assets/missing-asset-404"
+        },
+        {
           "source": "/next/**",
           "destination": "/next/index.html"
         },
@@ -315,11 +319,15 @@
           "headers": [
             {
               "key": "Content-Security-Policy",
-              "value": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; font-src 'self' data:; media-src 'self' blob:; connect-src 'self'; worker-src 'self' blob:; frame-src 'self' blob:; object-src 'self' blob:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+              "value": "default-src 'none'; manifest-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; font-src 'self' data:; media-src 'self' blob:; connect-src 'self'; worker-src 'self'; frame-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; require-trusted-types-for 'script'; trusted-types vue dompurify default"
             },
             {
               "key": "Cache-Control",
               "value": "no-cache, no-store, must-revalidate"
+            },
+            {
+              "key": "Cross-Origin-Opener-Policy",
+              "value": "same-origin"
             }
           ]
         },
@@ -328,7 +336,7 @@
           "headers": [
             {
               "key": "Cache-Control",
-              "value": "public, max-age=31536000, immutable"
+              "value": "public, max-age=3600"
             }
           ]
         }

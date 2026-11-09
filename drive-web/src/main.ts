@@ -1,4 +1,6 @@
 // Derived from filebrowser/filebrowser@e8a388f (Apache-2.0). Modified by DaemonClient contributors.
+// First: the Trusted Types default policy must exist before any library writes HTML.
+import "@/utils/trusted-types";
 import { disableExternal } from "@/utils/constants";
 import { createApp } from "vue";
 import VueLazyload from "vue-lazyload";

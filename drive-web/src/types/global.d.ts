@@ -2,6 +2,16 @@
 export {};
 
 declare global {
+  interface Window {
+    // Trusted Types (Chromium); only what utils/trusted-types.ts uses.
+    trustedTypes?: {
+      createPolicy(
+        name: string,
+        rules: { createHTML?: (input: string) => string }
+      ): unknown;
+    };
+  }
+
   interface HTMLElement {
     // TODO: no idea what the exact type is
     __vue__: any;

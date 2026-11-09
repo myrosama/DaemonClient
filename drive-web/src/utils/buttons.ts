@@ -1,3 +1,4 @@
+// Derived from filebrowser/filebrowser@e8a388f (Apache-2.0). Modified by DaemonClient contributors.
 function loading(button: string) {
   const el: HTMLButtonElement | null = document.querySelector(
     `#${button}-button > i`
@@ -18,7 +19,7 @@ function loading(button: string) {
   setTimeout(() => {
     if (el) {
       el.classList.add("spin");
-      el.innerHTML = "autorenew";
+      el.textContent = "autorenew";
       el.style.opacity = "1";
     }
   }, 100);
@@ -39,7 +40,7 @@ function done(button: string) {
   setTimeout(() => {
     if (el !== null) {
       el.classList.remove("spin");
-      el.innerHTML = el?.dataset?.icon || "";
+      el.textContent = el?.dataset?.icon || "";
       el.style.opacity = "1";
     }
   }, 100);
@@ -60,7 +61,7 @@ function success(button: string) {
   setTimeout(() => {
     if (el !== null) {
       el.classList.remove("spin");
-      el.innerHTML = "done";
+      el.textContent = "done";
       el.style.opacity = "1";
     }
     setTimeout(() => {
@@ -68,7 +69,7 @@ function success(button: string) {
 
       setTimeout(() => {
         if (el !== null) {
-          el.innerHTML = el?.dataset?.icon || "";
+          el.textContent = el?.dataset?.icon || "";
           el.style.opacity = "1";
         }
       }, 100);

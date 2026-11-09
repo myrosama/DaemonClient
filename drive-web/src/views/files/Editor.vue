@@ -167,7 +167,19 @@ onMounted(() => {
     if (isMarkdownFile && isPreview.value) {
       const new_value = editor.value?.getValue() || "";
       try {
-        previewContent.value = DOMPurify.sanitize(await marked(new_value));
+        previewContent.value = DOMPurify.sanitize(await marked(new_value), {
+          // A document must not restyle the app or draw fake forms.
+          FORBID_TAGS: [
+            "style",
+            "form",
+            "input",
+            "button",
+            "textarea",
+            "select",
+          ],
+          FORBID_ATTR: ["style"],
+          SANITIZE_NAMED_PROPS: true,
+        });
       } catch (error) {
         console.error("Failed to convert content to HTML:", error);
         previewContent.value = "";

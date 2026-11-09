@@ -126,14 +126,19 @@
           :options="videoOptions"
         >
         </VideoPlayer>
-        <object v-else-if="isPdf" class="pdf" :data="previewUrl"></object>
+        <iframe v-else-if="isPdf" class="pdf" :src="previewUrl"></iframe>
         <div v-else-if="fileStore.req?.type == 'blob'" class="info">
           <div class="title">
             <i class="material-icons">feedback</i>
             {{ $t("files.noPreview") }}
           </div>
           <div>
-            <a target="_blank" :href="downloadUrl" class="button button--flat">
+            <a
+              target="_blank"
+              rel="noopener noreferrer"
+              :href="downloadUrl"
+              class="button button--flat"
+            >
               <div>
                 <i class="material-icons">file_download</i
                 >{{ $t("buttons.download") }}
@@ -141,6 +146,7 @@
             </a>
             <a
               target="_blank"
+              rel="noopener noreferrer"
               :href="previewUrl"
               class="button button--flat"
               v-if="!fileStore.req?.isDir"
@@ -496,8 +502,8 @@ const close = () => {
   router.push({ path: uri });
 };
 
-const download = () => window.open(downloadUrl.value);
-const openDirect = () => window.open(directUrl.value);
+const download = () => window.open(downloadUrl.value, "_blank", "noopener");
+const openDirect = () => window.open(directUrl.value, "_blank", "noopener");
 
 const editAsText = () => {
   router.push({ path: route.path, query: { edit: "true" } });

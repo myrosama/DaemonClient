@@ -100,7 +100,7 @@ export function download(format: any, ...files: string[]) {
     url += `algo=${format}&`;
   }
 
-  window.open(url);
+  window.open(url, "_blank", "noopener");
 }
 
 export async function post(
