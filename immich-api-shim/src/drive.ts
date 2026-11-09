@@ -1,7 +1,7 @@
 import type { Env } from './index';
 import { json, requireAuth } from './helpers';
 import { D1Adapter, ensureDriveSchema } from './d1-adapter';
-import { hiddenIds, underDeletionIds, moveRefusal, parseThumb, sameMessages, TRASH_EXPIRY_MS } from './drive-tree';
+import { hiddenIds, moveRefusal, parseThumb, sameMessages, TRASH_EXPIRY_MS } from './drive-tree';
 import { getCachedConfig } from './cached-config';
 
 /**
@@ -153,6 +153,8 @@ export async function handleDrive(request: Request, env: Env, path: string, url:
     if (!body || typeof body.fileName !== 'string' || !body.fileName.trim()) {
       return json({ message: 'fileName is required' }, 400);
     }
+    // 'root' is the top level's marker in parentId, never a row.
+    if (body.id === 'root') return json({ message: 'Invalid id' }, 400);
     const type = body.type === 'folder' ? 'folder' : 'file';
     let thumb: string | null | undefined;
     try { thumb = parseThumb(body.thumb); } catch (error: any) { return json({ message: error.message }, 400); }
@@ -185,7 +187,7 @@ export async function handleDrive(request: Request, env: Env, path: string, url:
     // New parts mean the old thumbnail no longer matches, unless one is supplied.
     if (thumb !== undefined) record.thumb = thumb;
     else if (existing && !sameMessages(existing.messages, record.messages)) record.thumb = null;
-    await db.saveFile(record as any);
+    if (!(await db.saveFile(record as any))) return json({ message: 'This item or its folder is being deleted' }, 409);
     return json({ item: D1Adapter.normalizeFile({ ...(existing || {}), ...record }) }, 201);
   }
 
@@ -193,8 +195,10 @@ export async function handleDrive(request: Request, env: Env, path: string, url:
   // is enforced: a row owned by someone else reads as 404.
   const idMatch = path.match(/^\/api\/drive\/files\/([^/]+)(?:\/(trash|restore|purge))?$/);
   if (idMatch) {
-    const fid = decodeURIComponent(idMatch[1]);
+    let fid: string;
+    try { fid = decodeURIComponent(idMatch[1]); } catch { return json({ message: 'Invalid id' }, 400); }
     const action = idMatch[2];
+    if (action && fid === 'root') return json({ message: 'Invalid id' }, 400);
     const existing = await db.getFile(fid);
     if (!existing || existing.ownerId !== uid) return json({ message: 'Not found' }, 404);
     const now = new Date().toISOString();
@@ -204,18 +208,19 @@ export async function handleDrive(request: Request, env: Env, path: string, url:
       if (action === 'trash') {
         if (existing.purgingAt) return json(beingDeleted, 409);
         const fields = { trashedAt: existing.trashedAt || now, updatedAt: now };
-        await db.updateFile(fid, fields);
+        if (!(await db.updateFile(fid, fields))) return json(beingDeleted, 409);
         return json({ item: D1Adapter.normalizeFile({ ...existing, ...fields }) });
       }
       const rows = await db.listFiles(uid);
       if (action === 'restore') {
-        if (underDeletionIds(rows).has(fid)) return json(beingDeleted, 409);
-        // Back into its folder, or the top level if that folder is gone or hidden.
+        if (existing.purgingAt) return json(beingDeleted, 409);
+        // Back into its folder, or the top level if that folder is gone, trashed
+        // or being deleted (owner decision D2).
         const hidden = hiddenIds(rows);
         const parentOk = existing.parentId === 'root'
           || (rows.some((r) => r.id === existing.parentId) && !hidden.has(existing.parentId));
         const fields = { trashedAt: null, updatedAt: now, ...(parentOk ? {} : { parentId: 'root' }) };
-        await db.updateFile(fid, fields);
+        if (!(await db.updateFile(fid, fields))) return json(beingDeleted, 409);
         return json({ item: D1Adapter.normalizeFile({ ...existing, ...fields }) });
       }
       // purge: only from Trash (owner decision D1), then the whole subtree.
@@ -226,7 +231,7 @@ export async function handleDrive(request: Request, env: Env, path: string, url:
 
     if (!action && (request.method === 'PATCH' || request.method === 'PUT')) {
       if (existing.purgingAt) return json(beingDeleted, 409);
-      const body = (await request.json().catch(() => ({}))) as any;
+      const body = ((await request.json().catch(() => null)) || {}) as any;
       const fields: Record<string, any> = { updatedAt: now };
       if (typeof body.fileName === 'string' && body.fileName.trim()) fields.fileName = body.fileName.trim();
       if (typeof body.parentId === 'string' && body.parentId && body.parentId !== existing.parentId) {
@@ -234,7 +239,7 @@ export async function handleDrive(request: Request, env: Env, path: string, url:
         if (refusal) return json({ message: refusal }, 409);
         fields.parentId = body.parentId;
       }
-      await db.updateFile(fid, fields);
+      if (!(await db.updateFile(fid, fields))) return json(beingDeleted, 409);
       return json({ item: D1Adapter.normalizeFile({ ...existing, ...fields }) });
     }
 

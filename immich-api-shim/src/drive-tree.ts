@@ -40,11 +40,6 @@ export function hiddenIds(rows: TreeRow[]): Set<string> {
   return new Set([...known].filter(([, h]) => h).map(([id]) => id));
 }
 
-/** Ids that are marked for deletion or inside a marked folder. */
-export function underDeletionIds(rows: TreeRow[]): Set<string> {
-  return hiddenIds(rows.map((r) => ({ ...r, trashedAt: null })));
-}
-
 /**
  * Why `nodeId` may not move into `newParentId`, or null. The new parent must
  * be the top level or a visible folder that is not the node or below it.
@@ -79,7 +74,7 @@ export function parseThumb(raw: unknown): string | null | undefined {
   if (raw === null) return null;
   const t = raw as any;
   if (typeof t === 'object' && Number.isSafeInteger(t.message_id) && t.message_id > 0
-    && typeof t.file_id === 'string' && t.file_id.length > 0 && t.file_id.length <= 256) {
+    && typeof t.file_id === 'string' && /^[A-Za-z0-9_-]{1,256}$/.test(t.file_id)) {
     return JSON.stringify({ message_id: t.message_id, file_id: t.file_id });
   }
   throw new Error('thumb must be {message_id, file_id}');

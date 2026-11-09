@@ -3,7 +3,8 @@ import { requireAuth, firestoreGet, firestoreSet, firestoreDelete, firestoreQuer
 import sizeOf from 'image-size';
 import { normalizePhotoManifest } from './contracts';
 import { getFlagsForUser } from './feature-flags';
-import { D1Adapter } from './d1-adapter';
+import { D1Adapter, ensureDriveSchema } from './d1-adapter';
+import { hiddenIds } from './drive-tree';
 import { getCachedConfig } from './cached-config';
 import { computeThumbHashFromJpeg } from './thumbhash-util';
 import { sha1Base64OfFile, Sha1, bytesToBase64 } from './sha1';
@@ -2583,22 +2584,23 @@ export async function handleDashboardSummary(request: Request, env: Env): Promis
     console.log('[Dashboard] photos summary failed:', e?.message);
   }
 
-  // Drive — files only (folders excluded). Files table may not exist on workers
-  // provisioned before Drive shipped.
+  // Drive — files only (folders excluded), leaving out Trash and its contents.
+  // The schema step also creates the table on workers made before Drive.
   try {
-    const countRow = await env.DB.prepare(
-      `SELECT COUNT(*) AS n FROM files WHERE ownerId = ? AND type = 'file'`
-    ).bind(uid).first<{ n: number }>();
-    out.drive.count = countRow?.n || 0;
-
-    const recent = await env.DB.prepare(
-      `SELECT fileName, fileType FROM files WHERE ownerId = ? AND type = 'file'
-       ORDER BY uploadedAt DESC LIMIT 6`
-    ).bind(uid).all<{ fileName: string; fileType: string | null }>();
-    out.drive.recent = (recent.results || []).map(r => ({
-      fileName: r.fileName,
-      ext: (r.fileName.split('.').pop() || '').toUpperCase().slice(0, 4),
-    }));
+    await ensureDriveSchema(env.DB);
+    const rows = (await env.DB.prepare(
+      `SELECT id, parentId, type, fileName, uploadedAt, trashedAt, purgingAt FROM files WHERE ownerId = ?`
+    ).bind(uid).all<any>()).results || [];
+    const hidden = hiddenIds(rows);
+    const files = rows.filter((r) => r.type === 'file' && !hidden.has(r.id));
+    out.drive.count = files.length;
+    out.drive.recent = files
+      .sort((x, y) => String(y.uploadedAt).localeCompare(String(x.uploadedAt)))
+      .slice(0, 6)
+      .map((r) => ({
+        fileName: r.fileName,
+        ext: (r.fileName.split('.').pop() || '').toUpperCase().slice(0, 4),
+      }));
   } catch (e: any) {
     console.log('[Dashboard] drive summary failed (files table may not exist):', e?.message);
   }

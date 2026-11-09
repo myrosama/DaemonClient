@@ -1,8 +1,13 @@
 // Worker release W1 (docs/drive/W1.md): Trash, thumbnails, part confirmation.
 // Runs the real route handlers over an in-memory SQLite database.
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { handleDrive, ensureDriveSchema } from './drive';
-import { handleWebDav, hashToken } from './webdav';
+import { handleWebDav, hashToken, webdavUploadRefusal } from './webdav';
+import { D1Adapter } from './d1-adapter';
+import { handleDashboardSummary } from './assets';
+// Another package, so the type check (rootDir = this package) skips this import.
+// @ts-ignore TS6059: outside rootDir on purpose; vitest resolves it fine.
+import { DRIVE_MIGRATION_SQL } from '../../schema/schema.mjs';
 import { hiddenIds, isTempFileName } from './drive-tree';
 import { sqliteD1, PRE_W1_FILES_SQL } from './test-d1';
 import { testSessionToken, testAuthEnv } from './test-session';
@@ -69,17 +74,33 @@ describe('listings leave Trash out', () => {
     expect((await call('GET', '/api/drive/files?parentId=sub')).body.items).toEqual([]);
     expect(ids((await call('GET', '/api/drive/files?parentId=docs')).body.items)).toEqual(['a']);
   });
-  it('?trashed=1 lists trashed items, their contents and marked items, flagging only expired top-level ones', async () => {
-    const old = new Date(Date.now() - 30 * DAY - 1000).toISOString();
-    const recent = new Date(Date.now() - 30 * DAY + 60_000).toISOString();
-    const { call } = await setup([
-      { id: 'live' }, { id: 'f', type: 'folder', trashedAt: old }, { id: 'in', parentId: 'f' },
-      { id: 'r', trashedAt: recent }, { id: 'm', purgingAt: T0, trashedAt: old },
+  it('?trashed=1 lists trashed items, their contents and marked items, and flags expiry by the worker clock', async () => {
+    vi.useFakeTimers({ toFake: ['Date'], now: Date.parse('2026-12-01T00:00:00.000Z') });
+    try {
+      const at = (ms: number) => new Date(Date.now() - ms).toISOString();
+      const { call } = await setup([
+        { id: 'live' }, { id: 'f', type: 'folder', trashedAt: at(30 * DAY + 1000) }, { id: 'in', parentId: 'f' },
+        { id: 'edge', trashedAt: at(30 * DAY) }, { id: 'r', trashedAt: at(30 * DAY - 1000) }, { id: 'm', purgingAt: T0, trashedAt: at(31 * DAY) },
+      ]);
+      const items = (await call('GET', '/api/drive/files?trashed=1')).body.items;
+      expect(ids(items)).toEqual(['edge', 'f', 'in', 'm', 'r']);
+      const flag = Object.fromEntries(items.map((i: any) => [i.id, i.expired]));
+      expect(flag).toEqual({ edge: true, f: true, in: false, m: true, r: false });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it('the portal dashboard counts only files that are not in Trash', async () => {
+    const { env } = await setup([
+      { id: 'a', fileName: 'a.txt' }, { id: 'gone', fileName: 'gone.txt', trashedAt: T0 },
+      { id: 'bin', type: 'folder', trashedAt: T0 }, { id: 'in', parentId: 'bin', fileName: 'in.txt' },
     ]);
-    const items = (await call('GET', '/api/drive/files?trashed=1')).body.items;
-    expect(ids(items)).toEqual(['f', 'in', 'm', 'r']);
-    const flag = Object.fromEntries(items.map((i: any) => [i.id, i.expired]));
-    expect(flag).toEqual({ f: true, in: false, m: true, r: false });
+    await env.DB.prepare('CREATE TABLE photos (id TEXT, ownerId TEXT, isTrashed INTEGER)').run();
+    const token = await testSessionToken('u1');
+    const res = await handleDashboardSummary(new Request('https://worker.test/api/dashboard/summary', { headers: { Authorization: `Bearer ${token}` } }), env);
+    const body = await res.json() as any;
+    expect(body.drive.count).toBe(1);
+    expect(body.drive.recent.map((r: any) => r.fileName)).toEqual(['a.txt']);
   });
 });
 
@@ -103,9 +124,10 @@ describe('Trash, restore, delete forever', () => {
     expect([row('a').parentId, row('a').trashedAt]).toEqual(['docs', null]);
     expect(row('b').parentId).toBe('root');
     expect(row('c').parentId).toBe('root');
-    // Inside a folder being deleted: refused too, though d itself isn't marked.
-    expect((await call('POST', '/api/drive/files/d/restore')).status).toBe(409);
-    expect(ids((await call('GET', '/api/drive/files')).body.items)).toEqual(['a', 'b', 'c', 'docs']);
+    // Its folder is being deleted, but d itself isn't: to the top level (D2).
+    expect((await call('POST', '/api/drive/files/d/restore')).status).toBe(200);
+    expect(row('d').parentId).toBe('root');
+    expect(ids((await call('GET', '/api/drive/files')).body.items)).toEqual(['a', 'b', 'c', 'd', 'docs']);
   });
   it('a marked item can be neither restored, trashed again, renamed nor saved over', async () => {
     const { call } = await setup([{ id: 'm', trashedAt: T0, purgingAt: T0 }]);
@@ -135,6 +157,57 @@ describe('Trash, restore, delete forever', () => {
     // Marking again returns the same set (a second device resumes the delete).
     expect(ids((await call('POST', '/api/drive/files/f/purge')).body.items)).toEqual(['cyc1', 'cyc2', 'f', 'g', 'x']);
   });
+  it('delete forever terminates on a real cycle in old data and marks exactly that cycle', async () => {
+    const { call, row } = await setup([
+      { id: 'A', type: 'folder', parentId: 'B', trashedAt: T0 }, { id: 'B', type: 'folder', parentId: 'A' }, { id: 'live' },
+    ]);
+    const res = await call('POST', '/api/drive/files/A/purge');
+    expect(res.status).toBe(200);
+    expect(ids(res.body.items)).toEqual(['A', 'B']);
+    expect(row('live').purgingAt).toBeNull();
+  });
+  it("the walk does not pass through another owner's row", async () => {
+    const { call, row } = await setup([
+      { id: 'f', type: 'folder', trashedAt: T0 }, { id: 'other', type: 'folder', parentId: 'f', ownerId: 'someone-else' }, { id: 'below', parentId: 'other' },
+    ]);
+    await call('POST', '/api/drive/files/f/purge');
+    expect(row('below').purgingAt).toBeNull();
+  });
+  it("a row named 'root' can neither be created nor act on the whole drive", async () => {
+    const { call, row, DB } = await setup([{ id: 'root', type: 'folder', trashedAt: T0 }, { id: 'docs' }]);
+    expect((await call('POST', '/api/drive/files', { id: 'root', type: 'folder', fileName: 'x' })).status).toBe(400);
+    for (const a of ['trash', 'restore', 'purge']) expect((await call('POST', `/api/drive/files/root/${a}`)).status).toBe(400);
+    expect(row('docs').purgingAt).toBeNull();
+    // Even under a purged folder, the walk stops at it.
+    await DB.prepare("UPDATE files SET parentId = 'f' WHERE id = 'root'").run();
+    await DB.prepare("INSERT INTO files (id, ownerId, parentId, type, fileName, uploadedAt, trashedAt) VALUES ('f', 'u1', 'root', 'folder', 'f', ?, ?)").bind(T0, T0).run();
+    await call('POST', '/api/drive/files/f/purge');
+    expect(row('docs').purgingAt).toBeNull();
+  });
+  it('nothing new can land in a folder being deleted; a missing folder is still allowed', async () => {
+    const { call, row } = await setup([
+      { id: 'mk', type: 'folder', trashedAt: T0, purgingAt: T0 }, { id: 'bin', type: 'folder', trashedAt: T0 },
+    ]);
+    expect((await call('POST', '/api/drive/files', { id: 'late', fileName: 'late', parentId: 'mk', messages: [] })).status).toBe(409);
+    expect(row('late')).toBeUndefined();
+    // The current app's folder upload can send a child before its folder.
+    expect((await call('POST', '/api/drive/files', { id: 'early', fileName: 'e', parentId: 'not-yet', messages: [] })).status).toBe(201);
+    expect((await call('POST', '/api/drive/files', { id: 'inbin', fileName: 'i', parentId: 'bin', messages: [] })).status).toBe(201);
+  });
+  it('writes refuse at the database when the mark lands first (no check-then-write gap)', async () => {
+    const { DB, row } = await setup([{ id: 'mk', type: 'folder', purgingAt: T0 }, { id: 'm', purgingAt: T0 }, { id: 'ok' }]);
+    const db = new D1Adapter(DB);
+    const f = { ownerId: 'u1', type: 'file', fileName: 'n', uploadedAt: T0 };
+    expect(await db.saveFile({ ...f, id: 'new', parentId: 'mk' })).toBe(false);
+    expect(row('new')).toBeUndefined();
+    expect(await db.saveFile({ ...f, id: 'm', parentId: 'root' })).toBe(false);
+    expect(await db.saveFile({ ...f, id: 'fine', parentId: 'root' })).toBe(true);
+    expect(await db.updateFile('m', { fileName: 'x' })).toBe(false);
+    expect(row('m').fileName).toBe('m');
+    expect(await db.updateFile('ok', { parentId: 'mk' })).toBe(false);
+    expect(row('ok').parentId).toBe('root');
+    expect(await db.updateFile('ok', { fileName: 'y' })).toBe(true);
+  });
   it('an item inside a trashed folder can be deleted forever on its own', async () => {
     const { call, row } = await setup([{ id: 'f', type: 'folder', trashedAt: T0 }, { id: 'x', parentId: 'f' }]);
     expect((await call('POST', '/api/drive/files/x/purge')).status).toBe(200);
@@ -152,6 +225,11 @@ describe('Trash, restore, delete forever', () => {
     const { call, row } = await setup([{ id: 'f', type: 'folder' }, { id: 'x', parentId: 'f' }]);
     expect((await call('DELETE', '/api/drive/files/f')).status).toBe(200);
     expect(row('f')).toBeUndefined();
+  });
+  it('hostile input gets a 4xx or is ignored, never a crash', async () => {
+    const { call } = await setup([{ id: 'a' }]);
+    expect((await call('POST', '/api/drive/files/%E0%A4%A/purge')).status).toBe(400);
+    expect((await call('PATCH', '/api/drive/files/a', null)).status).toBe(200);
   });
   it("another owner's row reads as not found on every new route", async () => {
     const { call } = await setup([{ id: 'o', ownerId: 'someone-else', trashedAt: T0 }]);
@@ -176,9 +254,15 @@ describe('saves keep Trash state and thumbnails right', () => {
     await call('POST', '/api/drive/files', save({ thumb: { message_id: 9, file_id: 'n' } }));
     expect(JSON.parse(row('a').thumb)).toEqual({ message_id: 9, file_id: 'n' });
   });
+  it('thumb goes in and comes back as an object', async () => {
+    const { call } = await setup([]);
+    const thumb = { message_id: 9, file_id: 'n-_1' };
+    expect((await call('POST', '/api/drive/files', save({ thumb }))).body.item.thumb).toEqual(thumb);
+    expect((await call('GET', '/api/drive/files')).body.items[0].thumb).toEqual(thumb);
+  });
   it('rejects a malformed thumb', async () => {
     const { call } = await setup([]);
-    for (const thumb of ['x', { message_id: 'x', file_id: 't' }, { message_id: 1 }, { message_id: 1, file_id: 'y'.repeat(600) }])
+    for (const thumb of ['x', { message_id: 'x', file_id: 't' }, { message_id: 1 }, { message_id: 1, file_id: 'y'.repeat(300) }, { message_id: 1, file_id: 'bad id"' }])
       expect((await call('POST', '/api/drive/files', save({ thumb }))).status).toBe(400);
   });
   it('a save that moves an existing folder into its own descendant is refused', async () => {
@@ -213,6 +297,54 @@ describe('schema and capability', () => {
     expect(res.status).toBe(207);
     const cols = DB.rows('PRAGMA table_info(files)').map((c: any) => c.name);
     expect(cols).toEqual(expect.arrayContaining(['trashedAt', 'purgingAt', 'thumb']));
+  });
+  it('an up-to-date database needs no ALTER at all', async () => {
+    const DB = sqliteD1(PRE_W1_FILES_SQL);
+    await ensureDriveSchema(DB);
+    const seen: string[] = [];
+    await ensureDriveSchema({ ...DB, prepare: (sql: string) => { seen.push(sql); return DB.prepare(sql); } });
+    expect(seen.filter((s) => s.startsWith('ALTER'))).toEqual([]);
+    expect(seen).toHaveLength(1);
+  });
+  it('another isolate adding the column first is fine, whatever the error says', async () => {
+    const DB = sqliteD1(PRE_W1_FILES_SQL);
+    let once = true;
+    await ensureDriveSchema({ ...DB, prepare: (sql: string) => {
+      if (once && sql.includes('ADD COLUMN trashedAt')) {
+        once = false;
+        return { run: async () => { await DB.prepare(sql).run(); throw new Error('some other wording'); } };
+      }
+      return DB.prepare(sql);
+    } });
+    expect(DB.rows('PRAGMA table_info(files)').map((c: any) => c.name)).toContain('thumb');
+  });
+  it('a fresh database and an upgraded one end with the same columns as the install schema', async () => {
+    const names = (d: any) => d.rows('PRAGMA table_info(files)').map((c: any) => c.name).sort();
+    const fresh = sqliteD1();
+    await ensureDriveSchema(fresh);
+    const upgraded = sqliteD1(PRE_W1_FILES_SQL);
+    await ensureDriveSchema(upgraded);
+    const installed = sqliteD1(DRIVE_MIGRATION_SQL);
+    expect(names(fresh)).toEqual(names(installed));
+    expect(names(upgraded)).toEqual(names(installed));
+  });
+  it('both entry points answer 503 while the schema step fails, then recover', async () => {
+    const { DB } = await setup([], { preW1: true });
+    await DB.prepare('INSERT INTO config (key, value) VALUES (?, ?)').bind('dav', JSON.stringify({ tokenHash: await hashToken('mt'), uid: 'u1' })).run();
+    let fail = true;
+    const flaky = { ...DB, prepare: (sql: string) => {
+      if (fail && sql.startsWith('ALTER TABLE')) return { run: async () => { throw new Error('network'); } };
+      return DB.prepare(sql);
+    } };
+    const env = { DB: flaky, ...testAuthEnv() } as any;
+    const token = await testSessionToken('u1');
+    const api = () => { const u = new URL('https://worker.test/api/drive/files'); return handleDrive(new Request(u, { headers: { Authorization: `Bearer ${token}` } }), env, u.pathname, u); };
+    const dav = () => handleWebDav(new Request('https://worker.test/dav/', { method: 'PROPFIND', headers: { Authorization: 'Basic ' + btoa('m:mt') } }), env, new URL('https://worker.test/dav/'));
+    expect((await api()).status).toBe(503);
+    expect((await dav()).status).toBe(503);
+    fail = false;
+    expect((await api()).status).toBe(200);
+    expect((await dav()).status).toBe(207);
   });
   it('a schema step failing for any other reason is not remembered as done', async () => {
     const DB = sqliteD1(PRE_W1_FILES_SQL);
@@ -313,11 +445,102 @@ describe('WebDAV under W1', () => {
     expect(deleted.sort()).toEqual([101, 102, 103, 104]);
     expect(DB.rows("SELECT * FROM files WHERE fileName = 'new.txt'")).toEqual([]);
   });
+  // Runs a request whose handler sleeps on setTimeout, on a fake clock.
+  async function settle<T>(p: Promise<T>): Promise<T> {
+    let done = false;
+    p.finally(() => { done = true; }).catch(() => {});
+    while (!done) {
+      await vi.advanceTimersByTimeAsync(1000);
+      await new Promise((r) => setImmediate(r));
+    }
+    return p;
+  }
+  const tooMany = (retry_after: number) => ({ status: 429, body: { ok: false, error_code: 429, parameters: { retry_after } } });
+  const PART = 19 * 1024 * 1024;
+
   it('PUT waits as long as a 429 asks, then retries', async () => {
-    installTelegram((size, n) => (n === 1 ? { status: 429, body: { ok: false, error_code: 429, parameters: { retry_after: 0 } } } : ok(size, n)));
+    vi.useFakeTimers({ toFake: ['setTimeout'] });
+    try {
+      installTelegram((size, n) => (n === 1 ? tooMany(5) : ok(size, n)));
+      const { req } = await dav([]);
+      const pending = req('PUT', '/dav/new.txt', {}, 'hello');
+      for (let i = 0; i < 20 && sends === 0; i++) await new Promise((r) => setImmediate(r));
+      await vi.advanceTimersByTimeAsync(4000);
+      for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r));
+      expect(sends).toBe(1); // still waiting after 4 of the 5 seconds
+      expect((await settle(pending)).status).toBe(201);
+      expect(sends).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it('the 30-second wait limit covers the whole upload, not each part', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout'] });
+    try {
+      // Part 1 spends 20 s; part 2 asks for 20 s more and is out of budget.
+      installTelegram((size, n) => (n === 1 || n === 3 ? tooMany(20) : ok(size, n)));
+      const { req, DB } = await dav([]);
+      const res = await settle(req('PUT', '/dav/big.bin', {}, new Uint8Array(PART + 1)));
+      expect(res.status).toBe(502);
+      expect(sends).toBe(3);
+      expect(deleted).toEqual([102]);
+      expect(DB.rows("SELECT * FROM files WHERE fileName = 'big.bin'")).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it('a dropped connection counts as one unconfirmed send, not a failed upload', async () => {
+    installTelegram((size, n) => { if (n === 1) throw new Error('connection reset'); return ok(size, n); });
     const { req } = await dav([]);
     expect((await req('PUT', '/dav/new.txt', {}, 'hello')).status).toBe(201);
     expect(sends).toBe(2);
+  });
+  it('a multi-part PUT whose later part never confirms deletes the earlier parts and saves nothing', async () => {
+    installTelegram((size, n) => (n === 1 ? ok(size, n) : { body: { ok: true, result: { message_id: 100 + n, document: { file_id: `c${n}` } } } }));
+    const { req, DB } = await dav([]);
+    expect((await req('PUT', '/dav/big.bin', {}, new Uint8Array(PART + 1))).status).toBe(502);
+    expect(deleted).toContain(101);
+    expect(DB.rows("SELECT * FROM files WHERE fileName = 'big.bin'")).toEqual([]);
+  });
+  it('a database failure after every part is stored removes the parts and asks the client to retry', async () => {
+    installTelegram(ok);
+    const { req, env, DB } = await dav([]);
+    env.DB = { ...DB, prepare: (sql: string) => {
+      if (sql.startsWith('INSERT INTO files')) return { bind: () => ({ run: async () => { throw new Error('D1 down'); } }) };
+      return DB.prepare(sql);
+    } };
+    expect((await req('PUT', '/dav/new.txt', {}, 'hello')).status).toBe(503);
+    expect(deleted).toEqual([101]);
+  });
+  it('PUT to the name of a trashed file makes a new file and leaves the trashed one and its parts alone', async () => {
+    installTelegram(ok);
+    const { req, row, DB } = await dav([{ id: 't', fileName: 't.txt', trashedAt: T0, messages: [{ message_id: 5, file_id: 'old' }] }]);
+    expect((await req('PUT', '/dav/t.txt', {}, 'new')).status).toBe(201);
+    expect(row('t').trashedAt).toBe(T0);
+    expect(deleted).toEqual([]);
+    expect(DB.rows("SELECT id FROM files WHERE fileName = 't.txt'")).toHaveLength(2);
+  });
+  it('never deletes a Telegram message another file still uses', async () => {
+    installTelegram(ok);
+    const { req } = await dav([
+      { id: 'a', fileName: 'a.txt', messages: [{ message_id: 5, file_id: 'shared' }, { message_id: 7, file_id: 'mine' }], thumb: JSON.stringify({ message_id: 8, file_id: 'th' }) },
+      { id: 'b', fileName: 'b.txt', messages: [{ message_id: 5, file_id: 'shared' }, { message_id: 8, file_id: 'part-of-b' }] },
+    ]);
+    expect((await req('PUT', '/dav/a.txt', {}, 'x')).status).toBe(204);
+    expect(deleted).toEqual([7]);
+  });
+  it('an empty file is stored without a Telegram message and reads back empty', async () => {
+    installTelegram(ok);
+    const { req, DB } = await dav([]);
+    expect((await req('PUT', '/dav/empty.txt', {}, new Uint8Array(0))).status).toBe(201);
+    expect(sends).toBe(0);
+    expect(DB.rows("SELECT messages FROM files WHERE fileName = 'empty.txt'")[0].messages).toBe('[]');
+    const got = await req('GET', '/dav/empty.txt');
+    expect([got.status, (await got.arrayBuffer()).byteLength]).toEqual([200, 0]);
+  });
+  it('refuses an upload unless it has both the password and the salt to encrypt with', () => {
+    expect(webdavUploadRefusal({ enabled: true, mode: 'auto', password: 'p', salt: '' })).toMatch(/.+/);
+    expect(webdavUploadRefusal({ enabled: true, mode: 'auto', password: 'p', salt: 's' })).toBeNull();
   });
   it('PUT over a file clears its thumb and deletes the old thumbnail with the old parts', async () => {
     installTelegram(ok);
