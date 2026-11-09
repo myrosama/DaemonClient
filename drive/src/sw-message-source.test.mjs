@@ -14,7 +14,7 @@ const self = {
   addEventListener() {},
   skipWaiting() {},
   clients: { claim() {} },
-  location: { origin: 'https://drive.daemonclient.uz' },
+  location: { origin: 'https://drive.daemonclient.uz', protocol: 'https:' },
 }
 const ctx = vm.createContext({ self, console, URL, setTimeout, clearTimeout })
 vm.runInContext(source, ctx)
@@ -26,7 +26,7 @@ test("the current app's pages may register files", () => {
 })
 
 test('the new app under /next/, other origins, workers and unknown senders may not', () => {
-  for (const url of ['https://drive.daemonclient.uz/next/', 'https://drive.daemonclient.uz/next/files/x', 'https://evil.example/dashboard'])
+  for (const url of ['https://drive.daemonclient.uz/next', 'https://drive.daemonclient.uz/next/', 'https://drive.daemonclient.uz/next/files/x', 'https://evil.example/dashboard', 'blob:https://drive.daemonclient.uz/abc'])
     assert.equal(from({ type: 'window', url }), false, url)
   assert.equal(from({ type: 'worker', url: 'https://drive.daemonclient.uz/dashboard' }), false)
   assert.equal(from(null), false)

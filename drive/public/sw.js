@@ -208,15 +208,16 @@ async function getRegistration(fileId) {
 }
 
 // ── Message handler: register / clear files for streaming ──
-// Only this app's own pages may register files (they carry the bot token, the
-// worker URL and the file's key). The new app at /next/ shares the origin and
-// talks to its own service worker, never to this one.
+// Only this app's own pages may register or clear files (they carry the bot
+// token, the worker URL and the file's key). The new app at /next/ shares the
+// origin and doesn't use this worker's registrations.
 function mayRegisterFiles(event) {
   const src = event && event.source;
   if (!src || src.type !== 'window') return false;
   try {
     const url = new URL(src.url);
-    return url.origin === self.location.origin && !url.pathname.startsWith('/next/');
+    return url.protocol === self.location.protocol && url.origin === self.location.origin
+      && url.pathname !== '/next' && !url.pathname.startsWith('/next/');
   } catch {
     return false;
   }
@@ -250,7 +251,7 @@ self.addEventListener('message', async (event) => {
     }
   }
 
-  if (data.type === 'CLEAR_FILES') {
+  if (data.type === 'CLEAR_FILES' && mayRegisterFiles(event)) {
     virtualFiles.clear();
     chunkCache.clear();
     inflightChunks.clear();
