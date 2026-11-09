@@ -65,3 +65,12 @@ test('other links are never held, including look-alike hosts', () => {
     'not a url',
   ]) assert.equal(shouldHoldLink(href, { cloud: 'starting', hosts }), false, href)
 })
+
+test('a link that reaches an app through the portal is held like a direct one', () => {
+  const hosts = ['photos.daemonclient.uz', 'drive.daemonclient.uz']
+  const via = 'https://accounts.daemonclient.uz/login?return_url=' + encodeURIComponent('https://photos.daemonclient.uz/auth/login')
+  assert.equal(shouldHoldLink(via, { cloud: 'starting', hosts }), true)
+  assert.equal(shouldHoldLink(via, { cloud: 'ready', hosts }), false)
+  assert.equal(shouldHoldLink('https://accounts.daemonclient.uz/login', { cloud: 'starting', hosts }), false)
+  assert.equal(shouldHoldLink('https://accounts.daemonclient.uz/login?return_url=%%%', { cloud: 'starting', hosts }), false)
+})

@@ -40,7 +40,10 @@ export function appHosts(urls) {
 // is known to be unreachable; it would only open an error page.
 export function shouldHoldLink(href, { cloud, hosts }) {
   if (cloud !== 'checking' && cloud !== 'starting') return false
-  let host
-  try { host = new URL(href).hostname } catch { return false }
-  return hosts.includes(host)
+  let url
+  try { url = new URL(href) } catch { return false }
+  // A link through the portal's sign-in counts as a link to the app it returns to.
+  let target = null
+  try { target = new URL(url.searchParams.get('return_url')) } catch { /* no usable return_url */ }
+  return hosts.includes((target || url).hostname)
 }

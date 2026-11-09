@@ -658,7 +658,8 @@ function SignupPage() {
       }
 
       // The Turnstile token is single-use and the setup service needs it, so no
-      // shared session here. Opening Photos or Drive later asks once (ContinueToApp).
+      // shared session here. Opening Photos or Drive from the portal asks once
+      // (ContinueToApp).
 
       // Log signup activity
       try {
@@ -1702,6 +1703,11 @@ function backendApiUrl(workerUrl) {
 // Hosts of the Photos/Drive links the dashboard holds while a fresh account's
 // cloud is still unreachable (see utils/cloudStartup.js).
 const APP_HOSTS = appHosts([PHOTOS_URL, DRIVE_URL])
+// Through the portal's sign-in, so someone with no shared session yet confirms
+// once (ContinueToApp) instead of meeting Photos' own password form.
+const PHOTOS_LINK = IS_SELF_HOST
+  ? 'https://photos.daemonclient.uz/auth/login'
+  : `/login?return_url=${encodeURIComponent('https://photos.daemonclient.uz/auth/login')}`
 
 function DashboardPage() {
   const [services, setServices] = useState({ photos: null, drive: null })
@@ -1876,7 +1882,7 @@ function DashboardPage() {
 
   const apps = [
     { label: 'Drive',   href: 'https://drive.daemonclient.uz/login', bg: 'linear-gradient(145deg,#1A3B90,#2D5DC8)', icon: <FolderOpen size={27} className="text-white" strokeWidth={1.5}/> },
-    { label: 'Photos',  href: 'https://photos.daemonclient.uz/auth/login', bg: 'linear-gradient(145deg,#0A4520,#15803D)', icon: <Image      size={27} className="text-green-300" strokeWidth={1.5}/> },
+    { label: 'Photos',  href: PHOTOS_LINK, bg: 'linear-gradient(145deg,#0A4520,#15803D)', icon: <Image      size={27} className="text-green-300" strokeWidth={1.5}/> },
     { label: 'Hosting', disabled: true, bg: 'linear-gradient(145deg,#1A0A30,#2D1550)', icon: <Server  size={27} className="text-purple-400" strokeWidth={1.5}/> },
     { label: 'Movies',  disabled: true, bg: 'linear-gradient(145deg,#300808,#501212)', icon: <Monitor size={27} className="text-red-400"    strokeWidth={1.5}/> },
     { label: 'API',     disabled: true, bg: 'linear-gradient(145deg,#082028,#103040)', icon: <Hash    size={27} className="text-cyan-400"   strokeWidth={1.5}/> },
@@ -2057,7 +2063,7 @@ function DashboardPage() {
                     </div>
 
                     {/* 2×2 grid — real recent photos via thumbhash previews */}
-                    <a href="https://photos.daemonclient.uz/auth/login" target="_blank" rel="noopener noreferrer" className="flex-1 grid grid-cols-2 grid-rows-2 gap-px dc-inset min-h-[160px]">
+                    <a href={PHOTOS_LINK} target="_blank" rel="noopener noreferrer" className="flex-1 grid grid-cols-2 grid-rows-2 gap-px dc-inset min-h-[160px]">
                       {[0, 1, 2, 3].map((i) => {
                         const tile = photoTiles[i]
                         // Real thumbnail once fetched; thumbhash blur until then.
@@ -2086,7 +2092,7 @@ function DashboardPage() {
                     {/* footer */}
                     <div className="px-4 py-2.5 border-t border-white/[0.06] flex items-center justify-between">
                       <span className="text-[rgba(255,255,255,0.42)] text-[18px] leading-none tracking-[3px]">···</span>
-                      <a href="https://photos.daemonclient.uz/auth/login" target="_blank" rel="noopener noreferrer" className="text-[11px] text-[rgba(255,255,255,0.42)] hover:text-[rgba(255,255,255,0.66)] transition-colors">
+                      <a href={PHOTOS_LINK} target="_blank" rel="noopener noreferrer" className="text-[11px] text-[rgba(255,255,255,0.42)] hover:text-[rgba(255,255,255,0.66)] transition-colors">
                         Open Photos →
                       </a>
                     </div>

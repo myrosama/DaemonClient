@@ -156,11 +156,11 @@ export async function driveApi(path, opts = {}) {
     if (_session?.token === s.token) { _rejections++; persist(null); }
     throw new Error('Session expired — please sign in again');
   }
-  _rejections = 0;
   const text = await res.text();
   let body;
   try { body = text ? JSON.parse(text) : {}; } catch { body = text; }
   if (!res.ok) throw new Error((body && body.message) || `Request failed (${res.status})`);
+  if (_session?.token === s.token) _rejections = 0;
   return body;
 }
 
