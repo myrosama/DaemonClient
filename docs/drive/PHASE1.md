@@ -30,7 +30,7 @@ channel.
 default-src 'none'; manifest-src 'self'; script-src 'self';
 style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:;
 font-src 'self' data:; media-src 'self' blob:; connect-src 'self';
-worker-src 'self'; frame-src 'self' blob:; object-src 'none';
+worker-src 'self'; frame-src 'self'; object-src 'none';
 base-uri 'none'; form-action 'none'; frame-ancestors 'none';
 require-trusted-types-for 'script'; trusted-types vue dompurify default
 ```
@@ -41,12 +41,20 @@ must not outlive a rollback).
 
 **Trusted Types.** Vue and DOMPurify create their own policies. A `default`
 policy (`src/utils/trusted-types.ts`, loaded first) passes other libraries'
-HTML strings (Ace, video.js, epub.js `srcdoc`) through DOMPurify. It defines
-no `createScript` or `createScriptURL`, so a script URL can't be built from a
-string. Checked in Chrome on the preview: an `onerror` handler assigned via
-`innerHTML` comes out stripped; `script.src = "..."` throws; Ace with the
-editor chunk loaded renders, loads its JavaScript mode and its twilight theme
-from the bundle, with an empty console.
+HTML strings (Ace, video.js, epub.js `srcdoc`) through DOMPurify. `DOMParser`
+input passes unchanged: a parsed document is inert, and epub.js parses a
+book's XML with it, which HTML sanitising destroys. The policy claims
+DOMPurify's policy name first and refuses to re-enter, so it can't recurse.
+It defines no `createScript` or `createScriptURL`, so a script URL can't be
+built from a string. Vue sends `v-html` through its own pass-through policy,
+so Trusted Types doesn't guard it: the lint rule `vue/no-v-html` does, with
+one exception for the sanitised markdown preview.
+
+Checked in Chrome on the preview: an `onerror` handler assigned via
+`innerHTML` comes out stripped; `script.src = "..."` throws; an epub
+`container.xml` parses and its rootfile is found; Ace with the editor chunk
+loaded renders, loads its JavaScript mode and its twilight theme from the
+bundle, with no console errors.
 
 **Where it differs from spec §5, and why:**
 - A `default` Trusted Types policy beside the named `vue` and `dompurify`
@@ -100,7 +108,7 @@ check above ran on this build. Earlier builds caught two bugs that are fixed:
 `ace is not defined` on the settings page, and `/next/` redirecting to itself
 (a Firebase redirect matched `/next/` too; removed).
 
-## Gate 3 (two separate agents)
+## Gate 3 (three separate agents)
 
 **Security:** no HIGH. Fixed: Trusted Types, the CSP tightened to the spec,
 COOP, the missing-asset response, the markdown sanitiser config, `noopener`,
@@ -111,6 +119,11 @@ vs §5; the remaining differences are listed above), M2 (credits visible
 where signed-out visitors land), M3 (CI job; `build:all` typechecks), L2
 (colours), L3 (missing assets), L5 (licence bookkeeping), the dead CSS,
 cookie helper and tus type from L6, and L8 (this note).
+
+**Second security review** (a fresh agent, on the fix commits `c35493e`,
+`f3b04ef`, `4977b12`): no HIGH; script execution stays closed. Fixed in
+`6d0e1b8`: the default policy broke epub parsing (MEDIUM); `v-html` bypasses
+Trusted Types (lint rule); the recursion guard; `frame-src blob:` dropped.
 
 **Accepted, tracked:**
 - **Shared scheduler module → Phase 3** (L1). Photos' scheduler
@@ -164,13 +177,29 @@ cookie helper and tus type from L6, and L8 (this note).
   other page on `drive.daemonclient.uz` gets a script CSP as strict as the
   app allows (or the owner accepts the gap in writing), and the `$el.__vue__`
   mixin in `main.ts` goes.
-- **epub under Trusted Types.** The default policy turns a book's `srcdoc`
-  into body content only: checked on the preview, `<head>`, `<link
-  rel=stylesheet>`, `<style>` and `<meta>` are dropped, so books lose their
-  styles. Give epub.js its own path (a named policy with
-  `WHOLE_DOCUMENT: true` that keeps styles but no scripts, or its blob-URL
-  rendering) and allow `blob:` in `style-src`/`font-src` for book CSS and
-  fonts, or accept unstyled books.
+- **epub under Trusted Types.** Parsing works now, but chapters still don't
+  render right: the default policy turns a chapter's `srcdoc` into body
+  content only (checked: `<head>`, `<link rel=stylesheet>`, `<style>` and
+  `<meta>` are dropped), DOMPurify strips `blob:` images, and epub.js writes
+  its theme CSS with `innerHTML` inside the chapter frame, which has no
+  default policy and throws. Likely fix: epub.js's `method: "blobUrl"` (then
+  `frame-src` needs `blob:` again) plus `blob:` in `style-src`/`font-src`;
+  the chapter frame keeps its no-scripts sandbox, which is the real barrier.
+  Test with a real book.
+- **The service worker needs a named policy.** `serviceWorker.register` takes
+  a TrustedScriptURL: add a policy (e.g. `drive-sw`) whose `createScriptURL`
+  accepts only `origin + "/next/sw.js"`, and add it to `trusted-types`. Never
+  give `default` a `createScriptURL`.
+- **The PDF iframe** has no `sandbox`, so its safety rests on the worker's
+  headers; Chromium may refuse to render PDFs under a sandbox CSP. Check both
+  in Gate 2: a `.pdf` whose bytes are HTML must not render as HTML, and real
+  PDFs still render.
+- **Narrow the default policy** once instrumented: DOMPurify's default config
+  keeps `style=`, a non-leading `<style>`, forms and arbitrary ids. Nothing
+  untrusted reaches an element sink today; log `DOMPurify.removed` in dev
+  builds during Gate 2 to see what the libraries really send.
+- `Cross-Origin-Opener-Policy: same-origin` rules out popup sign-in; the
+  portal redirect is unaffected.
 - **Gate 2 under the CSP:** video.js (not exercised yet: no player was
   started in phase 1) and its bundled vtt.js for subtitles, epub, the PDF
   iframe with the worker's headers, Ace's modes.
