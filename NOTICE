@@ -19,6 +19,21 @@ Immich itself. It is excellent, and this project would not exist without it.
 
 ────────────────────────────────────────────────────────────────────────────
 
+The Drive web app in drive-web/ is derived from the frontend of File Browser
+(https://github.com/filebrowser/filebrowser), commit
+e8a388f840173580116f2743813d03b22286e44e (v2.63.23), copyright the File
+Browser contributors, licensed under the Apache License, Version 2.0. A copy
+of that license is in drive-web/LICENSE.filebrowser. Upstream shipped no
+NOTICE file and no per-file notices at that commit.
+
+The upstream files were imported unmodified in their own commit; every later
+change is in the git history. Files we changed carry a header saying so.
+JSON files cannot hold a comment, so the ones we changed are listed in
+drive-web/MODIFIED.md instead. "File Browser" is the upstream project's name;
+this app does not use its name or logos.
+
+────────────────────────────────────────────────────────────────────────────
+
 The Photos service worker's media scheduler
 (immich/web/src/service-worker/media-scheduler.ts) and the mobile core's
 scheduler (mobile/core/dc-core/src/sched/) port the design of the
