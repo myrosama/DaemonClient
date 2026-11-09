@@ -39,3 +39,11 @@ test('a signed-in visitor goes back to the app that sent them, never elsewhere',
   for (const raw of [null, '', '/dashboard', 'https://accounts.daemonclient.uz/setup', 'https://evil.example', '//drive.daemonclient.uz', 'http://drive.daemonclient.uz'])
     assert.equal(appReturnUrl(raw), null, String(raw))
 })
+
+test('only our other apps can sign someone out without asking', async () => {
+  const { cameFromOurApp } = await import('./safeReturnUrl.js')
+  assert.equal(cameFromOurApp('https://drive.daemonclient.uz/'), true)
+  assert.equal(cameFromOurApp('https://photos.daemonclient.uz/albums'), true)
+  for (const r of ['', 'https://evil.example/', 'https://drive.daemonclient.uz.evil.example/', 'https://accounts.daemonclient.uz/', 'not a url'])
+    assert.equal(cameFromOurApp(r), false, r)
+})

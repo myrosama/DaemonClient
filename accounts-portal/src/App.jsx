@@ -13,7 +13,7 @@ import { SetupWorker } from './pages/SetupWorker'
 import { SetupProcessor } from './pages/SetupProcessor'
 import { consumeOAuthState, CF_OAUTH_REDIRECT_URI, DEPLOYMENT_WORKER } from './config/cloudflareOauth'
 import { waitForWorker } from './utils/waitForWorker'
-import { safeReturnUrl, isAbsoluteUrl, appReturnUrl } from './utils/safeReturnUrl'
+import { safeReturnUrl, isAbsoluteUrl, appReturnUrl, cameFromOurApp } from './utils/safeReturnUrl'
 import { isFreshSetup, shouldHoldLink, appHosts } from './utils/cloudStartup'
 import { thumbHashToDataURL } from 'thumbhash'
 
@@ -434,7 +434,7 @@ function LoginPage() {
           const data = await res.json()
           const next = safeReturnUrl(data.redirectUrl)
           if (isAbsoluteUrl(next)) {
-            window.location.href = next
+            window.location.replace(next)
             return
           }
         }
@@ -442,12 +442,9 @@ function LoginPage() {
         console.warn('Session creation failed (non-critical):', sessionErr)
       }
 
-      // Navigate — route guards will redirect to correct step. Another of our
-      // apps is a page load; the router only knows this app's paths.
-      if (isAbsoluteUrl(returnUrl)) {
-        window.location.href = returnUrl
-        return
-      }
+      // Navigate — route guards will redirect to correct step. For another of
+      // our apps with no shared session, stay: the guard's "Continue" asks again.
+      if (isAbsoluteUrl(returnUrl)) return
       navigate(returnUrl)
     } catch (err) {
       const msg = err.code === 'auth/user-not-found'
@@ -660,13 +657,8 @@ function SignupPage() {
         console.warn('Setup call failed, will retry on setup page:', setupErr)
       }
 
-      // Create session (non-blocking — cross-domain cookie is nice-to-have)
-      try {
-        const refreshToken = user.refreshToken
-        await createSession(idToken, refreshToken, '/setup', turnstileToken)
-      } catch (sessionErr) {
-        console.warn('Session creation failed (non-critical):', sessionErr)
-      }
+      // The Turnstile token is single-use and the setup service needs it, so no
+      // shared session here. Opening Photos or Drive later asks once (ContinueToApp).
 
       // Log signup activity
       try {
@@ -834,6 +826,9 @@ function SetupPage() {
   // whether the user already has a telegram doc — clicking Start Setup before
   // this is true would re-call /startSetup and create a duplicate bot/channel.
   const [snapshotReady, setSnapshotReady] = useState(false)
+  // /startSetup requires a fresh Turnstile token for each attempt.
+  const [turnstileToken, setTurnstileToken] = useState('')
+  const turnstileReset = useRef(null)
   // Anything in the telegram doc at all (even partial) means /startSetup is
   // already in flight or completed. Don't run it again.
   const [docExists, setDocExists] = useState(false)
@@ -866,6 +861,11 @@ function SetupPage() {
     // depending on the server-side idempotency (which needs a Render redeploy).
     const alreadyInFlight = docExists || recentlyStarted
 
+    if (!alreadyInFlight && !IS_SELF_HOST && !turnstileToken) {
+      setError('Please complete the verification below.')
+      return
+    }
+
     setError('')
     setIsLoading(true)
 
@@ -895,7 +895,7 @@ function SetupPage() {
         const response = await fetch(`${RENDER_BACKEND}/startSetup`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${idToken}` },
-          body: JSON.stringify({ data: { uid, email: auth.currentUser.email } }),
+          body: JSON.stringify({ data: { uid, email: auth.currentUser.email }, 'cf-turnstile-response': turnstileToken }),
         })
         const result = await response.json().catch(() => ({}))
         if (!response.ok && response.status !== 202) {
@@ -930,6 +930,7 @@ function SetupPage() {
       )
     } catch (err) {
       console.error('Setup error:', err)
+      turnstileReset.current?.()
       setStatusMessage('')
       if (err.message.includes('Failed to fetch')) {
         setError('Could not reach the setup service. Check your connection and try again.')
@@ -1064,6 +1065,11 @@ function SetupPage() {
                     <p className="text-[13px] text-linear-text-secondary mt-1.5 leading-relaxed">
                       We create and configure a private bot and channel for you automatically.
                     </p>
+                    {!IS_SELF_HOST && !alreadyConfigured && !docExists && (
+                      <div className="mt-4">
+                        <Turnstile onToken={setTurnstileToken} resetRef={turnstileReset} />
+                      </div>
+                    )}
                     <Button
                       onClick={handleStartAutomatedSetup}
                       disabled={isLoading || !!statusMessage || !snapshotReady}
@@ -2999,7 +3005,10 @@ function ContinueToApp({ user, returnUrl }) {
         </button>
         <button
           type="button"
-          onClick={() => auth.signOut()}
+          onClick={async () => {
+            await destroySession().catch(() => {})
+            auth.signOut()
+          }}
           className="mt-4 text-[13px] text-linear-text-secondary hover:text-linear-text"
         >
           Use a different account
@@ -3013,15 +3022,34 @@ function ContinueToApp({ user, returnUrl }) {
 // and the shared session, then go back to that app's page (our own pages only).
 function LogoutRoute() {
   const location = useLocation()
+  // A link on someone else's page must not be able to sign a visitor out.
+  const [confirmed, setConfirmed] = useState(() => cameFromOurApp(document.referrer))
   useEffect(() => {
+    if (!confirmed) return
     const next = safeReturnUrl(new URLSearchParams(location.search).get('return_url')) || '/login'
     ;(async () => {
       try { await auth.signOut() } catch { /* still end the shared session */ }
       try { await destroySession() } catch { /* best effort */ }
       window.location.replace(next)
     })()
-  }, [location.search])
-  return <FullScreenSpinner message="Signing out…" />
+  }, [confirmed, location.search])
+  if (confirmed) return <FullScreenSpinner message="Signing out…" />
+  return (
+    <DotGridPage className="items-center justify-center px-4 py-8">
+      <div className="w-full max-w-[400px] relative z-10 bg-[#13151B] border border-white/[0.09] rounded-2xl shadow-2xl shadow-black/60 px-8 py-9 text-center">
+        <div className="flex justify-center mb-4"><DaemonLogo size={64} /></div>
+        <h1 className="text-[21px] font-semibold text-linear-text tracking-tight mb-5">Sign out of DaemonClient?</h1>
+        <button
+          type="button"
+          onClick={() => setConfirmed(true)}
+          className="w-full h-11 rounded-full bg-daemon-green hover:bg-daemon-green-hover text-white text-[14px] font-semibold transition-all duration-150"
+        >
+          Sign out
+        </button>
+        <Link to="/dashboard" className="block mt-4 text-[13px] text-linear-text-secondary hover:text-linear-text">Cancel</Link>
+      </div>
+    </DotGridPage>
+  )
 }
 
 function PublicOnly({ children }) {
@@ -3039,13 +3067,15 @@ function PublicOnly({ children }) {
 
   const { stage, loading: stageLoading } = useSetupStage(user)
 
-  if (authLoading || (user && stageLoading)) {
-    return <FullScreenSpinner />
-  }
+  if (authLoading) return <FullScreenSpinner />
+
+  // Going back to another app needs nothing from Firestore, so check this first.
+  const returnUrl = IS_SELF_HOST ? null : appReturnUrl(new URLSearchParams(location.search).get('return_url'))
+  if (user && returnUrl) return <ContinueToApp user={user} returnUrl={returnUrl} />
+
+  if (user && stageLoading) return <FullScreenSpinner />
 
   if (user) {
-    const returnUrl = IS_SELF_HOST ? null : appReturnUrl(new URLSearchParams(location.search).get('return_url'))
-    if (returnUrl) return <ContinueToApp user={user} returnUrl={returnUrl} />
     // Send them to wherever they need to be
     return <Navigate to={stageToRoute(stage)} replace />
   }

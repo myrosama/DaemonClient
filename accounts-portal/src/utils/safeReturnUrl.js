@@ -49,3 +49,14 @@ export function appReturnUrl(raw) {
   const url = safeReturnUrl(raw)
   return isAbsoluteUrl(url) && !url.startsWith('https://accounts.daemonclient.uz') ? url : null
 }
+
+// Whether the page that sent someone here (document.referrer) is one of our
+// other apps. Used so a stranger's page can't sign a visitor out with a link.
+export function cameFromOurApp(referrer) {
+  try {
+    const { origin } = new URL(referrer)
+    return origin === 'https://drive.daemonclient.uz' || origin === 'https://photos.daemonclient.uz'
+  } catch {
+    return false
+  }
+}
