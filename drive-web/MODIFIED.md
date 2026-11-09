@@ -9,3 +9,6 @@ generated, so they carry no header:
 - `package.json`
 - `pnpm-lock.yaml`
 - `public/manifest.json`
+
+The icons and logo in `public/img/` are not derived from File Browser: they
+were replaced outright with DaemonClient's own artwork.

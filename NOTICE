@@ -30,7 +30,9 @@ The upstream files were imported unmodified in their own commit; every later
 change is in the git history. Files we changed carry a header saying so.
 JSON files cannot hold a comment, so the ones we changed are listed in
 drive-web/MODIFIED.md instead. "File Browser" is the upstream project's name;
-this app does not use its name or logos.
+this app does not use its name or logos as its own brand, and credits it as
+"Based on File Browser". The build writes the licences of everything bundled
+into the app to THIRD_PARTY_LICENSES.txt, served beside it.
 
 ────────────────────────────────────────────────────────────────────────────
 

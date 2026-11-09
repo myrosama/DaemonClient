@@ -1,3 +1,4 @@
+<!-- Derived from filebrowser/filebrowser@e8a388f (Apache-2.0). Modified by DaemonClient contributors. -->
 <template>
   <div class="card floating help">
     <div class="card-title">
@@ -16,6 +17,7 @@
         <li><strong>Click</strong> - {{ $t("help.click") }}</li>
         <li><strong>Double click</strong> - {{ $t("help.doubleClick") }}</li>
       </ul>
+      <p><credits /></p>
     </div>
 
     <div class="card-action">
@@ -37,9 +39,11 @@
 <script>
 import { mapActions } from "pinia";
 import { useLayoutStore } from "@/stores/layout";
+import Credits from "@/components/Credits.vue";
 
 export default {
   name: "help",
+  components: { Credits },
   methods: {
     ...mapActions(useLayoutStore, ["closeHovers"]),
   },

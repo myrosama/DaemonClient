@@ -1,3 +1,4 @@
+<!-- Derived from filebrowser/filebrowser@e8a388f (Apache-2.0). Modified by DaemonClient contributors. -->
 <template>
   <div>
     <header-bar v-if="showHeader" showMenu showLogo />
@@ -6,11 +7,13 @@
       <i class="material-icons">{{ info.icon }}</i>
       <span>{{ t(info.message) }}</span>
     </h2>
+    <p class="error-credits"><credits /></p>
   </div>
 </template>
 
 <script setup lang="ts">
 import HeaderBar from "@/components/header/HeaderBar.vue";
+import Credits from "@/components/Credits.vue";
 import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 
@@ -55,3 +58,11 @@ const info = computed(() => {
   return errors[props.errorCode] ? errors[props.errorCode] : errors[500];
 });
 </script>
+
+<style scoped>
+.error-credits {
+  text-align: center;
+  font-size: 0.85em;
+  color: var(--textPrimary);
+}
+</style>
