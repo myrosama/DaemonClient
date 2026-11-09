@@ -208,11 +208,26 @@ async function getRegistration(fileId) {
 }
 
 // ── Message handler: register / clear files for streaming ──
+// Only this app's own pages may register files (they carry the bot token, the
+// worker URL and the file's key). The new app at /next/ shares the origin and
+// talks to its own service worker, never to this one.
+function mayRegisterFiles(event) {
+  const src = event && event.source;
+  if (!src || src.type !== 'window') return false;
+  try {
+    const url = new URL(src.url);
+    return url.origin === self.location.origin && !url.pathname.startsWith('/next/');
+  } catch {
+    return false;
+  }
+}
+
 self.addEventListener('message', async (event) => {
   const data = event.data;
   if (!data) return;
 
   if (data.type === 'REGISTER_FILE') {
+    if (!mayRegisterFiles(event)) return;
     const { fileId, messages, botToken, workerUrl, rawKeyBytes, isEncrypted, fileSize, fileType, fileName } = data;
 
     let decryptionKey = null;
