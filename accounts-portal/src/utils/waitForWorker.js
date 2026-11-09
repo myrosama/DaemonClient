@@ -17,6 +17,40 @@
 
 const DEFAULT_PROBE_TIMEOUT_MS = 10_000
 
+// The worker's name is published some time after the deploy returns. A lookup
+// before that gets "no such name", which the visitor's DNS may remember for up
+// to 30 minutes (workers.dev's negative TTL), so the app stays unreachable long
+// after the worker is up. So the browser doesn't touch the real name until
+// public DNS answers for a random sibling under the account's subdomain: a name
+// nobody will ask for again can't poison anything.
+const DOH_URL = 'https://cloudflare-dns.com/dns-query'
+const DEFAULT_DNS_TIMEOUT_MS = 3 * 60_000
+
+// `<account>.workers.dev` for a per-account worker address, otherwise null.
+function accountDomain(origin) {
+  const { hostname } = new URL(origin)
+  const labels = hostname.split('.')
+  return labels.length === 4 && hostname.endsWith('.workers.dev') ? labels.slice(1).join('.') : null
+}
+
+// true or false once public DNS has answered; null if it can't be asked.
+async function dnsPublished(domain, fetchImpl, cancel) {
+  const name = `dns-probe-${crypto.randomUUID()}.${domain}`
+  const probe = probeSignal(cancel, DEFAULT_PROBE_TIMEOUT_MS)
+  try {
+    const res = await fetchImpl(`${DOH_URL}?name=${encodeURIComponent(name)}&type=A`, {
+      headers: { accept: 'application/dns-json' }, cache: 'no-store', credentials: 'omit', signal: probe.signal,
+    })
+    if (!res.ok) return null
+    const { Status, Answer } = await res.json()
+    return Status === 0 && Array.isArray(Answer) && Answer.length > 0
+  } catch {
+    return null
+  } finally {
+    probe.done()
+  }
+}
+
 // A bare https origin and nothing else: no credentials, path, query or fragment.
 // Parsed, never pattern-matched, so `https://a\@b` cannot pass as `b`.
 function originOf(workerUrl) {
@@ -58,6 +92,7 @@ export async function waitForWorker(workerUrl, {
   timeoutMs = 5 * 60_000,
   intervalMs = 3000,
   probeTimeoutMs = DEFAULT_PROBE_TIMEOUT_MS,
+  dnsTimeoutMs = DEFAULT_DNS_TIMEOUT_MS,
   onWaiting,
   signal: cancel,              // abort to stop waiting, e.g. when the page unmounts
 } = {}) {
@@ -67,6 +102,18 @@ export async function waitForWorker(workerUrl, {
   const started = now()
   let attempts = 0
   const aborted = () => ({ ready: false, reason: 'aborted', attempts, waitedMs: now() - started })
+
+  const domain = dnsTimeoutMs > 0 ? accountDomain(origin) : null
+  while (domain) {
+    if (cancel && cancel.aborted) return aborted()
+    // Carry on when it's published, or when public DNS can't be asked at all.
+    if ((await dnsPublished(domain, fetchImpl, cancel)) !== false) break
+    if (cancel && cancel.aborted) return aborted()
+    const waitedMs = now() - started
+    if (waitedMs >= dnsTimeoutMs) break
+    if (onWaiting) onWaiting({ attempts, waitedMs })
+    await pause(Math.min(intervalMs, Math.max(0, dnsTimeoutMs - waitedMs)), cancel, sleep)
+  }
 
   for (;;) {
     if (cancel && cancel.aborted) return aborted()
