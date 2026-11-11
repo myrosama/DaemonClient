@@ -47,3 +47,11 @@ export function shouldHoldLink(href, { cloud, hosts }) {
   try { target = new URL(url.searchParams.get('return_url')) } catch { /* no usable return_url */ }
   return hosts.includes((target || url).hostname)
 }
+
+// Whether the dashboard must leave a fresh account's worker alone: until the
+// wait (waitForWorker) says it is reachable or gives up, any request to it can
+// make the visitor's DNS remember the name as missing for up to 30 minutes.
+export function mustNotContactWorker({ fresh, cloud }) {
+  return fresh && cloud !== 'ready' && cloud !== 'unknown'
+}
+

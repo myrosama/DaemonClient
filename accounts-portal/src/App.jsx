@@ -14,7 +14,7 @@ import { SetupProcessor } from './pages/SetupProcessor'
 import { consumeOAuthState, CF_OAUTH_REDIRECT_URI, DEPLOYMENT_WORKER } from './config/cloudflareOauth'
 import { waitForWorker } from './utils/waitForWorker'
 import { safeReturnUrl, isAbsoluteUrl, appReturnUrl, cameFromOurApp } from './utils/safeReturnUrl'
-import { isFreshSetup, shouldHoldLink, appHosts } from './utils/cloudStartup'
+import { isFreshSetup, shouldHoldLink, appHosts, mustNotContactWorker } from './utils/cloudStartup'
 import { thumbHashToDataURL } from 'thumbhash'
 
 // Render a stored thumbhash (base64) into a tiny blurred data-URL preview —
@@ -1782,9 +1782,10 @@ function DashboardPage() {
   // /api/dashboard/summary (and the accounts CORS origin) self-heal; then polls
   // a few times to catch the redeploy. Stays silent on failure — the cards just
   // show an honest empty state, never mock data.
+  const holdWorker = mustNotContactWorker({ fresh: freshSetup, cloud })
   useEffect(() => {
     const workerUrl = backend?.workerUrl
-    if (!workerUrl) return
+    if (!workerUrl || holdWorker) return
     let cancelled = false
     const base = workerUrl.replace(/\/$/, '')
     ;(async () => {
@@ -1827,7 +1828,7 @@ function DashboardPage() {
       if (data && !cancelled) setSummary(data)
     })()
     return () => { cancelled = true }
-  }, [backend?.workerUrl])
+  }, [backend?.workerUrl, holdWorker])
 
   // Real data with safe fallbacks. driveFiles/photoTiles drive the cards below.
   const driveCount = summary?.drive?.count ?? services.drive?.totalFiles ?? 0

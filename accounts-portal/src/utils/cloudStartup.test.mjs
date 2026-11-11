@@ -6,7 +6,7 @@
 // its cloud is "finishing setup" or have its links swallowed.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { isFreshSetup, shouldHoldLink, appHosts, FRESH_SETUP_WINDOW_MS } from './cloudStartup.js'
+import { isFreshSetup, shouldHoldLink, appHosts, mustNotContactWorker, FRESH_SETUP_WINDOW_MS } from './cloudStartup.js'
 
 const NOW = Date.parse('2026-10-04T13:00:00Z')
 
@@ -74,3 +74,13 @@ test('a link that reaches an app through the portal is held like a direct one', 
   assert.equal(shouldHoldLink('https://accounts.daemonclient.uz/login', { cloud: 'starting', hosts }), false)
   assert.equal(shouldHoldLink('https://accounts.daemonclient.uz/login?return_url=%%%', { cloud: 'starting', hosts }), false)
 })
+
+test("a fresh account's worker is contacted by nothing until the wait says it is reachable", () => {
+  for (const cloud of ['idle', 'checking', 'starting']) assert.equal(mustNotContactWorker({ fresh: true, cloud }), true, cloud)
+  for (const cloud of ['ready', 'unknown']) assert.equal(mustNotContactWorker({ fresh: true, cloud }), false, cloud)
+})
+
+test('an established account is never held back', () => {
+  for (const cloud of ['idle', 'checking', 'starting', 'ready', 'unknown']) assert.equal(mustNotContactWorker({ fresh: false, cloud }), false, cloud)
+})
+

@@ -23,8 +23,7 @@ const DEFAULT_PROBE_TIMEOUT_MS = 10_000
 // after the worker is up. So the browser doesn't touch the real name until
 // public DNS answers for a random sibling under the account's subdomain: a name
 // nobody will ask for again can't poison anything.
-const DOH_URL = 'https://cloudflare-dns.com/dns-query'
-const DEFAULT_DNS_TIMEOUT_MS = 3 * 60_000
+const DOH_URLS = ['https://cloudflare-dns.com/dns-query', 'https://1.1.1.1/dns-query']
 
 // `<account>.workers.dev` for a per-account worker address, otherwise null.
 function accountDomain(origin) {
@@ -33,22 +32,28 @@ function accountDomain(origin) {
   return labels.length === 4 && hostname.endsWith('.workers.dev') ? labels.slice(1).join('.') : null
 }
 
-// true or false once public DNS has answered; null if it can't be asked.
+// true / false once public DNS has answered; null if no public DNS could be
+// asked or it answered with an error, in which case the old check runs.
 async function dnsPublished(domain, fetchImpl, cancel) {
   const name = `dns-probe-${crypto.randomUUID()}.${domain}`
-  const probe = probeSignal(cancel, DEFAULT_PROBE_TIMEOUT_MS)
-  try {
-    const res = await fetchImpl(`${DOH_URL}?name=${encodeURIComponent(name)}&type=A`, {
-      headers: { accept: 'application/dns-json' }, cache: 'no-store', credentials: 'omit', signal: probe.signal,
-    })
-    if (!res.ok) return null
-    const { Status, Answer } = await res.json()
-    return Status === 0 && Array.isArray(Answer) && Answer.length > 0
-  } catch {
-    return null
-  } finally {
-    probe.done()
+  for (const url of DOH_URLS) {
+    const probe = probeSignal(cancel, DEFAULT_PROBE_TIMEOUT_MS)
+    try {
+      const res = await fetchImpl(`${url}?name=${encodeURIComponent(name)}&type=A`, {
+        headers: { accept: 'application/dns-json' }, cache: 'no-store', credentials: 'omit', signal: probe.signal,
+      })
+      if (!res.ok) continue
+      const { Status, Answer } = await res.json()
+      if (Status === 3) return false
+      if (Status === 0) return Array.isArray(Answer) && Answer.length > 0
+      return null
+    } catch {
+      if (cancel && cancel.aborted) return null
+    } finally {
+      probe.done()
+    }
   }
+  return null
 }
 
 // A bare https origin and nothing else: no credentials, path, query or fragment.
@@ -92,7 +97,7 @@ export async function waitForWorker(workerUrl, {
   timeoutMs = 5 * 60_000,
   intervalMs = 3000,
   probeTimeoutMs = DEFAULT_PROBE_TIMEOUT_MS,
-  dnsTimeoutMs = DEFAULT_DNS_TIMEOUT_MS,
+  checkDns = true,
   onWaiting,
   signal: cancel,              // abort to stop waiting, e.g. when the page unmounts
 } = {}) {
@@ -103,16 +108,25 @@ export async function waitForWorker(workerUrl, {
   let attempts = 0
   const aborted = () => ({ ready: false, reason: 'aborted', attempts, waitedMs: now() - started })
 
-  const domain = dnsTimeoutMs > 0 ? accountDomain(origin) : null
+  const domain = checkDns ? accountDomain(origin) : null
+  let sawMissing = false
   while (domain) {
     if (cancel && cancel.aborted) return aborted()
-    // Carry on when it's published, or when public DNS can't be asked at all.
-    if ((await dnsPublished(domain, fetchImpl, cancel)) !== false) break
+    const published = await dnsPublished(domain, fetchImpl, cancel)
     if (cancel && cancel.aborted) return aborted()
+    if (published === null) break
+    if (published) {
+      // Other DNS servers can lag the one that answered by a few seconds.
+      if (sawMissing) await pause(intervalMs, cancel, sleep)
+      if (cancel && cancel.aborted) return aborted()
+      break
+    }
+    sawMissing = true
     const waitedMs = now() - started
-    if (waitedMs >= dnsTimeoutMs) break
+    // Never fall through to the real name here: that is the lookup that poisons.
+    if (waitedMs >= timeoutMs) return { ready: false, reason: 'timeout', attempts, waitedMs }
     if (onWaiting) onWaiting({ attempts, waitedMs })
-    await pause(Math.min(intervalMs, Math.max(0, dnsTimeoutMs - waitedMs)), cancel, sleep)
+    await pause(Math.min(intervalMs, Math.max(0, timeoutMs - waitedMs)), cancel, sleep)
   }
 
   for (;;) {

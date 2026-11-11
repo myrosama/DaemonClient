@@ -14,7 +14,7 @@ import assert from 'node:assert/strict'
 import { waitForWorker } from './waitForWorker.js'
 
 // These tests are about the browser probe; the DNS step has its own below.
-const waitNoDns = (url, opts) => waitForWorker(url, { dnsTimeoutMs: 0, ...opts })
+const waitNoDns = (url, opts) => waitForWorker(url, { checkDns: false, ...opts })
 
 // A fake clock: sleep() advances it instead of waiting, so a five-minute
 // timeout runs in milliseconds and the arithmetic is exact.
@@ -200,12 +200,14 @@ test('an abort during the pause between probes ends the wait at once, not after 
 // name" remembered by the visitor's DNS for up to 30 minutes. ─────────────────
 const NEW_WORKER = 'https://dc-abc.dc-e4557592.workers.dev'
 const doh = (status, answers = 0) => new Response(JSON.stringify({ Status: status, Answer: answers ? [{ data: '1.1.1.1' }] : undefined }))
-const isDoh = (u) => String(u).startsWith('https://cloudflare-dns.com/')
+const isDoh = (u) => String(u).startsWith('https://cloudflare-dns.com/') || String(u).startsWith('https://1.1.1.1/')
+// A fake clock for every DNS test, so a wait that never ends fails fast instead of spinning in real time.
+const dnsWait = (url, opts) => { const c = clock(); return waitForWorker(url, { now: c.now, sleep: c.sleep, ...opts }) }
 
 test("the worker's own address is not looked up until public DNS has the account's subdomain", async () => {
   const log = []
   let dnsCalls = 0
-  const r = await waitForWorker(NEW_WORKER, {
+  const r = await dnsWait(NEW_WORKER, {
     sleep: async () => {},
     fetchImpl: async (u) => {
       log.push(String(u))
@@ -222,7 +224,7 @@ test("the worker's own address is not looked up until public DNS has the account
 test('the DNS check asks about a new random name each time, never the real one', async () => {
   const names = []
   let n = 0
-  await waitForWorker(NEW_WORKER, {
+  await dnsWait(NEW_WORKER, {
     sleep: async () => {},
     fetchImpl: async (u) => {
       if (!isDoh(u)) return new Response('{}')
@@ -240,7 +242,7 @@ test('the DNS check asks about a new random name each time, never the real one',
 test('tells the page it is waiting while DNS catches up', async () => {
   let waits = 0
   let n = 0
-  await waitForWorker(NEW_WORKER, {
+  await dnsWait(NEW_WORKER, {
     sleep: async () => {},
     onWaiting: () => { waits++ },
     fetchImpl: async (u) => (isDoh(u) ? (++n < 2 ? doh(3) : doh(0, 2)) : new Response('{}')),
@@ -251,7 +253,7 @@ test('tells the page it is waiting while DNS catches up', async () => {
 test('if public DNS cannot be asked, setup carries on to the normal check', async () => {
   for (const broken of [async () => { throw new Error('blocked') }, async () => new Response('nope', { status: 500 }), async () => new Response('not json')]) {
     let reached = 0
-    const r = await waitForWorker(NEW_WORKER, {
+    const r = await dnsWait(NEW_WORKER, {
       sleep: async () => {},
       fetchImpl: async (u) => { if (isDoh(u)) return broken(); reached++; return new Response('{}') },
     })
@@ -262,7 +264,7 @@ test('if public DNS cannot be asked, setup carries on to the normal check', asyn
 
 test('stops waiting on DNS when the page leaves', async () => {
   const ac = new AbortController()
-  const r = await waitForWorker(NEW_WORKER, {
+  const r = await dnsWait(NEW_WORKER, {
     signal: ac.signal,
     sleep: async () => { ac.abort() },
     fetchImpl: async (u) => { assert.ok(isDoh(u), 'the worker must not be contacted'); return doh(3) },
@@ -270,19 +272,63 @@ test('stops waiting on DNS when the page leaves', async () => {
   assert.equal(r.reason, 'aborted')
 })
 
-test('a DNS wait that runs out still tries the worker, rather than hanging', async () => {
+test('a name that never appears ends the wait without ever looking up the worker', async () => {
   let t = 0
   let reached = 0
-  const r = await waitForWorker(NEW_WORKER, {
+  const r = await dnsWait(NEW_WORKER, {
     now: () => t,
     sleep: async (ms) => { t += ms },
-    dnsTimeoutMs: 9000,
+    timeoutMs: 9000,
     intervalMs: 3000,
     fetchImpl: async (u) => { if (isDoh(u)) return doh(3); reached++; return new Response('{}') },
   })
+  assert.deepEqual([r.ready, r.reason], [false, 'timeout'])
+  assert.equal(reached, 0)
+  assert.ok(t >= 9000)
+})
+
+test('a second public DNS address is asked when the first cannot be reached', async () => {
+  const log = []
+  let n = 0
+  const r = await dnsWait(NEW_WORKER, {
+    sleep: async () => {},
+    fetchImpl: async (u) => {
+      u = String(u)
+      if (u.startsWith('https://cloudflare-dns.com/')) throw new TypeError('blocked')
+      if (u.startsWith('https://1.1.1.1/')) { log.push('dns'); return ++n < 2 ? doh(3) : doh(0, 2) }
+      log.push('worker'); return new Response('{}')
+    },
+  })
+  assert.equal(r.ready, true)
+  assert.deepEqual(log, ['dns', 'dns', 'worker'])
+})
+
+test('a DNS server error is not taken for "no such name"', async () => {
+  let reached = 0
+  const r = await dnsWait(NEW_WORKER, {
+    sleep: async () => {},
+    fetchImpl: async (u) => { if (isDoh(u)) return doh(2); reached++; return new Response('{}') },
+  })
   assert.equal(r.ready, true)
   assert.equal(reached, 1)
-  assert.ok(t >= 9000)
+})
+
+test('once the name appears, the first lookup waits one more interval for slower DNS servers', async () => {
+  const sleeps = []
+  let n = 0
+  await dnsWait(NEW_WORKER, {
+    intervalMs: 3000,
+    sleep: async (ms) => { sleeps.push(ms) },
+    fetchImpl: async (u) => (isDoh(u) ? (++n < 2 ? doh(3) : doh(0, 2)) : new Response('{}')),
+  })
+  assert.deepEqual(sleeps, [3000, 3000])
+  // An address that was already there costs no pause at all.
+  const none = []
+  await dnsWait(NEW_WORKER, {
+    sleep: async (ms) => { none.push(ms) },
+    fetchImpl: async (u) => (isDoh(u) ? doh(0, 2) : new Response('{}')),
+  })
+  assert.deepEqual(none, [])
 })
 
 test('an address that is not a per-account workers.dev name skips the DNS check', async () => {
