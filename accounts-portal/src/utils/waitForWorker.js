@@ -35,7 +35,9 @@ function accountDomain(origin) {
 // true / false once public DNS has answered; null if no public DNS could be
 // asked or it answered with an error, in which case the old check runs.
 async function dnsPublished(domain, fetchImpl, cancel) {
-  const name = `dns-probe-${crypto.randomUUID()}.${domain}`
+  // getRandomValues, not randomUUID: the latter is missing on iOS before 15.4.
+  const id = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('')
+  const name = `dns-probe-${id}.${domain}`
   for (const url of DOH_URLS) {
     const probe = probeSignal(cancel, DEFAULT_PROBE_TIMEOUT_MS)
     try {
@@ -114,14 +116,16 @@ export async function waitForWorker(workerUrl, {
     if (cancel && cancel.aborted) return aborted()
     const published = await dnsPublished(domain, fetchImpl, cancel)
     if (cancel && cancel.aborted) return aborted()
-    if (published === null) break
+    // Public DNS can't be asked: fall back to the direct check, but only if it
+    // never said "no such name" — after that, a lookup now could still poison.
+    if (published === null && !sawMissing) break
     if (published) {
       // Other DNS servers can lag the one that answered by a few seconds.
       if (sawMissing) await pause(intervalMs, cancel, sleep)
       if (cancel && cancel.aborted) return aborted()
       break
     }
-    sawMissing = true
+    if (published === false) sawMissing = true
     const waitedMs = now() - started
     // Never fall through to the real name here: that is the lookup that poisons.
     if (waitedMs >= timeoutMs) return { ready: false, reason: 'timeout', attempts, waitedMs }

@@ -9,7 +9,9 @@
 // Cloudflare has issued the certificate within a couple of minutes in every
 // observed case; fifteen leaves a wide margin without catching old accounts.
 export const FRESH_SETUP_WINDOW_MS = 15 * 60_000
-const CLOCK_SKEW_MS = 2 * 60_000
+// A setup time ahead of the visitor's clock (a slow clock) still counts: the
+// DNS wait it enables costs one request once the name is published.
+const CLOCK_SKEW_MS = 24 * 3600_000
 
 function toMillis(t) {
   if (!t) return NaN

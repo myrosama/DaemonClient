@@ -208,7 +208,6 @@ test("the worker's own address is not looked up until public DNS has the account
   const log = []
   let dnsCalls = 0
   const r = await dnsWait(NEW_WORKER, {
-    sleep: async () => {},
     fetchImpl: async (u) => {
       log.push(String(u))
       if (isDoh(u)) return ++dnsCalls < 3 ? doh(3) : doh(0, 2)
@@ -225,7 +224,6 @@ test('the DNS check asks about a new random name each time, never the real one',
   const names = []
   let n = 0
   await dnsWait(NEW_WORKER, {
-    sleep: async () => {},
     fetchImpl: async (u) => {
       if (!isDoh(u)) return new Response('{}')
       names.push(new URL(u).searchParams.get('name'))
@@ -243,19 +241,52 @@ test('tells the page it is waiting while DNS catches up', async () => {
   let waits = 0
   let n = 0
   await dnsWait(NEW_WORKER, {
-    sleep: async () => {},
     onWaiting: () => { waits++ },
     fetchImpl: async (u) => (isDoh(u) ? (++n < 2 ? doh(3) : doh(0, 2)) : new Response('{}')),
   })
   assert.equal(waits, 1)
 })
 
+test('public DNS failing after it said "no such name" keeps waiting, rather than looking up the real name', async () => {
+  const log = []
+  let n = 0
+  const r = await dnsWait(NEW_WORKER, {
+    fetchImpl: async (u) => {
+      if (!isDoh(u)) { log.push('worker'); return new Response('{}') }
+      n++
+      if (n === 1) { log.push('missing'); return doh(3) }
+      if (n === 2 || n === 3) { log.push('dns down'); throw new TypeError('offline') }
+      log.push('found'); return doh(0, 2)
+    },
+  })
+  assert.equal(r.ready, true)
+  assert.deepEqual(log, ['missing', 'dns down', 'dns down', 'found', 'worker'])
+})
+
+test('a browser without crypto.randomUUID still runs the check', async () => {
+  const original = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(crypto), 'randomUUID')
+  Object.defineProperty(Object.getPrototypeOf(crypto), 'randomUUID', { value: undefined, configurable: true })
+  try {
+    const names = []
+    const r = await dnsWait(NEW_WORKER, {
+      fetchImpl: async (u) => {
+        if (!isDoh(u)) return new Response('{}')
+        names.push(new URL(u).searchParams.get('name'))
+        return doh(0, 2)
+      },
+    })
+    assert.equal(r.ready, true)
+    assert.match(names[0], /^dns-probe-[0-9a-f]{32}\.dc-e4557592\.workers\.dev$/)
+  } finally {
+    Object.defineProperty(Object.getPrototypeOf(crypto), 'randomUUID', original)
+  }
+})
+
 test('if public DNS cannot be asked, setup carries on to the normal check', async () => {
   for (const broken of [async () => { throw new Error('blocked') }, async () => new Response('nope', { status: 500 }), async () => new Response('not json')]) {
     let reached = 0
     const r = await dnsWait(NEW_WORKER, {
-      sleep: async () => {},
-      fetchImpl: async (u) => { if (isDoh(u)) return broken(); reached++; return new Response('{}') },
+        fetchImpl: async (u) => { if (isDoh(u)) return broken(); reached++; return new Response('{}') },
     })
     assert.equal(r.ready, true)
     assert.equal(reached, 1)
@@ -291,7 +322,6 @@ test('a second public DNS address is asked when the first cannot be reached', as
   const log = []
   let n = 0
   const r = await dnsWait(NEW_WORKER, {
-    sleep: async () => {},
     fetchImpl: async (u) => {
       u = String(u)
       if (u.startsWith('https://cloudflare-dns.com/')) throw new TypeError('blocked')
@@ -306,7 +336,6 @@ test('a second public DNS address is asked when the first cannot be reached', as
 test('a DNS server error is not taken for "no such name"', async () => {
   let reached = 0
   const r = await dnsWait(NEW_WORKER, {
-    sleep: async () => {},
     fetchImpl: async (u) => { if (isDoh(u)) return doh(2); reached++; return new Response('{}') },
   })
   assert.equal(r.ready, true)

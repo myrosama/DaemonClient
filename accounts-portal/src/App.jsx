@@ -1763,7 +1763,7 @@ function DashboardPage() {
     }).then((r) => {
       if (r.reason === 'aborted') return
       setCloud(r.ready ? 'ready' : 'unknown')
-    })
+    }).catch(() => setCloud('unknown'))
     return () => ac.abort()
   }, [backend?.workerUrl, freshSetup])
 

@@ -32,9 +32,11 @@ test('a Firestore Timestamp is read too, not only an ISO string', () => {
   assert.equal(isFreshSetup({ toMillis: () => NOW - 30_000 }, NOW), true)
 })
 
-test('a timestamp slightly in the future (clock skew) still counts as fresh; far in the future does not', () => {
+test("a setup time in the future (the visitor's clock is slow) still counts as fresh, up to a day", () => {
   assert.equal(isFreshSetup(new Date(NOW + 30_000).toISOString(), NOW), true)
-  assert.equal(isFreshSetup(new Date(NOW + 10 * 60_000).toISOString(), NOW), false)
+  assert.equal(isFreshSetup(new Date(NOW + 10 * 60_000).toISOString(), NOW), true)
+  assert.equal(isFreshSetup(new Date(NOW + 23 * 3600_000).toISOString(), NOW), true)
+  assert.equal(isFreshSetup(new Date(NOW + 25 * 3600_000).toISOString(), NOW), false)
 })
 
 const hosts = appHosts(['https://photos.daemonclient.uz', 'https://drive.daemonclient.uz/', '', 'not a url'])
