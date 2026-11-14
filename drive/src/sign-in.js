@@ -33,3 +33,12 @@ export function signInStep({ signedOut, rejections, sharedSignedIn, returnedFrom
   if (sharedSignedIn) return 'done';
   return returnedFromPortal ? 'failed' : 'portal';
 }
+
+// A shared-session sign-in carries an ID token that lasts an hour, and the worker
+// reads the Telegram settings with it the first time; after that hour it answers
+// "not configured". So "not configured" gets one re-check with a fresh session
+// before the setup screen shows. Self-hosted builds sign in with a password.
+export function recheckNotConfigured({ configured, selfHost, alreadyRechecked }) {
+  return !configured && !selfHost && !alreadyRechecked;
+}
+

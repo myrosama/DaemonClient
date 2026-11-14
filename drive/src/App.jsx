@@ -18,7 +18,7 @@ import {
     onAuthChange, getDriveConfig, getWorkerUrl, driveApi,
     trySharedSignIn, isSelfHost, SIGNED_OUT_KEY, sessionRejections,
 } from './api.js';
-import { portalSignInUrl, signInStep } from './sign-in.js';
+import { portalSignInUrl, signInStep, recheckNotConfigured } from './sign-in.js';
 import { isWorkerUnreachable, waitStartedAt, waitedTooLong, clearWait, sessionStore } from './worker-unreachable.js';
 import { uploadGate, GATE_MESSAGES } from './upload-gate.js';
 import { pickProbes, unlockCustomKey, makeKeyCheck } from './zke-unlock.js';
@@ -2513,13 +2513,21 @@ function App() {
 
     useEffect(() => {
         let active = true;
+        let rechecked = false;
         // Resolve where an authenticated user belongs: dashboard if their own
         // worker is provisioned + bot configured, else the onboarding gate.
         const resolveAuthed = async () => {
             if (!getWorkerUrl()) return 'onboard';
             try {
                 const cfg = await getDriveConfig(true);
-                return cfg && cfg.configured ? 'dashboard' : 'onboard';
+                const configured = !!(cfg && cfg.configured);
+                if (recheckNotConfigured({ configured, selfHost: isSelfHost, alreadyRechecked: rechecked })) {
+                    rechecked = true;
+                    // A new session re-runs apply() through onAuthChange; this run's
+                    // result is then dropped (getSession() !== session).
+                    if (await trySharedSignIn()) return 'loading';
+                }
+                return configured ? 'dashboard' : 'onboard';
             } catch (e) {
                 if (e && e.code === 'NO_WORKER') return 'onboard';
                 return 'dashboard'; // transient error — dashboard surfaces its own config error

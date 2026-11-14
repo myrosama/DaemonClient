@@ -38,3 +38,11 @@ test('signing out goes through the portal and comes back to the Drive sign-in pa
   assert.equal(url.origin + url.pathname, 'https://accounts.daemonclient.uz/logout');
   assert.equal(url.searchParams.get('return_url'), 'https://drive.daemonclient.uz/login');
 });
+
+test('"not set up" from a session that may be stale is checked once more with a fresh session', async () => {
+  const { recheckNotConfigured } = await import('./sign-in.js');
+  assert.equal(recheckNotConfigured({ configured: false, selfHost: false, alreadyRechecked: false }), true);
+  assert.equal(recheckNotConfigured({ configured: false, selfHost: false, alreadyRechecked: true }), false);
+  assert.equal(recheckNotConfigured({ configured: true, selfHost: false, alreadyRechecked: false }), false);
+  assert.equal(recheckNotConfigured({ configured: false, selfHost: true, alreadyRechecked: false }), false);
+});
