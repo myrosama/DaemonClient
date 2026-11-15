@@ -889,3 +889,24 @@ range refused when the manifest changed since its layout; the rest recorded.
   last 64 KiB); no cached picture left after sign-out. Full reads ran at
   2.0–5.3 MB/s on this Mac's network (throughput is 1.8's).
 - G3: above. G4: `ce43929` and this docs commit.
+
+**After the reviews — the listener mechanism, settled.** An automated review
+then found that a plain connect could not tell our listener from another app
+that took a freed port, and a security re-check of that fix found that a
+reopened listener's old connections lived on with the old secret, and that a
+busy or slow port could stall or flap the check. Fixed in `5b07471`; what the
+mechanism now guarantees, each with a test:
+- **(a)** a secret works only on connections its live listener owns — they
+  run in the listener's task set, so a reopen ends them with it;
+- **(b)** the app never keeps an address whose port does not answer as ours —
+  `ensure_running` sends a fresh nonce and expects an HMAC of the listener's
+  secret, which is never sent;
+- **(c)** neither the listener nor `ensure_running` spins or hangs — one
+  750 ms deadline per challenge, one retry, a capped reply, paused accepts.
+The trade-off, chosen: a port that is connected but does not answer in time
+— ours but busy, or another app — is reopened. That is safe by (a), cheap,
+and can be caused by another app; it ends that listener's connections, so
+the app must use the addresses `media_server()` returns and reload what
+failed (P2). The part cache cannot outlive sign-out: the account owns it and
+readers hold it weakly. Tests: 148 passed; the connection-ownership test was
+mutation-checked (detached connections fail it).

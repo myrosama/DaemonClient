@@ -1609,10 +1609,12 @@ fallback is not observable (the unit test is the evidence).
 **As built (Task 1.6), differences from the steps above:**
 - **A new secret per listener**, not one per `Core` (security review, HIGH):
   a closed port can be taken by another app, which then receives the old
-  secret with the app's next request. `ensure_running` asks each port
-  whether it still answers (a loopback connect) — iOS can close a suspended
-  app's socket while its accept loop never notices — and reopens it with a
-  new secret. Accept errors pause 100 ms and, after 20 in a row, end the
+  secret with the app's next request. `ensure_running` challenges each port
+  (a fresh nonce; only our listener can answer with the HMAC of its secret) —
+  iOS can close a suspended app's socket while its accept loop never
+  notices, and another app may then hold the port — and reopens it with a new
+  secret; a listener's connections end with it. A busy port that cannot
+  answer within the deadline is reopened too (safe; see DESIGN_NOTES 1.6). Accept errors pause 100 ms and, after 20 in a row, end the
   listener; at most 32 connections per listener (a semaphore before
   `accept`); a `403` closes its connection; SVG is not a picture.
 - **A part cache** (Step 3's own criterion: AVFoundation's probe of the first
@@ -1645,7 +1647,9 @@ fallback is not observable (the unit test is the evidence).
 - **P2:** the app's HTTP client must open at most 32 connections per host
   (Dart's `HttpClient` has no limit by default; a 33rd waits for an idle one
   to close); the base URLs carry a path (`/<secret>`) — check Immich keeps
-  it; call `media_server()` on every resume and use the addresses it returns;
+  it; call `media_server()` on every resume, off the UI thread and off the
+  core's threads (it can block ~2 s per listener), use the addresses it
+  returns and reload what failed when they change;
   check on a device which error iOS gives a reclaimed socket and that the
   reopen works; `Telegram::download` stays off the bridge; the bridge holds
   `Arc<Core>`.
