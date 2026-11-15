@@ -1447,7 +1447,7 @@ the Photos key, the manifest cache), `src/error.rs`, `src/worker.rs` and
   crash never leaves half a file. Originals are never kept.
 - Reply caps: a worker or Bot API JSON reply over 4 MiB is refused.
 
-- [ ] **Step 1:** tests first, failing — `select` for every row of the table
+- [x] **Step 1:** tests first, failing — `select` for every row of the table
   and every shape (one-part `originalId`, multi-part, no thumb, no preview,
   rendition, empty); `check` (gap, repeat, wrong count, 0-byte, size-0 older
   upload); the range reader across part boundaries, a short or long part →
@@ -1456,8 +1456,8 @@ the Photos key, the manifest cache), `src/error.rs`, `src/worker.rs` and
   restart); `Core::image` fetches a thumbnail once (second read from disk);
   sign-out drops key, scheduler and manifests; reply caps. Fakes: wiremock
   worker and Telegram, as in 1.2/1.3.
-- [ ] **Step 2:** implement. Run → pass; clippy, fmt, `cargo deny`.
-- [ ] **Step 3: Gate 2** — `examples/read_assets.rs` on the test account: list
+- [x] **Step 2:** implement. Run → pass; clippy, fmt, `cargo deny`.
+- [x] **Step 3: Gate 2** — `examples/read_assets.rs` on the test account: list
   the account's assets through the worker's timeline (the web's calls), group
   them by shape (mode × parts × thumb/preview/rendition × image/video), and
   for one of each: read thumbnail and preview; read the original in full and
@@ -1465,4 +1465,52 @@ the Photos key, the manifest cache), `src/error.rs`, `src/worker.rs` and
   own `/api/assets/:id/original` (SHA-256 equal). Prints shapes, counts,
   sizes and timings only — never ids, names or tokens. Recorded in
   DESIGN_NOTES.
-- [ ] **Step 4:** Gate 3; commit code, then docs.
+- [x] **Step 4:** Gate 3; commit code, then docs.
+
+**As built (Task 1.5), differences from the steps above:**
+- `check` is folded into `select`: a selection that does not add up is never
+  produced. Stricter than the web in two places: one original file larger
+  than a part is `Corrupt`; an empty `mimeType` stays empty (the worker
+  always fills it).
+- `range` takes `PartSlices` that the caller plans from `layout`'s size with
+  P0's `chunk_plan` (1.6 answers 206/416/200 from that plan). `image` reads
+  one stored file (thumbnails and previews; a multi-part original there is
+  `Internal`). `layout` on a size-0 one-file asset downloads the file to
+  measure it, and `range` downloads it again.
+- **A shape the plan missed** (spec review): in an encrypted library, older
+  uploads stored the thumbnail and preview as plain JPEGs. As the worker
+  does, such a file is used as it is when decryption fails and its bytes are
+  a JPEG or PNG — thumbnails and previews only, never parts.
+- Encrypted with no Photos key → `NotProvisioned`, before downloading. A
+  stopped scheduler (its account signed out) reports `SignedOut`.
+- Picture cache (Gate 3, and the operator on 2026-11-15): named by SHA-256 of
+  the account (user id, worker address), how the file is read and its
+  `file_id`; emptied on sign-out and when another account signs in — not on
+  the app's next launch; a write that began before a clear is dropped;
+  only the manifest's thumbnail and preview files, ≤ 4 MiB, are kept;
+  eviction to 90 %. SPEC §4.7 updated.
+- Reply caps: manifests 1 MiB (~9,500 parts, about 180 GB), other JSON
+  4 MiB, files 20 MiB — one capped reader for all three.
+- `http` (the core's TLS client, for the examples) and `reader` are public.
+
+**Carried forward from Task 1.5's Gate 3:**
+- **1.6:** allow-list `Selection.mime` before it becomes a `Content-Type` (the
+  worker supplies it); the per-launch secret (§5.7); which type a playback
+  rendition is served as (the web sends the original's, the worker
+  `video/mp4`); a video with only `originalId` has no preview — its
+  "preview" is the video itself and must never reach an image decoder (P2
+  too).
+- **1.6 / P2:** `Telegram::download` (reachable through `Core::telegram()`)
+  bypasses the scheduler — keep it off the bridge.
+- **Linux (asked):** the worker treats a row with `encrypted: true` and no
+  `encryptionMode` as server-encrypted, but its manifest reports `off`, so
+  the web and the core would read it as plain.
+- **1.8:** throughput — Gate 2 read ~1.5 MB/s in a debug build, one part at a
+  time; next-part prefetch is 1.6.
+- **Accepted:** the manifest's 10-minute life is not pinned by a test (no
+  injectable clock); the media cache failing to open stops `Core::start`
+  (only when its folder cannot be made, which start needs anyway); each call
+  reads the account twice (fails closed — a `file_id` works only with its own
+  bot, and the cache generation drops late writes); a grid thumbnail standing
+  in for a one-file original is downloaded every time (§4.7).
+

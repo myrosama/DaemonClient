@@ -198,7 +198,10 @@ or repurpose them, and every value must survive the app's strict parser
   not kept.
 - Asset manifests are kept in memory for 10 minutes — a manifest can gain a
   preview or an H.264 rendition later. Decrypted thumbnails and previews are
-  kept on disk (500 MB by default), keyed by `file_id`, which never changes.
+  kept on disk (500 MB by default, nothing over 4 MiB), keyed by the account,
+  how the file is read and its `file_id` (which never changes). The cache is
+  emptied on sign-out and when another account signs in on the phone; an app
+  restart keeps it.
 - "Save to phone" is the only thing that writes a full file where the user
   can see it.
 
@@ -434,3 +437,4 @@ into tasks.
 | 2026-10-27 | D20: home-screen name "Photos" and the DaemonClient logo, done in P0 0.4 (§5 item 1, §10 risk); §4.9 notes the website's measured scheduler values | operator (D20, 2026-10-12); Linux machine (web values) |
 | 2026-10-31 | D21: store framing (self-hosted storage tool), name "DaemonClient Photos", own developer account, delete account in the app, Immich brand removed at release; storage credentials never leave the core | operator |
 | 2026-10-29 | The core's design (`plans/P1-core.md` part 1, decisions C1–C11) approved in full; from it: random part names in Photos too (§4.4), manifest and thumbnail caching (§4.7), the token bucket ported from Nuke instead of `governor` and the opened item skipping it (§4.9) | operator, 2026-10-29 |
+| 2026-11-15 | §4.7: the picture cache is per account, emptied on sign-out and when another account signs in, and keeps nothing over 4 MiB (P1 Task 1.5, Gate 3) | operator (emptied on sign-out, 2026-11-15) |
