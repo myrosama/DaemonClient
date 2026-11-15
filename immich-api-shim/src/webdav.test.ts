@@ -13,6 +13,8 @@ import {
   handleWebDav,
   type DriveRow,
 } from './webdav';
+import { ensureDriveSchema } from './d1-adapter';
+import { sqliteD1, PRE_W1_FILES_SQL } from './test-d1';
 
 // Minimal D1 mock backing the `config` (key/value) table used by get/setConfig.
 function mockDb(config: Record<string, string>) {
@@ -206,59 +208,7 @@ describe('authenticateDav', () => {
   });
 });
 
-// ── Integration: handleWebDav over a mock D1 + mock Telegram ─────────────────
-// Backs the `config` and `files` tables, mirroring D1Adapter's exact SQL.
-function mockDbFull(config: Record<string, string>, files: any[]) {
-  return {
-    prepare(sql: string) {
-      return {
-        bind(...args: any[]) {
-          return {
-            first: async () => {
-              if (sql.includes('SELECT value FROM config')) {
-                const v = config[args[0]];
-                return v !== undefined ? { value: v } : null;
-              }
-              if (sql.includes('SELECT * FROM files WHERE id')) {
-                return files.find((f) => f.id === args[0]) || null;
-              }
-              return null;
-            },
-            run: async () => {
-              if (sql.includes('INSERT OR REPLACE INTO config')) config[args[0]] = args[1];
-              else if (sql.startsWith('INSERT INTO files')) {
-                // saveFile: args are the column values in declared order — reconstruct.
-                const cols = sql.slice(sql.indexOf('(') + 1, sql.indexOf(')')).split(',').map((s) => s.trim());
-                const rowObj: any = {};
-                cols.forEach((c, i) => (rowObj[c] = args[i]));
-                const existing = files.findIndex((f) => f.id === rowObj.id);
-                if (existing >= 0) files[existing] = { ...files[existing], ...rowObj };
-                else files.push(rowObj);
-              } else if (sql.startsWith('UPDATE files SET')) {
-                const id = args[args.length - 1];
-                const setPart = sql.slice('UPDATE files SET '.length, sql.indexOf(' WHERE'));
-                const cols = setPart.split(',').map((s) => s.trim().replace(' = ?', ''));
-                const f = files.find((x) => x.id === id);
-                if (f) cols.forEach((c, i) => (f[c] = args[i]));
-              } else if (sql.startsWith('DELETE FROM files')) {
-                const idx = files.findIndex((f) => f.id === args[0]);
-                if (idx >= 0) files.splice(idx, 1);
-              }
-              return {};
-            },
-            all: async () => {
-              if (sql.includes('SELECT * FROM files WHERE ownerId')) {
-                return { results: files.filter((f) => f.ownerId === args[0]) };
-              }
-              return { results: [] };
-            },
-          };
-        },
-      };
-    },
-  } as any;
-}
-
+// ── Integration: handleWebDav over SQLite (test-d1.ts) + mock Telegram ────────
 describe('handleWebDav (integration)', () => {
   const PLAIN = 'hello drive over webdav!';
   const SALT = btoa('sixteenbytesalt!');
@@ -286,7 +236,14 @@ describe('handleWebDav (integration)', () => {
       telegram: JSON.stringify({ botToken: 'BOT', channelId: '-100' }),
       drive_zke: JSON.stringify({ enabled: true, mode: 'auto', password: 'pw', salt: SALT }),
     };
-    return { DB: mockDbFull(config, files), files } as any;
+    const DB = sqliteD1(PRE_W1_FILES_SQL);
+    await ensureDriveSchema(DB);
+    for (const f of files) {
+      const keys = Object.keys(f);
+      await DB.prepare(`INSERT INTO files (${keys.join(',')}) VALUES (${keys.map(() => '?').join(',')})`).bind(...keys.map((k) => f[k])).run();
+    }
+    for (const [k, v] of Object.entries(config)) await DB.prepare('INSERT INTO config (key, value) VALUES (?, ?)').bind(k, v).run();
+    return { DB, files: (): any[] => DB.rows('SELECT * FROM files') } as any;
   }
   function installFetch(sendDocCapture?: (blob: ArrayBuffer) => void) {
     realFetch = globalThis.fetch;
@@ -295,11 +252,10 @@ describe('handleWebDav (integration)', () => {
       if (url.includes('/getFile?file_id=c0')) return new Response(JSON.stringify({ ok: true, result: { file_path: 'docs/c0.bin' } }));
       if (url.includes('/file/botBOT/docs/c0.bin')) return new Response(encChunk.slice(0));
       if (url.includes('/sendDocument')) {
-        if (sendDocCapture && init?.body instanceof FormData) {
-          const doc = (init.body as FormData).get('document') as unknown as Blob;
-          sendDocCapture(await doc.arrayBuffer());
-        }
-        return new Response(JSON.stringify({ ok: true, result: { message_id: 99, document: { file_id: 'newc' } } }));
+        const doc = (init.body as FormData).get('document') as unknown as Blob;
+        const bytes = await doc.arrayBuffer();
+        sendDocCapture?.(bytes);
+        return new Response(JSON.stringify({ ok: true, result: { message_id: 99, document: { file_id: 'newc', file_size: bytes.byteLength } } }));
       }
       if (url.includes('/deleteMessage')) return new Response(JSON.stringify({ ok: true }));
       throw new Error('unexpected fetch ' + url);
@@ -355,7 +311,7 @@ describe('handleWebDav (integration)', () => {
       e, new URL('https://worker.test/dav/new.txt'),
     );
     expect(res.status).toBe(201);
-    const saved = files.find((f) => f.fileName === 'new.txt');
+    const saved = e.files().find((f: any) => f.fileName === 'new.txt');
     expect(saved).toBeTruthy();
     expect(saved.fileSize).toBe(4);
     expect(JSON.parse(saved.messages)).toHaveLength(1);
@@ -378,7 +334,7 @@ describe('handleWebDav (integration)', () => {
     const e = await env(files);
     const res = await handleWebDav(req('MKCOL', '/dav/NewFolder'), e, new URL('https://worker.test/dav/NewFolder'));
     expect(res.status).toBe(201);
-    expect(files.find((f) => f.fileName === 'NewFolder' && f.type === 'folder')).toBeTruthy();
+    expect(e.files().find((f: any) => f.fileName === 'NewFolder' && f.type === 'folder')).toBeTruthy();
   });
 
   it('MOVE renames a file', async () => {
@@ -389,16 +345,16 @@ describe('handleWebDav (integration)', () => {
       e, new URL('https://worker.test/dav/Docs/a.txt'),
     );
     expect([201, 204]).toContain(res.status);
-    expect(files.find((f) => f.id === 'a').fileName).toBe('renamed.txt');
+    expect(e.files().find((f: any) => f.id === 'a').fileName).toBe('renamed.txt');
   });
 
-  it('DELETE removes a file', async () => {
+  it('DELETE moves a file to Trash (release W1)', async () => {
     const files = baseFiles();
     const e = await env(files);
     installFetch();
     const res = await handleWebDav(req('DELETE', '/dav/Docs/a.txt'), e, new URL('https://worker.test/dav/Docs/a.txt'));
     expect(res.status).toBe(204);
-    expect(files.find((f) => f.id === 'a')).toBeUndefined();
+    expect(e.files().find((f: any) => f.id === 'a').trashedAt).toBeTruthy();
   });
 
   it('LOCK returns a fake lock token', async () => {

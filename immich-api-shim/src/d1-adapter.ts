@@ -403,7 +403,11 @@ export class D1Adapter {
     if (typeof messages === 'string') {
       try { messages = JSON.parse(messages); } catch { messages = []; }
     }
-    return { ...row, messages: messages ?? [], encrypted: !!row.encrypted };
+    let thumb = row.thumb ?? null;
+    if (typeof thumb === 'string') {
+      try { thumb = JSON.parse(thumb); } catch { thumb = null; }
+    }
+    return { ...row, messages: messages ?? [], encrypted: !!row.encrypted, thumb };
   }
 
   async listFiles(ownerId: string, parentId?: string): Promise<any[]> {
@@ -424,28 +428,65 @@ export class D1Adapter {
     return result || null;
   }
 
-  async saveFile(file: Record<string, any> & { id: string }): Promise<void> {
+  // Both writes below refuse in the statement itself (false = nothing written)
+  // when the row, or the folder it would land in, is being deleted, so a mark
+  // landing between a route's check and its write can't be overwritten.
+  async saveFile(file: Record<string, any> & { id: string }): Promise<boolean> {
     const entries = Object.entries(file).filter(([, v]) => v !== undefined);
     const keys = entries.map(([k]) => k);
     const values = entries.map(([, v]) => v);
     const placeholders = keys.map(() => '?').join(', ');
     const updateSet = keys.filter(k => k !== 'id').map(k => `${k} = excluded.${k}`).join(', ');
-    await this.db.prepare(
-      `INSERT INTO files (${keys.join(', ')}) VALUES (${placeholders})
-       ON CONFLICT(id) DO UPDATE SET ${updateSet}`
-    ).bind(...values).run();
+    const result = await this.db.prepare(
+      `INSERT INTO files (${keys.join(', ')})
+       SELECT ${placeholders}
+       WHERE NOT EXISTS (SELECT 1 FROM files WHERE id = ? AND purgingAt IS NOT NULL)
+       ON CONFLICT(id) DO UPDATE SET ${updateSet} WHERE files.purgingAt IS NULL`
+    ).bind(...values, file.parentId ?? 'root').run();
+    return (result.meta?.changes ?? 0) > 0;
   }
 
-  async updateFile(id: string, fields: Record<string, any>): Promise<void> {
+  async updateFile(id: string, fields: Record<string, any>): Promise<boolean> {
     const entries = Object.entries(fields).filter(([k, v]) => k !== 'id' && v !== undefined);
-    if (entries.length === 0) return;
+    if (entries.length === 0) return true;
     const setClause = entries.map(([k]) => `${k} = ?`).join(', ');
-    const values = entries.map(([, v]) => v);
-    await this.db.prepare(`UPDATE files SET ${setClause} WHERE id = ?`).bind(...values, id).run();
+    const bindings = [...entries.map(([, v]) => v), id];
+    let where = 'id = ? AND purgingAt IS NULL';
+    if (typeof fields.parentId === 'string') {
+      where += ' AND NOT EXISTS (SELECT 1 FROM files p WHERE p.id = ? AND p.purgingAt IS NOT NULL)';
+      bindings.push(fields.parentId);
+    }
+    const result = await this.db.prepare(`UPDATE files SET ${setClause} WHERE ${where}`).bind(...bindings).run();
+    return (result.meta?.changes ?? 0) > 0;
   }
 
   async deleteFile(id: string): Promise<void> {
     await this.db.prepare('DELETE FROM files WHERE id = ?').bind(id).run();
+  }
+
+  /**
+   * Mark an item and everything inside it for deletion (Drive's "delete
+   * forever", W1). Owner-scoped at every level; UNION (not UNION ALL) stops on
+   * a cycle in old data; a row named 'root' (the top level's marker) is never marked. Keeps an existing mark, and returns every row of the
+   * subtree so a client can delete their Telegram messages and resume later.
+   */
+  async markPurging(ownerId: string, id: string, now: string): Promise<any[]> {
+    const result = await this.db.prepare(
+      `WITH RECURSIVE sub(id) AS (
+         SELECT id FROM files WHERE id = ? AND ownerId = ?
+         UNION
+         SELECT f.id FROM files f JOIN sub ON f.parentId = sub.id WHERE f.ownerId = ? AND f.id <> 'root'
+       )
+       UPDATE files SET purgingAt = COALESCE(purgingAt, ?)
+       WHERE ownerId = ? AND id IN (SELECT id FROM sub)
+       RETURNING *`
+    ).bind(id, ownerId, ownerId, now, ownerId).all<any>();
+    return (result.results || []).map(D1Adapter.normalizeFile);
+  }
+
+  async hasChildren(ownerId: string, id: string): Promise<boolean> {
+    const row = await this.db.prepare('SELECT 1 AS x FROM files WHERE ownerId = ? AND parentId = ? LIMIT 1').bind(ownerId, id).first<any>();
+    return !!row;
   }
 
   // ────────────────────────────────────────────────────────────
@@ -532,4 +573,49 @@ export class D1Adapter {
     ).bind(ownerId).first<{ total: number }>();
     return result?.total || 0;
   }
+}
+
+// ────────────────────────────────────────────────────────────
+// Drive schema, self-healing
+// ────────────────────────────────────────────────────────────
+// Auto-update ships code only, never a migration, so the Drive handlers create
+// their own table, and release W1's columns on a table made before it. Done
+// once per database binding; if that binding is new on every request it costs
+// one PRAGMA. A failed ALTER counts only if the column is really still missing
+// (another isolate may have added it), so this reads the schema, not an error
+// message. schema/schema.mjs holds the same columns for new installs; a test
+// keeps the two equal.
+const W1_FILE_COLUMNS = ['trashedAt', 'purgingAt', 'thumb'];
+const driveSchemaReady = new WeakSet<object>();
+
+async function fileColumns(db: D1Database): Promise<Set<string>> {
+  const result = await db.prepare('PRAGMA table_info(files)').all<{ name: string }>();
+  return new Set((result.results || []).map((c) => c.name));
+}
+
+export async function ensureDriveSchema(db: D1Database): Promise<void> {
+  if (driveSchemaReady.has(db)) return;
+  let columns = await fileColumns(db);
+  if (columns.size === 0) {
+    await db.batch([
+      db.prepare(`CREATE TABLE IF NOT EXISTS files (
+        id TEXT PRIMARY KEY, ownerId TEXT NOT NULL, parentId TEXT NOT NULL DEFAULT 'root',
+        type TEXT NOT NULL DEFAULT 'file', fileName TEXT NOT NULL, fileSize INTEGER DEFAULT 0,
+        fileType TEXT, messages TEXT, encrypted INTEGER DEFAULT 0,
+        encryptionMode TEXT DEFAULT 'off', uploadedAt TEXT NOT NULL, updatedAt TEXT,
+        trashedAt TEXT, purgingAt TEXT, thumb TEXT
+      )`),
+      db.prepare('CREATE INDEX IF NOT EXISTS idx_files_owner_parent ON files(ownerId, parentId)'),
+    ]);
+    columns = await fileColumns(db);
+  }
+  for (const column of W1_FILE_COLUMNS) {
+    if (columns.has(column)) continue;
+    try {
+      await db.prepare(`ALTER TABLE files ADD COLUMN ${column} TEXT`).run();
+    } catch (error) {
+      if (!(await fileColumns(db)).has(column)) throw error;
+    }
+  }
+  driveSchemaReady.add(db);
 }

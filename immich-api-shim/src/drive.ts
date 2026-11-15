@@ -1,7 +1,7 @@
 import type { Env } from './index';
-import type { D1Database } from '@cloudflare/workers-types';
 import { json, requireAuth } from './helpers';
-import { D1Adapter } from './d1-adapter';
+import { D1Adapter, ensureDriveSchema } from './d1-adapter';
+import { hiddenIds, moveRefusal, parseThumb, rowMessageIds, sameMessages, TRASH_EXPIRY_MS } from './drive-tree';
 import { getCachedConfig } from './cached-config';
 
 /**
@@ -14,26 +14,9 @@ export function driveKeyCheck(raw: unknown): string {
 }
 import { hashToken } from './webdav';
 
-// Self-healing schema: per-user workers provisioned before the `files` table
-// existed (1.2.0) would otherwise need an operator force-update to run the
-// migration. Instead the Drive handler creates its own table on first use —
-// idempotent (IF NOT EXISTS) and guarded to once per isolate so it's effectively
-// free. This is why code-only auto-update (which never runs migrations) is enough
-// to bring Drive online for existing users.
-let driveSchemaReady = false;
-async function ensureDriveSchema(db: D1Database): Promise<void> {
-  if (driveSchemaReady) return;
-  await db.batch([
-    db.prepare(`CREATE TABLE IF NOT EXISTS files (
-      id TEXT PRIMARY KEY, ownerId TEXT NOT NULL, parentId TEXT NOT NULL DEFAULT 'root',
-      type TEXT NOT NULL DEFAULT 'file', fileName TEXT NOT NULL, fileSize INTEGER DEFAULT 0,
-      fileType TEXT, messages TEXT, encrypted INTEGER DEFAULT 0,
-      encryptionMode TEXT DEFAULT 'off', uploadedAt TEXT NOT NULL, updatedAt TEXT
-    )`),
-    db.prepare('CREATE INDEX IF NOT EXISTS idx_files_owner_parent ON files(ownerId, parentId)'),
-  ]);
-  driveSchemaReady = true;
-}
+// The schema step (the table, and W1's columns on older workers) lives in
+// d1-adapter.ts so WebDAV runs it too.
+export { ensureDriveSchema } from './d1-adapter';
 
 // Drive runs on the SAME per-user worker + D1 as Photos. Unlike Photos, Drive
 // bytes never pass through the worker: the browser chunks + client-encrypts
@@ -49,7 +32,12 @@ export async function handleDrive(request: Request, env: Env, path: string, url:
 
   const session = await requireAuth(request, env);
   const uid = session.uid;
-  await ensureDriveSchema(env.DB);
+  try {
+    await ensureDriveSchema(env.DB);
+  } catch (error: any) {
+    console.error('[drive] schema step failed:', error?.message);
+    return json({ message: 'Temporarily unavailable' }, 503);
+  }
   const db = new D1Adapter(env.DB);
 
   // GET /api/drive/config — bot token + channel + proxy URL, so the client can
@@ -72,6 +60,9 @@ export async function handleDrive(request: Request, env: Env, path: string, url:
       channelId,
       proxyUrl: env.TELEGRAM_PROXY || null,
       configured: !!(botToken && channelId),
+      // The Drive API level: 1 = release W1 (Trash, thumbnails). Absent on older
+      // workers; the new app makes no writes until it sees this.
+      driveApi: 1,
     });
   }
 
@@ -80,7 +71,7 @@ export async function handleDrive(request: Request, env: Env, path: string, url:
   // (botUsername, ownership flags) are preserved. The user's bot is shared with
   // Photos; this is the one config for it.
   if (path === '/api/drive/config' && request.method === 'POST') {
-    const body = (await request.json().catch(() => ({}))) as any;
+    const body = ((await request.json().catch(() => null)) || {}) as any;
     const existing = (await db.getJsonConfig<any>('telegram')) || {};
     const merged = { ...existing };
     if (typeof body.botToken === 'string' && body.botToken.trim()) merged.botToken = body.botToken.trim();
@@ -107,7 +98,7 @@ export async function handleDrive(request: Request, env: Env, path: string, url:
       return json(cfg || { enabled: false });
     }
     if (request.method === 'POST' || request.method === 'PUT') {
-      const body = (await request.json().catch(() => ({}))) as any;
+      const body = ((await request.json().catch(() => null)) || {}) as any;
       // A conditional save (the app adding a key-check value to existing
       // settings) lands only on the salt it was made for — never over a
       // password another device set in the meantime.
@@ -136,9 +127,22 @@ export async function handleDrive(request: Request, env: Env, path: string, url:
   // GET /api/drive/files[?parentId=] — list this owner's files/folders. With no
   // parentId, returns the whole tree (the client filters per folder locally,
   // matching the old local-first sync model).
+  // Trashed items, their contents and marked items are hidden (W1); with
+  // ?trashed=1 only those are listed, each with its own trashedAt flagged
+  // `expired` after 30 days by this worker's clock.
   if (path === '/api/drive/files' && request.method === 'GET') {
+    const rows = await db.listFiles(uid);
+    const hidden = hiddenIds(rows);
+    if (url.searchParams.get('trashed') === '1') {
+      const cutoff = Date.now() - TRASH_EXPIRY_MS;
+      const items = rows.filter((r) => hidden.has(r.id)).map((r) => ({
+        ...r,
+        expired: !!r.trashedAt && Date.parse(r.trashedAt) <= cutoff,
+      }));
+      return json({ items });
+    }
     const parentId = url.searchParams.get('parentId');
-    const items = await db.listFiles(uid, parentId === null ? undefined : parentId);
+    const items = rows.filter((r) => !hidden.has(r.id) && (parentId === null || r.parentId === parentId));
     return json({ items });
   }
 
@@ -149,9 +153,16 @@ export async function handleDrive(request: Request, env: Env, path: string, url:
     if (!body || typeof body.fileName !== 'string' || !body.fileName.trim()) {
       return json({ message: 'fileName is required' }, 400);
     }
+    // 'root' is the top level's marker in parentId, never a row.
+    if (body.id === 'root') return json({ message: 'Invalid id' }, 400);
+    if (Array.isArray(body.messages) && body.messages.some((m: unknown) => !m || typeof m !== 'object')) {
+      return json({ message: 'messages must be objects' }, 400);
+    }
     const type = body.type === 'folder' ? 'folder' : 'file';
+    let thumb: string | null | undefined;
+    try { thumb = parseThumb(body.thumb); } catch (error: any) { return json({ message: error.message }, 400); }
     const now = new Date().toISOString();
-    const record = {
+    const record: Record<string, any> = {
       id: typeof body.id === 'string' && body.id ? body.id : crypto.randomUUID(),
       ownerId: uid,
       parentId: typeof body.parentId === 'string' && body.parentId ? body.parentId : 'root',
@@ -165,30 +176,95 @@ export async function handleDrive(request: Request, env: Env, path: string, url:
       uploadedAt: typeof body.uploadedAt === 'string' ? body.uploadedAt : now,
       updatedAt: now,
     };
-    await db.saveFile(record);
-    return json({ item: D1Adapter.normalizeFile(record) }, 201);
+    // A save never sets trashedAt or purgingAt: the upsert leaves columns it
+    // isn't given alone, so neither the classic app nor WebDAV can un-trash.
+    const existing = await db.getFile(record.id);
+    if (existing) {
+      if (existing.ownerId !== uid) return json({ message: 'Not found' }, 404);
+      if (existing.purgingAt) return json({ message: 'This item is being deleted' }, 409);
+      if (record.parentId !== existing.parentId) {
+        const refusal = moveRefusal(await db.listFiles(uid), record.id, record.parentId);
+        if (refusal) return json({ message: refusal }, 409);
+      }
+    }
+    // New parts mean the old thumbnail no longer matches, unless one is supplied.
+    if (thumb !== undefined) record.thumb = thumb;
+    else if (existing && !sameMessages(existing.messages, record.messages)) record.thumb = null;
+    if (!(await db.saveFile(record as any))) return json({ message: 'This item or its folder is being deleted' }, 409);
+    return json({ item: D1Adapter.normalizeFile({ ...(existing || {}), ...record }) }, 201);
   }
 
   // /api/drive/files/:id — rename/move (PATCH/PUT) or delete (DELETE). Ownership
   // is enforced: a row owned by someone else reads as 404.
-  const idMatch = path.match(/^\/api\/drive\/files\/([^/]+)$/);
+  const idMatch = path.match(/^\/api\/drive\/files\/([^/]+)(?:\/(trash|restore|purge))?$/);
   if (idMatch) {
-    const fid = decodeURIComponent(idMatch[1]);
+    let fid: string;
+    try { fid = decodeURIComponent(idMatch[1]); } catch { return json({ message: 'Invalid id' }, 400); }
+    const action = idMatch[2];
+    if (action && fid === 'root') return json({ message: 'Invalid id' }, 400);
     const existing = await db.getFile(fid);
     if (!existing || existing.ownerId !== uid) return json({ message: 'Not found' }, 404);
+    const now = new Date().toISOString();
+    const beingDeleted = { message: 'This item is being deleted' };
 
-    if (request.method === 'PATCH' || request.method === 'PUT') {
-      const body = (await request.json().catch(() => ({}))) as any;
-      const fields: Record<string, any> = { updatedAt: new Date().toISOString() };
+    if (action && request.method === 'POST') {
+      if (action === 'trash') {
+        if (existing.purgingAt) return json(beingDeleted, 409);
+        const fields = { trashedAt: existing.trashedAt || now, updatedAt: now };
+        if (!(await db.updateFile(fid, fields))) return json(beingDeleted, 409);
+        return json({ item: D1Adapter.normalizeFile({ ...existing, ...fields }) });
+      }
+      const rows = await db.listFiles(uid);
+      if (action === 'restore') {
+        if (existing.purgingAt) return json(beingDeleted, 409);
+        // Back into its folder, or the top level if that folder is gone, trashed
+        // or being deleted (owner decision D2).
+        const hidden = hiddenIds(rows);
+        const parentOk = existing.parentId === 'root'
+          || (rows.some((r) => r.id === existing.parentId) && !hidden.has(existing.parentId));
+        const fields = { trashedAt: null, updatedAt: now, ...(parentOk ? {} : { parentId: 'root' }) };
+        if (!(await db.updateFile(fid, fields))) return json(beingDeleted, 409);
+        return json({ item: D1Adapter.normalizeFile({ ...existing, ...fields }) });
+      }
+      // purge: only from Trash (owner decision D1), then the whole subtree.
+      if (!hiddenIds(rows).has(fid)) return json({ message: 'Move it to Trash first' }, 409);
+      const items = await db.markPurging(uid, fid, now);
+      // The client deletes what this lists, so leave out any message a row
+      // outside the deletion still uses.
+      const marked = new Set(items.map((i) => i.id));
+      const keep = new Set(rows.filter((r) => !marked.has(r.id)).flatMap(rowMessageIds));
+      return json({
+        items: items.map((i) => ({
+          ...i,
+          messages: Array.isArray(i.messages) ? i.messages.filter((m: any) => !keep.has(m?.message_id)) : [],
+          thumb: i.thumb && keep.has(i.thumb.message_id) ? null : i.thumb,
+        })),
+      });
+    }
+
+    if (!action && (request.method === 'PATCH' || request.method === 'PUT')) {
+      if (existing.purgingAt) return json(beingDeleted, 409);
+      const body = ((await request.json().catch(() => null)) || {}) as any;
+      const fields: Record<string, any> = { updatedAt: now };
       if (typeof body.fileName === 'string' && body.fileName.trim()) fields.fileName = body.fileName.trim();
-      if (typeof body.parentId === 'string' && body.parentId) fields.parentId = body.parentId;
-      await db.updateFile(fid, fields);
+      try { fields.thumb = parseThumb(body.thumb); } catch (error: any) { return json({ message: error.message }, 400); }
+      if (typeof body.parentId === 'string' && body.parentId && body.parentId !== existing.parentId) {
+        const refusal = moveRefusal(await db.listFiles(uid), fid, body.parentId);
+        if (refusal) return json({ message: refusal }, 409);
+        fields.parentId = body.parentId;
+      }
+      if (!(await db.updateFile(fid, fields))) return json(beingDeleted, 409);
       return json({ item: D1Adapter.normalizeFile({ ...existing, ...fields }) });
     }
 
-    if (request.method === 'DELETE') {
+    if (!action && request.method === 'DELETE') {
       // Telegram message deletion stays client-side (the client holds the bot
       // token + the `messages` array). We only drop the metadata row here.
+      // An unmarked item is still accepted, as the classic app deletes that way
+      // (until release W2); a marked folder must be emptied first.
+      if (existing.purgingAt && existing.type === 'folder' && await db.hasChildren(uid, fid)) {
+        return json({ message: 'Delete the items inside this folder first' }, 409);
+      }
       await db.deleteFile(fid);
       return json({ success: true });
     }

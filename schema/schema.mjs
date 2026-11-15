@@ -19,7 +19,9 @@
 //   form both consume without either of them growing a build.
 //
 //   Anything that creates or repairs a database imports from here. If you add a
-//   column, add it here and nowhere else.
+//   column, add it here and nowhere else (the one exception: a new `files`
+//   column also goes in the worker's self-healing list, ensureDriveSchema in
+//   immich-api-shim/src/d1-adapter.ts; a test keeps the two equal).
 
 /** The full schema a fresh database gets: photos, albums, config, upload
  *  sessions and Drive files.
@@ -90,7 +92,8 @@ CREATE TABLE IF NOT EXISTS files (
   id TEXT PRIMARY KEY, ownerId TEXT NOT NULL, parentId TEXT NOT NULL DEFAULT 'root',
   type TEXT NOT NULL DEFAULT 'file', fileName TEXT NOT NULL, fileSize INTEGER DEFAULT 0,
   fileType TEXT, messages TEXT, encrypted INTEGER DEFAULT 0,
-  encryptionMode TEXT DEFAULT 'off', uploadedAt TEXT NOT NULL, updatedAt TEXT
+  encryptionMode TEXT DEFAULT 'off', uploadedAt TEXT NOT NULL, updatedAt TEXT,
+  trashedAt TEXT, purgingAt TEXT, thumb TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_files_owner_parent ON files(ownerId, parentId);`;
 
@@ -103,7 +106,8 @@ export const DRIVE_MIGRATION_SQL = `CREATE TABLE IF NOT EXISTS files (
   id TEXT PRIMARY KEY, ownerId TEXT NOT NULL, parentId TEXT NOT NULL DEFAULT 'root',
   type TEXT NOT NULL DEFAULT 'file', fileName TEXT NOT NULL, fileSize INTEGER DEFAULT 0,
   fileType TEXT, messages TEXT, encrypted INTEGER DEFAULT 0,
-  encryptionMode TEXT DEFAULT 'off', uploadedAt TEXT NOT NULL, updatedAt TEXT
+  encryptionMode TEXT DEFAULT 'off', uploadedAt TEXT NOT NULL, updatedAt TEXT,
+  trashedAt TEXT, purgingAt TEXT, thumb TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_files_owner_parent ON files(ownerId, parentId);`;
 
