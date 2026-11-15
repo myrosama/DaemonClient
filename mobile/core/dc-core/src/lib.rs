@@ -4,9 +4,11 @@
 pub mod chunk_plan;
 mod core;
 pub mod crypto;
+mod disk_cache;
 mod error;
-pub(crate) mod http;
+pub mod http;
 pub mod logging;
+pub mod reader;
 pub mod sched;
 mod secret;
 pub mod session;

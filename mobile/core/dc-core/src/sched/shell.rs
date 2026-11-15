@@ -134,8 +134,9 @@ impl Drop for Permit {
     }
 }
 
+/// The scheduler stops only when its account's session ends.
 fn stopped() -> CoreError {
-    CoreError::Internal("the scheduler stopped".to_owned())
+    CoreError::SignedOut
 }
 
 /// Sends the job's answer when the job task ends, however it ends: a panic
@@ -444,7 +445,7 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(1)).await;
         drop(scheduler); // signing out
         let result = waiting.wait().await;
-        assert!(matches!(result, Err(CoreError::Internal(_))), "{result:?}");
+        assert!(matches!(result, Err(CoreError::SignedOut)), "{result:?}");
         tokio::time::sleep(Duration::from_millis(1)).await;
         assert_eq!(
             Arc::strong_count(&calls),
