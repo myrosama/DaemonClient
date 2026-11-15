@@ -1514,3 +1514,94 @@ the Photos key, the manifest cache), `src/error.rs`, `src/worker.rs` and
   bot, and the cache generation drops late writes); a grid thumbnail standing
   in for a one-file original is downloaded every time (§4.7).
 
+
+## Task 1.6 — The local media server
+
+**Delivers:** design §5.7 — Immich's own image loaders and the platform video
+players fetch from `http://127.0.0.1:PORT/<secret>/api/…`, and the core
+answers from the read path (Task 1.5), streaming, a part ahead.
+
+**Files:** create `src/media_server.rs`, `examples/serve.rs`; modify
+`src/reader.rs` (prefetch: starting a part's download is split from waiting
+for it), `src/core.rs` (`Core::media_server()`), `src/lib.rs`, `Cargo.toml` +
+`Cargo.lock` (`hyper` `server`/`http1`, `hyper-util` `tokio`,
+`http-body-util` — all already in the tree through reqwest; HTTP/1.1 only).
+
+**Interfaces:**
+- `Core::media_server() -> MediaServer { grid_base, viewer_base }` — the
+  design's `ensure_running`: binds both listeners on first call, returns the
+  same addresses while they run, reopens one whose accept loop has ended
+  (iOS closes a suspended app's sockets) and returns its new address. Works
+  signed out (requests then get `401`); sign-out and another account leave
+  the listeners alone. The secret is made once per `Core` (32 random bytes,
+  hex).
+- Routes, `GET` and `HEAD`: `/{secret}/api/assets/{id}/thumbnail?size=
+  thumbnail|preview|fullsize`, `/{secret}/api/assets/{id}/original`,
+  `/{secret}/api/assets/{id}/video/playback`; `edited` and other query
+  parameters ignored.
+
+**Rules:**
+- **Secret:** a missing or wrong one → `403`, compared in constant time
+  (`subtle`). Request paths are never logged (the secret is in them).
+- **Classes (D17, decided here — the 1.4 carry-forward):** the grid listener
+  reads at `Visible`, the viewer listener at `Opened`, but **only the first
+  part of each request** — the parts prefetched behind it are `Next`, so a
+  long video never holds the grid back for more than one part.
+- **Thumbnail routes never answer with a video:** when the selected file is
+  not an image (an `originalId`-only video has no preview, so "preview" is
+  the video), the grid thumbnail is served instead (a JPEG). The worker
+  sends the video; recorded as a difference.
+- **Content-Type:** thumbnails and previews `image/jpeg`; an H.264 rendition
+  `video/mp4` (the worker's choice; the web sends the original's type); an
+  original its manifest type, only if it is `image/…` or `video/…` made of
+  safe characters, else `application/octet-stream`.
+- **Ranges** (RFC 9110 §14, P0's `chunk_plan`): `bytes=a-b`, `bytes=a-`,
+  `bytes=-n` → `206` with `Content-Range`, the whole range served across
+  parts; a start past the end → `416` with `Content-Range: bytes */size`; an
+  end past the end trimmed; no `Range`, more than one range or one we cannot
+  read → `200` with the whole file. `HEAD` answers sizes and types without
+  downloading (except a size-0 older upload, which `layout` measures).
+  `Accept-Ranges: bytes` always.
+- **Streaming (C6):** each part is downloaded and checked in full, then sent;
+  the next part's download starts as soon as the current one is in hand;
+  the body holds at most one part — about two parts in memory per stream.
+- **Hang-ups cancel:** a closed connection drops the response; the stream
+  stops and its tickets go, so the scheduler drops what nobody waits for.
+  hyper's `half_close` stays off (a read EOF ends the connection).
+- **Errors:** `SignedOut` → `401`, `NotFound` / a bad id → `404`,
+  `Corrupt` → `502`, network / rate limit / not provisioned → `503`; bodies
+  carry no detail. Other methods `405`, other paths `404`.
+- **Idle sockets:** any app on the phone can connect; headers must arrive
+  within 30 s (`header_read_timeout`) or the connection closes.
+
+- [ ] **Step 1:** tests first, failing — secret (missing, wrong, right);
+  every route and size; `405`/`404`; ranges across a part boundary with real
+  19 MiB parts, suffix, past-the-end `416`, trimmed end, no/multiple/garbled
+  `Range` → `200`; `HEAD` with no download (`.expect(0)`); the Content-Type
+  allow-list (a manifest saying `text/html`); a video's "preview" served as
+  its JPEG thumbnail; a rendition as `video/mp4`; the next part requested
+  before the client reads the first; a stream's second part pending while a
+  grid thumbnail still starts; a hang-up (raw `TcpStream`: write the
+  request, drop the socket) cancels — a re-request downloads again; a
+  signed-out request `401`; `media_server()` returns the same addresses
+  twice and reopens a dead listener.
+- [ ] **Step 2:** implement. Run → pass; clippy, fmt, `cargo deny`.
+- [ ] **Step 3: Gate 2** — `examples/serve.rs --release` on the test account:
+  starts the media server and a local counting relay in front of Telegram
+  (`CoreConfig.telegram_api`), then through the media server only: a grid
+  thumbnail is a JPEG; a full original is byte-identical to the worker's
+  (SHA-256); three ranges match; **AVFoundation on this Mac** loads a
+  multi-part video from the viewer address and draws a frame from its middle
+  (as AVPlayer would), timed to the first frame. Prints Telegram downloads
+  per part during that load: if any part is downloaded more than once
+  (players read the index at the end, then the start), a small in-memory
+  cache of the last parts (SPEC §4.7 "a small bounded cache") is added here.
+- [ ] **Step 4:** Gate 3 (one reviewer at a time); commit code, then docs.
+
+**Carried into this task from 1.5:** a manifest refreshed between `layout()`
+and `range()` can leave the slices planned for the old size — it fails
+closed as `Corrupt`; `examples/read_assets.rs` signs out on the error path
+too; DESIGN_NOTES 1.5 says whether a test-account thumbnail took the plain
+fallback is not observable (the unit test is the evidence).
+**For P2:** the app's server address becomes `http://127.0.0.1:PORT/<secret>`
+— a base with a path; check that Immich's URL handling keeps the path.
