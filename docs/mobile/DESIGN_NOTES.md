@@ -813,7 +813,8 @@ shows them (it decrypts, and on failure serves bytes that are a JPEG or PNG)
 and the core would have shown broken tiles. Ported as the worker does it:
 decrypt first, the magic check only after a failure (checked first, one
 encrypted thumbnail in 65,536 would be shown as noise), thumbnails and
-previews only. 1 MEDIUM (the size-0 `layout` path untested — now tested),
+previews only. Whether any test-account thumbnail took this path cannot be
+seen from outside the core; the unit test is the evidence that it works. 1 MEDIUM (the size-0 `layout` path untested — now tested),
 7 LOW (tests for a short part, the key derived once, the scheduler living on
 the core's runtime — each mutation-checked; the rest recorded as accepted).
 The operator decided on 2026-11-15 that sign-out empties the picture cache
@@ -835,3 +836,56 @@ The operator decided on 2026-11-15 that sign-out empties the picture cache
   matches before the Gate 3 fixes. Linux's worker release W1 (canaried on
   this account) changes no Photos endpoint.
 - G3: above. G4: `e5be91b` and this docs commit.
+
+---
+
+## 1.6 — The local media server            2026-11-15
+
+**Planned:** P1-core.md Part 2, Task 1.6 (written before the code). Two
+decisions were due and written into the plan first: only a request's first
+download runs at its listener's class (the 1.4 carry-forward about video
+holding the grid back), and a thumbnail route never answers with a video.
+**Did:** `media_server` (hyper, HTTP/1.1, two loopback listeners), the range
+reader a part ahead, and — from Gate 2's own criterion — a per-account part
+cache. Differences from the plan: "As built (Task 1.6)" in P1-core.md.
+**Gate 2 found three things before review:** (1) the test tool's Telegram
+relay ran on the runtime that the Swift check blocked, so AVFoundation's
+first request timed out (fixed in the tool); (2) every part was downloaded
+twice when AVFoundation opened a video — it probes the first 2 bytes (a whole
+part under C6), asks for the whole file, then the end — hence the part cache;
+(3) C6's promise of a first frame after one part holds for files with the
+index at the start: an iPhone `.mov` keeps it at the end, so a video opens
+after two parts. Recorded for the operator in SPEC §11.
+**Security:** reviewer — **1 HIGH**, 1 MEDIUM, 1 LOW, all fixed. HIGH: another
+app on the phone could get the secret — running out of file descriptors
+ended the listener, the reopened one kept the same secret, and another app
+could take the freed port and receive the secret with the app's next
+request; now every listener has its own secret, errors pause instead of
+ending at once, and at most 32 connections per listener (the MEDIUM). LOW:
+`MediaServer` printed its secrets in `Debug`. Also: a `403` closes its
+connection, SVG is not a picture.
+**Spec:** reviewer — **1 HIGH**, 4 MEDIUM, 8 LOW. HIGH: iOS can close a
+suspended app's socket while the accept loop never notices, and
+`ensure_running` checked only the loop — it now asks the port itself (a
+loopback connect) and reopens. MEDIUM: tests for the 502/503 statuses and for
+the listeners surviving sign-out; the plan and SPEC texts (secret per
+listener, the part cache, C6's measured cost). LOW: a test that a stream's
+first part runs at the viewer's class (and a part from memory no longer uses
+it up), `image()` never a video tested, a case-insensitive type check, a
+range refused when the manifest changed since its layout; the rest recorded.
+**Gate evidence:**
+- G1: tests first, failing; four tests mutation-checked (hyper's
+  `half_close`, the next part prefetched at `Opened`, no connection limit, no
+  port check — each fails its test). `cargo test -p dc-core` 145 passed;
+  clippy (deny lints), fmt clean; `cargo deny check advisories` ok; no new
+  crates (hyper's server side, already in the tree through reqwest).
+- G2 (`cargo run --release -p dc-core --example serve`, the approved test
+  account, read-only, everything through the media server; a relay counts
+  Telegram downloads and never prints a path): a grid thumbnail — a JPEG;
+  **AVFoundation, cold, opened a 3-part iPhone video in 7.8–8.0 s and drew a
+  1920x1080 frame from its middle in 12.8–15.1 s, each part downloaded once**
+  (three runs); the whole file **byte-identical to the worker's** (SHA-256)
+  and three ranges equal (one across a part boundary, the first 2 bytes, the
+  last 64 KiB); no cached picture left after sign-out. Full reads ran at
+  2.0–5.3 MB/s on this Mac's network (throughput is 1.8's).
+- G3: above. G4: `ce43929` and this docs commit.

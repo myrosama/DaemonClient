@@ -152,7 +152,7 @@ Detailed: `plans/P1-core.md` (design approved 2026-10-29, decisions C1–C11).
       unread), and port the relevant test cases as this task's failing tests.
 - [x] **1.5** Read path — thumbnail, existing preview, original and byte
       ranges, for every asset shape.
-- [ ] **1.6** Local media server — loopback only, per-launch secret, `Range`,
+- [x] **1.6** Local media server — loopback only, per-launch secret, `Range`,
       next-part prefetch, client disconnect cancels through the scheduler;
       a second listener (port) for opened photos and video, because Android's
       Cronet allows 6 connections per host (RESEARCH §10).

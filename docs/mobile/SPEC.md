@@ -180,10 +180,15 @@ or repurpose them, and every value must survive the app's strict parser
 
 ### 4.6 Local media server — the phone's version of the web service worker
 
-- An HTTP server on `127.0.0.1`, random port, started with the core.
-- Every request must carry a **per-launch random secret**; anything without
-  it gets `403`. Other apps on the device can reach loopback ports, so this is
-  required, not optional.
+- An HTTP server on `127.0.0.1`: two listeners on random ports, one for the
+  grid and one for opened media (C10), opened on first use and reopened when
+  the phone has closed them (`Core::media_server()`, called on resume).
+- Every request must carry its listener's **random secret** — a new one each
+  time a listener opens, so an app that takes over a closed port learns
+  nothing that opens the next; anything without it gets `403` and loses its
+  connection. Other apps on the device can reach loopback ports, so this is
+  required, not optional; at most 32 connections per listener, so they cannot
+  use up the app's file descriptors either.
 - Answers the paths the Immich app already requests —
   `/api/assets/:id/thumbnail`, `/original`, `/video/playback` — by fetching the
   manifest, then the Telegram chunks, then decrypting. `Range` requests map to
@@ -195,7 +200,9 @@ or repurpose them, and every value must survive the app's strict parser
 - Thumbnails are cached decrypted in the app's sandboxed cache directory, as
   every photo app does; size-bounded, evicted least-recently-used.
 - Originals and video are fetched on demand through a small bounded cache,
-  not kept.
+  not kept: the last three parts read (57 MiB), in memory, per account — a
+  player that probes the start, reads the index at the end and goes back to
+  the start downloads each part once.
 - Asset manifests are kept in memory for 10 minutes — a manifest can gain a
   preview or an H.264 rendition later. Decrypted thumbnails and previews are
   kept on disk (500 MB by default, nothing over 4 MiB), keyed by the account,
@@ -438,3 +445,4 @@ into tasks.
 | 2026-10-31 | D21: store framing (self-hosted storage tool), name "DaemonClient Photos", own developer account, delete account in the app, Immich brand removed at release; storage credentials never leave the core | operator |
 | 2026-10-29 | The core's design (`plans/P1-core.md` part 1, decisions C1–C11) approved in full; from it: random part names in Photos too (§4.4), manifest and thumbnail caching (§4.7), the token bucket ported from Nuke instead of `governor` and the opened item skipping it (§4.9) | operator, 2026-10-29 |
 | 2026-11-15 | §4.7: the picture cache is per account, emptied on sign-out and when another account signs in, and keeps nothing over 4 MiB (P1 Task 1.5, Gate 3) | operator (emptied on sign-out, 2026-11-15) |
+| 2026-11-15 | §4.6: a new secret per listener (not per launch), two listeners opened on first use and reopened after the phone closes them, 32 connections per listener; §4.7: the in-memory part cache (3 parts); C6 measured: an iPhone video opens after **two** parts, not one (P1 Task 1.6, Gate 2 and Gate 3) | Gate 3 (security), Gate 2 (measured); C6 cost to be confirmed by the operator |

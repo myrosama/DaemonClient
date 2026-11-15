@@ -1574,7 +1574,7 @@ for it), `src/core.rs` (`Core::media_server()`), `src/lib.rs`, `Cargo.toml` +
 - **Idle sockets:** any app on the phone can connect; headers must arrive
   within 30 s (`header_read_timeout`) or the connection closes.
 
-- [ ] **Step 1:** tests first, failing — secret (missing, wrong, right);
+- [x] **Step 1:** tests first, failing — secret (missing, wrong, right);
   every route and size; `405`/`404`; ranges across a part boundary with real
   19 MiB parts, suffix, past-the-end `416`, trimmed end, no/multiple/garbled
   `Range` → `200`; `HEAD` with no download (`.expect(0)`); the Content-Type
@@ -1585,8 +1585,8 @@ for it), `src/core.rs` (`Core::media_server()`), `src/lib.rs`, `Cargo.toml` +
   request, drop the socket) cancels — a re-request downloads again; a
   signed-out request `401`; `media_server()` returns the same addresses
   twice and reopens a dead listener.
-- [ ] **Step 2:** implement. Run → pass; clippy, fmt, `cargo deny`.
-- [ ] **Step 3: Gate 2** — `examples/serve.rs --release` on the test account:
+- [x] **Step 2:** implement. Run → pass; clippy, fmt, `cargo deny`.
+- [x] **Step 3: Gate 2** — `examples/serve.rs --release` on the test account:
   starts the media server and a local counting relay in front of Telegram
   (`CoreConfig.telegram_api`), then through the media server only: a grid
   thumbnail is a JPEG; a full original is byte-identical to the worker's
@@ -1596,7 +1596,7 @@ for it), `src/core.rs` (`Core::media_server()`), `src/lib.rs`, `Cargo.toml` +
   per part during that load: if any part is downloaded more than once
   (players read the index at the end, then the start), a small in-memory
   cache of the last parts (SPEC §4.7 "a small bounded cache") is added here.
-- [ ] **Step 4:** Gate 3 (one reviewer at a time); commit code, then docs.
+- [x] **Step 4:** Gate 3 (one reviewer at a time); commit code, then docs.
 
 **Carried into this task from 1.5:** a manifest refreshed between `layout()`
 and `range()` can leave the slices planned for the old size — it fails
@@ -1605,3 +1605,55 @@ too; DESIGN_NOTES 1.5 says whether a test-account thumbnail took the plain
 fallback is not observable (the unit test is the evidence).
 **For P2:** the app's server address becomes `http://127.0.0.1:PORT/<secret>`
 — a base with a path; check that Immich's URL handling keeps the path.
+
+**As built (Task 1.6), differences from the steps above:**
+- **A new secret per listener**, not one per `Core` (security review, HIGH):
+  a closed port can be taken by another app, which then receives the old
+  secret with the app's next request. `ensure_running` asks each port
+  whether it still answers (a loopback connect) — iOS can close a suspended
+  app's socket while its accept loop never notices — and reopens it with a
+  new secret. Accept errors pause 100 ms and, after 20 in a row, end the
+  listener; at most 32 connections per listener (a semaphore before
+  `accept`); a `403` closes its connection; SVG is not a picture.
+- **A part cache** (Step 3's own criterion: AVFoundation's probe of the first
+  2 bytes, then the whole file, then the end, downloaded every part twice):
+  the last 3 parts read, 57 MiB, in memory, per account, used only by the
+  range reader; dropped at sign-out (structurally — the account owns it).
+- **C6 measured:** an iPhone `.mov` keeps its index at the end, so a video
+  opens after **two** parts (the probe, then the end), not one — ~8 s at
+  ~5 MB/s on this Mac. Recorded in SPEC §11 for the operator; a candidate for
+  1.8: fetch the last part alongside the first.
+- Interfaces: `Core::media_server(self: &Arc<Self>)` — the bridge holds an
+  `Arc<Core>`; `MediaServer` has no `Debug` (it holds the secrets);
+  `Core::image()` returns `Image { bytes, mime }` and is never a video (a
+  video with no preview gets its JPEG thumbnail; a one-file original with an
+  empty type is now `404`, where 1.5 served it); `Core::range()` takes the
+  size it was planned on and refuses (`Corrupt`) if the manifest changed in
+  between; a stream's first part read from memory leaves the next download
+  at the listener's class.
+- A one-file original standing in for a thumbnail keeps its own image type;
+  `fullsize` is the preview; `HEAD` on a thumbnail route downloads the
+  picture (only originals and videos answer `HEAD` from the manifest).
+- The 1.4 carry-forward on suspension during video (the web's
+  `maxSuspendMs`) is closed by the classes rule: only a request's first part
+  runs at `Opened`. The 1.5 carry-ins are done (`read_assets` signs out on
+  every path; DESIGN_NOTES 1.5 says the plain-picture fallback is shown by
+  its unit test only).
+- tokio `net`, `PartSlices::bounds()`, `disk_cache::hex` crate-visible.
+
+**Carried forward from Task 1.6's Gate 3:**
+- **P2:** the app's HTTP client must open at most 32 connections per host
+  (Dart's `HttpClient` has no limit by default; a 33rd waits for an idle one
+  to close); the base URLs carry a path (`/<secret>`) — check Immich keeps
+  it; call `media_server()` on every resume and use the addresses it returns;
+  check on a device which error iOS gives a reclaimed socket and that the
+  reopen works; `Telegram::download` stays off the bridge; the bridge holds
+  `Arc<Core>`.
+- **1.8:** fetch the last part alongside the first when a player probes the
+  start (halves a video's opening); measure the part cache's size on a phone.
+- **Accepted, untested:** `header_read_timeout`; a stream cut mid-way after
+  its headers; a hang-up during streaming dropping the prefetched part; the
+  part cache's drop at sign-out. A stream started before sign-out can still
+  send the part it already holds and one prefetched part (the request was
+  allowed when made).
+
