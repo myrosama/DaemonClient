@@ -107,7 +107,8 @@ impl DiskCache {
 
     /// Drops the least recently used down to 90 % (so not every write
     /// evicts); returns what is left. Counted from the disk, so a file
-    /// written twice or removed by the OS cannot skew the total.
+    /// written twice or removed by the OS cannot skew the total. "Recently"
+    /// is to the file system's clock: files used within one tick tie.
     fn evict(&self) -> u64 {
         let mut entries = self.entries(false);
         entries.sort_by_key(|(_, modified, _)| *modified);
@@ -209,8 +210,16 @@ mod tests {
     fn drops_the_least_recently_used_first() {
         let dir = tempfile::tempdir().unwrap();
         let cache = DiskCache::open(dir.path().join("media"), 1_000).unwrap();
-        for i in 0..10 {
-            cache.put(&format!("f{i}"), &[0u8; 100], cache.generation());
+        for i in 0..10u64 {
+            let key = format!("f{i}");
+            cache.put(&key, &[0u8; 100], cache.generation());
+            // Distinct times: ext4 stamps writes a few ms apart identically.
+            let at = SystemTime::now() - std::time::Duration::from_secs(100 - i);
+            let file = std::fs::File::options()
+                .write(true)
+                .open(cache.path(&key))
+                .unwrap();
+            file.set_modified(at).unwrap();
         }
         assert!(cache.get("f0").is_some()); // now the most recent
         cache.put("f10", &[0u8; 100], cache.generation()); // 1,100 > 1,000: down to 900
