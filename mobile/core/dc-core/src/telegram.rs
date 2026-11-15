@@ -123,23 +123,7 @@ impl Telegram {
                 status.as_u16()
             )));
         }
-        let too_large = || CoreError::Server("a stored file is larger than 20 MiB".to_owned());
-        if reply
-            .content_length()
-            .is_some_and(|n| n > MAX_DOWNLOAD as u64)
-        {
-            return Err(too_large());
-        }
-        // Bounded by the check above; avoids growing a 19 MiB part to 32 MiB.
-        let mut bytes =
-            Vec::with_capacity(reply.content_length().unwrap_or(0).try_into().unwrap_or(0));
-        while let Some(chunk) = reply.chunk().await? {
-            if bytes.len() + chunk.len() > MAX_DOWNLOAD {
-                return Err(too_large());
-            }
-            bytes.extend_from_slice(&chunk);
-        }
-        Ok(Some(bytes))
+        Ok(Some(crate::http::body(&mut reply, MAX_DOWNLOAD).await?))
     }
 
     /// Sends one part (or an encrypted thumbnail) into the channel; paced.
@@ -248,9 +232,12 @@ struct FileRef {
 }
 
 /// Classifies a bot API answer: rate limits, refusals for good, the rest.
-async fn answer<T: DeserializeOwned>(reply: reqwest::Response) -> Result<T, CoreError> {
+async fn answer<T: DeserializeOwned>(mut reply: reqwest::Response) -> Result<T, CoreError> {
     let status = reply.status();
-    let Ok(body) = reply.json::<Reply<T>>().await else {
+    let body = crate::http::body(&mut reply, crate::http::JSON_CAP)
+        .await
+        .ok();
+    let Some(body) = body.and_then(|b| serde_json::from_slice::<Reply<T>>(&b).ok()) else {
         return Err(match status.as_u16() {
             429 | 420 => CoreError::RateLimited { retry_after: 5 },
             code if code >= 500 => CoreError::Network(format!("the storage answered {code}")),
@@ -546,6 +533,23 @@ mod tests {
             "-1".to_owned(),
         );
         assert!(matches!(tg.fetch("big").await, Err(CoreError::Server(_))));
+    }
+
+    #[tokio::test]
+    async fn refuses_a_bot_api_reply_over_four_mebibytes() {
+        let server = MockServer::start().await;
+        let huge = format!(
+            "{{\"ok\": true, \"result\": true, \"pad\": \"{}\"}}",
+            "x".repeat(5 << 20)
+        );
+        Mock::given(path(format!("/bot{TOKEN}/deleteMessage")))
+            .respond_with(ResponseTemplate::new(200).set_body_string(huge))
+            .mount(&server)
+            .await;
+        assert!(matches!(
+            telegram(&server).delete_message(1).await,
+            Err(CoreError::Server(_))
+        ));
     }
 
     #[tokio::test]

@@ -150,7 +150,7 @@ Detailed: `plans/P1-core.md` (design approved 2026-10-29, decisions C1–C11).
       **First:** read Nuke's full `TaskQueue`, coalescing/cancellation code,
       `ImagePrefetcher` and their tests (RESEARCH §9 lists what is still
       unread), and port the relevant test cases as this task's failing tests.
-- [ ] **1.5** Read path — thumbnail, existing preview, original and byte
+- [x] **1.5** Read path — thumbnail, existing preview, original and byte
       ranges, for every asset shape.
 - [ ] **1.6** Local media server — loopback only, per-launch secret, `Range`,
       next-part prefetch, client disconnect cancels through the scheduler;

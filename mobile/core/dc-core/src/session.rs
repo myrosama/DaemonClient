@@ -104,7 +104,7 @@ pub async fn sign_in(
         reqwest::StatusCode::NOT_FOUND => return Err(CoreError::BadAddress),
         _ => {}
     }
-    let login: LoginReply = crate::worker::read_json(reply).await?;
+    let login: LoginReply = crate::worker::read_json(reply, crate::http::JSON_CAP).await?;
     let worker_url = match (login.worker_url.filter(|u| !u.is_empty()), deployment) {
         // Hosted workers are always https; local-network http is for self-hosters only.
         (Some(url), Deployment::Hosted) => Some(normalize_server(&url)?)

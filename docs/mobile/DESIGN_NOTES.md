@@ -777,3 +777,61 @@ that every read but the opened one took a token.
   test account after the bucket fix: sent 64 KiB in 1017 ms, identical on
   read-back (632 ms, cached path 219 ms), deleted.
 - G3: above. G4: `e827804` and this docs commit.
+
+---
+
+## 1.5 — The read path            2026-11-15
+
+**Planned:** P1-core.md Part 2, Task 1.5 (written before the code, 10-31).
+**Did:** `reader` (which stored file answers which request — the web's
+`selectFileIds` and playback rule, ported exactly — the manifest checks, the
+range reader), `disk_cache`, and `Core::image` / `layout` / `range` on a
+per-account scheduler. Differences from the plan are under "As built (Task
+1.5)" in P1-core.md.
+**What the test account holds** (found before building, so the work fits
+the data): 2,177 assets in 10 shapes, all `server`-encrypted, all with a
+thumbnail, every size known, no gaps, no H.264 renditions — 1,197 images
+with only `originalId` (649 with a preview), 707 one-part and 13 two-part
+images, 160 `originalId`-only videos and 100 multi-part videos up to 740 MB.
+The web plays `originalId`-only videos through the worker; the core reads
+them itself.
+**Security:** reviewer — 0 HIGH, **2 MEDIUM**, 3 LOW, all fixed. Both
+MEDIUMs were about the picture cache across accounts: signing in as another
+account without signing out kept the first account's decrypted thumbnails
+where the second session could be served them (cache names now include the
+account and how the file is read; another account empties the cache), and a
+thumbnail finishing just as the user signed out was written after the cache
+was emptied (a generation counter now drops such writes; emptying also
+removes temp files). LOW, fixed: the read kind in the cache name, a 1 MiB cap
+on manifests (they are kept in memory), nothing over 4 MiB kept on disk. A
+second, short check of the plain-picture fallback (below): 0 HIGH, 0 MEDIUM,
+1 LOW (a copy made for every such read — now only when the bytes are a
+picture), fixed.
+**Spec:** reviewer — **1 HIGH**: a shape the plan missed — older uploads in an
+encrypted library stored thumbnails and previews as plain JPEGs; the worker
+shows them (it decrypts, and on failure serves bytes that are a JPEG or PNG)
+and the core would have shown broken tiles. Ported as the worker does it:
+decrypt first, the magic check only after a failure (checked first, one
+encrypted thumbnail in 65,536 would be shown as noise), thumbnails and
+previews only. 1 MEDIUM (the size-0 `layout` path untested — now tested),
+7 LOW (tests for a short part, the key derived once, the scheduler living on
+the core's runtime — each mutation-checked; the rest recorded as accepted).
+The operator decided on 2026-11-15 that sign-out empties the picture cache
+(SPEC §4.7, change log).
+**Gate evidence:**
+- G1: tests first, each failing before its fix; two of them mutation-checked
+  (an always-clearing `restore` and a scheduler on the caller's runtime both
+  fail the suite). `cargo test -p dc-core` 127 passed; clippy (deny lints),
+  fmt clean; `cargo deny check advisories` ok.
+- G2 (`cargo run -p dc-core --example read_assets`, the approved test account,
+  read-only, debug build, 2026-11-15): **every grid thumbnail of the account
+  — 2,177 — loaded through the core as a JPEG** (332 s, 8 at a time); for the
+  smallest asset of each of the 10 shapes, thumbnail and preview read and the
+  original **byte-identical to the production worker's**
+  `/api/assets/:id/original` (full SHA-256 for 9 shapes; 3 of 3 ranges,
+  one across a part boundary, for a 58 MB 4-part video); **0 cached files
+  left after sign-out**. Originals read at ~2.5–3.3 MB/s one part at a time
+  (prefetch is 1.6, throughput 1.8). The first run (10-31) gave the same
+  matches before the Gate 3 fixes. Linux's worker release W1 (canaried on
+  this account) changes no Photos endpoint.
+- G3: above. G4: `e5be91b` and this docs commit.

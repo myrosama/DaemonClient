@@ -1393,3 +1393,124 @@ job's priority raise freeing its low-priority slot.
   everything (`maxSuspendMs`) because playhead parts chain; the phone has no
   cap yet — decide then.
 
+
+## Task 1.5 — The read path
+
+**Delivers:** design §5.6 — every asset shape of the account read correctly:
+the manifest fetched, checked and cached; the right Telegram file chosen for
+each request; decrypted per the asset's mode; thumbnails and previews kept on
+disk; originals read part by part and by byte range; every download through
+the account's scheduler (Task 1.4).
+
+**Files:** create `src/reader.rs` (selection, manifest check, range reader),
+`src/disk_cache.rs`; modify `src/core.rs` (`Account` gains the scheduler,
+the Photos key, the manifest cache), `src/error.rs`, `src/worker.rs` and
+`src/telegram.rs` (reply size caps).
+
+**Interfaces:**
+- `reader::Rendition::{Thumbnail, Preview, Original, Playback}`.
+- `reader::select(&AssetManifest, Rendition) -> Selection { file_ids, size,
+  mime }` — pure. Thumbnail/Preview: the web's `selectFileIds` exactly
+  (`immich/web/src/service-worker/telegram-media.ts`): grid thumbnail → thumb
+  → preview → (single-part) original; preview/fullsize → preview →
+  (single-part) original or thumb → (multi-part) thumb; thumb/preview are
+  `image/jpeg`. Original: parts sorted by index, or `originalId` for one-part
+  uploads. Playback: `playbackChunks` with `playbackSize` when present, else
+  the original (`index.ts` `fetchVideoDirect`). Nothing to serve → `NotFound`.
+- `reader::check(&Selection)` for Original/Playback — indexes exactly
+  0…n−1, no gaps or repeats, and n = `part_count(size)` (one part for a
+  0-byte file); a size of 0 with a non-empty single file is an older upload
+  whose size was never stored — it is served at the length the file has.
+  Fails → `CoreError::Corrupt`, never bytes at the wrong offsets.
+- `Core::image(asset_id, Rendition::Thumbnail|Preview, Class) -> Bytes` —
+  through the disk cache.
+- `Core::layout(asset_id, Rendition::Original|Playback) -> Layout { size,
+  parts, mime }` (what 1.6 answers `HEAD` with) and
+  `Core::range(asset_id, rendition, start, end_inclusive, Class) -> RangeReader`
+  with `async fn next() -> Option<Result<Bytes>>` — walks P0's `PartSlices`,
+  one part at a time; each decrypted part must be exactly `PART_SIZE` except
+  the last, `size − (n−1)·PART_SIZE`, else `Corrupt`.
+- `CoreError::Corrupt(String)` ("this file is damaged …") and
+  `From<CryptoError> for CoreError` (authentication failure → `Corrupt`).
+
+**Rules** (design §5.6, and the carry-forwards from 1.2–1.4):
+- Encrypted = `encryptionMode` `server` or `client`; anything else is plain.
+  Encrypted with no Photos key → an error saying the encryption password is
+  not set up (`NotProvisioned`), never the encrypted bytes.
+- Per signed-in account, made on first use and dropped on sign-out with it:
+  the Photos key (derived once), the scheduler (its fetch holds this
+  account's bot), manifests (10 minutes, at most 4,096, all dropped when
+  full).
+- Disk cache: decrypted thumbnails and previews under `cache_dir/media`,
+  file named by SHA-256 of the `file_id`, 500 MB, oldest-used dropped first
+  (modified time touched on read), written to a temp file and renamed so a
+  crash never leaves half a file. Originals are never kept.
+- Reply caps: a worker or Bot API JSON reply over 4 MiB is refused.
+
+- [x] **Step 1:** tests first, failing — `select` for every row of the table
+  and every shape (one-part `originalId`, multi-part, no thumb, no preview,
+  rendition, empty); `check` (gap, repeat, wrong count, 0-byte, size-0 older
+  upload); the range reader across part boundaries, a short or long part →
+  `Corrupt`, a wrong key → `Corrupt`, plain assets untouched; the disk cache
+  (hit, atomic write leaves no partial file, eviction order, survives a
+  restart); `Core::image` fetches a thumbnail once (second read from disk);
+  sign-out drops key, scheduler and manifests; reply caps. Fakes: wiremock
+  worker and Telegram, as in 1.2/1.3.
+- [x] **Step 2:** implement. Run → pass; clippy, fmt, `cargo deny`.
+- [x] **Step 3: Gate 2** — `examples/read_assets.rs` on the test account: list
+  the account's assets through the worker's timeline (the web's calls), group
+  them by shape (mode × parts × thumb/preview/rendition × image/video), and
+  for one of each: read thumbnail and preview; read the original in full and
+  three random ranges, and compare each with the same bytes from the worker's
+  own `/api/assets/:id/original` (SHA-256 equal). Prints shapes, counts,
+  sizes and timings only — never ids, names or tokens. Recorded in
+  DESIGN_NOTES.
+- [x] **Step 4:** Gate 3; commit code, then docs.
+
+**As built (Task 1.5), differences from the steps above:**
+- `check` is folded into `select`: a selection that does not add up is never
+  produced. Stricter than the web in two places: one original file larger
+  than a part is `Corrupt`; an empty `mimeType` stays empty (the worker
+  always fills it).
+- `range` takes `PartSlices` that the caller plans from `layout`'s size with
+  P0's `chunk_plan` (1.6 answers 206/416/200 from that plan). `image` reads
+  one stored file (thumbnails and previews; a multi-part original there is
+  `Internal`). `layout` on a size-0 one-file asset downloads the file to
+  measure it, and `range` downloads it again.
+- **A shape the plan missed** (spec review): in an encrypted library, older
+  uploads stored the thumbnail and preview as plain JPEGs. As the worker
+  does, such a file is used as it is when decryption fails and its bytes are
+  a JPEG or PNG — thumbnails and previews only, never parts.
+- Encrypted with no Photos key → `NotProvisioned`, before downloading. A
+  stopped scheduler (its account signed out) reports `SignedOut`.
+- Picture cache (Gate 3, and the operator on 2026-11-15): named by SHA-256 of
+  the account (user id, worker address), how the file is read and its
+  `file_id`; emptied on sign-out and when another account signs in — not on
+  the app's next launch; a write that began before a clear is dropped;
+  only the manifest's thumbnail and preview files, ≤ 4 MiB, are kept;
+  eviction to 90 %. SPEC §4.7 updated.
+- Reply caps: manifests 1 MiB (~9,500 parts, about 180 GB), other JSON
+  4 MiB, files 20 MiB — one capped reader for all three.
+- `http` (the core's TLS client, for the examples) and `reader` are public.
+
+**Carried forward from Task 1.5's Gate 3:**
+- **1.6:** allow-list `Selection.mime` before it becomes a `Content-Type` (the
+  worker supplies it); the per-launch secret (§5.7); which type a playback
+  rendition is served as (the web sends the original's, the worker
+  `video/mp4`); a video with only `originalId` has no preview — its
+  "preview" is the video itself and must never reach an image decoder (P2
+  too).
+- **1.6 / P2:** `Telegram::download` (reachable through `Core::telegram()`)
+  bypasses the scheduler — keep it off the bridge.
+- **Linux (asked):** the worker treats a row with `encrypted: true` and no
+  `encryptionMode` as server-encrypted, but its manifest reports `off`, so
+  the web and the core would read it as plain.
+- **1.8:** throughput — Gate 2 read ~1.5 MB/s in a debug build, one part at a
+  time; next-part prefetch is 1.6.
+- **Accepted:** the manifest's 10-minute life is not pinned by a test (no
+  injectable clock); the media cache failing to open stops `Core::start`
+  (only when its folder cannot be made, which start needs anyway); each call
+  reads the account twice (fails closed — a `file_id` works only with its own
+  bot, and the cache generation drops late writes); a grid thumbnail standing
+  in for a one-file original is downloaded every time (§4.7).
+

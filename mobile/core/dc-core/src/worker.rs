@@ -21,19 +21,19 @@ impl Worker {
         &self.session
     }
 
-    async fn get<T: DeserializeOwned>(&self, path: &str) -> Result<T, CoreError> {
+    async fn get<T: DeserializeOwned>(&self, path: &str, cap: usize) -> Result<T, CoreError> {
         let reply = self
             .http
             .get(format!("{}{path}", self.session.worker_url))
             .bearer_auth(self.session.token.expose())
             .send()
             .await?;
-        read_json(reply).await
+        read_json(reply, cap).await
     }
 
     /// The bot and channel; `NotProvisioned` when either is missing.
     pub async fn telegram_config(&self) -> Result<TelegramConfig, CoreError> {
-        let raw: RawTelegramConfig = self.get("/api/server/telegram-config").await?;
+        let raw: RawTelegramConfig = self.get("/api/server/telegram-config", JSON_CAP).await?;
         match (
             raw.bot_token.filter(|t| !t.expose().is_empty()),
             raw.channel_id.filter(|c| !c.is_empty()),
@@ -47,7 +47,7 @@ impl Worker {
     }
 
     pub async fn zke_config(&self) -> Result<ZkeConfig, CoreError> {
-        self.get("/api/server/zke-config").await
+        self.get("/api/server/zke-config", JSON_CAP).await
     }
 
     /// The Photos key, or `None` when the library is not encrypted.
@@ -75,7 +75,7 @@ impl Worker {
         if !valid {
             return Err(CoreError::BadAddress);
         }
-        self.get(&format!("/api/assets/{asset_id}/dc-manifest"))
+        self.get(&format!("/api/assets/{asset_id}/dc-manifest"), MANIFEST_CAP)
             .await
     }
 
@@ -98,21 +98,36 @@ impl Worker {
             .json(&serde_json::json!({ "assets": assets }))
             .send()
             .await?;
-        Ok(read_json::<BulkCheckReply>(reply).await?.results)
+        Ok(read_json::<BulkCheckReply>(reply, JSON_CAP).await?.results)
     }
 }
+
+use crate::http::JSON_CAP;
+
+/// Manifests are kept in memory (up to 4,096): 1 MiB each at most. A part
+/// entry is about 100 bytes, so that is ~9,500 parts — some 180 GB.
+const MANIFEST_CAP: usize = 1024 * 1024;
 
 /// A worker reply as `T`: `401` → `SignedOut`, `404` → `NotFound`, any other
 /// failure → `Server` with the reply's own `message`, scrubbed and short.
 pub(crate) async fn read_json<T: DeserializeOwned>(
-    reply: reqwest::Response,
+    mut reply: reqwest::Response,
+    cap: usize,
 ) -> Result<T, CoreError> {
     match reply.status() {
-        s if s.is_success() => Ok(reply.json().await?),
+        s if s.is_success() => {
+            let body = crate::http::body(&mut reply, cap).await?;
+            serde_json::from_slice(&body)
+                .map_err(|_| CoreError::Server("unexpected reply from the server".to_owned()))
+        }
         reqwest::StatusCode::UNAUTHORIZED => Err(CoreError::SignedOut),
         reqwest::StatusCode::NOT_FOUND => Err(CoreError::NotFound),
         status => {
-            let body: Option<serde_json::Value> = reply.json().await.ok();
+            let body = crate::http::body(&mut reply, crate::http::JSON_CAP)
+                .await
+                .ok();
+            let body: Option<serde_json::Value> =
+                body.and_then(|b| serde_json::from_slice(&b).ok());
             let message = body
                 .as_ref()
                 .and_then(|v| v.get("message"))
@@ -329,6 +344,44 @@ mod tests {
         .await;
         assert!(matches!(
             worker(&server).telegram_config().await,
+            Err(CoreError::Server(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn refuses_a_manifest_over_one_mebibyte() {
+        let server = MockServer::start().await;
+        let huge = format!(
+            "{{\"thumbId\": \"t\", \"pad\": \"{}\"}}",
+            "x".repeat(3 << 19)
+        );
+        serve(
+            &server,
+            "/api/assets/abc/dc-manifest",
+            ResponseTemplate::new(200).set_body_string(huge),
+        )
+        .await;
+        assert!(matches!(
+            worker(&server).manifest("abc").await,
+            Err(CoreError::Server(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn refuses_a_reply_over_four_mebibytes() {
+        let server = MockServer::start().await;
+        let huge = format!(
+            "{{\"enabled\": false, \"pad\": \"{}\"}}",
+            "x".repeat(5 << 20)
+        );
+        serve(
+            &server,
+            "/api/server/zke-config",
+            ResponseTemplate::new(200).set_body_string(huge),
+        )
+        .await;
+        assert!(matches!(
+            worker(&server).zke_config().await,
             Err(CoreError::Server(_))
         ));
     }

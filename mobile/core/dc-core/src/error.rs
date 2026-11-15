@@ -26,12 +26,25 @@ pub enum CoreError {
     /// The server refused the request or answered nonsense; its own words, scrubbed.
     #[error("the server said: {0}")]
     Server(String),
+    /// A stored file does not add up (manifest or part) or fails decryption.
+    #[error("this file is damaged: {0}")]
+    Corrupt(String),
     // User-facing text says "storage", never "Telegram" (SPEC D21).
     #[error("the storage asked to wait {retry_after} s")]
     RateLimited { retry_after: u64 },
     /// The storage refused for good (bad token, bot removed from the channel, ...).
     #[error("the storage refused: {0} — check your storage setup at accounts.daemonclient.uz")]
     TelegramRejected(String),
+}
+
+impl From<crate::crypto::CryptoError> for CoreError {
+    fn from(e: crate::crypto::CryptoError) -> Self {
+        use crate::crypto::CryptoError::{Authentication, Truncated};
+        match e {
+            Authentication | Truncated(_) => CoreError::Corrupt(e.to_string()),
+            _ => CoreError::Internal(e.to_string()),
+        }
+    }
 }
 
 /// A remote party's message made safe to show and log: tokens scrubbed first
