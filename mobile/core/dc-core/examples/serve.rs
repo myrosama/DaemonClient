@@ -9,7 +9,9 @@
 //! production worker's bytes, and three ranges.
 //! Password from the macOS Keychain item `daemonclient-test` (see
 //! examples/sign_in.rs). Read-only. Prints sizes, timings and counts — never
-//! ids, paths or tokens.
+//! ids, paths or tokens. (The viewer URL, its secret included, is the Swift
+//! check's argument, so `ps` shows it on this Mac while the run lasts — a
+//! test session's loopback secret, accepted.)
 use std::collections::HashMap;
 use std::convert::Infallible;
 use std::sync::{Arc, Mutex};

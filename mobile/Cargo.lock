@@ -360,6 +360,7 @@ dependencies = [
  "bytes",
  "getrandom 0.4.3",
  "hex",
+ "hmac",
  "http-body-util",
  "hyper",
  "hyper-util",

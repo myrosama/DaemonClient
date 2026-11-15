@@ -10,7 +10,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Weak};
 use std::task::{Context, Poll, ready};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use http_body_util::combinators::UnsyncBoxBody;
@@ -33,6 +33,8 @@ const HEADER_TIMEOUT: Duration = Duration::from_secs(30);
 /// Connections served at once per listener; more wait in the kernel's
 /// queue, so another app cannot use up this one's file descriptors.
 const MAX_CONNECTIONS: usize = 32;
+/// How long a liveness challenge may take, connection and reply together.
+const CHALLENGE_TIME: Duration = Duration::from_millis(750);
 /// Accept errors in a row before a listener gives up (2 s with the pause);
 /// another one then opens, with a new secret.
 const ACCEPT_RETRIES: u32 = 20;
@@ -53,18 +55,77 @@ pub(crate) struct Listeners {
 
 struct Listener {
     base: String,
+    secret: Arc<str>,
     address: std::net::SocketAddr,
     task: tokio::task::JoinHandle<()>,
 }
 
 impl Listener {
-    /// Whether it still takes connections. iOS can close a suspended app's
-    /// socket while its accept loop never notices, so ask the port itself.
+    /// Whether it is still ours and listening. iOS can close a suspended
+    /// app's socket while its accept loop never notices, and another app can
+    /// then take the port — so the port must answer a fresh challenge with
+    /// an HMAC of this listener's secret. The secret itself is never sent.
     fn answers(&self) -> bool {
+        let pass = || challenge(self.address, &self.secret);
+        // Once more after a moment: a busy listener may just be slow. If it
+        // still fails, reopening is safe (invariant a) — and staying could
+        // mean staying with another app.
         !self.task.is_finished()
-            && std::net::TcpStream::connect_timeout(&self.address, Duration::from_millis(250))
-                .is_ok()
+            && (pass() || {
+                std::thread::sleep(Duration::from_millis(250));
+                pass()
+            })
     }
+}
+
+fn challenge(address: std::net::SocketAddr, secret: &str) -> bool {
+    use std::io::{Read, Write};
+    let mut nonce = [0u8; 32];
+    if getrandom::fill(&mut nonce).is_err() {
+        return false;
+    }
+    let nonce = crate::disk_cache::hex(&nonce);
+    // One deadline for all of it: whatever holds the port, `ensure_running`
+    // returns in bounded time.
+    let deadline = Instant::now() + CHALLENGE_TIME;
+    let left = || {
+        deadline
+            .saturating_duration_since(Instant::now())
+            .max(Duration::from_millis(1))
+    };
+    let (Some(expected), Ok(mut stream)) = (
+        proof(secret, &nonce),
+        std::net::TcpStream::connect_timeout(&address, left()),
+    ) else {
+        return false;
+    };
+    let request =
+        format!("GET /alive/{nonce} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+    if stream.set_write_timeout(Some(left())).is_err()
+        || stream.write_all(request.as_bytes()).is_err()
+    {
+        return false;
+    }
+    let (mut reply, mut chunk) = (Vec::new(), [0u8; 128]);
+    while reply.len() < 512 && Instant::now() < deadline {
+        if stream.set_read_timeout(Some(left())).is_err() {
+            return false;
+        }
+        match stream.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => reply.extend(chunk.iter().take(n)),
+            Err(_) => return false,
+        }
+    }
+    String::from_utf8_lossy(&reply).ends_with(&expected)
+}
+
+/// HMAC-SHA256 of a challenge under a listener's secret, in hex.
+fn proof(secret: &str, nonce: &str) -> Option<String> {
+    use hmac::{KeyInit, Mac};
+    let mut mac = hmac::Hmac::<sha2::Sha256>::new_from_slice(secret.as_bytes()).ok()?;
+    mac.update(nonce.as_bytes());
+    Some(crate::disk_cache::hex(&mac.finalize().into_bytes()))
 }
 
 impl Listeners {
@@ -125,11 +186,16 @@ fn listen(core: &Arc<Core>, class: Class) -> Result<Listener, CoreError> {
         let _runtime = handle.enter();
         tokio::net::TcpListener::from_std(socket).map_err(failed)?
     };
+    let secret_for_check = secret.clone();
     let core = Arc::downgrade(core);
     let slots = Arc::new(tokio::sync::Semaphore::new(MAX_CONNECTIONS));
     let task = handle.spawn(async move {
+        // Its connections belong to this task: when it ends or is aborted
+        // (a reopen), they end too, and the secret with them (invariant a).
+        let mut connections = tokio::task::JoinSet::new();
         let mut errors = 0;
         loop {
+            while connections.try_join_next().is_some() {}
             let Ok(slot) = slots.clone().acquire_owned().await else {
                 return;
             };
@@ -150,7 +216,7 @@ fn listen(core: &Arc<Core>, class: Class) -> Result<Listener, CoreError> {
             };
             errors = 0;
             let (core, secret) = (core.clone(), secret.clone());
-            tokio::spawn(async move {
+            connections.spawn(async move {
                 let _slot = slot; // freed when the connection ends
                 let service = hyper::service::service_fn(move |request| {
                     answer(core.clone(), secret.clone(), class, request)
@@ -166,6 +232,7 @@ fn listen(core: &Arc<Core>, class: Class) -> Result<Listener, CoreError> {
     });
     Ok(Listener {
         base,
+        secret: secret_for_check,
         address,
         task,
     })
@@ -192,6 +259,22 @@ async fn route(
     request: &Request<Incoming>,
 ) -> Result<Reply, StatusCode> {
     let path = request.uri().path().strip_prefix('/').unwrap_or_default();
+    // `ensure_running`'s challenge: answered without the secret, proving it,
+    // and touching no lock of the core — `ensure_running` holds one while it asks.
+    if let Some(nonce) = path.strip_prefix("alive/") {
+        let fresh = nonce.len() == 64 && nonce.bytes().all(|b| b.is_ascii_hexdigit());
+        let proof = proof(secret, nonce).filter(|_| fresh && request.method() == Method::GET);
+        let proof = proof.ok_or(StatusCode::NOT_FOUND)?;
+        let mut reply = Response::new(
+            Full::new(Bytes::from(proof))
+                .map_err(|never| match never {})
+                .boxed_unsync(),
+        );
+        reply
+            .headers_mut()
+            .insert(CONNECTION, HeaderValue::from_static("close"));
+        return Ok(reply);
+    }
     let (given, rest) = path.split_once('/').unwrap_or((path, ""));
     if !bool::from(given.as_bytes().ct_eq(secret.as_bytes())) {
         // Not the app: do not keep its connection open either.
@@ -956,5 +1039,144 @@ mod tests {
             started.elapsed()
         );
         assert_eq!(playing.await.unwrap(), 200);
+    }
+
+    #[tokio::test]
+    async fn an_app_on_our_old_port_is_not_taken_for_us() {
+        let dir = tempfile::tempdir().unwrap();
+        let core = Arc::new(
+            Core::start(CoreConfig::new(dir.path().join("d"), dir.path().join("c"))).unwrap(),
+        );
+        let urls = core.media_server().unwrap();
+        let (address, secret) = urls
+            .grid_base
+            .strip_prefix("http://")
+            .unwrap()
+            .split_once('/')
+            .unwrap();
+        let (address, secret) = (address.to_owned(), secret.to_owned());
+        core.close_listeners_for_test();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        // Another app takes the freed port and answers anything.
+        let impostor = std::net::TcpListener::bind(&address).unwrap();
+        let heard = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log = heard.clone();
+        std::thread::spawn(move || {
+            for stream in impostor.incoming().flatten() {
+                let mut stream = stream;
+                let _ = stream.set_read_timeout(Some(Duration::from_millis(200)));
+                let mut buffer = [0u8; 2048];
+                let n = std::io::Read::read(&mut stream, &mut buffer).unwrap_or(0);
+                log.lock().unwrap().extend_from_slice(&buffer[..n]);
+                let _ = std::io::Write::write_all(
+                    &mut stream,
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok",
+                );
+            }
+        });
+        let reopened = core.media_server().unwrap();
+        assert_ne!(
+            reopened.grid_base, urls.grid_base,
+            "kept an address another app holds"
+        );
+        let heard = String::from_utf8_lossy(&heard.lock().unwrap()).into_owned();
+        assert!(!heard.contains(&secret), "the probe gave the secret away");
+    }
+
+    /// Invariant (a): a secret works only on connections its live listener
+    /// owns. Busy slots make `ensure_running` reopen (the production path:
+    /// `dead.task.abort()`); a connection held from before must die with it.
+    #[tokio::test]
+    async fn a_replaced_listener_takes_its_connections_with_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let core = Arc::new(
+            Core::start(CoreConfig::new(dir.path().join("d"), dir.path().join("c"))).unwrap(),
+        );
+        let urls = core.media_server().unwrap();
+        let (address, secret) = urls
+            .grid_base
+            .strip_prefix("http://")
+            .unwrap()
+            .split_once('/')
+            .unwrap();
+        let (address, secret) = (address.to_owned(), secret.to_owned());
+        let request = format!("GET /{secret}/api/assets/a1/thumbnail HTTP/1.1\r\nHost: l\r\n\r\n");
+        let mut held = tokio::net::TcpStream::connect(&address).await.unwrap();
+        held.write_all(request.as_bytes()).await.unwrap();
+        let mut head = vec![];
+        while !head.ends_with(b"\r\n\r\n") {
+            head.push(held.read_u8().await.unwrap());
+        }
+        assert!(
+            head.starts_with(b"HTTP/1.1 401"),
+            "the secret works on its own listener"
+        );
+        let mut idle = vec![];
+        for _ in 1..MAX_CONNECTIONS {
+            idle.push(tokio::net::TcpStream::connect(&address).await.unwrap());
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let reopened = tokio::task::spawn_blocking({
+            let core = core.clone();
+            move || core.media_server().unwrap()
+        })
+        .await
+        .unwrap();
+        assert_ne!(
+            reopened.grid_base, urls.grid_base,
+            "all slots busy: reopened"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        // The same request, on the connection held from before the reopen.
+        let again = held.write_all(request.as_bytes()).await;
+        let mut answer = [0u8; 12];
+        let read = tokio::time::timeout(Duration::from_secs(2), held.read_exact(&mut answer)).await;
+        let answered = again.is_ok() && matches!(read, Ok(Ok(_)));
+        assert!(!answered, "the old secret still works on an old connection");
+    }
+
+    /// Invariant (c): `ensure_running` returns in bounded time, whatever holds the port.
+    #[tokio::test]
+    async fn a_slow_impostor_cannot_hold_the_app_up() {
+        let dir = tempfile::tempdir().unwrap();
+        let core = Arc::new(
+            Core::start(CoreConfig::new(dir.path().join("d"), dir.path().join("c"))).unwrap(),
+        );
+        let urls = core.media_server().unwrap();
+        let address = urls
+            .grid_base
+            .strip_prefix("http://")
+            .unwrap()
+            .split_once('/')
+            .unwrap()
+            .0
+            .to_owned();
+        core.close_listeners_for_test();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let impostor = std::net::TcpListener::bind(&address).unwrap();
+        std::thread::spawn(move || {
+            for stream in impostor.incoming().flatten() {
+                std::thread::spawn(move || {
+                    let mut stream = stream;
+                    // One byte every 200 ms, forever.
+                    while std::io::Write::write_all(&mut stream, b"H").is_ok() {
+                        std::thread::sleep(Duration::from_millis(200));
+                    }
+                });
+            }
+        });
+        let started = Instant::now();
+        let reopened = tokio::task::spawn_blocking({
+            let core = core.clone();
+            move || core.media_server().unwrap()
+        })
+        .await
+        .unwrap();
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "{:?}",
+            started.elapsed()
+        );
+        assert_ne!(reopened.grid_base, urls.grid_base);
     }
 }

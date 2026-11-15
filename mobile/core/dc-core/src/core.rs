@@ -433,8 +433,12 @@ impl Core {
     }
 
     /// The local media server's addresses (design §5.7, `ensure_running`):
-    /// both listeners open on first use, and one the OS closed — iOS does that
-    /// to a suspended app — opens again on the next call, maybe on a new port.
+    /// both listeners open on first use; one that no longer answers as ours —
+    /// iOS closes a suspended app's sockets, another app may take the port,
+    /// or it is too busy to answer — opens again on a new port with a new
+    /// secret, and its old connections end. The app must use the addresses
+    /// returned and reload what failed. Blocks up to ~2 s per listener: call
+    /// it off the core's async threads and off the UI thread.
     pub fn media_server(self: &Arc<Self>) -> Result<MediaServer, CoreError> {
         crate::media_server::ensure_running(self, &mut lock(&self.server))
     }
