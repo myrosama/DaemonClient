@@ -8,6 +8,7 @@ mod disk_cache;
 mod error;
 pub mod http;
 pub mod logging;
+pub mod media_server;
 pub mod reader;
 pub mod sched;
 mod secret;

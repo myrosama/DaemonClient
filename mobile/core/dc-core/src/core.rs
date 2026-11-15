@@ -13,7 +13,8 @@ use tokio::sync::OnceCell;
 
 use crate::chunk_plan::PartSlices;
 use crate::disk_cache::DiskCache;
-use crate::reader::{self, Layout, RangeReader, Rendition, Stored};
+use crate::media_server::{Listeners, MediaServer};
+use crate::reader::{self, Image, Layout, PartCache, RangeReader, Rendition, Stored};
 use crate::sched::{Class, Fetch, Limits, Scheduler};
 use crate::session::{Deployment, Session};
 use crate::telegram::Telegram;
@@ -23,6 +24,9 @@ use crate::{CoreError, Secret};
 pub const TELEGRAM_API: &str = "https://api.telegram.org";
 /// Decrypted thumbnails and previews kept on disk (P1 decision C5).
 const MEDIA_CACHE: u64 = 500 * 1024 * 1024;
+/// Recently read parts kept in memory per account: a video's first part, its
+/// last (the index) and the one playing (Task 1.6, Gate 2).
+const PART_CACHE: u64 = 3 * crate::chunk_plan::PART_SIZE;
 /// The largest image kept there (previews measured 1–2.2 MB on the test account).
 const MAX_KEPT: usize = 4 * 1024 * 1024;
 const MANIFEST_TTL: Duration = Duration::from_secs(10 * 60);
@@ -57,6 +61,7 @@ pub struct Core {
     /// The signed-in account; `None` when signed out.
     account: RwLock<Option<Account>>,
     media: Arc<DiskCache>,
+    server: Mutex<Listeners>,
 }
 
 /// One signed-in session and what is made for it on first use. All of it
@@ -68,6 +73,7 @@ struct Account {
     /// Every download; its fetch holds this account's bot and Photos key.
     scheduler: Arc<OnceCell<Arc<Scheduler>>>,
     manifests: Arc<Mutex<Manifests>>,
+    parts: Arc<Mutex<PartCache>>,
 }
 
 /// Asset id → manifest and when it was fetched.
@@ -101,6 +107,7 @@ impl Core {
             config,
             account: RwLock::new(None),
             media,
+            server: Mutex::default(),
         })
     }
 
@@ -168,6 +175,9 @@ impl Core {
             telegram: Arc::default(),
             scheduler: Arc::default(),
             manifests: Arc::default(),
+            parts: Arc::new(Mutex::new(PartCache::new(
+                usize::try_from(PART_CACHE).unwrap_or(usize::MAX),
+            ))),
         });
         Ok(())
     }
@@ -306,17 +316,25 @@ impl Core {
     }
 
     /// A thumbnail or preview (or the one-file original standing in for it):
-    /// from the disk cache, else downloaded, decrypted and kept.
+    /// from the disk cache, else downloaded, decrypted and kept. Never a
+    /// video: a video with no preview gets its grid thumbnail.
     pub async fn image(
         &self,
         asset_id: &str,
         rendition: Rendition,
         class: Class,
-    ) -> Result<Bytes, CoreError> {
+    ) -> Result<Image, CoreError> {
         // Taken first: a sign-out or another account from here on drops the write.
         let generation = self.media.generation();
         let manifest = self.manifest(asset_id).await?;
-        let selection = reader::select(&manifest, rendition)?;
+        let picture = |s: &reader::Selection| s.mime.starts_with("image/");
+        let selection = match reader::select(&manifest, rendition)? {
+            s if picture(&s) => s,
+            _ => reader::select(&manifest, Rendition::Thumbnail)?,
+        };
+        if !picture(&selection) {
+            return Err(CoreError::NotFound);
+        }
         let [file_id] = selection.file_ids.as_slice() else {
             return Err(CoreError::Internal(
                 "an image is one stored file".to_owned(),
@@ -332,7 +350,10 @@ impl Core {
         if keep {
             let (media, name) = (self.media.clone(), name.clone());
             if let Ok(Some(bytes)) = self.handle.spawn_blocking(move || media.get(&name)).await {
-                return Ok(bytes);
+                return Ok(Image {
+                    bytes,
+                    mime: selection.mime,
+                });
             }
         }
         let scheduler = Arc::downgrade(&self.scheduler().await?);
@@ -345,7 +366,10 @@ impl Core {
                 .spawn_blocking(move || media.put(&name, &kept, generation))
                 .await;
         }
-        Ok(bytes)
+        Ok(Image {
+            bytes,
+            mime: selection.mime,
+        })
     }
 
     /// The size, part count and type of an original or of a video's playback.
@@ -373,25 +397,55 @@ impl Core {
         })
     }
 
-    /// Reads `slices` (planned with `chunk_plan` on `layout`'s size) of an
+    /// Reads `slices` (planned with `chunk_plan` on `layout`'s `size`) of an
     /// original or a video's playback, a part at a time.
     pub async fn range(
         &self,
         asset_id: &str,
         rendition: Rendition,
+        size: u64,
         slices: PartSlices,
         class: Class,
     ) -> Result<RangeReader, CoreError> {
         let manifest = self.manifest(asset_id).await?;
         let selection = reader::select(&manifest, rendition)?;
+        // `slices` were planned on `size`: a manifest renewed since (a
+        // rendition added, say) must not have its bytes sent under them.
+        if selection.size != 0 && selection.size != size {
+            return Err(CoreError::Corrupt(
+                "the file changed while it was being read".to_owned(),
+            ));
+        }
         let scheduler = Arc::downgrade(&self.scheduler().await?);
+        let parts = {
+            let account = self.account.read().map_err(|_| poisoned())?;
+            Arc::downgrade(&account.as_ref().ok_or(CoreError::SignedOut)?.parts)
+        };
         Ok(RangeReader {
             scheduler,
             selection,
             stored: Stored::of(&manifest),
             slices,
             class,
+            ahead: None,
+            parts,
         })
+    }
+
+    /// The local media server's addresses (design §5.7, `ensure_running`):
+    /// both listeners open on first use, and one the OS closed — iOS does that
+    /// to a suspended app — opens again on the next call, maybe on a new port.
+    pub fn media_server(self: &Arc<Self>) -> Result<MediaServer, CoreError> {
+        crate::media_server::ensure_running(self, &mut lock(&self.server))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn close_listeners_for_test(&self) {
+        lock(&self.server).close(&self.handle);
+    }
+
+    pub(crate) fn handle(&self) -> &tokio::runtime::Handle {
+        &self.handle
     }
 
     /// One HTTPS request to Telegram; its HTTP status. The device check of
@@ -434,7 +488,7 @@ impl Drop for Core {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::chunk_plan::{PART_SIZE, RangePlan, plan_range};
     use crate::reader::Rendition;
@@ -505,7 +559,10 @@ mod tests {
         assert!(matches!(core.restore(tampered), Err(CoreError::BadAddress)));
     }
 
-    async fn bot_server(delay_ms: u64, expected_config_fetches: u64) -> wiremock::MockServer {
+    async fn bot_server(
+        delay_ms: u64,
+        expected_config_fetches: impl Into<wiremock::Times>,
+    ) -> wiremock::MockServer {
         let server = wiremock::MockServer::start().await;
         wiremock::Mock::given(wiremock::matchers::path("/api/auth/login"))
             .respond_with(
@@ -558,22 +615,22 @@ mod tests {
     const PASSWORD: &str = "correct horse battery staple";
     const SALT: &str = "c2FsdC1zYWx0LXNhbHQhIQ==";
 
-    fn sealed(plain: &[u8]) -> Vec<u8> {
+    pub(crate) fn sealed(plain: &[u8]) -> Vec<u8> {
         crate::crypto::encrypt_part(&crate::crypto::derive_key(PASSWORD, SALT).unwrap(), plain)
             .unwrap()
     }
 
     /// A signed-in core whose worker serves asset `a1` with `manifest`, whose
     /// bot serves `files` (file_id, stored bytes, downloads expected).
-    async fn library(
+    pub(crate) async fn library(
         manifest: serde_json::Value,
         encryption: bool,
         files: Vec<(&str, Vec<u8>, u64)>,
         manifest_fetches: u64,
     ) -> (wiremock::MockServer, Core, tempfile::TempDir) {
-        use wiremock::matchers::{path, query_param};
+        use wiremock::matchers::path;
         use wiremock::{Mock, ResponseTemplate};
-        let server = bot_server(0, 1).await;
+        let server = bot_server(0, 0..=1).await; // HEAD needs no bot
         let zke = serde_json::json!({"enabled": encryption, "password": PASSWORD, "salt": SALT});
         Mock::given(path("/api/server/zke-config"))
             .respond_with(ResponseTemplate::new(200).set_body_json(zke))
@@ -586,18 +643,7 @@ mod tests {
             .mount(&server)
             .await;
         for (id, bytes, downloads) in files {
-            Mock::given(path("/bot1:A/getFile"))
-                .and(query_param("file_id", id))
-                .respond_with(ResponseTemplate::new(200).set_body_json(
-                    serde_json::json!({"ok": true, "result": {"file_path": format!("p/{id}")}}),
-                ))
-                .mount(&server)
-                .await;
-            Mock::given(path(format!("/file/bot1:A/p/{id}")))
-                .respond_with(ResponseTemplate::new(200).set_body_bytes(bytes))
-                .expect(downloads)
-                .mount(&server)
-                .await;
+            mount_file(&server, id, bytes, downloads, std::time::Duration::ZERO).await;
         }
         let dir = tempfile::tempdir().unwrap();
         let mut config = config_in(&dir);
@@ -609,7 +655,35 @@ mod tests {
         (server, core, dir)
     }
 
-    fn photo(fields: serde_json::Value) -> serde_json::Value {
+    /// The bot serves `id` (getFile, then the file after `delay`), downloaded `downloads` times.
+    pub(crate) async fn mount_file(
+        server: &wiremock::MockServer,
+        id: &str,
+        bytes: Vec<u8>,
+        downloads: u64,
+        delay: std::time::Duration,
+    ) {
+        use wiremock::matchers::{path, query_param};
+        use wiremock::{Mock, ResponseTemplate};
+        Mock::given(path("/bot1:A/getFile"))
+            .and(query_param("file_id", id))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({"ok": true, "result": {"file_path": format!("p/{id}")}}),
+            ))
+            .mount(server)
+            .await;
+        Mock::given(path(format!("/file/bot1:A/p/{id}")))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_bytes(bytes)
+                    .set_delay(delay),
+            )
+            .expect(downloads)
+            .mount(server)
+            .await;
+    }
+
+    pub(crate) fn photo(fields: serde_json::Value) -> serde_json::Value {
         let mut m = serde_json::json!({"encryptionMode": "server", "mimeType": "image/heic", "fileSize": 10});
         if let (Some(m), Some(f)) = (m.as_object_mut(), fields.as_object()) {
             m.extend(f.clone());
@@ -634,7 +708,7 @@ mod tests {
                 .image("a1", Rendition::Thumbnail, Class::Visible)
                 .await
                 .unwrap();
-            assert_eq!(&bytes[..], b"jpeg");
+            assert_eq!(&bytes.bytes[..], b"jpeg");
         }
     }
 
@@ -655,7 +729,7 @@ mod tests {
             panic!("no range")
         };
         let mut reader = core
-            .range("a1", Rendition::Original, slices, Class::Opened)
+            .range("a1", Rendition::Original, size, slices, Class::Opened)
             .await
             .unwrap();
         assert_eq!(read_all(&mut reader).await.unwrap(), b"\x07\x07\x07012");
@@ -670,7 +744,7 @@ mod tests {
             panic!("no range")
         };
         let mut reader = core
-            .range("a1", Rendition::Original, slices, Class::Opened)
+            .range("a1", Rendition::Original, 10, slices, Class::Opened)
             .await
             .unwrap();
         assert!(matches!(
@@ -683,7 +757,7 @@ mod tests {
             panic!("no range")
         };
         let mut reader = core
-            .range("a1", Rendition::Original, slices, Class::Opened)
+            .range("a1", Rendition::Original, 10, slices, Class::Opened)
             .await
             .unwrap();
         assert!(
@@ -713,7 +787,8 @@ mod tests {
                 &core
                     .image("a1", Rendition::Thumbnail, Class::Visible)
                     .await
-                    .unwrap()[..],
+                    .unwrap()
+                    .bytes[..],
                 b"plain"
             );
         }
@@ -744,7 +819,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            &bytes[..],
+            &bytes.bytes[..],
             b"jpeg",
             "from disk: the file was downloaded once"
         );
@@ -795,6 +870,7 @@ mod tests {
                 core.image("a1", Rendition::Thumbnail, Class::Visible)
                     .await
                     .unwrap()
+                    .bytes
                     .len(),
                 5 << 20
             );
@@ -816,7 +892,7 @@ mod tests {
                 .image("a1", Rendition::Thumbnail, Class::Visible)
                 .await
                 .unwrap();
-            assert_eq!(bytes.to_vec(), jpeg, "served raw, then from disk");
+            assert_eq!(bytes.bytes.to_vec(), jpeg, "served raw, then from disk");
         }
         let err = core
             .image("a1", Rendition::Preview, Class::Opened)
@@ -830,12 +906,60 @@ mod tests {
             panic!("no range")
         };
         let mut reader = core
-            .range("a1", Rendition::Original, slices, Class::Opened)
+            .range("a1", Rendition::Original, 10, slices, Class::Opened)
             .await
             .unwrap();
         assert!(
             matches!(read_all(&mut reader).await, Err(CoreError::Corrupt(_))),
             "parts never fall back"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_part_read_again_comes_from_memory() {
+        let one = photo(serde_json::json!({"originalId": "o"}));
+        let (_server, core, _dir) =
+            library(one, true, vec![("o", sealed(b"0123456789"), 1)], 1).await;
+        for (first, last, want) in [(0, 1, &b"01"[..]), (2, 9, &b"23456789"[..])] {
+            let RangePlan::Partial(slices) = plan_range(10, first, last) else {
+                panic!("no range")
+            };
+            let mut reader = core
+                .range("a1", Rendition::Original, 10, slices, Class::Opened)
+                .await
+                .unwrap();
+            assert_eq!(read_all(&mut reader).await.unwrap(), want);
+        }
+    }
+
+    #[tokio::test]
+    async fn an_image_is_never_a_video() {
+        let m = photo(serde_json::json!({"originalId": "o", "mimeType": "video/mp4"}));
+        let (_server, core, _dir) =
+            library(m, true, vec![("o", sealed(b"0123456789"), 0)], 1).await;
+        let err = core
+            .image("a1", Rendition::Thumbnail, Class::Visible)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, CoreError::NotFound), "{err}");
+    }
+
+    #[tokio::test]
+    async fn a_range_planned_on_another_size_is_refused() {
+        let one = photo(serde_json::json!({"originalId": "o"}));
+        let (_server, core, _dir) =
+            library(one, true, vec![("o", sealed(b"0123456789"), 0)], 1).await;
+        let RangePlan::Partial(slices) = plan_range(11, 0, 10) else {
+            panic!("no range")
+        };
+        let err = core
+            .range("a1", Rendition::Original, 11, slices, Class::Opened)
+            .await
+            .err()
+            .unwrap();
+        assert!(
+            matches!(err, CoreError::Corrupt(_)),
+            "the file changed since its layout: {err}"
         );
     }
 
@@ -850,7 +974,7 @@ mod tests {
             panic!("no range")
         };
         let mut reader = core
-            .range("a1", Rendition::Original, slices, Class::Opened)
+            .range("a1", Rendition::Original, 10, slices, Class::Opened)
             .await
             .unwrap();
         assert_eq!(read_all(&mut reader).await.unwrap(), b"234");
@@ -872,7 +996,7 @@ mod tests {
         let bytes = second
             .block_on(core.image("a1", Rendition::Preview, Class::Opened))
             .unwrap();
-        assert_eq!(&bytes[..], b"preview");
+        assert_eq!(&bytes.bytes[..], b"preview");
     }
 
     #[tokio::test]
@@ -887,7 +1011,7 @@ mod tests {
             panic!("no range")
         };
         let mut reader = core
-            .range("a1", Rendition::Original, slices, Class::Opened)
+            .range("a1", Rendition::Original, 10, slices, Class::Opened)
             .await
             .unwrap();
         core.sign_out().unwrap();
