@@ -52,19 +52,38 @@ impl Worker {
 
     /// The Photos key, or `None` when the library is not encrypted.
     pub async fn photos_key(&self) -> Result<Option<crypto::Key>, CoreError> {
-        let zke = self.zke_config().await?;
-        // The D1 worker sends "" for missing settings; the web treats that as no key too.
-        let password = zke.password.filter(|p| !p.expose().is_empty());
-        let salt = zke.salt.filter(|s| !s.is_empty());
-        let (true, Some(password), Some(salt)) = (zke.enabled, password, salt) else {
-            return Ok(None);
-        };
-        // PBKDF2 is slow on purpose: keep it off the async threads.
-        let key = tokio::task::spawn_blocking(move || crypto::derive_key(password.expose(), &salt))
-            .await
-            .map_err(|e| CoreError::Internal(format!("key derivation stopped: {e}")))?
-            .map_err(|e| CoreError::Server(format!("unusable encryption settings: {e}")))?;
-        Ok(Some(key))
+        Ok(self.encryption().await?.1)
+    }
+
+    /// Whether encryption is on, and the Photos key when it can be made — on
+    /// without a key means the settings are unfinished (nothing may upload).
+    pub async fn encryption(&self) -> Result<(bool, Option<crypto::Key>), CoreError> {
+        key_from(self.zke_config().await?).await
+    }
+
+    /// Registers an asset whose bytes the phone sent to Telegram itself
+    /// (`clientUpload`, D23): metadata only. Its id.
+    pub async fn create_asset(
+        &self,
+        fields: Vec<(&'static str, String)>,
+    ) -> Result<String, CoreError> {
+        #[derive(Deserialize)]
+        struct Created {
+            id: String,
+        }
+        let form = fields
+            .into_iter()
+            .fold(reqwest::multipart::Form::new(), |form, (name, value)| {
+                form.text(name, value)
+            });
+        let reply = self
+            .http
+            .post(format!("{}/api/assets", self.session.worker_url))
+            .bearer_auth(self.session.token.expose())
+            .multipart(form)
+            .send()
+            .await?;
+        Ok(read_json::<Created>(reply, JSON_CAP).await?.id)
     }
 
     pub async fn manifest(&self, asset_id: &str) -> Result<AssetManifest, CoreError> {
@@ -100,6 +119,40 @@ impl Worker {
             .await?;
         Ok(read_json::<BulkCheckReply>(reply, JSON_CAP).await?.results)
     }
+}
+
+/// What a library's encryption settings give: on or off, and the key —
+/// derived off the async threads (PBKDF2 is slow on purpose).
+pub(crate) async fn key_from(zke: ZkeConfig) -> Result<(bool, Option<crypto::Key>), CoreError> {
+    // The D1 worker sends "" for missing settings; the web treats that as no key too.
+    let password = zke.password.filter(|p| !p.expose().is_empty());
+    let salt = zke.salt.filter(|s| !s.is_empty());
+    let (true, Some(password), Some(salt)) = (zke.enabled, password, salt) else {
+        return Ok((zke.enabled, None));
+    };
+    // PBKDF2 is slow on purpose: keep it off the async threads.
+    let key = tokio::task::spawn_blocking(move || crypto::derive_key(password.expose(), &salt))
+        .await
+        .map_err(|e| CoreError::Internal(format!("key derivation stopped: {e}")))?
+        .map_err(|e| CoreError::Server(format!("unusable encryption settings: {e}")))?;
+    Ok((true, Some(key)))
+}
+
+/// Tells whether the settings changed without keeping them (memory only).
+pub(crate) fn settings_digest(zke: &ZkeConfig) -> String {
+    use sha2::Digest;
+    let password = zke
+        .password
+        .as_ref()
+        .map(|p| p.expose().as_str())
+        .unwrap_or_default();
+    let digest = sha2::Sha256::new()
+        .chain_update([u8::from(zke.enabled)])
+        .chain_update(password.as_bytes())
+        .chain_update(b"\0")
+        .chain_update(zke.salt.as_deref().unwrap_or_default().as_bytes())
+        .finalize();
+    crate::disk_cache::hex(&digest)
 }
 
 use crate::http::JSON_CAP;

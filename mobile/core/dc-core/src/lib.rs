@@ -14,6 +14,7 @@ pub mod sched;
 mod secret;
 pub mod session;
 pub mod telegram;
+pub mod upload;
 pub mod worker;
 
 pub use crate::core::{Core, CoreConfig, TELEGRAM_API};

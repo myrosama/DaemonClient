@@ -23,17 +23,37 @@ pub(crate) fn tls_config() -> Result<rustls::ClientConfig, rustls::Error> {
 }
 
 pub fn client() -> Result<reqwest::Client, CoreError> {
+    builder()?
+        .read_timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|e| CoreError::Internal(format!("HTTP client set-up failed: {e}")))
+}
+
+/// For sending files. Without `client`'s 30 s limit: reqwest counts it from
+/// the start of the request until the answer begins, so a 19 MiB part on a
+/// slow uplink — minutes — would always fail (Task 1.7, Gate 2). Each send
+/// gets `upload_timeout` instead; keepalive notices a dead connection.
+pub fn upload_client() -> Result<reqwest::Client, CoreError> {
+    builder()?
+        .tcp_keepalive(Duration::from_secs(30))
+        .build()
+        .map_err(|e| CoreError::Internal(format!("HTTP client set-up failed: {e}")))
+}
+
+/// Time allowed to send `bytes`: a minute, and as long as 20 KB/s needs.
+pub(crate) fn upload_timeout(bytes: usize) -> Duration {
+    Duration::from_secs(60 + u64::try_from(bytes / 20_000).unwrap_or(u64::MAX / 2))
+}
+
+fn builder() -> Result<reqwest::ClientBuilder, CoreError> {
     let tls = tls_config().map_err(|e| CoreError::Internal(format!("TLS set-up failed: {e}")))?;
-    reqwest::Client::builder()
+    Ok(reqwest::Client::builder()
         .tls_backend_preconfigured(tls)
         .connect_timeout(Duration::from_secs(10))
-        .read_timeout(Duration::from_secs(30))
         .user_agent(concat!("DaemonClient-core/", env!("CARGO_PKG_VERSION")))
         // The worker and Telegram never redirect API calls; following one
         // could carry the bot token to another host.
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|e| CoreError::Internal(format!("HTTP client set-up failed: {e}")))
+        .redirect(reqwest::redirect::Policy::none()))
 }
 
 /// The most JSON the core reads from a worker or the Bot API.

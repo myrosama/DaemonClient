@@ -62,6 +62,7 @@ pub struct Core {
     account: RwLock<Option<Account>>,
     media: Arc<DiskCache>,
     server: Mutex<Listeners>,
+    uploading: Arc<Mutex<std::collections::HashSet<PathBuf>>>,
 }
 
 /// One signed-in session and what is made for it on first use. All of it
@@ -74,6 +75,16 @@ struct Account {
     scheduler: Arc<OnceCell<Arc<Scheduler>>>,
     manifests: Arc<Mutex<Manifests>>,
     parts: Arc<Mutex<PartCache>>,
+    /// The encryption settings' digest and what they give.
+    encryption: Arc<Mutex<Option<(String, Encryption)>>>,
+}
+
+/// Whether the library is encrypted, and its Photos key when it can be made
+/// (on without a key: unfinished settings — nothing may be uploaded).
+#[derive(Clone)]
+pub(crate) struct Encryption {
+    pub(crate) enabled: bool,
+    pub(crate) key: Option<Arc<crate::crypto::Key>>,
 }
 
 /// Asset id → manifest and when it was fetched.
@@ -108,6 +119,7 @@ impl Core {
             account: RwLock::new(None),
             media,
             server: Mutex::default(),
+            uploading: Arc::default(),
         })
     }
 
@@ -169,6 +181,8 @@ impl Core {
             && (current.user_id != session.user_id || current.worker_url != session.worker_url)
         {
             self.media.clear();
+            // Uploads under way belong to the account that started them.
+            let _ = std::fs::remove_dir_all(self.config.data_dir.join("uploads"));
         }
         *account = Some(Account {
             worker: Arc::new(Worker::new(self.http.clone(), session)),
@@ -178,6 +192,7 @@ impl Core {
             parts: Arc::new(Mutex::new(PartCache::new(
                 usize::try_from(PART_CACHE).unwrap_or(usize::MAX),
             ))),
+            encryption: Arc::default(),
         });
         Ok(())
     }
@@ -189,6 +204,7 @@ impl Core {
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
         self.media.clear();
+        let _ = std::fs::remove_dir_all(self.config.data_dir.join("uploads"));
         Ok(())
     }
 
@@ -219,7 +235,7 @@ impl Core {
                     self.config.telegram_api.clone(),
                     config.bot_token,
                     config.channel_id,
-                )))
+                )?))
             })
             .await?
             .clone();
@@ -237,20 +253,57 @@ impl Core {
         }
     }
 
-    /// The account's download scheduler, made on first read.
-    async fn scheduler(&self) -> Result<Arc<Scheduler>, CoreError> {
-        let (worker, cell) = {
+    /// The account's encryption settings, fetched once per session (the key
+    /// derivation is slow on purpose: a library's uploads must not repeat it).
+    pub(crate) async fn encryption(&self) -> Result<Encryption, CoreError> {
+        let (worker, cache) = {
             let account = self.account.read().map_err(|_| poisoned())?;
             let account = account.as_ref().ok_or(CoreError::SignedOut)?;
-            (account.worker.clone(), account.scheduler.clone())
+            (account.worker.clone(), account.encryption.clone())
+        };
+        // Asked every time — a long background backup must see encryption
+        // switched on at the website — but derived only when it changed.
+        let zke = self.run(async move { worker.zke_config().await }).await??;
+        let digest = crate::worker::settings_digest(&zke);
+        if let Some((known, encryption)) = lock(&cache).as_ref()
+            && *known == digest
+        {
+            return Ok(encryption.clone());
+        }
+        let (enabled, key) = self.run(crate::worker::key_from(zke)).await??;
+        let encryption = Encryption {
+            enabled,
+            key: key.map(Arc::new),
+        };
+        *lock(&cache) = Some((digest, encryption.clone()));
+        self.still_signed_in(|a| Arc::ptr_eq(&a.encryption, &cache))?;
+        Ok(encryption)
+    }
+
+    /// Whether `worker`'s account is still the signed-in one.
+    pub(crate) fn signed_in_as(&self, worker: &Arc<Worker>) -> Result<(), CoreError> {
+        self.still_signed_in(|a| Arc::ptr_eq(&a.worker, worker))
+    }
+
+    /// The uploads under way in this process (one per file at a time).
+    pub(crate) fn uploading(&self) -> &Arc<Mutex<std::collections::HashSet<PathBuf>>> {
+        &self.uploading
+    }
+
+    /// The account's download scheduler, made on first read.
+    pub(crate) async fn scheduler(&self) -> Result<Arc<Scheduler>, CoreError> {
+        let cell = {
+            let account = self.account.read().map_err(|_| poisoned())?;
+            account
+                .as_ref()
+                .ok_or(CoreError::SignedOut)?
+                .scheduler
+                .clone()
         };
         let scheduler = cell
             .get_or_try_init(|| async {
                 let telegram = self.telegram().await?;
-                let key = self
-                    .run(async move { worker.photos_key().await })
-                    .await??
-                    .map(Arc::new);
+                let key = self.encryption().await?.key;
                 let fetch: Fetch = Arc::new(move |job: String| {
                     let (telegram, key) = (telegram.clone(), key.clone());
                     Box::pin(async move {
@@ -448,6 +501,10 @@ impl Core {
         lock(&self.server).close(&self.handle);
     }
 
+    pub(crate) fn data_dir(&self) -> &std::path::Path {
+        &self.config.data_dir
+    }
+
     pub(crate) fn handle(&self) -> &tokio::runtime::Handle {
         &self.handle
     }
@@ -638,7 +695,6 @@ pub(crate) mod tests {
         let zke = serde_json::json!({"enabled": encryption, "password": PASSWORD, "salt": SALT});
         Mock::given(path("/api/server/zke-config"))
             .respond_with(ResponseTemplate::new(200).set_body_json(zke))
-            .expect(0..=1) // the Photos key: derived at most once per session
             .mount(&server)
             .await;
         Mock::given(path("/api/assets/a1/dc-manifest"))
@@ -916,6 +972,17 @@ pub(crate) mod tests {
         assert!(
             matches!(read_all(&mut reader).await, Err(CoreError::Corrupt(_))),
             "parts never fall back"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_key_is_derived_again_only_when_the_settings_change() {
+        let (_server, core, _dir) = library(photo(serde_json::json!({})), true, vec![], 0).await;
+        let first = core.encryption().await.unwrap().key.unwrap();
+        let again = core.encryption().await.unwrap().key.unwrap();
+        assert!(
+            Arc::ptr_eq(&first, &again),
+            "same settings: the same key, not derived again"
         );
     }
 
