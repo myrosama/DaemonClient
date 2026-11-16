@@ -1661,3 +1661,89 @@ fallback is not observable (the unit test is the evidence).
   send the part it already holds and one prefetched part (the request was
   allowed when made).
 
+
+## Task 1.7 — The upload engine
+
+**Delivers:** design §5.8 steps 1–7, in the foreground: a file on the phone
+becomes an asset of the account, its bytes sent to Telegram by the core
+itself, the worker given only the metadata (`clientUpload`), exactly as the
+website's uploader does it (`immich/web/src/lib/utils/file-uploader.ts`,
+`daemonclient-drive.ts` `uploadMedia`) plus the phone's improvements
+(C3 random part names, C7 a few parts on disk, the resume journal).
+
+**Not in this task — a decision for the operator first:** §5.8's
+background hand-off ("part N is ready at this path, send it to this Telegram
+address") would give the platform's background uploader a Telegram URL, and
+that URL holds the bot token — against D21 ("storage credentials never leave
+the core"). Options for P2: (a) the OS uploader gets the URL anyway; (b) the
+OS uploader posts parts to the user's own worker, which sends them on
+(a worker change; parts are 19 MiB, under Cloudflare's limit); (c) foreground
+and short background windows only. Asked in NOW.md; 1.7 builds the engine
+both would use.
+
+**Files:** create `src/upload.rs`, `examples/upload.rs`; modify
+`src/core.rs` (`Core::upload`), `src/worker.rs` (asset creation, the D18
+thumbnail route), `Cargo.toml` (`sha1`, RustCrypto, the same family as
+`sha2` — the checksum the worker dedupes on is base64 SHA-1).
+
+**Interfaces:**
+- `Core::upload(UploadRequest, on_progress) -> Result<Uploaded, CoreError>`;
+  `UploadRequest { path, file_name, mime, created_at, modified_at,
+  device_asset_id, device_id, width, height, duration, latitude, longitude,
+  favorite, live_photo_video_id, thumbnail: Option<Picture>, preview:
+  Option<Picture> }` (the pictures and their thumbhash are made by the app,
+  P2); `Uploaded { asset_id, duplicate }`. Dropping the future stops the
+  upload; calling `upload` again with the same request resumes it.
+- The journal: `data_dir/uploads/<SHA-256 of device id + device asset id>`,
+  JSON, written atomically, no secrets: the encryption mode and a
+  fingerprint of the key it started with, the checksum, the parts sent
+  (`{index, message_id, file_id}`), the thumbnail's `file_id`, the step.
+
+**Rules:**
+- **Order** (§5.8): checksum (streamed) → `bulk-upload-check` (already
+  stored → `Uploaded { duplicate }`, nothing sent) → parts → thumbnail →
+  `POST /api/assets` → (HEIC/HEIF/RAW) `POST /api/assets/{id}/thumbnail` →
+  remove the temporary files and the journal.
+- **Encryption:** the Photos key when the library is encrypted (`server`,
+  as the website); none when encryption is off; **refused** when encryption
+  is on but its settings are incomplete (the 1.2 carry-forward — never a
+  plaintext upload by accident).
+- **Parts:** 19 MiB slices, each with its own random IV, at most 2 waiting on
+  disk (C7), each deleted once sent; names: random 16 hex + `.partNNN` when
+  encrypted (C3), the real name (as the website) when not; one part at a
+  time through the scheduler's send slot, paced by the Telegram client.
+- **Journal:** each sent part recorded at once; a resumed upload sends no
+  recorded part again; a key that changed since the journal was written
+  means starting over; the asset creation is retried with the same parts.
+- **Thumbnail:** encrypted as a document `thumb.bin`, or a plain `sendPhoto`
+  (as the website); HEIC/HEIF/RAW send none here — the D18 route takes the
+  thumbnail and the ~1440 px preview and stores both itself.
+- **Fields** (`clientUpload=true`, the worker's names): `telegramChunks`,
+  `telegramOriginalId` (the part's `file_id` when there is one part),
+  `telegramThumbId`, `encryptionMode`, `thumbEncrypted`, `fileName`,
+  `fileSize`, `mimeType`, `checksum`, `fileCreatedAt`, `fileModifiedAt`,
+  `deviceAssetId`, `deviceId`, `width`, `height`, `duration`, `latitude`,
+  `longitude`, `isFavorite`, `livePhotoVideoId`, `thumbhash`.
+- **Failures:** a rate limit waits and retries the same part (the Telegram
+  client pauses); "the storage refused" stops the upload with that message;
+  network trouble retries with growing waits (1, 2, 4 s), then returns the
+  error with the journal kept.
+
+- [ ] **Step 1:** tests first, failing (wiremock worker + Telegram, as in
+  1.2–1.6): checksum against a known SHA-1; a duplicate stops before any
+  send; part slicing, names and IVs; at most 2 parts on disk; journal written
+  after each part and resume sends nothing twice; a changed key starts over;
+  incomplete encryption refused; every form field and its name; one part →
+  `telegramOriginalId`; HEIC → no thumbnail send, the D18 route called with
+  both pictures; a rate limit retried; a refusal stops; temp files and
+  journal gone at the end.
+- [ ] **Step 2:** implement. Run → pass; clippy, fmt, `cargo deny`.
+- [ ] **Step 3: Gate 2** — `examples/upload.rs` on the test account (uploads
+  and deletes there are approved): a new JPEG, a HEIC made with `sips`, and a
+  video over 100 MB (`avconvert` of a test-account video, so its checksum is
+  new); each read back through the core byte-identical to its source, seen
+  in the timeline, its thumbnail a picture; one upload stopped after two
+  parts and resumed — a counting relay shows no part sent twice; the same
+  file again → a duplicate, nothing sent; then the test assets deleted
+  (`DELETE /api/assets`, which removes their parts from the channel).
+- [ ] **Step 4:** Gate 3 (one reviewer at a time); commit code, then docs.
