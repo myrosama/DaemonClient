@@ -1689,10 +1689,11 @@ thumbnail route), `Cargo.toml` (`sha1`, RustCrypto, the same family as
 **Interfaces:**
 - `Core::upload(UploadRequest, on_progress) -> Result<Uploaded, CoreError>`;
   `UploadRequest { path, file_name, mime, created_at, modified_at,
-  device_asset_id, device_id, width, height, duration, latitude, longitude,
-  favorite, live_photo_video_id, thumbnail: Option<Picture>, preview:
-  Option<Picture> }` (the pictures and their thumbhash are made by the app,
-  P2); `Uploaded { asset_id, duplicate }`. Dropping the future stops the
+  device_asset_id, device_id, width, height, duration, favorite,
+  live_photo_video_id, thumbnail, preview, thumbhash, exif }` — the device
+  ids required (a retried creation then finds the asset already made); the
+  pictures, thumbhash and EXIF made by the app (P2, D23);
+  `Uploaded { asset_id, duplicate }`. Dropping the future stops the
   upload; calling `upload` again with the same request resumes it.
 - The hand-off (D22): `Core::next_part(&job) -> Option<PartToSend { index,
   body_path, url, content_type }>` (prepares at most 2 ahead) and
@@ -1713,10 +1714,10 @@ thumbnail route), `Cargo.toml` (`sha1`, RustCrypto, the same family as
   different hash would match nothing already stored and upload the whole
   library again. Part integrity is AES-GCM's; per-file progress is the
   journal's; which photos are backed up is the app's own database (P2).
-- **Order** (§5.8): checksum (streamed) → `bulk-upload-check` (already
-  stored → `Uploaded { duplicate }`, nothing sent) → parts → thumbnail →
-  `POST /api/assets` → (HEIC/HEIF/RAW) `POST /api/assets/{id}/thumbnail` →
-  remove the temporary files and the journal.
+- **Order** (§5.8, D23): checksum (streamed) → `bulk-upload-check` (already
+  stored → `Uploaded { duplicate }`, nothing sent) → parts → thumbnail and
+  preview → `POST /api/assets` (metadata only) → remove the temporary files
+  and the journal.
 - **Encryption:** the Photos key when the library is encrypted (`server`,
   as the website); none when encryption is off; **refused** when encryption
   is on but its settings are incomplete (the 1.2 carry-forward — never a
@@ -1728,15 +1729,25 @@ thumbnail route), `Cargo.toml` (`sha1`, RustCrypto, the same family as
 - **Journal:** each sent part recorded at once; a resumed upload sends no
   recorded part again; a key that changed since the journal was written
   means starting over; the asset creation is retried with the same parts.
-- **Thumbnail:** encrypted as a document `thumb.bin`, or a plain `sendPhoto`
-  (as the website); HEIC/HEIF/RAW send none here — the D18 route takes the
-  thumbnail and the ~1440 px preview and stores both itself.
+- **Thumbnail and preview (D23):** made by the app's image engine; the core
+  sends both itself — encrypted as documents (`thumb.bin`, `preview.bin`), or
+  the thumbnail as a plain `sendPhoto` when the library is not encrypted (as
+  the website) — and the worker gets only their ids. The worker's D18 route
+  (which sent pictures to Telegram itself) is not used. A preview is given for
+  HEIC/HEIF/RAW (the website cannot show those) and may be for others.
+- **EXIF (D23):** read by the app's native engine, given to the core, sent as
+  one `exif` field in the worker's `PhotoExif` shape (`make`, `model`,
+  `lensModel`, `fNumber`, `focalLength`, `iso`, `exposureTime`,
+  `orientation`, `dateTimeOriginal`, `latitude`, `longitude`).
 - **Fields** (`clientUpload=true`, the worker's names): `telegramChunks`,
   `telegramOriginalId` (the part's `file_id` when there is one part),
   `telegramThumbId`, `encryptionMode`, `thumbEncrypted`, `fileName`,
   `fileSize`, `mimeType`, `checksum`, `fileCreatedAt`, `fileModifiedAt`,
   `deviceAssetId`, `deviceId`, `width`, `height`, `duration`, `latitude`,
-  `longitude`, `isFavorite`, `livePhotoVideoId`, `thumbhash`.
+  `longitude`, `isFavorite`, `livePhotoVideoId`, `thumbhash`, and — new,
+  for the worker to store (Linux, worker release W2) — `telegramPreviewId`
+  and `exif`. Until W2 the worker ignores those two: phone uploads then show
+  no preview on the website and no EXIF panel.
 - **Failures:** a rate limit waits and retries the same part (the Telegram
   client pauses); "the storage refused" stops the upload with that message;
   network trouble retries with growing waits (1, 2, 4 s), then returns the
@@ -1744,18 +1755,22 @@ thumbnail route), `Cargo.toml` (`sha1`, RustCrypto, the same family as
 
 - [ ] **Step 1:** tests first, failing (wiremock worker + Telegram, as in
   1.2–1.6): checksum against a known SHA-1; a duplicate stops before any
-  send; part slicing, names and IVs; at most 2 parts on disk; journal written
-  after each part and resume sends nothing twice; a changed key starts over;
-  incomplete encryption refused; every form field and its name; one part →
-  `telegramOriginalId`; HEIC → no thumbnail send, the D18 route called with
-  both pictures; a rate limit retried; a refusal stops; temp files and
-  journal gone at the end.
+  send; part slicing, names and IVs; the prepared body is a complete
+  `sendDocument` request; the journal written before a body is deleted, and
+  a resume sends nothing twice; `part_sent` given the same answer twice is
+  fine, a second copy of a part is deleted from the channel; a changed key
+  or file starts over and deletes the old parts; incomplete encryption
+  refused; every form field and its name; one part → `telegramOriginalId`;
+  thumbnail and preview sent by the core, no worker picture route; a rate
+  limit retried; a refusal stops; temp files and journal gone at the end; a
+  creation retried after an unrecorded success gets the same asset.
 - [ ] **Step 2:** implement. Run → pass; clippy, fmt, `cargo deny`.
 - [ ] **Step 3: Gate 2** — `examples/upload.rs` on the test account (uploads
   and deletes there are approved): a new JPEG, a HEIC made with `sips`, and a
   video over 100 MB (`avconvert` of a test-account video, so its checksum is
-  new); each read back through the core byte-identical to its source, seen
-  in the timeline, its thumbnail a picture; one upload stopped after two
+  new), each with a thumbnail and preview made by `sips`; each read back
+  through the core byte-identical to its source (EXIF included), seen in the
+  timeline, its thumbnail a picture; one upload stopped after two
   parts and resumed — a counting relay shows no part sent twice; the same
   file again → a duplicate, nothing sent; then the test assets deleted
   (`DELETE /api/assets`, which removes their parts from the channel).
