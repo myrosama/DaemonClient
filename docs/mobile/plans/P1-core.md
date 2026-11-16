@@ -1671,17 +1671,15 @@ website's uploader does it (`immich/web/src/lib/utils/file-uploader.ts`,
 `daemonclient-drive.ts` `uploadMedia`) plus the phone's improvements
 (C3 random part names, C7 a few parts on disk, the resume journal).
 
-**Not in this task — a decision for the operator first:** §5.8's
-background hand-off ("part N is ready at this path, send it to this Telegram
-address") would give the platform's background uploader a Telegram URL, and
-that URL holds the bot token — against D21 ("storage credentials never leave
-the core"). Options for P2: (a) the OS uploader gets the URL anyway; (b) the
-OS uploader posts parts to the user's own worker, which sends them on
-(a worker change; parts are 19 MiB, under Cloudflare's limit); (c) foreground
-and short background windows only. The operator wants automatic background
-backup as close to iCloud Photos / Google Photos as possible (2026-11-16), so
-(c) alone is not enough; asked which of (a)/(b). 1.7 builds the engine both
-would use.
+**The background hand-off is in this task** (operator, 2026-11-16, SPEC
+D22): the platform's background uploader sends parts straight to Telegram,
+so the core prepares each part as a **complete multipart request body on
+disk** (`chat_id` + `document`) and hands out `{body file, address,
+content type}`; when Telegram answers, the core is given the answer and
+records it. The foreground path uses the same two halves — it sends the
+prepared file itself — so every foreground upload tests what the background
+one will use. The address carries the bot token (D22's exception to D21): it
+goes only to the platform uploader, never to the screen or the logs.
 
 **Files:** create `src/upload.rs`, `examples/upload.rs`; modify
 `src/core.rs` (`Core::upload`), `src/worker.rs` (asset creation, the D18
@@ -1696,6 +1694,10 @@ thumbnail route), `Cargo.toml` (`sha1`, RustCrypto, the same family as
   Option<Picture> }` (the pictures and their thumbhash are made by the app,
   P2); `Uploaded { asset_id, duplicate }`. Dropping the future stops the
   upload; calling `upload` again with the same request resumes it.
+- The hand-off (D22): `Core::next_part(&job) -> Option<PartToSend { index,
+  body_path, url, content_type }>` (prepares at most 2 ahead) and
+  `Core::part_sent(&job, index, telegram_answer_json)` (checks and records
+  it); `upload` is built on these two.
 - The journal: `data_dir/uploads/<SHA-256 of device id + device asset id>`,
   JSON, written atomically, no secrets: the encryption mode and a
   fingerprint of the key it started with, the checksum, the parts sent
