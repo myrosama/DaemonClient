@@ -616,3 +616,41 @@ Completes R§9's "not yet read" list (`kean/Nuke` `main`, MIT).
   task was cancelled starts new work; the shared download follows the highest
   priority of its tasks, drops when that task is cancelled, and pending
   downloads start in priority order.
+
+---
+
+## 13. Full quality on the phone, and what makes previews worth keeping        2026-11-16
+
+The operator's rules (2026-11-16): the worker does nothing heavy — the phone's
+CPU, in Rust, encrypts, decrypts, uploads and downloads; the worker only
+answers small metadata requests; quality is never lost; scrolling is fast.
+Read from the fork and the platforms:
+
+- **What the fork's viewer shows.** `presentation/widgets/images/
+  remote_image_provider.dart` loads `thumbnail?size=preview` (Immich's
+  ~1440 px JPEG) and stops there unless the `loadOriginal` setting is on — it
+  is **off by default**. Videos likewise play `video/playback` unless
+  `loadOriginalVideo` (off by default). With Immich's defaults an opened photo
+  is a downscaled JPEG: a quality loss the operator does not want.
+- **Who can decode the originals.**
+  - **iOS:** remote images are decoded by ImageIO (`ios/Runner/Images/
+    RemoteImagesImpl.swift`, `CGImageSourceCreateThumbnailAtIndex`) — HEIC,
+    HEIF and camera RAW natively; AVPlayer plays the iPhone's HEVC `.mov`.
+  - **Android** (`minSdk 26`): the native side returns encoded bytes
+    (`RemoteImagesImpl.kt`, "always returns encoded") and Flutter's engine
+    decodes them — JPEG, PNG, WebP, GIF, and HEIF through the platform decoder
+    on Android 9+; **not RAW**. HEVC plays on most current phones (hardware).
+  - **Browsers:** only Safari decodes HEIC; none decodes RAW; HEVC only with
+    hardware support. The website needs JPEG previews for HEIC/HEIF/RAW (D18).
+- **What a preview is for, then:** the website (HEIC/RAW), Android RAW, and an
+  instant first paint in the viewer (~100–300 KB) while the original (MBs)
+  arrives. It never replaces the original, which is stored byte for byte with
+  all its EXIF (D22).
+- **Scrolling:** the grid uses the 256 px thumbnail, kept decrypted on disk
+  (1.5) and ordered by the scheduler (1.4); measured on a phone in P2.
+- **Where pictures and metadata can be made on the phone:** decoding HEIC/RAW
+  needs the platform's image engine (ImageIO, Android's `ImageDecoder`); in
+  Rust it would mean bundling libheif/libraw. The same engines read EXIF and
+  video metadata (ImageIO properties, `ExifInterface`,
+  `MediaMetadataRetriever`) while the file is open for the thumbnail; a Rust
+  parser (`nom-exif`, JPEG/HEIC/TIFF/MOV/MP4) is the alternative.
