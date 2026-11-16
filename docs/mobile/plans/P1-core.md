@@ -1678,8 +1678,10 @@ that URL holds the bot token — against D21 ("storage credentials never leave
 the core"). Options for P2: (a) the OS uploader gets the URL anyway; (b) the
 OS uploader posts parts to the user's own worker, which sends them on
 (a worker change; parts are 19 MiB, under Cloudflare's limit); (c) foreground
-and short background windows only. Asked in NOW.md; 1.7 builds the engine
-both would use.
+and short background windows only. The operator wants automatic background
+backup as close to iCloud Photos / Google Photos as possible (2026-11-16), so
+(c) alone is not enough; asked which of (a)/(b). 1.7 builds the engine both
+would use.
 
 **Files:** create `src/upload.rs`, `examples/upload.rs`; modify
 `src/core.rs` (`Core::upload`), `src/worker.rs` (asset creation, the D18
@@ -1700,6 +1702,15 @@ thumbnail route), `Cargo.toml` (`sha1`, RustCrypto, the same family as
   (`{index, message_id, file_id}`), the thumbnail's `file_id`, the step.
 
 **Rules:**
+- **The original, byte for byte** (operator, 2026-11-16): the file at `path`
+  is what is stored — no conversion (the website turns HEIC into JPEG; the
+  phone never does). P2 hands the core the photo library's original resource
+  (HEIC/RAW/MOV as shot, Live Photo pairs together), not an edited or
+  re-encoded copy. Gate 2 proves it: each upload reads back byte-identical.
+- **Dedupe on SHA-1** (base64), as the worker and the website do: a
+  different hash would match nothing already stored and upload the whole
+  library again. Part integrity is AES-GCM's; per-file progress is the
+  journal's; which photos are backed up is the app's own database (P2).
 - **Order** (§5.8): checksum (streamed) → `bulk-upload-check` (already
   stored → `Uploaded { duplicate }`, nothing sent) → parts → thumbnail →
   `POST /api/assets` → (HEIC/HEIF/RAW) `POST /api/assets/{id}/thumbnail` →
