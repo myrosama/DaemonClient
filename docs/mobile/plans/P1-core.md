@@ -300,16 +300,16 @@ The same order as the website (RESEARCH §6), with the phone's improvements:
    `sendDocument` under a random name (C3). Each sent part's
    `{index, message_id, file_id}` is written to the job's **journal** at
    once.
-4. **Thumbnail** — the 256 px JPEG and its thumbhash come from the phone's
-   own image engine (made by the app, P2), encrypted and sent like a part.
+4. **Thumbnail and preview** — the 256 px JPEG, its thumbhash and (for
+   HEIC/HEIF/RAW) a ~1440 px JPEG preview come from the phone's own image
+   engine (made by the app, P2), encrypted and sent by the core like a part.
 5. **Create the asset** — `POST /api/assets` with `clientUpload=true`, the part
-   list, device identity (`deviceAssetId`, `deviceId`, so a retry finds the
-   existing asset instead of making a second one), dates, size, type,
-   dimensions, duration, GPS, favourite, live-photo pairing, thumbhash.
-6. **HEIC/HEIF/RAW only** (D18): the thumbnail and a ~1440 px JPEG preview go
-   to `POST /api/assets/:id/thumbnail` together, and step 4 is skipped for
-   these files — that route requires the thumbnail and sends it itself, so
-   sending it in step 4 too would waste a Telegram message.
+   list, the thumbnail's and preview's ids, device identity (`deviceAssetId`,
+   `deviceId`, so a retry finds the existing asset instead of making a second
+   one), dates, size, type, dimensions, duration, location, favourite,
+   live-photo pairing, thumbhash and EXIF — metadata only.
+6. *(Changed by SPEC D23, 2026-11-16: the worker's D18 route, which sent the
+   pictures to Telegram itself, is not used — the phone sends them in step 4.)*
 7. Delete the temporary files and the journal.
 
 **Resuming:** the journal (one small file per upload, no secrets, written
@@ -1753,7 +1753,7 @@ thumbnail route), `Cargo.toml` (`sha1`, RustCrypto, the same family as
   network trouble retries with growing waits (1, 2, 4 s), then returns the
   error with the journal kept.
 
-- [ ] **Step 1:** tests first, failing (wiremock worker + Telegram, as in
+- [x] **Step 1:** tests first, failing (wiremock worker + Telegram, as in
   1.2–1.6): checksum against a known SHA-1; a duplicate stops before any
   send; part slicing, names and IVs; the prepared body is a complete
   `sendDocument` request; the journal written before a body is deleted, and
@@ -1764,8 +1764,8 @@ thumbnail route), `Cargo.toml` (`sha1`, RustCrypto, the same family as
   thumbnail and preview sent by the core, no worker picture route; a rate
   limit retried; a refusal stops; temp files and journal gone at the end; a
   creation retried after an unrecorded success gets the same asset.
-- [ ] **Step 2:** implement. Run → pass; clippy, fmt, `cargo deny`.
-- [ ] **Step 3: Gate 2** — `examples/upload.rs` on the test account (uploads
+- [x] **Step 2:** implement. Run → pass; clippy, fmt, `cargo deny`.
+- [x] **Step 3: Gate 2** — `examples/upload.rs` on the test account (uploads
   and deletes there are approved): a new JPEG, a HEIC made with `sips`, and a
   video over 100 MB (`avconvert` of a test-account video, so its checksum is
   new), each with a thumbnail and preview made by `sips`; each read back
@@ -1774,4 +1774,48 @@ thumbnail route), `Cargo.toml` (`sha1`, RustCrypto, the same family as
   parts and resumed — a counting relay shows no part sent twice; the same
   file again → a duplicate, nothing sent; then the test assets deleted
   (`DELETE /api/assets`, which removes their parts from the channel).
-- [ ] **Step 4:** Gate 3 (one reviewer at a time); commit code, then docs.
+- [x] **Step 4:** Gate 3 (one reviewer at a time); commit code, then docs.
+
+**As built (Task 1.7), differences from the steps above:**
+- Interfaces: `begin_upload(request) -> Begun::{Duplicate(Uploaded), Job}`,
+  `UploadJob::pending()`, `part(&job, index) -> PartToSend` (the plan's
+  `next_part`: the platform layer picks the index), `part_sent(&job, index,
+  answer)`, `finish_upload(job)`; `upload(request)` runs them all in the
+  foreground. `PartToSend { index, body_path, content_type }` + `address()`
+  (no `Debug`). No progress callback: P2 reports progress from `pending()`.
+- The journal: `uploads/<account>/<file>/journal.json` + `<index>.body` —
+  the checksum, the key's fingerprint (none = plain), the random name, the
+  parts, thumbnail and preview, and a `creating` flag set before the asset is
+  asked for: from then on nothing it lists is taken out of the channel (an
+  asset may point at it — the spec review's HIGH: a lost answer to a
+  successful creation followed by a "duplicate" deleted the asset's parts).
+- From the security review: an upload belongs to the account that began it
+  (its worker and bot kept, every step checks the signed-in account,
+  per-account folders, all of `uploads/` wiped at sign-out and account
+  switch); encryption settings read again for every file (the key derived
+  again only when they change); an answer from the platform uploader is
+  recorded only for its own part (index, name, size); the file's size and
+  modified time checked before each part is read; one upload per file at a
+  time; journal writes flushed to disk with unique temporary names; a
+  duplicate takes what an earlier attempt sent out of the channel (unless
+  `creating`); at most 2 prepared parts wait on disk (a refusal, not a
+  prefetch — C7).
+- From Gate 2: sends use their own HTTP client — reqwest's 30 s "read"
+  limit runs from the start of a request until the answer begins, so a
+  19 MiB part on a slow uplink always failed; sends get a time limit from
+  their size (20 KB/s, a minute at least) and TCP keepalive instead.
+- `latitude`/`longitude` are sent from the EXIF: until worker release W2
+  reads `exif`, location comes only from them. Thumbnail and preview go
+  through the send slot with the same retries as parts.
+
+**Carried forward from Task 1.7:**
+- **P2:** the platform uploaders (URLSession, WorkManager) on `part` /
+  `part_sent`; cancel their tasks at sign-out or account switch (the core
+  deletes the bodies and journals; a late answer then fails); the backup
+  queue and the app's record of what is backed up; progress from
+  `pending()`; abandoned uploads (a photo deleted mid-upload) cleaned up;
+  never log `PartToSend::address()` in Dart.
+- **Linux (W2):** the worker stores `telegramPreviewId` and `exif`.
+- **Accepted:** parts sent before a wipe at sign-out stay in that channel
+  unused; the encryption settings cost one small worker request per file.
+

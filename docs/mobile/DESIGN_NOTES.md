@@ -910,3 +910,65 @@ the app must use the addresses `media_server()` returns and reload what
 failed (P2). The part cache cannot outlive sign-out: the account owns it and
 readers hold it weakly. Tests: 148 passed; the connection-ownership test was
 mutation-checked (detached connections fail it).
+
+---
+
+## 1.7 — The upload engine            2026-11-16
+
+**Planned:** P1-core.md Part 2, Task 1.7 (written before the code), then
+revised the same day for the operator's decisions: SPEC D22 (automatic
+background backup — parts prepared as whole requests the platform uploader
+sends straight to Telegram, the one exception to D21) and D23 (the phone does
+the heavy work: thumbnail, preview and EXIF made on the phone, the worker
+given metadata only), the original byte for byte, dedupe on SHA-1.
+**Did:** `upload` (checksum → dedupe → parts → thumbnail and preview →
+metadata), the hand-off (`part` / `part_sent`), the resume journal.
+Differences from the plan: "As built (Task 1.7)" in P1-core.md.
+**Security:** reviewer — **1 HIGH**, 3 MEDIUM, 4 LOW, all fixed. HIGH: an
+upload was not tied to the account that began it — with another account
+signed in, a resumed or abandoned upload could delete that account's
+unrelated messages, register one account's parts in another's library, or
+send one account's plaintext into another's encrypted library. Now an upload
+keeps its account's worker and bot, checks the signed-in account at every
+step, lives in a per-account folder, and all uploads are wiped at sign-out
+and account switch. MEDIUM: encryption settings read once per session (now
+read for every file); answers from the platform uploader trusted as given
+(now recorded only for their own part: index, name, size); a file changed
+between the checksum and the part reads (size and modified time checked).
+LOW: one upload per file at a time, flushed journal writes, duplicates
+clean up earlier sends, at most two prepared parts on disk.
+**Spec:** reviewer — **1 HIGH**, 3 MEDIUM, 5 LOW. HIGH: a lost answer to a
+successful asset creation, then "duplicate" on the retry, deleted the parts
+the new asset pointed at — the journal now marks `creating` before the
+request, and nothing it lists is deleted after that. MEDIUM: location was
+not sent (the worker reads it only from `latitude`/`longitude` until W2 —
+now sent from the EXIF); three rules no test could catch (a key change, the
+journal written before a body goes, the IV-and-tag size — tests added); no
+progress callback (P2 reports progress from `pending()`). LOW: fixed —
+cleaned names compared, thumbnail and preview through the send slot with
+retries, bodies built off the async threads, more fields asserted.
+**Found by Gate 2, before any phone:** reqwest's 30 s "read" limit runs from
+the start of a request until the answer begins — on a slow uplink every
+19 MiB part would have failed and been sent again. Sends now use a client of
+their own, limited by their size (20 KB/s, a minute at least), with TCP
+keepalive. Mutation checks: the account check, the `creating` mark.
+**Gate evidence:**
+- G1: tests first, failing; `cargo test -p dc-core` 170 passed; clippy
+  (deny lints), fmt clean; `cargo deny check advisories` ok (`sha1` added,
+  RustCrypto).
+- G2 (`cargo run --release -p dc-core --example upload`, the approved test
+  account; test assets deleted at the end and leftovers of earlier runs at
+  the start): a JPEG and a HEIC made with `sips` (6–17 MB) uploaded and
+  **read back byte-identical**, thumbnails JPEG, in 15–27 s; the same JPEG
+  again a **duplicate with nothing sent**; **a 722 MB iPhone video in 39
+  parts — 2 sent by hand through the hand-off as the background uploader
+  will, 37 resumed by the core — exactly 39 parts sent, none twice, and read
+  back byte-identical** (898 s: this Mac's uplink, ~0.8 MB/s, sets the
+  pace; read back by a second core straight from Telegram — the counting
+  relay answers only after a whole part, which trips the 30 s read limit).
+  Earlier runs of the tool gave the video a new device id on the second
+  call, so it started over instead of resuming: 4 sent parts (~76 MB) stayed
+  in the test channel unused before that was found and fixed. Some runs also
+  met this Mac's network dropping for a while (timeouts on the worker); the
+  tool deletes its leftovers at its next start.
+- G3: above. G4: the code commit and this docs commit.

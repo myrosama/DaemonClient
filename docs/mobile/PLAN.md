@@ -156,7 +156,7 @@ Detailed: `plans/P1-core.md` (design approved 2026-10-29, decisions C1–C11).
       next-part prefetch, client disconnect cancels through the scheduler;
       a second listener (port) for opened photos and video, because Android's
       Cronet allows 6 connections per host (RESEARCH §10).
-- [ ] **1.7** Upload engine — prepare encrypted parts on disk, send, resume
+- [x] **1.7** Upload engine — prepare encrypted parts on disk, send, resume
       journal, metadata post (`POST /api/assets`, `clientUpload`) and, for
       HEIC/HEIF/RAW, the thumbnail + preview route.
 - [ ] **1.8** `dc-cli` and Gate 2 for the whole core against the test
