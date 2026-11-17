@@ -44,6 +44,24 @@ describe('a client upload with its own preview and EXIF', () => {
     expect([row.latitude, row.longitude]).toEqual([41.3, 69.2]);
     expect(row.exifChecked).toBe(2);
   });
+  it('an empty EXIF object (a screenshot) still counts as read, so the original is never fetched for it', async () => {
+    const { row } = await clientUpload({ exif: '{}' });
+    expect(row.exifChecked).toBe(2);
+  });
+  it('a preview with no thumbnail is still marked encrypted when the upload is', async () => {
+    const { row } = await clientUpload({ telegramThumbId: '', thumbEncrypted: 'false', telegramPreviewId: 'p3' });
+    expect([row.telegramPreviewId, row.previewEncrypted]).toEqual(['p3', 1]);
+  });
+  it('an empty preview id (what the phone sends with no preview) stores none', async () => {
+    const { row } = await clientUpload({ telegramPreviewId: '' });
+    expect(row.telegramPreviewId ?? null).toBeNull();
+  });
+  it('half a location, or one out of range, is not stored', async () => {
+    for (const [lat, lon] of [['41.3', ''], ['', '69.2'], ['91', '69.2'], ['41.3', '181']]) {
+      const { row } = await clientUpload({ latitude: lat, longitude: lon });
+      expect([row.latitude ?? null, row.longitude ?? null]).toEqual([null, null]);
+    }
+  });
   it('without EXIF, leaves it for the later check, as before', async () => {
     const { row } = await clientUpload({});
     expect(row.telegramPreviewId ?? null).toBeNull();

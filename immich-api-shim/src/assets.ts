@@ -1198,6 +1198,8 @@ async function handleUploadImpl(request: Request, env: Env, uid: string, idToken
     const parseCoord = (s: string | null) => { const n = parseFloat(s || ''); return isNaN(n) ? null : n; };
     let gpsLat: number | null = parseCoord(formData.get('latitude') as string | null);
     let gpsLon: number | null = parseCoord(formData.get('longitude') as string | null);
+    // Half a location, or one out of range, is no location.
+    if (gpsLat === null || gpsLon === null || Math.abs(gpsLat) > 90 || Math.abs(gpsLon) > 180) { gpsLat = null; gpsLon = null; }
     // Camera/lens/exposure metadata parsed from the file's EXIF in chunk 0 below.
     let exif: PhotoExif = {};
     const fileCreatedAt = (formData.get('fileCreatedAt') as string) || new Date().toISOString();
@@ -1680,9 +1682,10 @@ async function handleUploadImpl(request: Request, env: Env, uid: string, idToken
       telegramThumbId,
       thumbEncrypted: thumbEncrypted ? 1 : 0,
       // The preview is encrypted exactly when the upload is (the phone encrypts
-      // every rendition with the same key).
+      // every rendition with the same key). Readers decide by encryptionMode;
+      // this column is a record.
       telegramPreviewId: telegramPreviewId || undefined,
-      previewEncrypted: telegramPreviewId ? (thumbEncrypted || encryptionMode === 'server' ? 1 : 0) : undefined,
+      previewEncrypted: telegramPreviewId ? (encryptionMode === 'server' || encryptionMode === 'client' ? 1 : 0) : undefined,
       thumbhash: thumbhash || undefined,
       livePhotoVideoId: livePhotoVideoId || undefined,
       encryptionMode,

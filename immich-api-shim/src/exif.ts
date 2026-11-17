@@ -70,14 +70,21 @@ export async function extractExif(bytes: Uint8Array): Promise<PhotoExif> {
   return out;
 }
 
+// EXIF's own date form, "2026:11:15 10:00:00", has no time zone; read it as
+// UTC, as the server path does (Workers run in UTC).
+const EXIF_DATE = /^(\d{4}):(\d{2}):(\d{2})[ T](\d{2}:\d{2}:\d{2}(?:\.\d+)?)$/;
+
 /**
  * The `exif` field a client upload sends (SPEC D23: the phone reads EXIF
- * itself), checked field by field: unknown keys and bad values are dropped,
- * and anything that isn't a JSON object yields null. Never throws.
+ * itself), checked field by field and stored the way the server path stores
+ * its own: unknown keys and bad values are dropped. A JSON object, even an
+ * empty one, means "read" ({} = nothing found); anything else yields null.
+ * Never throws.
  */
 export function clientExif(raw: unknown): PhotoExif | null {
+  if (typeof raw !== 'string' || raw.length > 8192) return null;
   let v: any;
-  try { v = typeof raw === 'string' ? JSON.parse(raw) : null; } catch { return null; }
+  try { v = JSON.parse(raw); } catch { return null; }
   if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
   const str = (x: unknown, max: number) => (typeof x === 'string' && x.length > 0 && x.length <= max ? x : undefined);
   const num = (x: unknown, ok: (n: number) => boolean) => (typeof x === 'number' && Number.isFinite(x) && ok(x) ? x : undefined);
@@ -87,14 +94,19 @@ export function clientExif(raw: unknown): PhotoExif | null {
     lensModel: str(v.lensModel, 200),
     fNumber: num(v.fNumber, (n) => n > 0 && n < 1000),
     focalLength: num(v.focalLength, (n) => n >= 0 && n < 100000),
-    iso: num(v.iso, (n) => n > 0 && n < 10_000_000),
-    exposureTime: str(v.exposureTime, 40),
-    orientation: num(v.orientation, (n) => Number.isInteger(n) && n >= 1 && n <= 8),
-    dateTimeOriginal: str(v.dateTimeOriginal, 40),
+    // ImageIO gives ISOSpeedRatings as a list.
+    iso: num(Array.isArray(v.iso) ? v.iso[0] : v.iso, (n) => Number.isInteger(n) && n > 0 && n < 10_000_000),
+    // ImageIO gives seconds (0.004); store "1/250" as the server path does.
+    exposureTime: typeof v.exposureTime === 'number' ? formatExposure(v.exposureTime) : str(v.exposureTime, 40),
+    orientation: num(typeof v.orientation === 'string' && /^[1-8]$/.test(v.orientation) ? Number(v.orientation) : v.orientation,
+      (n) => Number.isInteger(n) && n >= 1 && n <= 8),
+    dateTimeOriginal: typeof v.dateTimeOriginal === 'string' && v.dateTimeOriginal.length <= 40
+      ? toIso(v.dateTimeOriginal.replace(EXIF_DATE, '$1-$2-$3T$4Z'))
+      : undefined,
   };
   const lat = num(v.latitude, (n) => n >= -90 && n <= 90);
   const lon = num(v.longitude, (n) => n >= -180 && n <= 180);
   if (lat !== undefined && lon !== undefined) { out.latitude = lat; out.longitude = lon; }
   for (const k of Object.keys(out) as (keyof PhotoExif)[]) if (out[k] === undefined) delete out[k];
-  return Object.keys(out).length ? out : null;
+  return out;
 }
