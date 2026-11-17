@@ -233,13 +233,22 @@ impl Core {
             .ok()
             .and_then(|bytes| serde_json::from_slice(&bytes).ok())
             .unwrap_or_default();
-        let item = (request.device_asset_id.clone(), checksum.clone());
+        // The same SHA-1 both ways: the website stores it as hex, the Immich
+        // app (and this core) as base64, and the worker compares them as text.
+        let hex = base64::engine::general_purpose::STANDARD
+            .decode(&checksum)
+            .map(|digest| crate::disk_cache::hex(&digest))
+            .unwrap_or_default();
+        let items = [
+            (request.device_asset_id.clone(), checksum.clone()),
+            (request.device_asset_id.clone(), hex),
+        ];
         let check = worker.clone();
         let checks = self
-            .run(async move { check.bulk_upload_check(&[item]).await })
+            .run(async move { check.bulk_upload_check(&items).await })
             .await?
             .map_err(release)?;
-        if let Some(check) = checks.first().filter(|c| !c.accepted()) {
+        if let Some(check) = checks.iter().find(|c| !c.accepted()) {
             // Stored already. Unless that is our own asset (`creating`), what
             // an earlier attempt sent is of no use.
             if !journal.creating {
@@ -799,6 +808,39 @@ mod tests {
                 .iter()
                 .all(|r| r.method.as_str() != "POST")
         );
+    }
+
+    #[tokio::test]
+    async fn a_file_the_website_stored_is_a_duplicate_too() {
+        // The website stores hex SHA-1, the Immich app base64 (1.8 Gate 2).
+        let (server, core, dir) = uploader(true, false).await;
+        let file = file_of(&dir, 10);
+        let hex = crate::disk_cache::hex(&Sha1::digest(std::fs::read(&file).unwrap()));
+        Mock::given(path("/api/assets/bulk-upload-check"))
+            .and(wiremock::matchers::body_string_contains(hex.as_str()))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"results": [
+                {"id": "dev-asset-1", "action": "accept"},
+                {"id": "dev-asset-1", "action": "reject", "assetId": "from-the-website"},
+            ]})))
+            .with_priority(1)
+            .mount(&server)
+            .await;
+        let done = core.upload(request(&file)).await.unwrap();
+        assert_eq!(
+            (done.asset_id.as_str(), done.duplicate),
+            ("from-the-website", true)
+        );
+        assert!(sent(&server, "/bot1:A/sendDocument").await.is_empty());
+        // Still asked as base64 too: the app's and the worker's own uploads.
+        let base64 = base64::engine::general_purpose::STANDARD
+            .encode(Sha1::digest(std::fs::read(&file).unwrap()));
+        let checks = sent(&server, "/api/assets/bulk-upload-check").await;
+        assert!(
+            checks
+                .iter()
+                .all(|r| String::from_utf8_lossy(&r.body).contains(&base64))
+        );
+        assert!(!checks.is_empty());
     }
 
     #[tokio::test]

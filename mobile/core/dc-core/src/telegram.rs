@@ -377,8 +377,11 @@ fn judge<T: DeserializeOwned>(
     }
 }
 
-/// Paces sends per bot: 1 per 1.5 s, bursts of 8 (RESEARCH §12), and a full
-/// stop after Telegram says `retry_after`.
+/// Paces sends per bot: 1 per 3 s, bursts of 3 (one photo: part, thumbnail,
+/// preview), and a full stop after Telegram says `retry_after`. Measured in
+/// Task 1.8: a channel takes 20 messages a minute, the 21st waits 40 s
+/// (RESEARCH §12 assumed 20 per 30 s). A burst after an idle spell can still
+/// draw one rate limit; the pause handles it.
 pub(crate) struct SendPacer {
     state: Mutex<(TokenBucket, Option<Instant>)>,
 }
@@ -386,7 +389,7 @@ pub(crate) struct SendPacer {
 impl SendPacer {
     pub(crate) fn new() -> Self {
         Self {
-            state: Mutex::new((TokenBucket::new(1.0 / 1.5, 8.0, Instant::now()), None)),
+            state: Mutex::new((TokenBucket::new(1.0 / 3.0, 3.0, Instant::now()), None)),
         }
     }
 
@@ -752,17 +755,17 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn sends_are_paced_eight_at_once_then_one_per_one_and_a_half_seconds() {
+    async fn sends_are_paced_three_at_once_then_one_per_three_seconds() {
         let pacer = SendPacer::new();
         let start = tokio::time::Instant::now();
-        for _ in 0..8 {
+        for _ in 0..3 {
             pacer.acquire().await;
         }
         assert_eq!(start.elapsed(), std::time::Duration::ZERO);
         pacer.acquire().await;
-        assert_eq!(start.elapsed(), std::time::Duration::from_millis(1500));
+        assert_eq!(start.elapsed(), std::time::Duration::from_secs(3));
         pacer.pause_for(std::time::Duration::from_secs(10));
         pacer.acquire().await;
-        assert!(start.elapsed() >= std::time::Duration::from_millis(11_500));
+        assert!(start.elapsed() >= std::time::Duration::from_secs(13));
     }
 }

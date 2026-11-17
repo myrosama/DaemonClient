@@ -1,0 +1,20 @@
+[package]
+name = "dc-cli"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+# The core from a terminal, for testing against the real worker and storage
+# without an app (P1 task 1.8). Every dependency is already in the tree except
+# `signal-hook-registry` (tokio's `signal`, for Ctrl-C).
+[dependencies]
+base64 = "=0.23.1"
+dc-core = { path = "../dc-core" }
+getrandom = "=0.4.3"
+reqwest = { version = "=0.13.5", default-features = false, features = ["json"] }
+serde_json = "=1.0.154"
+sha1 = "=0.11.0"
+tokio = { version = "=1.53.3", features = ["rt-multi-thread", "macros", "signal", "sync", "time"] }

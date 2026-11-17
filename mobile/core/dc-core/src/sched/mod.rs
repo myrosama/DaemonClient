@@ -30,7 +30,9 @@ pub enum Kind {
     Send,
 }
 
-/// Starting values (SPEC §4.9), measured in Task 1.8. Set in code, not by
+/// SPEC §4.9, from Task 1.8's measurement: the storage served 122 file paths
+/// and 126 thumbnails a second without a rate limit; with 6 at once the core
+/// managed 11 a second. Set in code, not by
 /// users: `reads_per_sec` > 0, `read_burst` ≥ 1, `max_running` > `reserved_high`.
 #[derive(Debug, Clone)]
 pub struct Limits {
@@ -49,13 +51,13 @@ pub struct Limits {
 impl Default for Limits {
     fn default() -> Self {
         Self {
-            max_running: 6,
+            max_running: 12,
             reserved_high: 1,
             max_next: 2,
             max_background: 2,
             max_sending: 1,
-            reads_per_sec: 20.0,
-            read_burst: 10.0,
+            reads_per_sec: 40.0,
+            read_burst: 12.0,
             job_timeout: Duration::from_secs(300),
         }
     }

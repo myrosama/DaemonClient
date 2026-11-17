@@ -98,7 +98,7 @@ impl Worker {
             .await
     }
 
-    /// `items` are `(client id, base64 SHA-1)`.
+    /// `items` are `(client id, SHA-1)`; the worker compares checksums as text.
     pub async fn bulk_upload_check(
         &self,
         items: &[(String, String)],
