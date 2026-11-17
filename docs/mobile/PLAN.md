@@ -161,6 +161,12 @@ Detailed: `plans/P1-core.md` (design approved 2026-10-29, decisions C1–C11).
       HEIC/HEIF/RAW, the thumbnail + preview route.
 - [x] **1.8** `dc-cli` and Gate 2 for the whole core against the test
       account, both directions with photos.daemonclient.uz.
+- [x] **1.9** Limits to the edge (operator, 2026-11-17): reads, sends and
+      albums measured on the test account; read defaults 24/60/24 and a
+      manifest gate; the send pace 1 per 3.5 s with a restart memory; albums
+      and batch delete in the Telegram client; the backup sending algorithm
+      proposed as SPEC D24 (operator to approve); the website fix tutorial
+      `docs/web/photos-website-fixes.md`.
 
 **Exit:** SPEC §9 P1.
 

@@ -1021,3 +1021,47 @@ two more tests.
   plays, with lag from the website's video path (RESEARCH §14). **P1 exit
   met** (SPEC §9).
 - G3: above. G4: the code commit and this docs commit.
+
+---
+
+## 1.9 — Limits to the edge: reads, sends, albums            2026-11-17
+
+**Planned:** P1-core.md, Task 1.9 (written before the code, extended mid-task
+for the operator's questions: an adaptive album algorithm, upload and
+download speeds, the worker's limits). Operator: "learn the rate limits
+perfectly… never hits 429 and if it does make sure it will be fixable…
+scroll through 10k thumbnails freely and fast, open any photo and any video,
+backups should be perfect"; "run every test possible and consult with the
+advisor".
+**Did:** ~20 measurement runs on the test account (every one in As built and
+RESEARCH §14's table), and from them: read defaults 24 at once, 60/s, burst
+24 (a fling 22 → 44 thumbnails a second, no rate limit; 32/80 no faster); a
+manifest gate (16 in flight for the grid, the opened and the next item skip
+it: a photo tapped mid-fling 13 s → 2 s, A/B); the send pace 1 per 3.5 s,
+burst 2 (≤ 19 in any minute; two 10-minute runs of 170 sends without a refusal), not respent after a restart within
+a minute (a per-account mark); every rate limit logged; albums and batch
+delete in the Telegram client; the limits checked at start.
+**Found:** Telegram's group limit counts **requests** — an album of 10
+documents is one; Telegram spends ~0.6–0.8 s a file in an album; requests
+must go one at a time (albums started together are refused; two parts in
+flight gain nothing); a request is capped at ~50 MB (45 MB albums). The
+uplink (~2 MB/s here) bounds videos and big photos; downloads fill the link
+with 2–3 parts. Cloudflare's free plan bounds a backup at ~14,000–16,000 new
+photos a day (D1 writes) and a scroll costs one worker request per thumbnail.
+**Proposed:** SPEC D24 — backups batched into albums by the pacer's token
+(~1,900 HEIC / ~2,200–2,800 JPEG an hour instead of ~340 / ~510), for the
+operator to approve; the website's side in `docs/web/photos-website-fixes.md`.
+**Security:** reviewer — 0 HIGH, 2 MEDIUM, 5 LOW, all fixed (manifest fetches
+queued before a sign-out now end there; benches delete what was in flight
+after Ctrl-C or a failure; complete limit checks; cleaned multipart names;
+an unreadable album answer deletes its messages; the mark's path from the
+session snapshot).
+**Spec:** reviewer — 0 HIGH, 4 MEDIUM, ~15 LOW, fixed or recorded (burst 2,
+D24 split into built and proposed, the albums-of-2 figure dropped, the next
+item exempt from the gate, more tests, stale text).
+**Gate evidence:**
+- G1: tests first, failing; dc-core 184, dc-cli 9; clippy (deny lints), fmt;
+  `cargo deny check advisories`. Mutation checks: the gate (open and next
+  bypass), the restart mark's wiring, name cleaning.
+- G2: the runs above on the test account.
+- G3: above. G4: the code commit and this docs commit.

@@ -184,7 +184,8 @@ and runs off the async threads. CI runs both vector directions with Node
 - Downloads are capped at 20 MiB (Telegram's bot limit; an encrypted part is
   19 MiB + 28 bytes), so a wrong or hostile answer cannot fill memory.
 - **Sends are paced per bot** — 1 per 1.5 s, bursts of 8 (RESEARCH §12);
-  *measured in 1.8: a channel takes ~20 a minute, so 1 per 3 s, bursts of 3.*
+  *measured in 1.8–1.9: a group takes ~20 requests a minute, so 1 per 3.5 s,
+  bursts of 2 (≤ 19 in any minute).*
   Downloads are not paced by that bucket.
 
 ### 5.5 Smart loading — the Nuke port (task 1.4)
@@ -402,7 +403,7 @@ committed separately, nothing pushed without the operator.
 | Risk | What happens | Mitigation |
 |---|---|---|
 | Telegram limits on reads are unknown | Fast scrolling may draw 429s | Starting values + global pause; measured in 1.8 before P2 |
-| Send budget (~20 messages / 30 s per bot; *measured in 1.8: ~20 a minute per channel*) | A first backup of a large library takes hours (~600 JPEGs or ~400 HEICs an hour) | Dedupe before sending; no wasted messages (C3, step 6); stated in the product's expectations |
+| Send budget (~20 messages / 30 s per bot; *measured in 1.8: ~20 a minute per channel*) | A first backup of a large library takes hours (~510 JPEGs or ~340 HEICs an hour one file a request; ~5× more with albums, SPEC D24) | Dedupe before sending; no wasted messages (C3, step 6); stated in the product's expectations |
 | The website and the phone upload with the same bot at once | Their pacers do not know about each other | Both honour `retry_after`; nothing is lost |
 | iOS closes the media server's sockets in the background | Images fail after resume | `ensure_running()` on resume (5.7) |
 | First frame of a video waits for one part (*two for an iPhone `.mov`, ~7–8 s measured*) | ~1–3 s on a good network | C6; prefetch; the thumbnail shows meanwhile |
@@ -1968,7 +1969,8 @@ many pending jobs (1.4) and the part cache's size (1.6) on a real device.
   sending slower). SPEC §10 and RESEARCH §12 corrected: a first backup runs at
   ~600 JPEGs or ~400 HEICs an hour. The plan's rule only foresaw speeding the
   pacer up; slowing it follows the same measurement. Only one refusal was
-  seen at 1 per 3 s (the bench stops at the first).
+  seen at 1 per 3 s (the bench stops at the first). *(Superseded by 1.9:
+  1 per 3.5 s, burst 2.)*
 - **C6 built, measured, removed** (the operator chose on 2026-11-16 to fix
   C6 in 1.8; to confirm the removal). `bench parts`: two whole parts one after the
   other 7.0–26.8 s (one pair stalled 124 s), both at once 4.0–5.9 s — each
@@ -2019,11 +2021,254 @@ many pending jobs (1.4) and the part cache's size (1.6) on a real device.
   cache's size (1.6) on a real device;
 - C6 again on a phone network (the connection/link ratio differs), and how
   ExoPlayer probes (Android may ask for `0-` first);
-- the app's HTTP client must allow ≥ 12 connections to the grid listener;
-- whether `sendMediaGroup` (10 files per call) counts as one message against
-  the ~20 a minute — if so, backups could be several times faster;
-- **the background uploader (D22) sends unpaced:** it must keep to ~20
-  messages a minute per channel too (the core's pacer does not see its
-  sends), or it meets 40 s refusals;
-- the opened item has no cap of its own: with 12 slots, up to 12 × 19 MiB of
-  original parts can be in memory at once — check on a device.
+- the app's HTTP client must allow ≥ 24 connections to the grid listener
+  (since 1.9);
+- *(answered in 1.9: an album counts as one request — SPEC D24)*;
+- **the background uploader (D22) sends unpaced:** it must keep to the core's
+  pace too (≤ 19 a minute; the core's pacer does not see its sends), or it
+  meets 40 s refusals — SPEC D24 (6);
+- the opened item has no cap of its own: with 24 slots (since 1.9), up to
+  24 × 19 MiB ≈ 456 MiB of original parts could be in memory at once — in P2
+  **cap jobs by stored size, not class** (a one-file original stands in for a
+  missing thumbnail at Visible): anything over ~1 MB, at most ~4 at once; and
+  check on a device.
+
+---
+
+## Task 1.9 — Limits to the edge: reads, sends, albums
+
+**Delivers** (operator, 2026-11-17: "learn the rate limits perfectly and put
+the core speeds optimized for that… make sure it never hits 429 and if it
+does make sure it will be fixable… scroll through 10k thumbnails freely and
+fast, open any photo and any video, backups should be perfect"): the core's
+read and send numbers set from sustained, library-scale measurements, with
+zero rate limits at the chosen numbers; every rate limit logged and recovered
+from without the user doing anything; whether albums (`sendMediaGroup`)
+lift the send ceiling, measured.
+
+**Files:** `dc-core/src/core.rs` (`CoreConfig.limits`, default
+`Limits::default()` — the app keeps the default; benches try others),
+`dc-core/src/sched/shell.rs` and `telegram.rs` (a log line on every rate
+limit), `dc-core/src/telegram.rs` (`send_media_group`, one pacer token per
+album — measured here, used by P2's uploader only if albums help;
+`delete_messages`, 1–100 ids per call, so no bench or discard strands
+messages), `dc-cli/src/main.rs` (`bench scroll`,
+`bench albums`, a longer `bench sends`); then, from the numbers,
+`Limits::default()` and `SendPacer`, SPEC §4.9/§10/§11, RESEARCH §14.
+
+**Rules:**
+- **Never a 429 at the chosen numbers:** each is chosen from a sustained run
+  that drew none, with margin below the first rate that drew one.
+- **When one comes anyway, nothing breaks:** reads pause all reads for
+  `retry_after` and retry the job first (gives up after 3 — the screen asks
+  again when it scrolls back); sends pause the bot's sends and resend the same
+  part (the journal keeps what was sent). Each is logged (`rate limited: …`),
+  no token or address in the line.
+- Benches stay on the test bot, stop escalating at the first rate limit,
+  delete every message they send (after Ctrl-C too), cap their size —
+  `bench sends` up to 250 (raised from 100: a 10-minute paced run is ~170).
+- "Never a 429" holds for the phone alone: its pacer cannot see the website's
+  or the worker's sends to the same chat; there, both honour `retry_after`.
+  P2's background uploader is unpaced by construction: the budget chosen here
+  is enforced by how many parts the core hands out per wake.
+- Defaults sit below the highest numbers that ran clean; As built names the
+  run that set the default and the run that was the ceiling, each recorded as
+  it is read.
+
+**Measurements** (release, this Mac, the test account):
+- **`bench scroll [n] <photo> <video>`** — the whole library's thumbnails (up
+  to n, fresh cache) asked for at once through the core, as a fling would;
+  two seconds in, the photo's preview and the video's first bytes asked for
+  at Opened, as a tap would. Reports thumbnails a second, rate limits (from
+  the log), how long the opened photo and video took, and the worker requests
+  it cost (each thumbnail fetches its asset's manifest first: a 10k fling is
+  10k worker requests unless manifests come in bulk). Run at the default
+  limits and at higher ones (two more numbers: at once, per second).
+- **Sends, sustained:** 1 per 3 s already drew one rate limit after 40
+  sends (1.8), so the first candidate is **1 per 3.5 s, burst 3** (~17 a
+  minute): `bench sends 170 paced` for ~10 minutes (≥ 150 sends) — zero rate
+  limits wanted; if one comes, 1 per 4 s.
+- **`bench albums [n]`** — albums of 10 tiny documents through the pacer
+  (one token per album), until the first rate limit: a refusal at the 2nd–3rd
+  album means Telegram counts each message (the pacer must then take 10
+  tokens per album); ~20 albums a minute (200 messages) means it counts each
+  request, and P2's backup batches small files into albums.
+- **Added (operator, 2026-11-17: "a perfect algorithm — many photos as
+  albums, one as a message; videos researched; how fast would uploads and
+  downloads be"):**
+  - **`bench upload <count> <KB> <album> [at-once]`** — the same number of
+    files of a realistic size sent twice: one by one through the pacer
+    (`at-once` in flight, spaced by the pacer), then in albums of `album`, one
+    album at a time; files a minute, MB/s, rate limits; all deleted. Runs:
+    tiny files (the request limit alone), photo-sized files (2–4 MB), and
+    19 MiB parts one vs two in flight (videos). Albums of 2, 5 and 10 tiny
+    files to see whether an album's ~6 s is per album or per file.
+  - **`bench parts <video> [k]`** — 1, 2, 3, 4 parts downloaded at once, new
+    parts each time: where downloads stop getting faster.
+  - From these, a model of upload and download speed by connection and
+    library mix, the current algorithm against an adaptive one (albums for
+    small files when several wait, a single send otherwise; video parts
+    alone), written to RESEARCH §14 for P2's uploader.
+- **Decision:** `Limits::default()` and the send pacer take the highest
+  numbers that ran clean, with margin; the album result goes to SPEC §10 and
+  P2's uploader design.
+
+- [x] **Step 1:** tests first, failing: `CoreConfig.limits` reaches the
+  scheduler; a rate limit is logged (reads and sends) without secrets;
+  `send_media_group` builds one multipart request with `media` as
+  `attach://` references, takes one pacer token, refuses fewer than 2 or more
+  than 10 items, and returns every message; `delete_messages` sends ids in
+  batches of 100; dc-cli's new arguments parse.
+- [x] **Step 2:** implement. Run → pass; clippy, fmt, `cargo deny`.
+- [x] **Step 3: Gate 2** — the measurements above on the test account; the
+  numbers chosen and checked with a second clean sustained run.
+- [x] **Step 4:** Gate 3 (one reviewer at a time); commit code, then docs.
+
+**As built (Task 1.9) — measurements, recorded as read:**
+- **Albums (`bench albums 10`, 2026-11-17 ~08:30 UTC):** 10 albums of 10
+  tiny documents through the pacer (one token per album): **100 messages in
+  61.0 s, no rate limit** — counted per message, the 3rd album (≥ 21
+  messages in a minute) would have been refused. An album counts as **one
+  request** against the group limit. All 100 deleted in one
+  `deleteMessages` call.
+- **Albums in flight (`bench albums 30 3`):** three albums at once (30
+  messages within seconds) → refused after 3 albums, 18.1 s, `retry_after`
+  6 s — a short wait: Telegram's per-second rule for one chat ("avoid more
+  than one message per second"), not the per-minute one. Albums go **one at
+  a time**.
+- **Albums one at a time, sustained (`bench albums 30 1`):** **300 messages
+  in 192.6 s, no rate limit** — 9.3 albums (93 files) a minute; each album
+  request takes ~6 s, so one at a time stays under both rules by itself. A
+  backup batched into albums of 10 moves **~5× the files** single sends can
+  (17 a minute at 1 per 3.5 s).
+- **Sends sustained at the candidate pace (`bench sends 170 paced`,
+  2026-11-17 ~07:43–07:53 UTC):** 1 per 3.5 s, burst 3 — **170 sends in
+  584.8 s (17.4 a minute), no rate limit**; all deleted in two
+  `deleteMessages` calls. The pace is kept (1 per 3 s had drawn a refusal
+  after 40).
+- **`bench upload 30 1 10` (1 KB files — the request limit alone):** one by
+  one **19.0 files a minute** (30 in 94.9 s); albums of 10 **98.4 files a
+  minute** (3 albums in 18.3 s, ~6.1 s each). No rate limit either way.
+- **Album size (`bench upload 10 1 5`, and the runs of 10):** albums of 5
+  ~4 s each (75 files a minute), of 10 ~6.1 s (98): Telegram spends ~0.6–0.8 s
+  **per file** in an album, so albums top out near 75–100 files a minute, one
+  at a time. (The albums-of-2 run, 7.3 s for 5, measured the pacer — its 5th
+  token comes at 7 s — not the albums; it is not used.)
+- **A new process starts with a full burst** — the second run's singles were
+  refused after 4 sends (`retry_after` 19 s): the previous run had spent the
+  minute's requests (10 singles + 5 albums). The limit is per account per
+  minute across processes; a pacer that restarts full can overdraw it.
+- **Downloads by parallelism (`bench parts <757 MB video> 4`, up then
+  down):** 1 at once 3.30 / 3.03 MB/s; 2 → 6.40 / 3.94; 3 → 7.85 / 5.29;
+  4 → 3.08 (a stall) / 6.24. One connection gets ~3 MB/s; 2–3 fill this
+  link (~8 MB/s); a 4th adds stalls, not speed.
+- **Photo-sized files (`bench upload 20 3000 10`, 3 MB each):** one by one
+  **19.2 files a minute, 0.98 MB/s** (still the request limit); albums of 10
+  **37.7 files a minute, 1.93 MB/s** — 2× faster, now bound by the upload
+  (one connection).
+- **Video parts, 19 MiB (`bench upload 4 19456 1 1` / `… 1 2`):** one in
+  flight **1.95 MB/s**, two in flight **1.80 MB/s** — the uplink is the
+  bound (~2 MB/s here); parts go one at a time.
+- **Scroll fling at the defaults (`bench scroll`, 12 at once, 40/s, burst
+  12):** **2,000 thumbnails in 92.1 s (21.7/s), no rate limit, no failure**;
+  tapped mid-fling, the photo opened in **5.68 s** and the video's first
+  bytes came in **3.46 s** — slow because each thumbnail first asks the worker
+  for its asset's manifest, outside the scheduler: the tapped photo's
+  manifest waited behind ~2,000 others (2,000 worker requests).
+- **Scroll fling at 24 at once, 60/s, burst 24:** **2,000 in 46.0 s
+  (43.5/s), no rate limit, no failure**; photo 5.16 s, video's first bytes
+  2.60 s (the manifest queue again). (A first attempt printed nothing — its
+  error went to a discarded stderr; rerun with it shown.)
+- **Scroll fling at 32 at once, 80/s:** 2,000 in 44.5 s (44.9/s) — no
+  faster than 24/60: **~45 a second is the ceiling** while every thumbnail
+  needs its own manifest request; photo 6.70 s, video 4.98 s (worse).
+- **Opening with no fling (`bench scroll … 1`):** photo **1.94 s** (vs
+  5.2–6.7 s during a fling: the manifest queue costs 3–5 s); video's first
+  bytes 9.23 s — a whole 19 MiB first part at ~3 MB/s, cold (the flings' 2.6–
+  5.0 s likely met a part Telegram had warm from the run before).
+- **Album files read back** (a probe, not in dc-cli): an album of 2 (1 KB,
+  300 KB) → each downloaded by its file id, **byte-identical**; deleted with
+  `deleteMessages`. Albums change sending only.
+- **Worker limits (Cloudflare's pages, 2026-11-13/10-30; each user's worker
+  runs on their own account, free plan):** 100,000 requests a day (Error
+  1027 until 00:00 UTC), no per-second limit, 10 ms CPU a request; D1 5 M
+  rows read and **100,000 rows written a day**, 500 MB a database, 50 queries
+  an invocation (a batch counts as one). A new photo writes ~6 D1 rows (the
+  row + 5 index entries: `fileCreatedAt`, `uploadedAt`, `isTrashed`,
+  `checksum`, `dedup`) → **~16,000 new photos a day** at most, whatever the
+  upload speed. Requests: 3 per photo today (check, encryption settings,
+  create) → ~33,000 a day; a scroll costs one per thumbnail per session
+  (manifests live 10 minutes in memory).
+- **Album size cap (`bench upload 10 5120 10` / `10 4600 10`):** an album of
+  52.4 MB (10 × 5 MiB) → **HTTP 413** (the singles phase ran, 1.00 MB/s);
+  an album of 47.1 MB → sent (32.2 s, 1.46 MB/s). A request is capped at
+  ~50 MB: albums stay **≤ 45 MB**.
+- **Two albums in flight (`bench albums 20 2`):** refused after 3 albums
+  (11.9 s, `retry_after` 5 s). (The pacer's full burst started albums 1–2
+  together at once, and 3–4 together ~6 s later — not 3.5 s apart.) So
+  albums started together are refused; two 19 MiB parts in flight ran clean
+  but no faster; singles in flight were not tried. **One send request at a
+  time** — nothing is gained by more, and albums lose.
+- **Manifest gate A/B (non-opened manifest fetches ≤ 16 in flight, the opened
+  item skips the queue), the fling at the new defaults (24 at once, 60/s,
+  burst 24), alternating:** without — photo **13.14 s / 4.50 s**, 20.6 /
+  44.1 thumbnails a second; with — photo **2.11 s / 2.45 s** (≈ the 1.94 s
+  baseline), 41.3 / 43.7 a second. Video's first bytes 3.3–4.8 s either way
+  (the 19 MiB first part). **Kept.** No rate limit in any of the four runs:
+  the second clean run at 24/60 — **`Limits::default()` = 24 at once, 60/s,
+  burst 24** (the ceiling, 32/80, was no faster).
+- **The pacer remembers a send across restarts:** each account's last send
+  time in `data_dir/sent-<id>`; a start within a minute of it begins with
+  no burst (the 19 s refusal above). Starts after a quiet minute keep the
+  burst.
+
+- **Second sustained send run, at burst 2 (`bench sends 170 paced`,
+  2026-11-17 ~12:30 UTC):** **170 sends in 589.1 s, no rate limit**; all
+  deleted. (A first attempt stopped at 48 sends on a network timeout — no
+  rate limit — and deleted its 48.)
+- **Gate 3 security (1.9):** 0 HIGH, 2 MEDIUM, 5 LOW, all fixed: manifest
+  fetches queued at the gate now end at sign-out instead of running with the
+  old session (a test; it failed before), and the gate's place is held until
+  the request ends, with a 30 s limit; Ctrl-C or a failure in a bench now
+  waits for the sends in flight and deletes them (checked live: 30 and 2
+  messages); the limits check refuses every stalling value (a near-zero
+  rate, an infinite burst, zero caps or timeout); names are cleaned in the
+  multipart headers of `send_document` and albums (mutation-checked); an
+  album answer the core cannot read has its messages deleted; the mark's path
+  comes from the session snapshot.
+- **Gate 3 spec (1.9):** 0 HIGH, 4 MEDIUM, ~15 LOW. Fixed: the albums-of-2
+  figure dropped (the pacer, not the album) and "staggered" corrected; D24
+  split into what the core has since 1.9 and what it proposes, with the
+  sections it amends; **the pacer's burst lowered to 2** — burst 3 after an
+  idle spell plus the steady pace could reach exactly 20 in a minute; burst 2
+  caps any minute at 2 + 60 / 3.5 = 19 — and a second sustained run made at
+  it; the viewer's next item no longer waits at the manifest gate (a test,
+  mutation-checked); tests added for an album of 10, an album answer the core
+  cannot read (its messages deleted), an infinite rate, the restart mark
+  written by a real upload; stale 1.8 text updated; the D1 count given as a
+  range (the primary key may be a 7th written row). Accepted, untested:
+  `MANIFEST_TIMEOUT` (30 s is too long for a unit test), one pacer token per
+  album (structural: albums go through the same `send`). `layout()` is not
+  gated by design (it serves an opened or viewed item). dc-cli's benches use
+  fresh clients without the restart mark: back-to-back bench runs can still
+  overdraw a minute (they are measurement tools).
+
+**Carried to P2 (Task 1.9):**
+- **SPEC D24, once the operator approves it:** the backup queue — one send
+  request in flight; batch by token into albums (≤ 10 files, ≤ 45 MB, small
+  files only; parts alone); random names for every album item, thumbnails
+  and previews too, replies matched by name and size; duplicate checks 100 a
+  request; encryption settings once a batch; the background budget (one
+  connection per host, ≤ 15 requests a wake); the free plan's daily limits
+  stop the queue until 00:00 UTC. In an unencrypted library thumbnails then
+  go as documents — check the website still shows them.
+- Thumbnail file ids from the worker in bulk (tutorial item 2), so a scroll
+  costs no manifest requests; until then the gate keeps the opened item first.
+- The grid listener must accept ≥ 24 connections (Flutter's HTTP client).
+- `part_sent` (the background uploader's answers) does not write the
+  restart mark yet — P2 wires it with the background queue.
+- Not done: a smaller first part for faster video starts (a format change on
+  both sides, SPEC §7) — recorded, not proposed.
+- **2026-11-19 after ~07:45 UTC:** try deleting test message 14362 (kept in
+  the test chat) — does the 48-hour delete rule hold for the bot as a
+  supergroup admin?
