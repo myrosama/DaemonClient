@@ -7,13 +7,13 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use base64::Engine as _;
 use dc_core::chunk_plan::{RangePlan, plan_range};
 use dc_core::reader::{Rendition, select};
-use dc_core::sched::Class;
+use dc_core::sched::{Class, Limits};
 use dc_core::session::{Deployment, HOSTED_API};
 use dc_core::telegram::Telegram;
 use dc_core::upload::UploadRequest;
@@ -32,8 +32,17 @@ const USAGE: &str = "usage: dc-cli <command>
   delete <asset>...       delete assets and their stored parts
   serve <asset>           the local media server's addresses, until Ctrl-C
   bench reads [n]         read limits, with n thumbnails (100, at most 200)
-  bench sends [n]         send limits, at most n tiny messages (40, at most 100), deleted after
-  bench parts <video>     two parts one after the other against both at once
+  bench sends [n] [paced] send limits with n tiny messages (40, at most 250), deleted after;
+                          `paced` keeps every send to the core's pace (a long steady run)
+  bench albums [n] [k]    n albums of 10 tiny documents at the core's pace, k at a time
+                          (10, at most 30; k 1, at most 3)
+  bench scroll <photo> <video> [n] [at-once rate]
+                          a fling through n thumbnails (2000, at most 5000) with the photo
+                          and the video opened 2 s in; optional scheduler numbers
+  bench parts <video> [k] downloads 1..k parts at once, up then down (4, at most 6)
+  bench upload <count> <KB> <album> [at-once]
+                          the same files one by one (at-once in flight, 1–2), then in
+                          albums of <album> (2–10; 1 = none); at most 300 MiB, deleted after
 Signs in from the Keychain item `daemonclient-test` (or $DC_KEYCHAIN).";
 
 #[derive(Debug, PartialEq)]
@@ -41,12 +50,37 @@ enum Command {
     Whoami,
     List(usize),
     Upload(Vec<PathBuf>),
-    Download { asset: String, out: PathBuf },
+    Download {
+        asset: String,
+        out: PathBuf,
+    },
     Delete(Vec<String>),
     Serve(String),
     BenchReads(usize),
-    BenchSends(usize),
-    BenchParts(String),
+    BenchSends {
+        n: usize,
+        paced: bool,
+    },
+    BenchAlbums {
+        n: usize,
+        at_once: usize,
+    },
+    BenchScroll {
+        photo: String,
+        video: String,
+        n: usize,
+        limits: Option<(usize, f64)>,
+    },
+    BenchParts {
+        video: String,
+        k: usize,
+    },
+    BenchUpload {
+        count: usize,
+        kb: usize,
+        album: usize,
+        at_once: usize,
+    },
 }
 
 fn parse(args: &[String]) -> Result<Command, String> {
@@ -76,13 +110,72 @@ fn parse(args: &[String]) -> Result<Command, String> {
         ["bench", "reads"] | ["bench", "reads", _] => {
             Ok(Command::BenchReads(count(words.get(2), 100, 200)?))
         }
-        ["bench", "sends"] | ["bench", "sends", _] => {
-            Ok(Command::BenchSends(count(words.get(2), 40, 100)?))
+        ["bench", "sends"] | ["bench", "sends", _] => Ok(Command::BenchSends {
+            n: count(words.get(2), 40, 250)?,
+            paced: false,
+        }),
+        ["bench", "sends", _, "paced"] => Ok(Command::BenchSends {
+            n: count(words.get(2), 40, 250)?,
+            paced: true,
+        }),
+        ["bench", "albums", _, _] => Ok(Command::BenchAlbums {
+            n: count(words.get(2), 10, 30)?,
+            at_once: count(words.get(3), 1, 3)?,
+        }),
+        ["bench", "albums"] | ["bench", "albums", _] => Ok(Command::BenchAlbums {
+            n: count(words.get(2), 10, 30)?,
+            at_once: 1,
+        }),
+        ["bench", "scroll", photo, video, rest @ ..] if matches!(rest.len(), 0 | 1 | 3) => {
+            let limits = match rest {
+                [_, at_once, rate] => {
+                    let at_once = count(Some(at_once), 0, 64)?;
+                    let rate = rate
+                        .parse::<f64>()
+                        .ok()
+                        .filter(|r| r.is_finite() && *r > 0.0)
+                        .ok_or_else(|| USAGE.to_owned())?;
+                    // One slot stays reserved for the opened item.
+                    if at_once < 2 {
+                        return Err(USAGE.to_owned());
+                    }
+                    Some((at_once, rate.min(200.0)))
+                }
+                _ => None,
+            };
+            Ok(Command::BenchScroll {
+                photo: (*photo).to_owned(),
+                video: (*video).to_owned(),
+                n: count(rest.first(), 2000, 5000)?,
+                limits,
+            })
         }
-        ["bench", "parts", video] => Ok(Command::BenchParts((*video).to_owned())),
+        ["bench", "parts", video] | ["bench", "parts", video, _] => Ok(Command::BenchParts {
+            video: (*video).to_owned(),
+            k: count(words.get(3), 4, 6)?,
+        }),
+        ["bench", "upload", files, kb, album, rest @ ..] if rest.len() <= 1 => {
+            let count_ = count(Some(files), 0, 100)?;
+            let kb = count(Some(kb), 0, 19_456)?;
+            let album = count(Some(album), 0, 10)?;
+            let at_once = count(rest.first(), 1, 2)?;
+            // A bench is not a backup: its sizes stay bounded.
+            if count_ * kb > 300 * 1024 || (album > 1 && album * kb > 50 * 1024) {
+                return Err(USAGE.to_owned());
+            }
+            Ok(Command::BenchUpload {
+                count: count_,
+                kb,
+                album,
+                at_once,
+            })
+        }
         _ => Err(USAGE.to_owned()),
     }
 }
+
+/// Rate limits the core has logged in this run.
+static RATE_LIMITS: AtomicUsize = AtomicUsize::new(0);
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -95,7 +188,12 @@ async fn main() -> ExitCode {
         }
     };
     // Before Core::start: the sink is fixed once per process (1.0).
-    dc_core::logging::install(Some(Box::new(|line: &str| eprintln!("{line}"))));
+    dc_core::logging::install(Some(Box::new(|line: &str| {
+        if line.contains("rate limited") {
+            RATE_LIMITS.fetch_add(1, Ordering::Relaxed);
+        }
+        eprintln!("{line}");
+    })));
     match run(command).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
@@ -108,10 +206,20 @@ async fn main() -> ExitCode {
 async fn run(command: Command) -> Result<(), Error> {
     let (email, password) = credentials()?;
     let dir = std::env::temp_dir().join(format!("dc-cli-{}", std::process::id()));
-    let core = Arc::new(Core::start(CoreConfig::new(
-        dir.join("data"),
-        dir.join("cache"),
-    ))?);
+    let mut config = CoreConfig::new(dir.join("data"), dir.join("cache"));
+    if let Command::BenchScroll {
+        limits: Some((at_once, rate)),
+        ..
+    } = &command
+    {
+        config.limits = Limits {
+            max_running: *at_once,
+            reads_per_sec: *rate,
+            read_burst: *at_once as f64,
+            ..Limits::default()
+        };
+    }
+    let core = Arc::new(Core::start(config)?);
     let signed_in = core
         .sign_in(
             HOSTED_API,
@@ -125,7 +233,16 @@ async fn run(command: Command) -> Result<(), Error> {
     let result = match signed_in {
         Err(e) => Err(e.into()),
         // It stops measuring at Ctrl-C itself, then deletes what it sent.
-        Ok(_) if matches!(command, Command::BenchSends(_)) => work(&core, command, &dir).await,
+        Ok(_)
+            if matches!(
+                command,
+                Command::BenchSends { .. }
+                    | Command::BenchAlbums { .. }
+                    | Command::BenchUpload { .. }
+            ) =>
+        {
+            work(&core, command, &dir).await
+        }
         // Ctrl-C ends `serve`; anything else is cut short. Both clean up below.
         Ok(_) => tokio::select! {
             result = work(&core, command, &dir) => result,
@@ -147,8 +264,18 @@ async fn work(core: &Arc<Core>, command: Command, dir: &Path) -> Result<(), Erro
         Command::Delete(ids) => delete(core, &ids).await,
         Command::Serve(asset) => serve(core, &asset).await,
         Command::BenchReads(n) => bench_reads(core, n).await,
-        Command::BenchSends(n) => bench_sends(core, n).await,
-        Command::BenchParts(video) => bench_parts(core, &video).await,
+        Command::BenchSends { n, paced } => bench_sends(core, n, paced).await,
+        Command::BenchAlbums { n, at_once } => bench_albums(core, n, at_once).await,
+        Command::BenchScroll {
+            photo, video, n, ..
+        } => bench_scroll(core, &photo, &video, n).await,
+        Command::BenchParts { video, k } => bench_parts(core, &video, k).await,
+        Command::BenchUpload {
+            count,
+            kb,
+            album,
+            at_once,
+        } => bench_upload(core, count, kb, album, at_once).await,
     }
 }
 
@@ -700,57 +827,45 @@ async fn bench_reads(core: &Arc<Core>, n: usize) -> Result<(), Error> {
     Ok(())
 }
 
-async fn bench_sends(core: &Core, n: usize) -> Result<(), Error> {
+async fn bench_sends(core: &Core, n: usize, paced: bool) -> Result<(), Error> {
     // Made first: deleting must not depend on the worker answering later.
     let telegram = fresh(core).await?;
     let mut sent = vec![];
-    let measured = tokio::select! {
-        result = measure_sends(core, n, &mut sent) => result,
-        _ = tokio::signal::ctrl_c() => Err("interrupted".into()),
-    };
+    let (stop, watcher) = stop_on_ctrl_c();
+    let measured = measure_sends(core, n, paced, &stop, &mut sent).await;
+    watcher.abort();
     // Always: every message the bench made goes.
-    let mut left = vec![];
-    for message in &sent {
-        let mut tries = 0;
-        loop {
-            match telegram.delete_message(*message).await {
-                Ok(()) => break,
-                Err(CoreError::RateLimited { retry_after }) if tries < 3 && retry_after <= 120 => {
-                    tries += 1;
-                    tokio::time::sleep(Duration::from_secs(retry_after.min(120))).await;
-                }
-                Err(_) => {
-                    left.push(*message);
-                    break;
-                }
-            }
-        }
-    }
-    println!(
-        "deleted {} of {} messages",
-        sent.len() - left.len(),
-        sent.len()
-    );
-    if !left.is_empty() {
-        println!("left in the channel, message ids: {left:?}");
-    }
-    measured
+    delete_all(&telegram, &sent).await;
+    interrupted(&stop).and(measured)
 }
 
-async fn measure_sends(core: &Core, n: usize, sent: &mut Vec<i64>) -> Result<(), Error> {
-    let tiny = || -> Result<Vec<u8>, Error> {
-        let mut bytes = vec![0u8; 64];
-        getrandom::fill(&mut bytes)?;
-        Ok(bytes)
-    };
+async fn measure_sends(
+    core: &Core,
+    n: usize,
+    all_paced: bool,
+    stop: &AtomicBool,
+    sent: &mut Vec<i64>,
+) -> Result<(), Error> {
     // The core's pacer, long enough to show its steady rate holds.
-    let paced = (n / 2).min(50);
+    let paced = if all_paced { n } else { (n / 2).min(50) };
     let telegram = fresh(core).await?;
     let started = Instant::now();
     let mut limit = None;
-    for _ in 0..paced {
+    for i in 0..paced {
+        if stop.load(Ordering::Relaxed) {
+            break;
+        }
         match telegram.send_document("bench.bin", tiny()?).await {
-            Ok(message) => sent.push(message.message_id),
+            Ok(message) => {
+                sent.push(message.message_id);
+                if (i + 1) % 25 == 0 {
+                    println!(
+                        "  {} sends, {:.0} s",
+                        i + 1,
+                        started.elapsed().as_secs_f64()
+                    );
+                }
+            }
             Err(CoreError::RateLimited { retry_after }) => {
                 limit = Some(retry_after);
                 break;
@@ -769,7 +884,10 @@ async fn measure_sends(core: &Core, n: usize, sent: &mut Vec<i64>) -> Result<(),
     };
     report("paced", sent.len(), started.elapsed().as_secs_f64(), limit);
     if let Some(retry_after) = limit {
-        tokio::time::sleep(Duration::from_secs(retry_after.min(120))).await;
+        wait(retry_after, stop).await;
+        return Ok(());
+    }
+    if all_paced {
         return Ok(());
     }
     // As fast as the storage takes them: a new client (each starts with the
@@ -779,6 +897,9 @@ async fn measure_sends(core: &Core, n: usize, sent: &mut Vec<i64>) -> Result<(),
     let started = Instant::now();
     let mut telegram = fresh(core).await?;
     for i in 0..n.saturating_sub(paced) {
+        if stop.load(Ordering::Relaxed) {
+            break;
+        }
         if i % 3 == 0 {
             telegram = fresh(core).await?;
         }
@@ -798,45 +919,374 @@ async fn measure_sends(core: &Core, n: usize, sent: &mut Vec<i64>) -> Result<(),
         limit,
     );
     if let Some(retry_after) = limit {
-        tokio::time::sleep(Duration::from_secs(retry_after.min(120))).await;
+        wait(retry_after, stop).await;
     }
     Ok(())
 }
 
-async fn bench_parts(core: &Core, video: &str) -> Result<(), Error> {
+/// Ctrl-C asks a bench to stop: nothing new is sent, what is in flight is
+/// waited for (so its messages are known), and then everything is deleted.
+fn stop_on_ctrl_c() -> (Arc<AtomicBool>, tokio::task::JoinHandle<()>) {
+    let stop = Arc::new(AtomicBool::new(false));
+    let flag = stop.clone();
+    let watcher = tokio::spawn(async move {
+        if tokio::signal::ctrl_c().await.is_ok() {
+            flag.store(true, Ordering::Relaxed);
+        }
+    });
+    (stop, watcher)
+}
+
+fn interrupted(stop: &AtomicBool) -> Result<(), Error> {
+    match stop.load(Ordering::Relaxed) {
+        true => Err("interrupted".into()),
+        false => Ok(()),
+    }
+}
+
+/// A wait that Ctrl-C cuts short.
+async fn wait(seconds: u64, stop: &AtomicBool) {
+    for _ in 0..seconds.min(120) {
+        if stop.load(Ordering::Relaxed) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+}
+
+fn tiny() -> Result<Vec<u8>, Error> {
+    let mut bytes = vec![0u8; 64];
+    getrandom::fill(&mut bytes)?;
+    Ok(bytes)
+}
+
+/// Every message a bench made goes, a hundred a request.
+async fn delete_all(telegram: &Telegram, sent: &[i64]) {
+    let mut tries = 0;
+    let result = loop {
+        match telegram.delete_messages(sent).await {
+            Err(CoreError::RateLimited { retry_after }) if tries < 3 => {
+                tries += 1;
+                tokio::time::sleep(Duration::from_secs(retry_after.min(120))).await;
+            }
+            other => break other,
+        }
+    };
+    match result {
+        Ok(()) => println!("deleted {} messages", sent.len()),
+        Err(e) => println!("could not delete them ({e}); message ids: {sent:?}"),
+    }
+}
+
+/// Albums of ten through the core's pacer (one token each): a refusal by the
+/// third means the storage counts every message in an album.
+async fn bench_albums(core: &Core, n: usize, at_once: usize) -> Result<(), Error> {
+    let telegram = fresh(core).await?;
+    let mut sent = vec![];
+    let (stop, watcher) = stop_on_ctrl_c();
+    let measured = measure_albums(&telegram, n, at_once, &stop, &mut sent).await;
+    watcher.abort();
+    delete_all(&telegram, &sent).await;
+    interrupted(&stop).and(measured)
+}
+
+async fn measure_albums(
+    telegram: &Arc<Telegram>,
+    n: usize,
+    at_once: usize,
+    stop: &AtomicBool,
+    sent: &mut Vec<i64>,
+) -> Result<(), Error> {
+    let started = Instant::now();
+    let mut tasks = JoinSet::new();
+    let (mut next, mut refused, mut failure) = (1, None, None::<Error>);
+    loop {
+        // Nothing new after a refusal or a failure; what is in flight is
+        // still collected, so its messages can be deleted.
+        while refused.is_none()
+            && failure.is_none()
+            && !stop.load(Ordering::Relaxed)
+            && next <= n
+            && tasks.len() < at_once
+        {
+            let files = (0..10)
+                .map(|k| Ok((format!("album{next}-{k}.bin"), tiny()?)))
+                .collect::<Result<Vec<_>, Error>>()?;
+            let telegram = telegram.clone();
+            tasks.spawn(async move { telegram.send_media_group(files).await });
+            next += 1;
+        }
+        let Some(joined) = tasks.join_next().await else {
+            break;
+        };
+        match joined {
+            Ok(Ok(messages)) => sent.extend(messages.iter().map(|m| m.message_id)),
+            Ok(Err(CoreError::RateLimited { retry_after })) => {
+                refused.get_or_insert(retry_after);
+            }
+            Ok(Err(e)) => {
+                failure.get_or_insert(e.into());
+            }
+            Err(e) => {
+                failure.get_or_insert(e.into());
+            }
+        }
+    }
+    let seconds = started.elapsed().as_secs_f64();
+    let albums = sent.len() / 10;
+    match refused {
+        Some(retry_after) => {
+            println!(
+                "{albums} albums ({} messages) in {seconds:.1} s, {at_once} at a time, then refused: retry_after {retry_after} s",
+                sent.len()
+            );
+            wait(retry_after, stop).await;
+        }
+        None => println!(
+            "{albums} albums ({} messages) in {seconds:.1} s, {at_once} at a time — no rate limit ({:.1} albums a minute)",
+            sent.len(),
+            albums as f64 * 60.0 / seconds.max(0.001)
+        ),
+    }
+    failure.map_or(Ok(()), Err)
+}
+
+/// A fling through `n` thumbnails with a photo and a video tapped mid-way.
+async fn bench_scroll(core: &Arc<Core>, photo: &str, video: &str, n: usize) -> Result<(), Error> {
+    let assets = newest(core, n).await?;
+    println!(
+        "{} thumbnails asked for at once; the photo and the video opened 2 s in",
+        assets.len()
+    );
+    let before = RATE_LIMITS.load(Ordering::Relaxed);
+    let fling = {
+        let core = core.clone();
+        phase(&assets, assets.len().max(1), move |id| {
+            let core = core.clone();
+            async move {
+                core.image(&id, Rendition::Thumbnail, Class::Visible)
+                    .await
+                    .map(|_| ())
+            }
+        })
+    };
+    let taps = async {
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        let started = Instant::now();
+        let photo_took = core
+            .image(photo, Rendition::Preview, Class::Opened)
+            .await
+            .map(|_| started.elapsed());
+        let started = Instant::now();
+        let video_took: Result<Duration, CoreError> = async {
+            let layout = core.layout(video, Rendition::Playback).await?;
+            let RangePlan::Partial(slices) = plan_range(layout.size, 0, 1) else {
+                return Err(CoreError::Corrupt("the video is empty".to_owned()));
+            };
+            let mut reader = core
+                .range(
+                    video,
+                    Rendition::Playback,
+                    layout.size,
+                    slices,
+                    Class::Opened,
+                )
+                .await?;
+            while let Some(piece) = reader.next().await {
+                piece?;
+            }
+            Ok(started.elapsed())
+        }
+        .await;
+        (photo_took, video_took)
+    };
+    let (thumbs, (photo_took, video_took)) = tokio::join!(fling, taps);
+    thumbs.print("thumbnails through the core");
+    match photo_took {
+        Ok(took) => println!("the photo opened in {:.2} s", took.as_secs_f64()),
+        Err(e) => println!("the photo failed: {e}"),
+    }
+    match video_took {
+        Ok(took) => println!("the video's first bytes in {:.2} s", took.as_secs_f64()),
+        Err(e) => println!("the video failed: {e}"),
+    }
+    println!(
+        "rate limits the core logged: {}; worker requests: one manifest per thumbnail ({})",
+        RATE_LIMITS.load(Ordering::Relaxed) - before,
+        assets.len()
+    );
+    Ok(())
+}
+
+/// 1..k whole parts downloaded at once, up then down, new parts each time.
+async fn bench_parts(core: &Core, video: &str, k: usize) -> Result<(), Error> {
     let manifest = core.worker()?.manifest(video).await?;
     let parts = select(&manifest, Rendition::Original)?.file_ids;
-    // Whole parts only (not the last), each pair new to the storage's caches.
-    let whole: Vec<String> = parts
-        .iter()
-        .take(parts.len().saturating_sub(1))
-        .cloned()
-        .collect();
-    if whole.len() < 4 {
-        return Err("needs a video of at least five parts".into());
+    // Whole parts only (not the last), none read twice.
+    let mut whole = parts.iter().take(parts.len().saturating_sub(1)).cloned();
+    let ladder: Vec<usize> = (1..=k).chain((1..=k).rev()).collect();
+    if ladder.iter().sum::<usize>() > parts.len().saturating_sub(1) {
+        return Err("the video has too few parts for this ladder".into());
     }
-    for (round, [a, b]) in whole.as_chunks::<2>().0.iter().take(4).enumerate() {
+    for at_once in ladder {
+        let batch: Vec<String> = whole.by_ref().take(at_once).collect();
         let telegram = fresh(core).await?;
         let started = Instant::now();
-        let together = round % 2 == 1;
-        if together {
-            let (x, y) = tokio::join!(telegram.download(a), telegram.download(b));
-            x?;
-            y?;
-        } else {
-            telegram.download(a).await?;
-            telegram.download(b).await?;
+        let mut tasks = JoinSet::new();
+        for file in batch {
+            let telegram = telegram.clone();
+            tasks.spawn(async move { telegram.download(&file).await.map(|b| b.len()) });
+        }
+        let mut bytes = 0;
+        while let Some(joined) = tasks.join_next().await {
+            bytes += joined??;
         }
         let seconds = started.elapsed().as_secs_f64();
         println!(
-            "two parts {}: {seconds:.1} s ({:.2} MB/s)",
-            if together {
-                "at once"
-            } else {
-                "one after the other"
-            },
-            2.0 * dc_core::chunk_plan::PART_SIZE as f64 / 1e6 / seconds.max(0.001)
+            "{at_once} at once: {:.1} MB in {seconds:.1} s, {:.2} MB/s",
+            bytes as f64 / 1e6,
+            bytes as f64 / 1e6 / seconds.max(0.001)
         );
+    }
+    Ok(())
+}
+
+/// The same files one by one, then in albums: what each way moves a minute.
+async fn bench_upload(
+    core: &Core,
+    count: usize,
+    kb: usize,
+    album: usize,
+    at_once: usize,
+) -> Result<(), Error> {
+    let telegram = fresh(core).await?;
+    let mut sent = vec![];
+    let (stop, watcher) = stop_on_ctrl_c();
+    let measured = measure_upload(core, count, kb, album, at_once, &stop, &mut sent).await;
+    watcher.abort();
+    delete_all(&telegram, &sent).await;
+    interrupted(&stop).and(measured)
+}
+
+fn random_file(name: String, kb: usize) -> Result<(String, Vec<u8>), Error> {
+    let mut bytes = vec![0u8; kb * 1024];
+    getrandom::fill(&mut bytes)?;
+    Ok((name, bytes))
+}
+
+async fn measure_upload(
+    core: &Core,
+    count: usize,
+    kb: usize,
+    album: usize,
+    at_once: usize,
+    stop: &AtomicBool,
+    sent: &mut Vec<i64>,
+) -> Result<(), Error> {
+    let report = |what: String, files: usize, seconds: f64, limit: Option<u64>| {
+        let mb = (files * kb * 1024) as f64 / 1e6;
+        println!(
+            "{what}: {files} files, {mb:.1} MB in {seconds:.1} s — {:.1} files a minute, {:.2} MB/s{}",
+            files as f64 * 60.0 / seconds.max(0.001),
+            mb / seconds.max(0.001),
+            limit.map_or(String::new(), |r| format!(
+                ", then refused: retry_after {r} s"
+            ))
+        );
+    };
+    // One by one through the pacer, `at_once` in flight.
+    let telegram = fresh(core).await?;
+    let started = Instant::now();
+    let (mut tasks, mut next, mut done, mut limit) = (JoinSet::new(), 0, 0, None);
+    let mut failure = None::<Error>;
+    loop {
+        // Nothing new after a refusal, a failure or Ctrl-C; what is in flight
+        // is still collected, so its messages can be deleted.
+        while limit.is_none()
+            && failure.is_none()
+            && !stop.load(Ordering::Relaxed)
+            && next < count
+            && tasks.len() < at_once
+        {
+            let (name, bytes) = random_file(format!("bench{next}.bin"), kb)?;
+            let telegram = telegram.clone();
+            tasks.spawn(async move { telegram.send_document(&name, bytes).await });
+            next += 1;
+        }
+        let Some(joined) = tasks.join_next().await else {
+            break;
+        };
+        match joined {
+            Ok(Ok(message)) => {
+                sent.push(message.message_id);
+                done += 1;
+            }
+            Ok(Err(CoreError::RateLimited { retry_after })) => {
+                limit.get_or_insert(retry_after);
+            }
+            Ok(Err(e)) => {
+                failure.get_or_insert(e.into());
+            }
+            Err(e) => {
+                failure.get_or_insert(e.into());
+            }
+        }
+    }
+    if let Some(e) = failure {
+        return Err(e);
+    }
+    report(
+        format!("one by one, {at_once} in flight"),
+        done,
+        started.elapsed().as_secs_f64(),
+        limit,
+    );
+    if let Some(retry_after) = limit {
+        wait(retry_after, stop).await;
+    }
+    if album < 2 {
+        return Ok(());
+    }
+    // The same in albums, one album at a time.
+    let telegram = fresh(core).await?;
+    let started = Instant::now();
+    let (mut done, mut limit) = (0, None);
+    for first in (0..count).step_by(album) {
+        if stop.load(Ordering::Relaxed) {
+            break;
+        }
+        let files = (first..count.min(first + album))
+            .map(|i| random_file(format!("album{i}.bin"), kb))
+            .collect::<Result<Vec<_>, Error>>()?;
+        let n = files.len();
+        let result = if let [(name, bytes)] = files.as_slice() {
+            telegram
+                .send_document(name, bytes.clone())
+                .await
+                .map(|m| vec![m])
+        } else {
+            telegram.send_media_group(files).await
+        };
+        match result {
+            Ok(messages) => {
+                sent.extend(messages.iter().map(|m| m.message_id));
+                done += n;
+            }
+            Err(CoreError::RateLimited { retry_after }) => {
+                limit = Some(retry_after);
+                break;
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
+    report(
+        format!("albums of {album}"),
+        done,
+        started.elapsed().as_secs_f64(),
+        limit,
+    );
+    if let Some(retry_after) = limit {
+        wait(retry_after, stop).await;
     }
     Ok(())
 }
@@ -928,10 +1378,81 @@ mod tests {
         assert_eq!(parse(&args("serve x")), Ok(Command::Serve("x".into())));
         assert_eq!(parse(&args("bench reads")), Ok(Command::BenchReads(100)));
         assert_eq!(parse(&args("bench reads 30")), Ok(Command::BenchReads(30)));
-        assert_eq!(parse(&args("bench sends")), Ok(Command::BenchSends(40)));
+        assert_eq!(
+            parse(&args("bench sends")),
+            Ok(Command::BenchSends {
+                n: 40,
+                paced: false
+            })
+        );
+        assert_eq!(
+            parse(&args("bench sends 200 paced")),
+            Ok(Command::BenchSends {
+                n: 200,
+                paced: true
+            })
+        );
+        assert_eq!(
+            parse(&args("bench scroll p v")),
+            Ok(Command::BenchScroll {
+                photo: "p".into(),
+                video: "v".into(),
+                n: 2000,
+                limits: None
+            })
+        );
+        assert_eq!(
+            parse(&args("bench scroll p v 500 24 60")),
+            Ok(Command::BenchScroll {
+                photo: "p".into(),
+                video: "v".into(),
+                n: 500,
+                limits: Some((24, 60.0))
+            })
+        );
+        assert_eq!(
+            parse(&args("bench albums")),
+            Ok(Command::BenchAlbums { n: 10, at_once: 1 })
+        );
+        assert_eq!(
+            parse(&args("bench albums 3")),
+            Ok(Command::BenchAlbums { n: 3, at_once: 1 })
+        );
+        assert_eq!(
+            parse(&args("bench albums 20 9")),
+            Ok(Command::BenchAlbums { n: 20, at_once: 3 })
+        );
         assert_eq!(
             parse(&args("bench parts v")),
-            Ok(Command::BenchParts("v".into()))
+            Ok(Command::BenchParts {
+                video: "v".into(),
+                k: 4
+            })
+        );
+        assert_eq!(
+            parse(&args("bench parts v 9")),
+            Ok(Command::BenchParts {
+                video: "v".into(),
+                k: 6
+            })
+        );
+        assert_eq!(
+            parse(&args("bench upload 30 3000 10")),
+            Ok(Command::BenchUpload {
+                count: 30,
+                kb: 3000,
+                album: 10,
+                at_once: 1
+            })
+        );
+        assert_eq!(
+            parse(&args("bench upload 4 19456 1 2")),
+            Ok(Command::BenchUpload {
+                count: 4,
+                kb: 19456,
+                album: 1,
+                at_once: 2
+            })
         );
     }
 
@@ -950,6 +1471,15 @@ mod tests {
             "list many",
             "bench",
             "bench parts",
+            "bench scroll",
+            "bench scroll p",
+            "bench scroll p v 10 24",
+            "bench sends 10 fast",
+            "bench upload",
+            "bench upload 10 100",
+            // Over the bench's 300 MiB, and an album over 50 MiB.
+            "bench upload 100 19456 1",
+            "bench upload 10 19456 10",
             "whoami extra",
         ] {
             assert!(parse(&args(line)).is_err(), "{line:?}");
@@ -965,8 +1495,23 @@ mod tests {
         );
         assert_eq!(
             parse(&args("bench sends 100000")),
-            Ok(Command::BenchSends(100))
+            Ok(Command::BenchSends {
+                n: 250,
+                paced: false
+            })
         );
+        assert_eq!(
+            parse(&args("bench albums 1000")),
+            Ok(Command::BenchAlbums { n: 30, at_once: 1 })
+        );
+        assert!(matches!(
+            parse(&args("bench scroll p v 100000 1000 1000")),
+            Ok(Command::BenchScroll {
+                n: 5000,
+                limits: Some((64, 200.0)),
+                ..
+            })
+        ));
     }
 
     #[test]

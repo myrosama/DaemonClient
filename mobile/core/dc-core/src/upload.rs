@@ -854,6 +854,13 @@ mod tests {
             (done.asset_id.as_str(), done.duplicate),
             ("new-asset", false)
         );
+        // The account's last send is kept for the next start (Task 1.9).
+        let marks = std::fs::read_dir(dir.path().join("data")).unwrap();
+        assert!(
+            marks
+                .filter_map(Result::ok)
+                .any(|e| e.file_name().to_string_lossy().starts_with("sent-"))
+        );
         let docs = sent(&server, "/bot1:A/sendDocument").await;
         assert_eq!(docs.len(), 4, "two parts, the thumbnail, the preview");
         let mut stored = vec![];

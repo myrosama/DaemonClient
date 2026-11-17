@@ -28,6 +28,8 @@ pub struct Telegram {
     channel_id: String,
     paths: Mutex<HashMap<String, (String, Instant)>>,
     pacer: SendPacer,
+    /// When this account last sent, kept across restarts.
+    sent_mark: Option<std::path::PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,8 +53,19 @@ impl Telegram {
             token,
             channel_id,
             paths: Mutex::new(HashMap::new()),
-            pacer: SendPacer::new(),
+            pacer: SendPacer::new(false),
+            sent_mark: None,
         })
+    }
+
+    /// Remembers sends in `mark`; one within the last minute (an earlier run
+    /// of the app) means starting without a burst.
+    pub fn remembering(mut self, mark: std::path::PathBuf) -> Self {
+        if sent_recently(&mark) {
+            self.pacer = SendPacer::new(true);
+        }
+        self.sent_mark = Some(mark);
+        self
     }
 
     fn method_url(&self, method: &str) -> String {
@@ -133,11 +146,48 @@ impl Telegram {
     pub async fn send_document(&self, name: &str, bytes: Vec<u8>) -> Result<Sent, CoreError> {
         let len = bytes.len();
         let part = reqwest::multipart::Part::bytes(bytes)
-            .file_name(name.to_owned())
+            .file_name(clean_name(name))
             .mime_str("application/octet-stream")
             .map_err(|e| CoreError::Internal(format!("multipart: {e}")))?;
-        let message: Message = self.send("sendDocument", "document", part, len).await?;
+        let form = self.form().part("document", part);
+        let message: Message = self.send("sendDocument", form, len).await?;
         sent_document(message)
+    }
+
+    /// Two to ten documents in one request (an album); one pacer token —
+    /// Telegram counts an album as one request (measured, P1 Task 1.9), and
+    /// takes ~0.6–0.8 s a file in it.
+    pub async fn send_media_group(
+        &self,
+        files: Vec<(String, Vec<u8>)>,
+    ) -> Result<Vec<Sent>, CoreError> {
+        if !(2..=10).contains(&files.len()) {
+            return Err(CoreError::Internal(
+                "an album takes 2 to 10 files".to_owned(),
+            ));
+        }
+        let len = files.iter().map(|(_, bytes)| bytes.len()).sum();
+        let media: Vec<_> = (0..files.len())
+            .map(|i| serde_json::json!({"type": "document", "media": format!("attach://f{i}")}))
+            .collect();
+        let mut form = self
+            .form()
+            .text("media", serde_json::Value::from(media).to_string());
+        for (i, (name, bytes)) in files.into_iter().enumerate() {
+            let part = reqwest::multipart::Part::bytes(bytes)
+                .file_name(clean_name(&name))
+                .mime_str("application/octet-stream")
+                .map_err(|e| CoreError::Internal(format!("multipart: {e}")))?;
+            form = form.part(format!("f{i}"), part);
+        }
+        let messages: Vec<Message> = self.send("sendMediaGroup", form, len).await?;
+        let ids: Vec<i64> = messages.iter().map(|m| m.message_id).collect();
+        let sent: Result<Vec<Sent>, CoreError> = messages.into_iter().map(sent_document).collect();
+        if sent.is_err() {
+            // None of it can be used: none of it stays in the chat.
+            let _ = self.delete_messages(&ids).await;
+        }
+        sent
     }
 
     /// Where a prepared part goes. It holds the bot token: only the
@@ -183,9 +233,7 @@ impl Telegram {
             .header(reqwest::header::CONTENT_TYPE, content_type)
             .body(body);
         let result = answer::<Message>(request.send().await?).await;
-        if let Err(CoreError::RateLimited { retry_after }) = &result {
-            self.pacer.pause_for(Duration::from_secs(*retry_after));
-        }
+        self.note(&result);
         sent_document(result?)
     }
 
@@ -196,7 +244,8 @@ impl Telegram {
             .file_name("thumb.jpg")
             .mime_str("image/jpeg")
             .map_err(|e| CoreError::Internal(format!("multipart: {e}")))?;
-        let message: Message = self.send("sendPhoto", "photo", part, len).await?;
+        let form = self.form().part("photo", part);
+        let message: Message = self.send("sendPhoto", form, len).await?;
         let file_id = message
             .photo
             .and_then(|sizes| sizes.into_iter().last())
@@ -208,17 +257,28 @@ impl Telegram {
         })
     }
 
-    async fn send(
+    fn form(&self) -> reqwest::multipart::Form {
+        reqwest::multipart::Form::new().text("chat_id", self.channel_id.clone())
+    }
+
+    /// A rate limit stops this bot's sends for as long as Telegram asks.
+    fn note<T>(&self, result: &Result<T, CoreError>) {
+        if let (Ok(_), Some(mark)) = (result, &self.sent_mark) {
+            let _ = std::fs::write(mark, unix_now().to_string());
+        }
+        if let Err(CoreError::RateLimited { retry_after }) = result {
+            log::warn!("rate limited: sends paused {retry_after} s");
+            self.pacer.pause_for(Duration::from_secs(*retry_after));
+        }
+    }
+
+    async fn send<T: DeserializeOwned>(
         &self,
         method: &str,
-        field: &str,
-        part: reqwest::multipart::Part,
+        form: reqwest::multipart::Form,
         len: usize,
-    ) -> Result<Message, CoreError> {
+    ) -> Result<T, CoreError> {
         self.pacer.acquire().await;
-        let form = reqwest::multipart::Form::new()
-            .text("chat_id", self.channel_id.clone())
-            .part(field.to_owned(), part);
         let result = answer(
             self.upload
                 .post(self.method_url(method))
@@ -228,9 +288,7 @@ impl Telegram {
                 .await?,
         )
         .await;
-        if let Err(CoreError::RateLimited { retry_after }) = &result {
-            self.pacer.pause_for(Duration::from_secs(*retry_after));
-        }
+        self.note(&result);
         result
     }
 
@@ -246,6 +304,36 @@ impl Telegram {
         .await?;
         Ok(())
     }
+
+    /// Deletes messages a hundred at a time (`deleteMessages`).
+    pub async fn delete_messages(&self, ids: &[i64]) -> Result<(), CoreError> {
+        for batch in ids.chunks(100) {
+            let body = serde_json::json!({ "chat_id": self.channel_id, "message_ids": batch });
+            let _: bool = answer(
+                self.http
+                    .post(self.method_url("deleteMessages"))
+                    .json(&body)
+                    .send()
+                    .await?,
+            )
+            .await?;
+        }
+        Ok(())
+    }
+}
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
+/// Whether `mark` says this account sent within the last minute.
+pub(crate) fn sent_recently(mark: &std::path::Path) -> bool {
+    std::fs::read_to_string(mark)
+        .ok()
+        .and_then(|t| t.trim().parse::<u64>().ok())
+        .is_some_and(|at| unix_now().saturating_sub(at) < 60)
 }
 
 fn unexpected() -> CoreError {
@@ -377,19 +465,24 @@ fn judge<T: DeserializeOwned>(
     }
 }
 
-/// Paces sends per bot: 1 per 3 s, bursts of 3 (one photo: part, thumbnail,
-/// preview), and a full stop after Telegram says `retry_after`. Measured in
-/// Task 1.8: a channel takes 20 messages a minute, the 21st waits 40 s
-/// (RESEARCH §12 assumed 20 per 30 s). A burst after an idle spell can still
-/// draw one rate limit; the pause handles it.
+/// Paces sends per bot: 1 per 3.5 s, bursts of 2 — at most 2 + 60 / 3.5 = 19
+/// in any minute, below Telegram's documented 20 for a group (the storage
+/// chat is a supergroup; 1 per 3 s drew a refusal after 40 sends, Task 1.8;
+/// 1 per 3.5 s ran 10 minutes clean, Task 1.9) — and a full stop after
+/// Telegram says `retry_after`.
 pub(crate) struct SendPacer {
     state: Mutex<(TokenBucket, Option<Instant>)>,
 }
 
 impl SendPacer {
-    pub(crate) fn new() -> Self {
+    /// `recent`: this account sent within the last minute, so the burst is
+    /// already spent.
+    pub(crate) fn new(recent: bool) -> Self {
+        let now = Instant::now();
+        let mut bucket = TokenBucket::new(1.0 / 3.5, 2.0, now);
+        while recent && bucket.try_take(now) {}
         Self {
-            state: Mutex::new((TokenBucket::new(1.0 / 3.0, 3.0, Instant::now()), None)),
+            state: Mutex::new((bucket, None)),
         }
     }
 
@@ -571,6 +664,227 @@ mod tests {
         assert_eq!((sent.message_id, sent.file_id.as_str()), (7, "large"));
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn a_pacer_that_sent_within_the_minute_starts_empty() {
+        // A restart must not spend a burst the minute already spent.
+        let start = tokio::time::Instant::now();
+        let fresh = SendPacer::new(false);
+        for _ in 0..2 {
+            fresh.acquire().await;
+        }
+        assert_eq!(start.elapsed(), std::time::Duration::ZERO);
+        let restarted = SendPacer::new(true);
+        restarted.acquire().await;
+        assert_eq!(start.elapsed(), std::time::Duration::from_millis(3500));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_client_whose_account_sent_within_the_minute_starts_without_a_burst() {
+        let dir = tempfile::tempdir().unwrap();
+        let mark = dir.path().join("sent");
+        std::fs::write(&mark, unix_now().to_string()).unwrap();
+        let tg = Telegram::new(
+            crate::http::client().unwrap(),
+            "http://127.0.0.1:9".to_owned(),
+            Secret::new(TOKEN.to_owned()),
+            "-1".to_owned(),
+        )
+        .unwrap()
+        .remembering(mark);
+        let start = tokio::time::Instant::now();
+        tg.pacer.acquire().await;
+        assert_eq!(start.elapsed(), std::time::Duration::from_millis(3500));
+    }
+
+    #[tokio::test]
+    async fn a_send_is_remembered_for_the_next_start() {
+        let server = MockServer::start().await;
+        Mock::given(path(format!("/bot{TOKEN}/sendDocument")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "ok": true, "result": {"message_id": 1, "document": {"file_id": "f", "file_name": "a.bin", "file_size": 1}}
+            })))
+            .mount(&server)
+            .await;
+        let dir = tempfile::tempdir().unwrap();
+        let mark = dir.path().join("sent");
+        assert!(!sent_recently(&mark), "never sent");
+        telegram(&server)
+            .remembering(mark.clone())
+            .send_document("a.bin", vec![1])
+            .await
+            .unwrap();
+        assert!(sent_recently(&mark));
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(120);
+        let secs = old.duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+        std::fs::write(&mark, secs.to_string()).unwrap();
+        assert!(!sent_recently(&mark), "two minutes ago");
+        std::fs::write(&mark, "garbage").unwrap();
+        assert!(!sent_recently(&mark));
+    }
+
+    #[tokio::test]
+    async fn a_send_rate_limit_is_logged_without_the_token() {
+        crate::logging::install(None);
+        let server = MockServer::start().await;
+        Mock::given(path(format!("/bot{TOKEN}/sendDocument")))
+            .respond_with(ResponseTemplate::new(429).set_body_json(json!({
+                "ok": false, "error_code": 429, "parameters": {"retry_after": 17}
+            })))
+            .mount(&server)
+            .await;
+        let err = telegram(&server)
+            .send_document("a.bin", vec![1])
+            .await
+            .unwrap_err();
+        assert!(matches!(err, CoreError::RateLimited { retry_after: 17 }));
+        let logs = crate::logging::recent_logs();
+        assert!(
+            logs.iter()
+                .any(|l| l.contains("rate limited: sends paused 17 s")),
+            "{logs:?}"
+        );
+        assert!(logs.iter().all(|l| !l.contains("TESTTOKEN")));
+    }
+
+    #[tokio::test]
+    async fn an_album_is_one_request_of_attached_documents() {
+        let server = MockServer::start().await;
+        let message = |id: i64, file: &str, name: &str, size: u64| json!({"message_id": id, "document": {"file_id": file, "file_name": name, "file_size": size}});
+        Mock::given(method("POST"))
+            .and(path(format!("/bot{TOKEN}/sendMediaGroup")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "ok": true, "result": [message(1, "fa", "x.bin", 3), message(2, "fb", "y.bin", 4)]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let sent = telegram(&server)
+            .send_media_group(vec![
+                ("x.bin".to_owned(), b"abc".to_vec()),
+                ("y.bin".to_owned(), b"defg".to_vec()),
+            ])
+            .await
+            .unwrap();
+        let got: Vec<_> = sent
+            .iter()
+            .map(|s| (s.message_id, s.file_id.as_str()))
+            .collect();
+        assert_eq!(got, [(1, "fa"), (2, "fb")]);
+        let requests = server.received_requests().await.unwrap();
+        let body = String::from_utf8_lossy(&requests[0].body);
+        assert!(
+            body.contains("attach://f0") && body.contains("attach://f1"),
+            "{body}"
+        );
+        assert!(body.contains("name=\"f1\"; filename=\"y.bin\""), "{body}");
+        assert!(body.contains("\"type\":\"document\""), "{body}");
+        assert!(body.contains("-100777"));
+    }
+
+    #[tokio::test]
+    async fn names_are_cleaned_before_they_go_in_a_header() {
+        let server = MockServer::start().await;
+        let message = json!({"message_id": 1, "document": {"file_id": "f", "file_name": "x", "file_size": 1}});
+        Mock::given(path(format!("/bot{TOKEN}/sendDocument")))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({"ok": true, "result": message})),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(path(format!("/bot{TOKEN}/sendMediaGroup")))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({"ok": true, "result": [message.clone(), message]})),
+            )
+            .mount(&server)
+            .await;
+        let tg = telegram(&server);
+        let bad = "a\"b\r\nX-Evil: 1.bin";
+        tg.send_document(bad, vec![1]).await.unwrap();
+        tg.send_media_group(vec![(bad.to_owned(), vec![1]), (bad.to_owned(), vec![2])])
+            .await
+            .unwrap();
+        for request in server.received_requests().await.unwrap() {
+            let body = String::from_utf8_lossy(&request.body);
+            // No line break inside a header: the name cannot split it.
+            assert!(!body.contains("\r\nX-Evil"), "{body}");
+            assert!(body.contains(&clean_name(bad)), "{body}");
+        }
+    }
+
+    #[tokio::test]
+    async fn an_album_takes_two_to_ten_files() {
+        let server = MockServer::start().await;
+        let ten: Vec<_> = (0..10)
+            .map(|i| json!({"message_id": i, "document": {"file_id": format!("f{i}"), "file_name": "x", "file_size": 1}}))
+            .collect();
+        Mock::given(path(format!("/bot{TOKEN}/sendMediaGroup")))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({"ok": true, "result": ten})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let tg = telegram(&server);
+        let files = |n: usize| (0..n).map(|i| (format!("{i}.bin"), vec![1])).collect();
+        assert!(tg.send_media_group(files(1)).await.is_err());
+        assert!(tg.send_media_group(files(11)).await.is_err());
+        assert_eq!(tg.send_media_group(files(10)).await.unwrap().len(), 10);
+    }
+
+    #[tokio::test]
+    async fn an_album_answer_that_cannot_be_read_leaves_nothing_in_the_chat() {
+        let server = MockServer::start().await;
+        Mock::given(path(format!("/bot{TOKEN}/sendMediaGroup")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"ok": true, "result": [
+                {"message_id": 5, "document": {"file_id": "f", "file_name": "x", "file_size": 1}},
+                {"message_id": 6}
+            ]})))
+            .mount(&server)
+            .await;
+        Mock::given(path(format!("/bot{TOKEN}/deleteMessages")))
+            .and(wiremock::matchers::body_json(
+                json!({"chat_id": "-100777", "message_ids": [5, 6]}),
+            ))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({"ok": true, "result": true})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let files = vec![("a.bin".to_owned(), vec![1]), ("b.bin".to_owned(), vec![2])];
+        assert!(telegram(&server).send_media_group(files).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn messages_are_deleted_a_hundred_at_a_time() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path(format!("/bot{TOKEN}/deleteMessages")))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({"ok": true, "result": true})),
+            )
+            .expect(2)
+            .mount(&server)
+            .await;
+        let ids: Vec<i64> = (1..=150).collect();
+        telegram(&server).delete_messages(&ids).await.unwrap();
+        let mut counts: Vec<usize> = server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .map(|r| {
+                let body: serde_json::Value = serde_json::from_slice(&r.body).unwrap();
+                assert_eq!(body["chat_id"], "-100777");
+                body["message_ids"].as_array().unwrap().len()
+            })
+            .collect();
+        counts.sort();
+        assert_eq!(counts, [50, 100]);
+        telegram(&server).delete_messages(&[]).await.unwrap();
+    }
+
     #[tokio::test]
     async fn classifies_rate_limits_and_refusals() {
         let server = MockServer::start().await;
@@ -741,12 +1055,12 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn the_pacer_survives_a_huge_pause_and_keeps_the_longer_one() {
-        let pacer = SendPacer::new();
+        let pacer = SendPacer::new(false);
         pacer.pause_for(std::time::Duration::from_secs(u64::MAX));
         let start = tokio::time::Instant::now();
         pacer.acquire().await;
         assert!(start.elapsed() <= std::time::Duration::from_secs(MAX_PAUSE_SECS + 1));
-        let pacer = SendPacer::new();
+        let pacer = SendPacer::new(false);
         pacer.pause_for(std::time::Duration::from_secs(300));
         pacer.pause_for(std::time::Duration::from_secs(5));
         let start = tokio::time::Instant::now();
@@ -755,17 +1069,18 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn sends_are_paced_three_at_once_then_one_per_three_seconds() {
-        let pacer = SendPacer::new();
+    async fn sends_are_paced_two_at_once_then_one_per_three_and_a_half_seconds() {
+        // At most 2 + 60 / 3.5 = 19 in any minute: below the group's 20.
+        let pacer = SendPacer::new(false);
         let start = tokio::time::Instant::now();
-        for _ in 0..3 {
+        for _ in 0..2 {
             pacer.acquire().await;
         }
         assert_eq!(start.elapsed(), std::time::Duration::ZERO);
         pacer.acquire().await;
-        assert_eq!(start.elapsed(), std::time::Duration::from_secs(3));
+        assert_eq!(start.elapsed(), std::time::Duration::from_millis(3500));
         pacer.pause_for(std::time::Duration::from_secs(10));
         pacer.acquire().await;
-        assert!(start.elapsed() >= std::time::Duration::from_secs(13));
+        assert!(start.elapsed() >= std::time::Duration::from_millis(13_500));
     }
 }
