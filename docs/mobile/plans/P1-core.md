@@ -300,16 +300,16 @@ The same order as the website (RESEARCH §6), with the phone's improvements:
    `sendDocument` under a random name (C3). Each sent part's
    `{index, message_id, file_id}` is written to the job's **journal** at
    once.
-4. **Thumbnail** — the 256 px JPEG and its thumbhash come from the phone's
-   own image engine (made by the app, P2), encrypted and sent like a part.
+4. **Thumbnail and preview** — the 256 px JPEG, its thumbhash and (for
+   HEIC/HEIF/RAW) a ~1440 px JPEG preview come from the phone's own image
+   engine (made by the app, P2), encrypted and sent by the core like a part.
 5. **Create the asset** — `POST /api/assets` with `clientUpload=true`, the part
-   list, device identity (`deviceAssetId`, `deviceId`, so a retry finds the
-   existing asset instead of making a second one), dates, size, type,
-   dimensions, duration, GPS, favourite, live-photo pairing, thumbhash.
-6. **HEIC/HEIF/RAW only** (D18): the thumbnail and a ~1440 px JPEG preview go
-   to `POST /api/assets/:id/thumbnail` together, and step 4 is skipped for
-   these files — that route requires the thumbnail and sends it itself, so
-   sending it in step 4 too would waste a Telegram message.
+   list, the thumbnail's and preview's ids, device identity (`deviceAssetId`,
+   `deviceId`, so a retry finds the existing asset instead of making a second
+   one), dates, size, type, dimensions, duration, location, favourite,
+   live-photo pairing, thumbhash and EXIF — metadata only.
+6. *(Changed by SPEC D23, 2026-11-16: the worker's D18 route, which sent the
+   pictures to Telegram itself, is not used — the phone sends them in step 4.)*
 7. Delete the temporary files and the journal.
 
 **Resuming:** the journal (one small file per upload, no secrets, written
@@ -1513,4 +1513,309 @@ the Photos key, the manifest cache), `src/error.rs`, `src/worker.rs` and
   reads the account twice (fails closed — a `file_id` works only with its own
   bot, and the cache generation drops late writes); a grid thumbnail standing
   in for a one-file original is downloaded every time (§4.7).
+
+
+## Task 1.6 — The local media server
+
+**Delivers:** design §5.7 — Immich's own image loaders and the platform video
+players fetch from `http://127.0.0.1:PORT/<secret>/api/…`, and the core
+answers from the read path (Task 1.5), streaming, a part ahead.
+
+**Files:** create `src/media_server.rs`, `examples/serve.rs`; modify
+`src/reader.rs` (prefetch: starting a part's download is split from waiting
+for it), `src/core.rs` (`Core::media_server()`), `src/lib.rs`, `Cargo.toml` +
+`Cargo.lock` (`hyper` `server`/`http1`, `hyper-util` `tokio`,
+`http-body-util` — all already in the tree through reqwest; HTTP/1.1 only).
+
+**Interfaces:**
+- `Core::media_server() -> MediaServer { grid_base, viewer_base }` — the
+  design's `ensure_running`: binds both listeners on first call, returns the
+  same addresses while they run, reopens one whose accept loop has ended
+  (iOS closes a suspended app's sockets) and returns its new address. Works
+  signed out (requests then get `401`); sign-out and another account leave
+  the listeners alone. The secret is made once per `Core` (32 random bytes,
+  hex).
+- Routes, `GET` and `HEAD`: `/{secret}/api/assets/{id}/thumbnail?size=
+  thumbnail|preview|fullsize`, `/{secret}/api/assets/{id}/original`,
+  `/{secret}/api/assets/{id}/video/playback`; `edited` and other query
+  parameters ignored.
+
+**Rules:**
+- **Secret:** a missing or wrong one → `403`, compared in constant time
+  (`subtle`). Request paths are never logged (the secret is in them).
+- **Classes (D17, decided here — the 1.4 carry-forward):** the grid listener
+  reads at `Visible`, the viewer listener at `Opened`, but **only the first
+  part of each request** — the parts prefetched behind it are `Next`, so a
+  long video never holds the grid back for more than one part.
+- **Thumbnail routes never answer with a video:** when the selected file is
+  not an image (an `originalId`-only video has no preview, so "preview" is
+  the video), the grid thumbnail is served instead (a JPEG). The worker
+  sends the video; recorded as a difference.
+- **Content-Type:** thumbnails and previews `image/jpeg`; an H.264 rendition
+  `video/mp4` (the worker's choice; the web sends the original's type); an
+  original its manifest type, only if it is `image/…` or `video/…` made of
+  safe characters, else `application/octet-stream`.
+- **Ranges** (RFC 9110 §14, P0's `chunk_plan`): `bytes=a-b`, `bytes=a-`,
+  `bytes=-n` → `206` with `Content-Range`, the whole range served across
+  parts; a start past the end → `416` with `Content-Range: bytes */size`; an
+  end past the end trimmed; no `Range`, more than one range or one we cannot
+  read → `200` with the whole file. `HEAD` answers sizes and types without
+  downloading (except a size-0 older upload, which `layout` measures).
+  `Accept-Ranges: bytes` always.
+- **Streaming (C6):** each part is downloaded and checked in full, then sent;
+  the next part's download starts as soon as the current one is in hand;
+  the body holds at most one part — about two parts in memory per stream.
+- **Hang-ups cancel:** a closed connection drops the response; the stream
+  stops and its tickets go, so the scheduler drops what nobody waits for.
+  hyper's `half_close` stays off (a read EOF ends the connection).
+- **Errors:** `SignedOut` → `401`, `NotFound` / a bad id → `404`,
+  `Corrupt` → `502`, network / rate limit / not provisioned → `503`; bodies
+  carry no detail. Other methods `405`, other paths `404`.
+- **Idle sockets:** any app on the phone can connect; headers must arrive
+  within 30 s (`header_read_timeout`) or the connection closes.
+
+- [x] **Step 1:** tests first, failing — secret (missing, wrong, right);
+  every route and size; `405`/`404`; ranges across a part boundary with real
+  19 MiB parts, suffix, past-the-end `416`, trimmed end, no/multiple/garbled
+  `Range` → `200`; `HEAD` with no download (`.expect(0)`); the Content-Type
+  allow-list (a manifest saying `text/html`); a video's "preview" served as
+  its JPEG thumbnail; a rendition as `video/mp4`; the next part requested
+  before the client reads the first; a stream's second part pending while a
+  grid thumbnail still starts; a hang-up (raw `TcpStream`: write the
+  request, drop the socket) cancels — a re-request downloads again; a
+  signed-out request `401`; `media_server()` returns the same addresses
+  twice and reopens a dead listener.
+- [x] **Step 2:** implement. Run → pass; clippy, fmt, `cargo deny`.
+- [x] **Step 3: Gate 2** — `examples/serve.rs --release` on the test account:
+  starts the media server and a local counting relay in front of Telegram
+  (`CoreConfig.telegram_api`), then through the media server only: a grid
+  thumbnail is a JPEG; a full original is byte-identical to the worker's
+  (SHA-256); three ranges match; **AVFoundation on this Mac** loads a
+  multi-part video from the viewer address and draws a frame from its middle
+  (as AVPlayer would), timed to the first frame. Prints Telegram downloads
+  per part during that load: if any part is downloaded more than once
+  (players read the index at the end, then the start), a small in-memory
+  cache of the last parts (SPEC §4.7 "a small bounded cache") is added here.
+- [x] **Step 4:** Gate 3 (one reviewer at a time); commit code, then docs.
+
+**Carried into this task from 1.5:** a manifest refreshed between `layout()`
+and `range()` can leave the slices planned for the old size — it fails
+closed as `Corrupt`; `examples/read_assets.rs` signs out on the error path
+too; DESIGN_NOTES 1.5 says whether a test-account thumbnail took the plain
+fallback is not observable (the unit test is the evidence).
+**For P2:** the app's server address becomes `http://127.0.0.1:PORT/<secret>`
+— a base with a path; check that Immich's URL handling keeps the path.
+
+**As built (Task 1.6), differences from the steps above:**
+- **A new secret per listener**, not one per `Core` (security review, HIGH):
+  a closed port can be taken by another app, which then receives the old
+  secret with the app's next request. `ensure_running` challenges each port
+  (a fresh nonce; only our listener can answer with the HMAC of its secret) —
+  iOS can close a suspended app's socket while its accept loop never
+  notices, and another app may then hold the port — and reopens it with a new
+  secret; a listener's connections end with it. A busy port that cannot
+  answer within the deadline is reopened too (safe; see DESIGN_NOTES 1.6). Accept errors pause 100 ms and, after 20 in a row, end the
+  listener; at most 32 connections per listener (a semaphore before
+  `accept`); a `403` closes its connection; SVG is not a picture.
+- **A part cache** (Step 3's own criterion: AVFoundation's probe of the first
+  2 bytes, then the whole file, then the end, downloaded every part twice):
+  the last 3 parts read, 57 MiB, in memory, per account, used only by the
+  range reader; dropped at sign-out (structurally — the account owns it).
+- **C6 measured:** an iPhone `.mov` keeps its index at the end, so a video
+  opens after **two** parts (the probe, then the end), not one — ~8 s at
+  ~5 MB/s on this Mac. Recorded in SPEC §11 for the operator; a candidate for
+  1.8: fetch the last part alongside the first.
+- Interfaces: `Core::media_server(self: &Arc<Self>)` — the bridge holds an
+  `Arc<Core>`; `MediaServer` has no `Debug` (it holds the secrets);
+  `Core::image()` returns `Image { bytes, mime }` and is never a video (a
+  video with no preview gets its JPEG thumbnail; a one-file original with an
+  empty type is now `404`, where 1.5 served it); `Core::range()` takes the
+  size it was planned on and refuses (`Corrupt`) if the manifest changed in
+  between; a stream's first part read from memory leaves the next download
+  at the listener's class.
+- A one-file original standing in for a thumbnail keeps its own image type;
+  `fullsize` is the preview; `HEAD` on a thumbnail route downloads the
+  picture (only originals and videos answer `HEAD` from the manifest).
+- The 1.4 carry-forward on suspension during video (the web's
+  `maxSuspendMs`) is closed by the classes rule: only a request's first part
+  runs at `Opened`. The 1.5 carry-ins are done (`read_assets` signs out on
+  every path; DESIGN_NOTES 1.5 says the plain-picture fallback is shown by
+  its unit test only).
+- tokio `net`, `PartSlices::bounds()`, `disk_cache::hex` crate-visible.
+
+**Carried forward from Task 1.6's Gate 3:**
+- **P2:** the app's HTTP client must open at most 32 connections per host
+  (Dart's `HttpClient` has no limit by default; a 33rd waits for an idle one
+  to close); the base URLs carry a path (`/<secret>`) — check Immich keeps
+  it; call `media_server()` on every resume, off the UI thread and off the
+  core's threads (it can block ~2 s per listener), use the addresses it
+  returns and reload what failed when they change;
+  check on a device which error iOS gives a reclaimed socket and that the
+  reopen works; `Telegram::download` stays off the bridge; the bridge holds
+  `Arc<Core>`.
+- **1.8:** fetch the last part alongside the first when a player probes the
+  start (halves a video's opening); measure the part cache's size on a phone.
+- **Accepted, untested:** `header_read_timeout`; a stream cut mid-way after
+  its headers; a hang-up during streaming dropping the prefetched part; the
+  part cache's drop at sign-out. A stream started before sign-out can still
+  send the part it already holds and one prefetched part (the request was
+  allowed when made).
+
+
+## Task 1.7 — The upload engine
+
+**Delivers:** design §5.8 steps 1–7, in the foreground: a file on the phone
+becomes an asset of the account, its bytes sent to Telegram by the core
+itself, the worker given only the metadata (`clientUpload`), exactly as the
+website's uploader does it (`immich/web/src/lib/utils/file-uploader.ts`,
+`daemonclient-drive.ts` `uploadMedia`) plus the phone's improvements
+(C3 random part names, C7 a few parts on disk, the resume journal).
+
+**The background hand-off is in this task** (operator, 2026-11-16, SPEC
+D22): the platform's background uploader sends parts straight to Telegram,
+so the core prepares each part as a **complete multipart request body on
+disk** (`chat_id` + `document`) and hands out `{body file, address,
+content type}`; when Telegram answers, the core is given the answer and
+records it. The foreground path uses the same two halves — it sends the
+prepared file itself — so every foreground upload tests what the background
+one will use. The address carries the bot token (D22's exception to D21): it
+goes only to the platform uploader, never to the screen or the logs.
+
+**Files:** create `src/upload.rs`, `examples/upload.rs`; modify
+`src/core.rs` (`Core::upload`), `src/worker.rs` (asset creation, the D18
+thumbnail route), `Cargo.toml` (`sha1`, RustCrypto, the same family as
+`sha2` — the checksum the worker dedupes on is base64 SHA-1).
+
+**Interfaces:**
+- `Core::upload(UploadRequest, on_progress) -> Result<Uploaded, CoreError>`;
+  `UploadRequest { path, file_name, mime, created_at, modified_at,
+  device_asset_id, device_id, width, height, duration, favorite,
+  live_photo_video_id, thumbnail, preview, thumbhash, exif }` — the device
+  ids required (a retried creation then finds the asset already made); the
+  pictures, thumbhash and EXIF made by the app (P2, D23);
+  `Uploaded { asset_id, duplicate }`. Dropping the future stops the
+  upload; calling `upload` again with the same request resumes it.
+- The hand-off (D22): `Core::next_part(&job) -> Option<PartToSend { index,
+  body_path, url, content_type }>` (prepares at most 2 ahead) and
+  `Core::part_sent(&job, index, telegram_answer_json)` (checks and records
+  it); `upload` is built on these two.
+- The journal: `data_dir/uploads/<SHA-256 of device id + device asset id>`,
+  JSON, written atomically, no secrets: the encryption mode and a
+  fingerprint of the key it started with, the checksum, the parts sent
+  (`{index, message_id, file_id}`), the thumbnail's `file_id`, the step.
+
+**Rules:**
+- **The original, byte for byte** (operator, 2026-11-16): the file at `path`
+  is what is stored — no conversion (the website turns HEIC into JPEG; the
+  phone never does). P2 hands the core the photo library's original resource
+  (HEIC/RAW/MOV as shot, Live Photo pairs together), not an edited or
+  re-encoded copy. Gate 2 proves it: each upload reads back byte-identical.
+- **Dedupe on SHA-1** (base64), as the worker and the website do: a
+  different hash would match nothing already stored and upload the whole
+  library again. Part integrity is AES-GCM's; per-file progress is the
+  journal's; which photos are backed up is the app's own database (P2).
+- **Order** (§5.8, D23): checksum (streamed) → `bulk-upload-check` (already
+  stored → `Uploaded { duplicate }`, nothing sent) → parts → thumbnail and
+  preview → `POST /api/assets` (metadata only) → remove the temporary files
+  and the journal.
+- **Encryption:** the Photos key when the library is encrypted (`server`,
+  as the website); none when encryption is off; **refused** when encryption
+  is on but its settings are incomplete (the 1.2 carry-forward — never a
+  plaintext upload by accident).
+- **Parts:** 19 MiB slices, each with its own random IV, at most 2 waiting on
+  disk (C7), each deleted once sent; names: random 16 hex + `.partNNN` when
+  encrypted (C3), the real name (as the website) when not; one part at a
+  time through the scheduler's send slot, paced by the Telegram client.
+- **Journal:** each sent part recorded at once; a resumed upload sends no
+  recorded part again; a key that changed since the journal was written
+  means starting over; the asset creation is retried with the same parts.
+- **Thumbnail and preview (D23):** made by the app's image engine; the core
+  sends both itself — encrypted as documents (`thumb.bin`, `preview.bin`), or
+  the thumbnail as a plain `sendPhoto` when the library is not encrypted (as
+  the website) — and the worker gets only their ids. The worker's D18 route
+  (which sent pictures to Telegram itself) is not used. A preview is given for
+  HEIC/HEIF/RAW (the website cannot show those) and may be for others.
+- **EXIF (D23):** read by the app's native engine, given to the core, sent as
+  one `exif` field in the worker's `PhotoExif` shape (`make`, `model`,
+  `lensModel`, `fNumber`, `focalLength`, `iso`, `exposureTime`,
+  `orientation`, `dateTimeOriginal`, `latitude`, `longitude`).
+- **Fields** (`clientUpload=true`, the worker's names): `telegramChunks`,
+  `telegramOriginalId` (the part's `file_id` when there is one part),
+  `telegramThumbId`, `encryptionMode`, `thumbEncrypted`, `fileName`,
+  `fileSize`, `mimeType`, `checksum`, `fileCreatedAt`, `fileModifiedAt`,
+  `deviceAssetId`, `deviceId`, `width`, `height`, `duration`, `latitude`,
+  `longitude`, `isFavorite`, `livePhotoVideoId`, `thumbhash`, and — new,
+  for the worker to store (Linux, worker release W2) — `telegramPreviewId`
+  and `exif`. Until W2 the worker ignores those two: phone uploads then show
+  no preview on the website and no EXIF panel.
+- **Failures:** a rate limit waits and retries the same part (the Telegram
+  client pauses); "the storage refused" stops the upload with that message;
+  network trouble retries with growing waits (1, 2, 4 s), then returns the
+  error with the journal kept.
+
+- [x] **Step 1:** tests first, failing (wiremock worker + Telegram, as in
+  1.2–1.6): checksum against a known SHA-1; a duplicate stops before any
+  send; part slicing, names and IVs; the prepared body is a complete
+  `sendDocument` request; the journal written before a body is deleted, and
+  a resume sends nothing twice; `part_sent` given the same answer twice is
+  fine, a second copy of a part is deleted from the channel; a changed key
+  or file starts over and deletes the old parts; incomplete encryption
+  refused; every form field and its name; one part → `telegramOriginalId`;
+  thumbnail and preview sent by the core, no worker picture route; a rate
+  limit retried; a refusal stops; temp files and journal gone at the end; a
+  creation retried after an unrecorded success gets the same asset.
+- [x] **Step 2:** implement. Run → pass; clippy, fmt, `cargo deny`.
+- [x] **Step 3: Gate 2** — `examples/upload.rs` on the test account (uploads
+  and deletes there are approved): a new JPEG, a HEIC made with `sips`, and a
+  video over 100 MB (`avconvert` of a test-account video, so its checksum is
+  new), each with a thumbnail and preview made by `sips`; each read back
+  through the core byte-identical to its source (EXIF included), seen in the
+  timeline, its thumbnail a picture; one upload stopped after two
+  parts and resumed — a counting relay shows no part sent twice; the same
+  file again → a duplicate, nothing sent; then the test assets deleted
+  (`DELETE /api/assets`, which removes their parts from the channel).
+- [x] **Step 4:** Gate 3 (one reviewer at a time); commit code, then docs.
+
+**As built (Task 1.7), differences from the steps above:**
+- Interfaces: `begin_upload(request) -> Begun::{Duplicate(Uploaded), Job}`,
+  `UploadJob::pending()`, `part(&job, index) -> PartToSend` (the plan's
+  `next_part`: the platform layer picks the index), `part_sent(&job, index,
+  answer)`, `finish_upload(job)`; `upload(request)` runs them all in the
+  foreground. `PartToSend { index, body_path, content_type }` + `address()`
+  (no `Debug`). No progress callback: P2 reports progress from `pending()`.
+- The journal: `uploads/<account>/<file>/journal.json` + `<index>.body` —
+  the checksum, the key's fingerprint (none = plain), the random name, the
+  parts, thumbnail and preview, and a `creating` flag set before the asset is
+  asked for: from then on nothing it lists is taken out of the channel (an
+  asset may point at it — the spec review's HIGH: a lost answer to a
+  successful creation followed by a "duplicate" deleted the asset's parts).
+- From the security review: an upload belongs to the account that began it
+  (its worker and bot kept, every step checks the signed-in account,
+  per-account folders, all of `uploads/` wiped at sign-out and account
+  switch); encryption settings read again for every file (the key derived
+  again only when they change); an answer from the platform uploader is
+  recorded only for its own part (index, name, size); the file's size and
+  modified time checked before each part is read; one upload per file at a
+  time; journal writes flushed to disk with unique temporary names; a
+  duplicate takes what an earlier attempt sent out of the channel (unless
+  `creating`); at most 2 prepared parts wait on disk (a refusal, not a
+  prefetch — C7).
+- From Gate 2: sends use their own HTTP client — reqwest's 30 s "read"
+  limit runs from the start of a request until the answer begins, so a
+  19 MiB part on a slow uplink always failed; sends get a time limit from
+  their size (20 KB/s, a minute at least) and TCP keepalive instead.
+- `latitude`/`longitude` are sent from the EXIF: until worker release W2
+  reads `exif`, location comes only from them. Thumbnail and preview go
+  through the send slot with the same retries as parts.
+
+**Carried forward from Task 1.7:**
+- **P2:** the platform uploaders (URLSession, WorkManager) on `part` /
+  `part_sent`; cancel their tasks at sign-out or account switch (the core
+  deletes the bodies and journals; a late answer then fails); the backup
+  queue and the app's record of what is backed up; progress from
+  `pending()`; abandoned uploads (a photo deleted mid-upload) cleaned up;
+  never log `PartToSend::address()` in Dart.
+- **Linux (W2):** the worker stores `telegramPreviewId` and `exif`.
+- **Accepted:** parts sent before a wipe at sign-out stay in that channel
+  unused; the encryption settings cost one small worker request per file.
 

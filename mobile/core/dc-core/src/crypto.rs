@@ -42,6 +42,16 @@ impl std::fmt::Debug for Key {
 }
 
 impl Key {
+    /// Tells keys apart without revealing them (the upload journal's).
+    pub(crate) fn fingerprint(&self) -> String {
+        use sha2::Digest;
+        let digest = sha2::Sha256::new()
+            .chain_update(b"daemonclient key fingerprint\0")
+            .chain_update(self.bytes.as_slice())
+            .finalize();
+        crate::disk_cache::hex(&digest).chars().take(32).collect()
+    }
+
     /// For test vectors only: the raw key the JavaScript exported.
     #[cfg(test)]
     pub(crate) fn from_raw(raw: [u8; 32]) -> Self {

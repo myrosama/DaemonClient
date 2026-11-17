@@ -80,7 +80,7 @@ async fn core_range(
         return Err("no such range".into());
     };
     let mut reader = core
-        .range(id, Rendition::Original, slices, Class::Opened)
+        .range(id, Rendition::Original, size, slices, Class::Opened)
         .await?;
     let mut bytes = vec![];
     while let Some(piece) = reader.next().await {
@@ -113,6 +113,13 @@ async fn main() -> Result<(), Error> {
     ))?);
     core.sign_in(HOSTED_API, Deployment::Hosted, &email, &password)
         .await?;
+    let checked = check(&core).await;
+    // Always, so no decrypted test-account pictures stay in the temp folder.
+    core.sign_out()?;
+    checked
+}
+
+async fn check(core: &Arc<Core>) -> Result<(), Error> {
     let worker = core.worker()?;
     let session = worker.session().clone();
     let http = dc_core::http::client()?;
@@ -182,8 +189,8 @@ async fn main() -> Result<(), Error> {
         };
         let (id, manifest, tile) = done?;
         let kind = match &tile {
-            Ok(b) if b.starts_with(&[0xff, 0xd8]) => "jpeg",
-            Ok(b) if b.starts_with(&[0x89, b'P', b'N', b'G']) => "png",
+            Ok(i) if i.bytes.starts_with(&[0xff, 0xd8]) => "jpeg",
+            Ok(i) if i.bytes.starts_with(&[0x89, b'P', b'N', b'G']) => "png",
             Ok(_) => "NOT A PICTURE",
             Err(CoreError::Corrupt(_)) => "DAMAGED",
             Err(_) => "FAILED",
@@ -215,12 +222,18 @@ async fn main() -> Result<(), Error> {
 
     for (shape, (count, id, _)) in &shapes {
         let started = Instant::now();
-        let thumb = core.image(id, Rendition::Thumbnail, Class::Visible).await?;
+        let thumb = core
+            .image(id, Rendition::Thumbnail, Class::Visible)
+            .await?
+            .bytes;
         let thumb_ms = started.elapsed().as_millis();
-        let preview = core.image(id, Rendition::Preview, Class::Opened).await?;
+        let preview = core
+            .image(id, Rendition::Preview, Class::Opened)
+            .await?
+            .bytes;
         let layout = core.layout(id, Rendition::Original).await?;
         let started = Instant::now();
-        let all = core_range(&core, id, layout.size, 0, u64::MAX).await?;
+        let all = core_range(core, id, layout.size, 0, u64::MAX).await?;
         let read_ms = started.elapsed().as_millis();
         let same = if layout.size <= 40 * 1024 * 1024 {
             let theirs = from_worker(format!("/api/assets/{id}/original"), None).await?;
@@ -245,7 +258,7 @@ async fn main() -> Result<(), Error> {
             };
             for start in [PART_SIZE - 1_000, pick(0), pick(8)] {
                 let end = (start + 65_535).min(layout.size - 1);
-                let ours = core_range(&core, id, layout.size, start, end).await?;
+                let ours = core_range(core, id, layout.size, start, end).await?;
                 let theirs =
                     from_worker(format!("/api/assets/{id}/original"), Some((start, end))).await?;
                 equal += usize::from(
@@ -279,8 +292,6 @@ async fn main() -> Result<(), Error> {
             layout.parts,
         );
     }
-    // Leaves no decrypted test-account pictures in the temp folder.
-    core.sign_out()?;
     if failures > 0 {
         return Err(format!("{failures} thumbnails or shapes failed").into());
     }

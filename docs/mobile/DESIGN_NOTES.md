@@ -813,7 +813,8 @@ shows them (it decrypts, and on failure serves bytes that are a JPEG or PNG)
 and the core would have shown broken tiles. Ported as the worker does it:
 decrypt first, the magic check only after a failure (checked first, one
 encrypted thumbnail in 65,536 would be shown as noise), thumbnails and
-previews only. 1 MEDIUM (the size-0 `layout` path untested — now tested),
+previews only. Whether any test-account thumbnail took this path cannot be
+seen from outside the core; the unit test is the evidence that it works. 1 MEDIUM (the size-0 `layout` path untested — now tested),
 7 LOW (tests for a short part, the key derived once, the scheduler living on
 the core's runtime — each mutation-checked; the rest recorded as accepted).
 The operator decided on 2026-11-15 that sign-out empties the picture cache
@@ -835,3 +836,139 @@ The operator decided on 2026-11-15 that sign-out empties the picture cache
   matches before the Gate 3 fixes. Linux's worker release W1 (canaried on
   this account) changes no Photos endpoint.
 - G3: above. G4: `e5be91b` and this docs commit.
+
+---
+
+## 1.6 — The local media server            2026-11-15
+
+**Planned:** P1-core.md Part 2, Task 1.6 (written before the code). Two
+decisions were due and written into the plan first: only a request's first
+download runs at its listener's class (the 1.4 carry-forward about video
+holding the grid back), and a thumbnail route never answers with a video.
+**Did:** `media_server` (hyper, HTTP/1.1, two loopback listeners), the range
+reader a part ahead, and — from Gate 2's own criterion — a per-account part
+cache. Differences from the plan: "As built (Task 1.6)" in P1-core.md.
+**Gate 2 found three things before review:** (1) the test tool's Telegram
+relay ran on the runtime that the Swift check blocked, so AVFoundation's
+first request timed out (fixed in the tool); (2) every part was downloaded
+twice when AVFoundation opened a video — it probes the first 2 bytes (a whole
+part under C6), asks for the whole file, then the end — hence the part cache;
+(3) C6's promise of a first frame after one part holds for files with the
+index at the start: an iPhone `.mov` keeps it at the end, so a video opens
+after two parts. Recorded for the operator in SPEC §11.
+**Security:** reviewer — **1 HIGH**, 1 MEDIUM, 1 LOW, all fixed. HIGH: another
+app on the phone could get the secret — running out of file descriptors
+ended the listener, the reopened one kept the same secret, and another app
+could take the freed port and receive the secret with the app's next
+request; now every listener has its own secret, errors pause instead of
+ending at once, and at most 32 connections per listener (the MEDIUM). LOW:
+`MediaServer` printed its secrets in `Debug`. Also: a `403` closes its
+connection, SVG is not a picture.
+**Spec:** reviewer — **1 HIGH**, 4 MEDIUM, 8 LOW. HIGH: iOS can close a
+suspended app's socket while the accept loop never notices, and
+`ensure_running` checked only the loop — it now asks the port itself (a
+loopback connect) and reopens. MEDIUM: tests for the 502/503 statuses and for
+the listeners surviving sign-out; the plan and SPEC texts (secret per
+listener, the part cache, C6's measured cost). LOW: a test that a stream's
+first part runs at the viewer's class (and a part from memory no longer uses
+it up), `image()` never a video tested, a case-insensitive type check, a
+range refused when the manifest changed since its layout; the rest recorded.
+**Gate evidence:**
+- G1: tests first, failing; four tests mutation-checked (hyper's
+  `half_close`, the next part prefetched at `Opened`, no connection limit, no
+  port check — each fails its test). `cargo test -p dc-core` 145 passed;
+  clippy (deny lints), fmt clean; `cargo deny check advisories` ok; no new
+  crates (hyper's server side, already in the tree through reqwest).
+- G2 (`cargo run --release -p dc-core --example serve`, the approved test
+  account, read-only, everything through the media server; a relay counts
+  Telegram downloads and never prints a path): a grid thumbnail — a JPEG;
+  **AVFoundation, cold, opened a 3-part iPhone video in 7.8–8.0 s and drew a
+  1920x1080 frame from its middle in 12.8–15.1 s, each part downloaded once**
+  (three runs); the whole file **byte-identical to the worker's** (SHA-256)
+  and three ranges equal (one across a part boundary, the first 2 bytes, the
+  last 64 KiB); no cached picture left after sign-out. Full reads ran at
+  2.0–5.3 MB/s on this Mac's network (throughput is 1.8's).
+- G3: above. G4: `ce43929` and this docs commit.
+
+**After the reviews — the listener mechanism, settled.** An automated review
+then found that a plain connect could not tell our listener from another app
+that took a freed port, and a security re-check of that fix found that a
+reopened listener's old connections lived on with the old secret, and that a
+busy or slow port could stall or flap the check. Fixed in `5b07471`; what the
+mechanism now guarantees, each with a test:
+- **(a)** a secret works only on connections its live listener owns — they
+  run in the listener's task set, so a reopen ends them with it;
+- **(b)** the app never keeps an address whose port does not answer as ours —
+  `ensure_running` sends a fresh nonce and expects an HMAC of the listener's
+  secret, which is never sent;
+- **(c)** neither the listener nor `ensure_running` spins or hangs — one
+  750 ms deadline per challenge, one retry, a capped reply, paused accepts.
+The trade-off, chosen: a port that is connected but does not answer in time
+— ours but busy, or another app — is reopened. That is safe by (a), cheap,
+and can be caused by another app; it ends that listener's connections, so
+the app must use the addresses `media_server()` returns and reload what
+failed (P2). The part cache cannot outlive sign-out: the account owns it and
+readers hold it weakly. Tests: 148 passed; the connection-ownership test was
+mutation-checked (detached connections fail it).
+
+---
+
+## 1.7 — The upload engine            2026-11-16
+
+**Planned:** P1-core.md Part 2, Task 1.7 (written before the code), then
+revised the same day for the operator's decisions: SPEC D22 (automatic
+background backup — parts prepared as whole requests the platform uploader
+sends straight to Telegram, the one exception to D21) and D23 (the phone does
+the heavy work: thumbnail, preview and EXIF made on the phone, the worker
+given metadata only), the original byte for byte, dedupe on SHA-1.
+**Did:** `upload` (checksum → dedupe → parts → thumbnail and preview →
+metadata), the hand-off (`part` / `part_sent`), the resume journal.
+Differences from the plan: "As built (Task 1.7)" in P1-core.md.
+**Security:** reviewer — **1 HIGH**, 3 MEDIUM, 4 LOW, all fixed. HIGH: an
+upload was not tied to the account that began it — with another account
+signed in, a resumed or abandoned upload could delete that account's
+unrelated messages, register one account's parts in another's library, or
+send one account's plaintext into another's encrypted library. Now an upload
+keeps its account's worker and bot, checks the signed-in account at every
+step, lives in a per-account folder, and all uploads are wiped at sign-out
+and account switch. MEDIUM: encryption settings read once per session (now
+read for every file); answers from the platform uploader trusted as given
+(now recorded only for their own part: index, name, size); a file changed
+between the checksum and the part reads (size and modified time checked).
+LOW: one upload per file at a time, flushed journal writes, duplicates
+clean up earlier sends, at most two prepared parts on disk.
+**Spec:** reviewer — **1 HIGH**, 3 MEDIUM, 5 LOW. HIGH: a lost answer to a
+successful asset creation, then "duplicate" on the retry, deleted the parts
+the new asset pointed at — the journal now marks `creating` before the
+request, and nothing it lists is deleted after that. MEDIUM: location was
+not sent (the worker reads it only from `latitude`/`longitude` until W2 —
+now sent from the EXIF); three rules no test could catch (a key change, the
+journal written before a body goes, the IV-and-tag size — tests added); no
+progress callback (P2 reports progress from `pending()`). LOW: fixed —
+cleaned names compared, thumbnail and preview through the send slot with
+retries, bodies built off the async threads, more fields asserted.
+**Found by Gate 2, before any phone:** reqwest's 30 s "read" limit runs from
+the start of a request until the answer begins — on a slow uplink every
+19 MiB part would have failed and been sent again. Sends now use a client of
+their own, limited by their size (20 KB/s, a minute at least), with TCP
+keepalive. Mutation checks: the account check, the `creating` mark.
+**Gate evidence:**
+- G1: tests first, failing; `cargo test -p dc-core` 170 passed; clippy
+  (deny lints), fmt clean; `cargo deny check advisories` ok (`sha1` added,
+  RustCrypto).
+- G2 (`cargo run --release -p dc-core --example upload`, the approved test
+  account; test assets deleted at the end and leftovers of earlier runs at
+  the start): a JPEG and a HEIC made with `sips` (6–17 MB) uploaded and
+  **read back byte-identical**, thumbnails JPEG, in 15–27 s; the same JPEG
+  again a **duplicate with nothing sent**; **a 722 MB iPhone video in 39
+  parts — 2 sent by hand through the hand-off as the background uploader
+  will, 37 resumed by the core — exactly 39 parts sent, none twice, and read
+  back byte-identical** (898 s: this Mac's uplink, ~0.8 MB/s, sets the
+  pace; read back by a second core straight from Telegram — the counting
+  relay answers only after a whole part, which trips the 30 s read limit).
+  Earlier runs of the tool gave the video a new device id on the second
+  call, so it started over instead of resuming: 4 sent parts (~76 MB) stayed
+  in the test channel unused before that was found and fixed. Some runs also
+  met this Mac's network dropping for a while (timeouts on the worker); the
+  tool deletes its leftovers at its next start.
+- G3: above. G4: the code commit and this docs commit.

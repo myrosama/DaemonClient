@@ -51,6 +51,13 @@ submission (P4) — they change.
 | Privacy manifest | App-level `PrivacyInfo.xcprivacy` (required-reason APIs, data collected, no tracking) | The Runner target has none | P4 |
 | 4.2 | More than a repackaged website | Native backup, viewer and on-device encryption — fine | — |
 
+## Before submission — a cleanup and readiness session (operator, 2026-11-16)
+
+- **No "Telegram" in the apps' code text or comments** — strings, comments,
+  identifiers a reviewer could read (the core's included): one pass before
+  the first submission, together with the Immich brand removal (P2 2.10) and
+  the items above. Until then work goes on as it is.
+
 ## Already fine
 
 - Sign-in with our own account system (4.8 exemption).

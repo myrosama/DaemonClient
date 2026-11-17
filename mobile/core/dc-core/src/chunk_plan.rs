@@ -64,6 +64,11 @@ pub struct PartSlices {
 }
 
 impl PartSlices {
+    /// The first and last byte of the whole range (for `Content-Range`).
+    pub fn bounds(&self) -> (u64, u64) {
+        (self.start, self.end)
+    }
+
     /// Parts still to come.
     pub fn remaining(&self) -> u64 {
         if self.done {

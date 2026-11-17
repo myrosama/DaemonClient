@@ -3,13 +3,14 @@
 //! (immich/web/src/service-worker/telegram-media.ts and index.ts), ported
 //! exactly — and the checks that keep every byte at its offset.
 
-use std::sync::Weak;
+use std::collections::VecDeque;
+use std::sync::{Mutex, PoisonError, Weak};
 
 use bytes::Bytes;
 
 use crate::CoreError;
 use crate::chunk_plan::{PART_SIZE, PartSlice, PartSlices, part_count};
-use crate::sched::{Class, Scheduler};
+use crate::sched::{Class, Scheduler, Ticket};
 use crate::worker::{AssetManifest, ManifestChunk};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -64,7 +65,8 @@ pub fn select(m: &AssetManifest, rendition: Rendition) -> Result<Selection, Core
         Rendition::Playback => match m.playback_chunks.as_deref() {
             Some(parts) if !parts.is_empty() => {
                 let size = m.playback_size.filter(|&s| s > 0).unwrap_or(m.file_size);
-                in_order(parts, size, &m.mime_type)
+                // The worker's choice; the web sends the original's type.
+                in_order(parts, size, "video/mp4")
             }
             _ => select(m, Rendition::Original),
         },
@@ -122,6 +124,13 @@ fn check(file_ids: Vec<String>, size: u64, mime: &str) -> Result<Selection, Core
 pub struct Layout {
     pub size: u64,
     pub parts: usize,
+    pub mime: String,
+}
+
+/// A thumbnail or preview and its type.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Image {
+    pub bytes: Bytes,
     pub mime: String,
 }
 
@@ -183,20 +192,75 @@ pub(crate) async fn read_file(
     index: usize,
     class: Class,
 ) -> Result<Bytes, CoreError> {
+    let ticket = start(scheduler, selection, stored, index, class)?;
+    finish(ticket, selection, index).await
+}
+
+/// Starts one stored file's download.
+fn start(
+    scheduler: &Weak<Scheduler>,
+    selection: &Selection,
+    stored: Stored,
+    index: usize,
+    class: Class,
+) -> Result<Ticket, CoreError> {
     let file_id = selection
         .file_ids
         .get(index)
         .ok_or_else(|| CoreError::Corrupt("a part is missing".to_owned()))?;
-    let ticket = scheduler
-        .upgrade()
-        .ok_or(CoreError::SignedOut)?
-        .read(job_key(file_id, stored), class);
+    let scheduler = scheduler.upgrade().ok_or(CoreError::SignedOut)?;
+    Ok(scheduler.read(job_key(file_id, stored), class))
+}
+
+/// Waits for a started download; its length checked when known.
+async fn finish(ticket: Ticket, selection: &Selection, index: usize) -> Result<Bytes, CoreError> {
     let bytes = ticket.wait().await?;
     match selection.part_len(index) {
         Some(len) if bytes.len() as u64 != len => {
             Err(CoreError::Corrupt("a part has the wrong length".to_owned()))
         }
         _ => Ok(bytes),
+    }
+}
+
+/// Recently read parts of originals and videos, in memory and per account
+/// (SPEC §4.7 "a small bounded cache"; never on disk). Players read a video's
+/// first bytes to probe it, its end for the index, then the start again: with
+/// this each part is downloaded once (Task 1.6, Gate 2).
+pub(crate) struct PartCache {
+    budget: usize,
+    used: usize,
+    parts: VecDeque<(String, Bytes)>,
+}
+
+impl PartCache {
+    pub(crate) fn new(budget: usize) -> Self {
+        Self {
+            budget,
+            used: 0,
+            parts: VecDeque::new(),
+        }
+    }
+
+    fn get(&mut self, key: &str) -> Option<Bytes> {
+        let at = self.parts.iter().position(|(k, _)| k == key)?;
+        let entry = self.parts.remove(at)?;
+        let bytes = entry.1.clone();
+        self.parts.push_back(entry); // the most recently used last
+        Some(bytes)
+    }
+
+    fn put(&mut self, key: String, bytes: Bytes) {
+        if bytes.len() > self.budget || self.get(&key).is_some() {
+            return;
+        }
+        self.used += bytes.len();
+        self.parts.push_back((key, bytes));
+        while self.used > self.budget
+            && let Some((_, dropped)) = self.parts.pop_front()
+        {
+            self.used -= dropped.len();
+        }
     }
 }
 
@@ -209,6 +273,9 @@ pub struct RangeReader {
     pub(crate) stored: Stored,
     pub(crate) slices: PartSlices,
     pub(crate) class: Class,
+    /// The next part, downloading while this one is sent (C6).
+    pub(crate) ahead: Option<(usize, Ticket)>,
+    pub(crate) parts: Weak<Mutex<PartCache>>,
 }
 
 impl RangeReader {
@@ -218,23 +285,61 @@ impl RangeReader {
         Some(self.piece(slice).await)
     }
 
-    async fn piece(&self, slice: PartSlice) -> Result<Bytes, CoreError> {
+    async fn piece(&mut self, slice: PartSlice) -> Result<Bytes, CoreError> {
         let short = || CoreError::Corrupt("a part is shorter than the range".to_owned());
         let index = usize::try_from(slice.index).map_err(|_| short())?;
-        let part = read_file(
-            &self.scheduler,
-            &self.selection,
-            self.stored,
-            index,
-            self.class,
-        )
-        .await?;
+        let ahead = self.ahead.take().filter(|(ahead, _)| *ahead == index);
+        let part = match self.cached(index) {
+            Some(part) => part,
+            None => {
+                // Only a request's first download runs at its own class; the
+                // rest are Next, so a long video never holds the grid back (D17).
+                let class = std::mem::replace(&mut self.class, Class::Next);
+                let ticket = match ahead {
+                    Some((_, ticket)) => ticket,
+                    None => start(&self.scheduler, &self.selection, self.stored, index, class)?,
+                };
+                let part = finish(ticket, &self.selection, index).await?;
+                if let (Some(parts), Some(file_id)) =
+                    (self.parts.upgrade(), self.selection.file_ids.get(index))
+                {
+                    let key = job_key(file_id, self.stored);
+                    parts
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .put(key, part.clone());
+                }
+                part
+            }
+        };
+        // This part is in hand: the next one downloads while it is sent.
+        if let Some(next) = self.slices.clone().next()
+            && let Ok(next) = usize::try_from(next.index)
+            && self.cached(next).is_none()
+        {
+            self.ahead = start(
+                &self.scheduler,
+                &self.selection,
+                self.stored,
+                next,
+                Class::Next,
+            )
+            .ok()
+            .map(|ticket| (next, ticket));
+        }
         let start = usize::try_from(slice.start).map_err(|_| short())?;
         let end = usize::try_from(slice.end_inclusive).map_err(|_| short())?;
         if start > end || end >= part.len() {
             return Err(short());
         }
         Ok(part.slice(start..=end))
+    }
+
+    fn cached(&self, index: usize) -> Option<Bytes> {
+        let key = job_key(self.selection.file_ids.get(index)?, self.stored);
+        let parts = self.parts.upgrade()?;
+        let mut parts = parts.lock().unwrap_or_else(PoisonError::into_inner);
+        parts.get(&key)
     }
 }
 
@@ -336,7 +441,10 @@ mod tests {
         let base = json!({"originalId": "o", "fileSize": 30 * MIB,
             "playbackChunks": [{"index": 0, "file_id": "r0"}], "playbackSize": 5 * MIB});
         let s = pick(base).unwrap();
-        assert_eq!((ids(&s), s.size), (vec!["r0"], 5 * MIB));
+        assert_eq!(
+            (ids(&s), s.size, s.mime.as_str()),
+            (vec!["r0"], 5 * MIB, "video/mp4")
+        );
         let s = pick(json!({"originalId": "o", "fileSize": 7 * MIB, "playbackChunks": [{"index": 0, "file_id": "r0"}]})).unwrap();
         assert_eq!(
             s.size,
@@ -376,6 +484,21 @@ mod tests {
         assert!(
             pick(json!({"chunks": chunks(&[0]), "fileSize": 0})).is_ok(),
             "a 0-byte or older upload"
+        );
+    }
+
+    #[test]
+    fn the_part_cache_keeps_the_most_recently_used_within_its_budget() {
+        let mut cache = PartCache::new(25);
+        cache.put("a".into(), Bytes::from(vec![0u8; 10]));
+        cache.put("b".into(), Bytes::from(vec![1u8; 10]));
+        assert!(cache.get("a").is_some()); // now the most recent
+        cache.put("c".into(), Bytes::from(vec![2u8; 10])); // 30 > 25
+        assert!(cache.get("b").is_none() && cache.get("a").is_some() && cache.get("c").is_some());
+        cache.put("big".into(), Bytes::from(vec![3u8; 26]));
+        assert!(
+            cache.get("big").is_none() && cache.get("a").is_some(),
+            "over the budget: not kept"
         );
     }
 

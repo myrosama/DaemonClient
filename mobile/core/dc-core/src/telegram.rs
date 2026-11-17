@@ -21,6 +21,8 @@ const PATH_CACHE_MAX: usize = 4096;
 
 pub struct Telegram {
     http: reqwest::Client,
+    /// For sends: no 30 s limit before the answer (`http::upload_client`).
+    upload: reqwest::Client,
     api: String,
     token: Secret<String>,
     channel_id: String,
@@ -40,16 +42,17 @@ impl Telegram {
         api: String,
         token: Secret<String>,
         channel_id: String,
-    ) -> Self {
+    ) -> Result<Self, CoreError> {
         let api = api.trim_end_matches('/').to_owned();
-        Self {
+        Ok(Self {
             http,
+            upload: crate::http::upload_client()?,
             api,
             token,
             channel_id,
             paths: Mutex::new(HashMap::new()),
             pacer: SendPacer::new(),
-        }
+        })
     }
 
     fn method_url(&self, method: &str) -> String {
@@ -128,25 +131,72 @@ impl Telegram {
 
     /// Sends one part (or an encrypted thumbnail) into the channel; paced.
     pub async fn send_document(&self, name: &str, bytes: Vec<u8>) -> Result<Sent, CoreError> {
+        let len = bytes.len();
         let part = reqwest::multipart::Part::bytes(bytes)
             .file_name(name.to_owned())
             .mime_str("application/octet-stream")
             .map_err(|e| CoreError::Internal(format!("multipart: {e}")))?;
-        let message: Message = self.send("sendDocument", "document", part).await?;
-        let file_id = message.document.map(|d| d.file_id).ok_or_else(unexpected)?;
-        Ok(Sent {
-            message_id: message.message_id,
-            file_id,
-        })
+        let message: Message = self.send("sendDocument", "document", part, len).await?;
+        sent_document(message)
+    }
+
+    /// Where a prepared part goes. It holds the bot token: only the
+    /// platform's background uploader may be given it (SPEC D22).
+    pub(crate) fn document_address(&self) -> String {
+        self.method_url("sendDocument")
+    }
+
+    /// A whole `sendDocument` request — the multipart body and its content
+    /// type — that the platform's uploader can send as it is (D22).
+    pub(crate) fn document_request(
+        &self,
+        name: &str,
+        bytes: &[u8],
+    ) -> Result<(Vec<u8>, String), CoreError> {
+        let mut random = [0u8; 16];
+        getrandom::fill(&mut random)
+            .map_err(|_| CoreError::Internal("no random numbers".to_owned()))?;
+        let boundary = format!("dc{}", crate::disk_cache::hex(&random));
+        let name = clean_name(name);
+        let head = format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"chat_id\"\r\n\r\n{}\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"document\"; filename=\"{name}\"\r\nContent-Type: application/octet-stream\r\n\r\n",
+            self.channel_id
+        );
+        let mut body = Vec::with_capacity(head.len() + bytes.len() + boundary.len() + 8);
+        body.extend_from_slice(head.as_bytes());
+        body.extend_from_slice(bytes);
+        body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+        Ok((body, format!("multipart/form-data; boundary={boundary}")))
+    }
+
+    /// Sends a prepared part (paced like every send).
+    pub(crate) async fn send_request(
+        &self,
+        body: bytes::Bytes,
+        content_type: &str,
+    ) -> Result<Sent, CoreError> {
+        self.pacer.acquire().await;
+        let request = self
+            .upload
+            .post(self.method_url("sendDocument"))
+            .timeout(crate::http::upload_timeout(body.len()))
+            .header(reqwest::header::CONTENT_TYPE, content_type)
+            .body(body);
+        let result = answer::<Message>(request.send().await?).await;
+        if let Err(CoreError::RateLimited { retry_after }) = &result {
+            self.pacer.pause_for(Duration::from_secs(*retry_after));
+        }
+        sent_document(result?)
     }
 
     /// Sends a JPEG thumbnail of an unencrypted library; paced.
     pub async fn send_photo(&self, jpeg: Vec<u8>) -> Result<Sent, CoreError> {
+        let len = jpeg.len();
         let part = reqwest::multipart::Part::bytes(jpeg)
             .file_name("thumb.jpg")
             .mime_str("image/jpeg")
             .map_err(|e| CoreError::Internal(format!("multipart: {e}")))?;
-        let message: Message = self.send("sendPhoto", "photo", part).await?;
+        let message: Message = self.send("sendPhoto", "photo", part, len).await?;
         let file_id = message
             .photo
             .and_then(|sizes| sizes.into_iter().last())
@@ -163,14 +213,16 @@ impl Telegram {
         method: &str,
         field: &str,
         part: reqwest::multipart::Part,
+        len: usize,
     ) -> Result<Message, CoreError> {
         self.pacer.acquire().await;
         let form = reqwest::multipart::Form::new()
             .text("chat_id", self.channel_id.clone())
             .part(field.to_owned(), part);
         let result = answer(
-            self.http
+            self.upload
                 .post(self.method_url(method))
+                .timeout(crate::http::upload_timeout(len))
                 .multipart(form)
                 .send()
                 .await?,
@@ -229,6 +281,32 @@ struct Message {
 #[derive(Deserialize)]
 struct FileRef {
     file_id: String,
+    #[serde(default)]
+    file_name: Option<String>,
+    #[serde(default)]
+    file_size: Option<u64>,
+}
+
+/// A real file name goes in a header: nothing that could end it.
+pub(crate) fn clean_name(name: &str) -> String {
+    name.chars()
+        .map(|c| {
+            if c.is_control() || matches!(c, '"' | '\\') {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect()
+}
+
+/// What the platform uploader's answer says was stored: which message and
+/// file, under what name and size — so the core can tell it belongs to the
+/// part it is recorded for.
+pub(crate) struct Answered {
+    pub(crate) sent: Sent,
+    pub(crate) name: Option<String>,
+    pub(crate) size: Option<u64>,
 }
 
 /// Classifies a bot API answer: rate limits, refusals for good, the rest.
@@ -237,7 +315,36 @@ async fn answer<T: DeserializeOwned>(mut reply: reqwest::Response) -> Result<T, 
     let body = crate::http::body(&mut reply, crate::http::JSON_CAP)
         .await
         .ok();
-    let Some(body) = body.and_then(|b| serde_json::from_slice::<Reply<T>>(&b).ok()) else {
+    judge(status, body.as_deref())
+}
+
+/// What Telegram answered the platform uploader for a prepared part (D22).
+pub(crate) fn sent_from(answer: &[u8]) -> Result<Answered, CoreError> {
+    let message: Message = judge(reqwest::StatusCode::OK, Some(answer))?;
+    let document = message.document.ok_or_else(unexpected)?;
+    Ok(Answered {
+        sent: Sent {
+            message_id: message.message_id,
+            file_id: document.file_id,
+        },
+        name: document.file_name,
+        size: document.file_size,
+    })
+}
+
+fn sent_document(message: Message) -> Result<Sent, CoreError> {
+    let file_id = message.document.map(|d| d.file_id).ok_or_else(unexpected)?;
+    Ok(Sent {
+        message_id: message.message_id,
+        file_id,
+    })
+}
+
+fn judge<T: DeserializeOwned>(
+    status: reqwest::StatusCode,
+    body: Option<&[u8]>,
+) -> Result<T, CoreError> {
+    let Some(body) = body.and_then(|b| serde_json::from_slice::<Reply<T>>(b).ok()) else {
         return Err(match status.as_u16() {
             429 | 420 => CoreError::RateLimited { retry_after: 5 },
             code if code >= 500 => CoreError::Network(format!("the storage answered {code}")),
@@ -339,6 +446,7 @@ mod tests {
             Secret::new(TOKEN.to_owned()),
             "-100777".to_owned(),
         )
+        .unwrap()
     }
 
     async fn get_file(server: &MockServer, id: &str, file_path: &str, times: u64) {
@@ -502,7 +610,8 @@ mod tests {
             format!("http://127.0.0.1:{port}"),
             Secret::new(token.to_owned()),
             "-1".to_owned(),
-        );
+        )
+        .unwrap();
         let err = tg.download("f").await.unwrap_err().to_string();
         assert!(
             !err.contains("AAHdq") && !err.contains("123456789"),
@@ -531,7 +640,8 @@ mod tests {
             format!("http://{address}"),
             Secret::new(TOKEN.to_owned()),
             "-1".to_owned(),
-        );
+        )
+        .unwrap();
         assert!(matches!(tg.fetch("big").await, Err(CoreError::Server(_))));
     }
 

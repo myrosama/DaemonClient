@@ -8,11 +8,13 @@ mod disk_cache;
 mod error;
 pub mod http;
 pub mod logging;
+pub mod media_server;
 pub mod reader;
 pub mod sched;
 mod secret;
 pub mod session;
 pub mod telegram;
+pub mod upload;
 pub mod worker;
 
 pub use crate::core::{Core, CoreConfig, TELEGRAM_API};
