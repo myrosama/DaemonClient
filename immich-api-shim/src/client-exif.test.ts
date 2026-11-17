@@ -1,0 +1,43 @@
+// SPEC D23: the phone reads EXIF itself and sends it as one `exif` field with
+// a client upload; the worker stores it instead of downloading the original.
+import { describe, it, expect } from 'vitest';
+import { clientExif } from './exif';
+import { toAssetManifest } from './asset-manifest';
+
+describe('the EXIF the phone sends with a client upload', () => {
+  it('keeps every PhotoExif field it understands', () => {
+    const exif = clientExif(JSON.stringify({
+      make: 'Apple', model: 'iPhone 15', lensModel: 'back camera 6.86mm f/1.78', fNumber: 1.78,
+      focalLength: 6.86, iso: 50, exposureTime: '1/250', orientation: 6,
+      dateTimeOriginal: '2026-11-15T10:00:00.000Z', latitude: 41.3, longitude: 69.2,
+    }));
+    expect(exif).toEqual({
+      make: 'Apple', model: 'iPhone 15', lensModel: 'back camera 6.86mm f/1.78', fNumber: 1.78,
+      focalLength: 6.86, iso: 50, exposureTime: '1/250', orientation: 6,
+      dateTimeOriginal: '2026-11-15T10:00:00.000Z', latitude: 41.3, longitude: 69.2,
+    });
+  });
+  it('drops unknown keys and any value of the wrong type or out of range', () => {
+    expect(clientExif(JSON.stringify({
+      make: 42, model: 'x'.repeat(300), iso: -1, fNumber: 'f/2', orientation: 9, latitude: 91,
+      longitude: -181, exposureTime: { a: 1 }, focalLength: Number.MAX_VALUE * 0, extra: 'nope', __proto__: { polluted: 1 },
+    }))).toEqual({ focalLength: 0 });
+  });
+  it('treats missing, malformed or non-object input as no EXIF, never an error', () => {
+    for (const raw of [null, '', 'not json', '[1,2]', '"text"', '7', 'null', JSON.stringify({})]) {
+      expect(clientExif(raw)).toBeNull();
+    }
+  });
+  it('a location needs both coordinates', () => {
+    expect(clientExif(JSON.stringify({ latitude: 41.3, iso: 100 }))).toEqual({ iso: 100 });
+  });
+});
+
+describe('the manifest names the encryption the readers must undo', () => {
+  it('an encrypted row with no stored mode reads as server-encrypted, not plain', () => {
+    expect(toAssetManifest({ encrypted: true }).encryptionMode).toBe('server');
+    expect(toAssetManifest({ encrypted: 1 }).encryptionMode).toBe('server');
+    expect(toAssetManifest({}).encryptionMode).toBe('off');
+    expect(toAssetManifest({ encrypted: true, encryptionMode: 'client' }).encryptionMode).toBe('client');
+  });
+});

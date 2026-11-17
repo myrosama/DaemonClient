@@ -59,7 +59,9 @@ export function toAssetManifest(photo: any): AssetManifest {
     chunks,
     ...(playbackChunks ? { playbackChunks } : {}),
     ...(playbackSize ? { playbackSize } : {}),
-    encryptionMode: photo?.encryptionMode || 'off',
+    // A row marked encrypted with no stored mode was encrypted by the worker
+    // (the worker's own read path treats it so); readers must decrypt it too.
+    encryptionMode: photo?.encryptionMode || (photo?.encrypted ? 'server' : 'off'),
     mimeType,
     fileSize: Number(photo?.fileSize) || 0,
     isHeic,

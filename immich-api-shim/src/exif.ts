@@ -69,3 +69,32 @@ export async function extractExif(bytes: Uint8Array): Promise<PhotoExif> {
 
   return out;
 }
+
+/**
+ * The `exif` field a client upload sends (SPEC D23: the phone reads EXIF
+ * itself), checked field by field: unknown keys and bad values are dropped,
+ * and anything that isn't a JSON object yields null. Never throws.
+ */
+export function clientExif(raw: unknown): PhotoExif | null {
+  let v: any;
+  try { v = typeof raw === 'string' ? JSON.parse(raw) : null; } catch { return null; }
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
+  const str = (x: unknown, max: number) => (typeof x === 'string' && x.length > 0 && x.length <= max ? x : undefined);
+  const num = (x: unknown, ok: (n: number) => boolean) => (typeof x === 'number' && Number.isFinite(x) && ok(x) ? x : undefined);
+  const out: PhotoExif = {
+    make: str(v.make, 200),
+    model: str(v.model, 200),
+    lensModel: str(v.lensModel, 200),
+    fNumber: num(v.fNumber, (n) => n > 0 && n < 1000),
+    focalLength: num(v.focalLength, (n) => n >= 0 && n < 100000),
+    iso: num(v.iso, (n) => n > 0 && n < 10_000_000),
+    exposureTime: str(v.exposureTime, 40),
+    orientation: num(v.orientation, (n) => Number.isInteger(n) && n >= 1 && n <= 8),
+    dateTimeOriginal: str(v.dateTimeOriginal, 40),
+  };
+  const lat = num(v.latitude, (n) => n >= -90 && n <= 90);
+  const lon = num(v.longitude, (n) => n >= -180 && n <= 180);
+  if (lat !== undefined && lon !== undefined) { out.latitude = lat; out.longitude = lon; }
+  for (const k of Object.keys(out) as (keyof PhotoExif)[]) if (out[k] === undefined) delete out[k];
+  return Object.keys(out).length ? out : null;
+}

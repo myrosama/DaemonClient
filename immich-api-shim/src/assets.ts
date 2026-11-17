@@ -8,7 +8,7 @@ import { hiddenIds } from './drive-tree';
 import { getCachedConfig } from './cached-config';
 import { computeThumbHashFromJpeg } from './thumbhash-util';
 import { sha1Base64OfFile, Sha1, bytesToBase64 } from './sha1';
-import { extractExif, type PhotoExif } from './exif';
+import { extractExif, clientExif, type PhotoExif } from './exif';
 import { StoreZipWriter } from './zip';
 import { toAssetManifest } from './asset-manifest';
 import { earlyDedupDecision, videoHintFromFields } from './upload-dedup';
@@ -1315,6 +1315,8 @@ async function handleUploadImpl(request: Request, env: Env, uid: string, idToken
     let telegramThumbId: string | null = null;
     let encryptionMode = isEncryptedByServer ? 'server' : 'off';
     let thumbEncrypted = false;
+    let telegramPreviewId: string | null = null;
+    let clientSentExif = false;
     let pendingThumbGen: any = null;
 
     if (clientUpload) {
@@ -1326,6 +1328,20 @@ async function handleUploadImpl(request: Request, env: Env, uid: string, idToken
         // Honour client-reported thumbEncrypted so the read path knows whether to decrypt
         const teVal = formData.get('thumbEncrypted');
         if (teVal === 'true' || teVal === '1') thumbEncrypted = true;
+        // SPEC D23: the phone makes the preview and reads EXIF itself; store
+        // both, so nothing downloads the original for them later. A bad value
+        // is dropped, never a failed upload.
+        const previewId = formData.get('telegramPreviewId');
+        if (typeof previewId === 'string' && /^[A-Za-z0-9_-]{1,256}$/.test(previewId)) telegramPreviewId = previewId;
+        const sent = clientExif(formData.get('exif'));
+        if (sent) {
+          exif = sent;
+          clientSentExif = true;
+          if (gpsLat === null && gpsLon === null && sent.latitude !== undefined && sent.longitude !== undefined) {
+            gpsLat = sent.latitude;
+            gpsLon = sent.longitude;
+          }
+        }
     } else {
         // --- Legacy Server-Side Upload Logic ---
         // Define these before the loop so GPS extraction + Strategy 2 can reference them.
@@ -1663,6 +1679,10 @@ async function handleUploadImpl(request: Request, env: Env, uid: string, idToken
       telegramOriginalId,
       telegramThumbId,
       thumbEncrypted: thumbEncrypted ? 1 : 0,
+      // The preview is encrypted exactly when the upload is (the phone encrypts
+      // every rendition with the same key).
+      telegramPreviewId: telegramPreviewId || undefined,
+      previewEncrypted: telegramPreviewId ? (thumbEncrypted || encryptionMode === 'server' ? 1 : 0) : undefined,
       thumbhash: thumbhash || undefined,
       livePhotoVideoId: livePhotoVideoId || undefined,
       encryptionMode,
@@ -1684,9 +1704,9 @@ async function handleUploadImpl(request: Request, env: Env, uid: string, idToken
       orientation: exif.orientation !== undefined ? String(exif.orientation) : undefined,
       dateTimeOriginal: exif.dateTimeOriginal,
       // Legacy/server path parsed EXIF above → mark inspected at the current
-      // version. Client uploads (web) skip parsing here, so leave 0 and let the
-      // lazy backfill handle them when they're not client-encrypted.
-      exifChecked: clientUpload ? undefined : EXIF_PARSE_VERSION,
+      // version. A client upload that sent its own EXIF (the phone) is done
+      // too; the website sends none, so leave 0 for the lazy backfill.
+      exifChecked: clientUpload && !clientSentExif ? undefined : EXIF_PARSE_VERSION,
       // Dedup fields — stored so future uploads from the same device can be
       // identified as duplicates without re-uploading to Telegram.
       deviceAssetId: deviceAssetId || undefined,
