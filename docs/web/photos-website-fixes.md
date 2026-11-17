@@ -37,7 +37,7 @@ account): **100,000 worker requests a day** (then Error 1027 until 00:00
 UTC), 10 ms CPU a request; D1 **100,000 rows written** and 5 M rows read a
 day. A new photo writes ~6–7 D1 rows (the row + one per index), so a backup can
 add at most ~14,000–16,000 photos a day; a scroll costs one worker request per
-thumbnail today. Items 2 and 8 below are about this budget.
+thumbnail today. Items 2, 3 and 9 below are about this budget.
 
 ---
 
@@ -71,7 +71,35 @@ phone image to read its EXIF.
 live, a HEIC uploaded with `dc-cli upload x.heic` (on the Mac) opens in Chrome
 and shows its camera data; the worker log shows no EXIF backfill for it.
 
-### 2. Thumbnail file ids in bulk (fewer worker requests while scrolling)
+### 2. Talk to Telegram directly — drop the `/proxy` relay
+
+**Symptom.** Every byte the website reads or uploads passes through the
+user's worker: the service worker's `getFile` and file downloads
+(`telegram-media.ts` `buildGetFileUrl` / `buildDownloadUrl`) and the uploader's
+`sendDocument` (`daemonclient-drive.ts`) all go to `${proxyUrl}?url=…`, the
+worker's `/proxy` (`index.ts`, set by `server.ts` `proxyUrl`). A thumbnail on
+the website costs **3 worker requests** (manifest, file path, bytes); an upload
+part costs its whole body through the worker.
+
+**Why it isn't needed (checked 2026-11-17 from the Mac, with a made-up
+token):** Telegram answers browsers itself — `api.telegram.org/bot…/getMe`
+and `api.telegram.org/file/bot…/…` both return
+`access-control-allow-origin: *` (even on 401/404), and a multipart `POST`
+is a CORS "simple request" (no preflight; Telegram's preflight answers with
+`allow-origin: *` and `allow-headers: content-type` anyway). The phone core
+has always talked to Telegram directly.
+
+**Change.** Call `https://api.telegram.org/…` directly for `getFile`, file
+downloads and `sendDocument` / `sendMediaGroup`; keep `/proxy` only as a
+fallback when a direct call fails at the network level (a network that blocks
+Telegram). Nothing is exposed that isn't already: the browser already holds
+the bot token (`/api/server/telegram-config`).
+
+**Verify.** DevTools → Network while scrolling: thumbnails come from
+`api.telegram.org`, and the worker sees only manifest (or bucket) requests;
+an upload's parts go to `api.telegram.org`.
+
+### 3. Thumbnail file ids in bulk (fewer worker requests while scrolling)
 
 **Symptom.** Scrolling a big library costs one worker request per thumbnail
 (the app and the website both fetch `dc-manifest` before each thumbnail): a
@@ -89,7 +117,7 @@ Mac which: the phone core will read the same.
 **Verify.** Scroll a month on the website with DevTools open: one bucket
 request, no `dc-manifest` per tile.
 
-### 3. One spelling for checksums
+### 4. One spelling for checksums
 
 **Symptom.** The website uploads again a photo the app already backed up.
 
@@ -108,7 +136,7 @@ every 40-character `[0-9a-f]` checksum → base64 of the same bytes.
 **Verify.** Upload a photo with the app (or `dc-cli upload`), then drop the
 same file on the website: it says the photo is already there.
 
-### 4. Delete everything a photo left behind
+### 5. Delete everything a photo left behind
 
 **Symptom.** After a photo is deleted its thumbnail (and preview) stay in the
 user's Telegram chat — in an unencrypted library, a visible picture — and the
@@ -138,7 +166,7 @@ not checked.
 **Verify.** Upload, delete, then `dc-cli download <id> out` on the Mac:
 "not found". The thumbnail's message is gone from the chat.
 
-### 5. Website video: stop re-downloading, start playing sooner
+### 6. Website video: stop re-downloading, start playing sooner
 
 **Symptom.** Videos "kinda lag" (the operator, on the P1 exit video): slow to
 start, and they pause every ~19 MB.
@@ -159,7 +187,7 @@ background at a low priority — exactly the phone core's fix (Task 1.6:
 Telegram download appears once; playback runs past the 19 MB marks without
 stopping on a normal connection.
 
-### 6. Pace every send, and send small files in albums
+### 7. Pace every send, and send small files in albums
 
 **Symptom.** Long website uploads stall ~40 s at a time.
 
@@ -187,7 +215,7 @@ out each 429; the worker's `paceSend` (`assets.ts`, `SEND_INTERVAL_MS =
 **Verify.** Upload 100 photos from the website: no `429` in the console, and
 it takes minutes, not tens of minutes.
 
-### 7. Website uploads keep the original
+### 8. Website uploads keep the original
 
 **Symptom.** A HEIC uploaded from the website loses its original bytes and
 EXIF; the app then sees a JPEG that is not what the camera made.
@@ -203,7 +231,7 @@ as `telegramPreviewId`; read EXIF in the browser and send it as `exif` (item
 **Verify.** Upload a HEIC on the website, then `dc-cli download <id> out.heic`
 on the Mac: "checksum matches", and the file is a HEIC.
 
-### 8. Stay inside the free plan's day
+### 9. Stay inside the free plan's day
 
 **Symptom.** A big first backup stops dead for the rest of the day (Error
 1027, or D1's "daily limit exceeded"), and everything else on that account
@@ -225,23 +253,23 @@ stops with it.
 **Verify.** On the test account, back up 1,000 photos and count the worker
 requests in the Cloudflare dashboard: about 2 per album, not 3 per photo.
 
-### 9. Delete the worker's byte paths (D23)
+### 10. Delete the worker's byte paths (D23)
 
-Once 1–8 are live, nothing should need the worker to move bytes: delete the
+Once 1–9 are live, nothing should need the worker to move bytes: delete the
 server-side upload (`assetData`), serving decrypted thumbnails, originals and
 video (with its range stitching), the D18 `POST /api/assets/:id/thumbnail`
 route, the EXIF and HEIC backfills that download originals, and any
 server-side conversion. Keep the service worker's fallback to the worker only
 until the website reads everything directly.
 
-### 10. For the operator to decide
+### 11. For the operator to decide
 
 - **iPhone videos are HEVC.** No H.264 copy exists, so they play in Safari,
   in Chrome only with hardware HEVC, and mostly not in Firefox. The phone
   could make an H.264 copy at upload (CPU, battery, and a second upload of the
   same video), or the website could say "open in Safari".
 - **A channel instead of a supergroup** for new accounts: Telegram documents
-  the 20-a-minute limit for groups only. With albums (item 6) the ceiling is
+  the 20-a-minute limit for groups only. With albums (item 7) the ceiling is
   already ~5× higher, so this is worth testing only if backups are still too
   slow.
 
