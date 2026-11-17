@@ -1017,5 +1017,7 @@ two more tests.
   uploaded and read back byte-identical; a website upload downloaded and
   decrypted, matching its stored checksum; the video served to AVFoundation
   (a 1080p frame from its middle) and ranges checked with `curl` (206, 416,
-  403). **Open:** the operator's look at both uploads on the website.
+  403). The operator opened both on the website: they open and the video
+  plays, with lag from the website's video path (RESEARCH §14). **P1 exit
+  met** (SPEC §9).
 - G3: above. G4: the code commit and this docs commit.

@@ -1922,7 +1922,7 @@ many pending jobs (1.4) and the part cache's size (1.6) on a real device.
   dimensions (fixed sample text, so they run on Linux). Plus, only if C6 is
   built: the early last-part fetch.
 - [x] **Step 2:** implement. Run → pass; clippy, fmt, `cargo deny`.
-- [ ] **Step 3: Gate 2 — the P1 exit** on the test account (uploads and
+- [x] **Step 3: Gate 2 — the P1 exit** on the test account (uploads and
   deletes there approved):
   1. `whoami` signs in.
   2. `upload` a new JPEG (made with `sips`, so its checksum is new) and a
@@ -2003,8 +2003,9 @@ many pending jobs (1.4) and the part cache's size (1.6) on a real device.
     1920×1080 frame from its middle (10.2 s — a seek across parts); `curl`
     ranges inside a part, across a part boundary and the last byte: 206 and
     the file's own bytes; past the end: 416; a wrong secret: 403.
-  - Open: the operator's look at both uploads on photos.daemonclient.uz,
-    then `dc-cli delete`.
+  - The operator opened both on photos.daemonclient.uz (2026-11-17): they
+    open and the video plays, "kinda lagged" — the website's video path
+    (RESEARCH §14). Then `dc-cli delete`d. **P1 exit met.**
 - Gate 3 security fixes in `dc-cli`: Ctrl-C ends any command through the
   cleanup (temp folder removed; `bench sends` deletes what it sent — checked
   live), the deleting client made before measuring, waits capped at 120 s,

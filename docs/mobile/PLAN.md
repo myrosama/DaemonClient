@@ -159,7 +159,7 @@ Detailed: `plans/P1-core.md` (design approved 2026-10-29, decisions C1–C11).
 - [x] **1.7** Upload engine — prepare encrypted parts on disk, send, resume
       journal, metadata post (`POST /api/assets`, `clientUpload`) and, for
       HEIC/HEIF/RAW, the thumbnail + preview route.
-- [ ] **1.8** `dc-cli` and Gate 2 for the whole core against the test
+- [x] **1.8** `dc-cli` and Gate 2 for the whole core against the test
       account, both directions with photos.daemonclient.uz.
 
 **Exit:** SPEC §9 P1.

@@ -667,3 +667,71 @@ Read from the fork and the platforms:
   video metadata (ImageIO properties, `ExifInterface`,
   `MediaMetadataRetriever`) while the file is open for the thumbnail; a Rust
   parser (`nom-exif`, JPEG/HEIC/TIFF/MOV/MP4) is the alternative.
+
+---
+
+## 14. Telegram's official limits, and how the website reads phone uploads        2026-11-17
+
+**Telegram's own words** (Bot FAQ, `core.telegram.org/bots/faq#my-bot-is-hitting-limits-how-do-i-avoid-this`;
+Bot API, `core.telegram.org/bots/api`):
+- "In a single chat, avoid sending more than one message per second" — bursts
+  are tolerated, "eventually you'll begin receiving 429 errors".
+- "In a group, bots are not able to send more than **20 messages per minute**."
+  The account setup makes a **supergroup**, and P1 1.8 measured exactly that:
+  20 sends in 20.6 s, the 21st refused with `retry_after` 40 s. So the backup
+  ceiling (~600 JPEGs an hour) is a documented rule, not luck. Channels are
+  not named in the FAQ — only the one-a-second guidance would apply; untested.
+- Broadcasts: about 30 messages a second across chats; paid broadcasts reach
+  1,000 a second (0.1 Stars a message) — for messaging many users, no help
+  for one storage chat.
+- `retry_after` (`ResponseParameters`) is the wait before the request may be
+  repeated; ignoring it makes the waits grow (community reports).
+- `sendMediaGroup`: 2–10 items per call, returns an array of Messages;
+  "documents and audio files can be only grouped in an album with messages of
+  the same type". **Whether an album counts as one message against the group
+  limit is not documented** — measure in P2 (if it does, backups of small
+  photos could go several times faster).
+- Files: `sendDocument` up to 50 MB; `getFile` downloads up to 20 MB; a file
+  link is valid at least an hour. A local Bot API server lifts these (2,000 MB
+  up, no download limit) but needs a server — not for the hosted product.
+- Deleting: "a message can only be deleted if it was sent less than **48
+  hours** ago" (the admin rules beside it may lift this in a supergroup — a
+  test message `14362` was kept in the test chat on 2026-11-17 ~07:45 UTC to
+  try after 48 hours). `deleteMessages` deletes 1–100 at once. File ids "can
+  be treated as persistent" — and measured: **a deleted message's file still
+  downloads by its file id**. Deleting removes the message, not the file:
+  encrypted libraries leave only ciphertext behind; plain ones cannot be
+  fully erased. The product should say so.
+
+**How the website reads what the phone uploads** (the website's service worker
+`immich/web/src/service-worker/` and `telegram-media.ts` `selectFileIds`; the
+worker's `assets.ts`, `asset-manifest.ts`):
+- **Grid:** the thumbnail by `thumbId`, decrypted in the browser — works
+  (the phone sends it exactly as the website does).
+- **Opening a photo:** `size=preview` → `previewId`, else the original. The
+  phone sends a JPEG preview for HEIC, but the worker drops it until W2, so
+  the website serves the raw HEIC as `image/heic`: **phone HEICs do not open
+  outside Safari** until W2. JPEGs open (the original is shown).
+- **Video:** `playback` takes an H.264 rendition when one exists — none ever
+  does — so the original `.mov` plays: iPhone video is HEVC, which Safari
+  plays, Chrome only with hardware support, Firefox mostly not. Each range
+  request downloads and decrypts a whole 19 MiB part again (no part cache, no
+  next-part prefetch): opening re-reads the first part two or three times and
+  playback stalls at each part boundary — the lag the operator saw on the P1
+  exit video. The core fixed the same in 1.6 (a 3-part cache, the next part
+  fetched while one plays).
+- **EXIF:** until W2 the worker ignores the phone's EXIF and leaves
+  `exifChecked` unset, so its background EXIF backfill downloads and decrypts
+  the first part of every phone image to read EXIF — the heavy work D23 takes
+  off the worker.
+- **Deleting:** the worker deletes only the messages in `telegramChunks`; it
+  never stores the thumbnail's or preview's message ids, so their messages
+  stay in the chat (a visible picture in a plain library). The tombstone row
+  keeps its file ids, and the manifest still answers for it: a deleted photo
+  stayed downloadable through the manifest (P1 1.8, `dc-cli download` after
+  `dc-cli delete`). `deleteMessage`'s answer is not checked.
+- **Duplicates:** the website stores hex SHA-1, the phone base64 (see 1.8);
+  the website re-uploads what the phone stored until the worker normalises.
+- **Sending:** the website's own uploader does not pace at all (it waits out
+  each 429), and the worker's pacer allows 1 per 1.5 s — twice the group
+  limit, so long website uploads stall 40 s at a time.
