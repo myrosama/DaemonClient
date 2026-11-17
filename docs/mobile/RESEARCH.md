@@ -143,6 +143,9 @@ downloading" possible: a byte range maps to the chunks that cover it.
   hits Cloudflare's limits.
 - `checksum = base64(SHA-1(plaintext))` is load-bearing: without it
   `bulk-upload-check` never matches and the app re-uploads the whole library.
+  *Corrected 2026-11-17 (P1 1.8): that is the Immich app's and the worker's
+  spelling; the website stores **hex** SHA-1 (`hash-file.ts`), and the worker
+  compares the text — the core asks about both.*
 
 **Consequence:** the mobile core is a port of what the web already does —
 the Drive uploader/downloader and the Photos service worker — into Rust. The
@@ -264,7 +267,8 @@ Read from `immich/web/src/lib/utils/file-uploader.ts:300-448`,
    channel: `GET {workerUrl}/api/server/telegram-config` (`server.ts:65`; the
    web's `daemonclient-drive.ts getConfig`).
 2. Checksum: `base64(SHA-1(plaintext))`; dedupe first with
-   `POST /api/assets/bulk-upload-check`.
+   `POST /api/assets/bulk-upload-check`. *(Corrected 2026-11-17: the website
+   sends **hex** SHA-1, `hash-file.ts` `bytesToHex`.)*
 3. Thumbnail generated on the client; `thumbhash` derived from it.
 4. Original sliced at 19 MiB → each slice encrypted → `sendDocument` →
    `telegramChunks: [{index, message_id, file_id}]`.
@@ -574,6 +578,15 @@ The scheduler (SPEC §4.9) must therefore keep sends flowing at exactly that
 rate and never waste a send token — e.g. dedupe by checksum *before* sending.
 This is a property of Telegram bots, not of the app; it belongs in the
 product's expectations (first full backup of a big library takes hours).
+
+**Corrected 2026-11-17 (P1 1.8, measured with `dc-cli bench sends` on the test
+bot):** the limit is about **20 messages a minute** per channel, not 20 per
+30 s — 20 sends in 20.6 s, then the 21st was refused with `retry_after` 40 s;
+paced at 1 per 3 s, 40 sends in 2 minutes, then one refusal with `retry_after`
+3 s. A library of small photos therefore backs up at about **10 photos a
+minute (~600 an hour)** with a thumbnail each, ~400 an hour for HEIC (a
+preview too). The core now paces 1 per 3 s, burst 3. Reads have no such
+limit in practice: 126 thumbnails a second without a refusal.
 
 ---
 

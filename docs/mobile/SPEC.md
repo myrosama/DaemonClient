@@ -57,7 +57,7 @@ because of it (Cloudflare body and CPU limits).
 | D16 | One shared engine with two thin adapters — Photos (`/api/assets`, Photos key, thumbnails, checksum) and Drive (`/api/drive/files`, Drive key, ordered `messages`). | 2026-10-04 | plan, confirmed by operator |
 | D20 | The Photos app's **home-screen name is "Photos"** (Android debug builds "Photos-Debug"); its app icon, launch/splash screens and in-app logos are the DaemonClient logo (`drive/public/logo.png` on white); the Immich logo no longer spins on the sign-in screen. Done in P0 task 0.4, ahead of P2 task 2.1. The store name stays "DaemonClient Photos" (D9) unless the operator decides otherwise before P4 (§10). | 2026-10-12 | operator |
 | D21 | **Store framing and release decisions** (from `APP_STORE.md`): the apps are presented as a **self-hosted storage tool**; sign-up and storage setup happen on the website, and the apps never ask for anything Telegram-related. The name shown is **"DaemonClient Photos"** (replaces D20's home-screen "Photos"; changed at release). The operator publishes from **their own Apple Developer account**. **Delete account** is offered in the app. Immich's remaining brand, links and purchase screens are removed before release. **In code:** storage credentials (bot token, channel) are fetched by the core from the user's worker and stay in the core's memory — they never cross the bridge to Dart, never appear on screen, and user-facing messages say "storage", not "Telegram". The privacy policy still names every third party (Apple 5.1.1/5.1.2). | 2026-10-31 | operator |
-| D22 | **Automatic background backup, like iCloud Photos / Google Photos** (operator, 2026-11-16): photos are backed up while the app is suspended. The phone's own background uploader (URLSession on iOS, WorkManager on Android) sends each encrypted part **straight to Telegram**. The core prepares each part as a complete request body in the app's private storage and hands the uploader that file and the Telegram address — which holds the bot token: **the one exception to D21**, needed because only the operating system can upload while the app is suspended. The address goes only to the platform uploader, never to the screen, logs or analytics; the core still records every answer. The upload sends the **original file byte for byte** (no conversion) and dedupes on base64 SHA-1, as the worker and the website do. | 2026-11-16 | operator |
+| D22 | **Automatic background backup, like iCloud Photos / Google Photos** (operator, 2026-11-16): photos are backed up while the app is suspended. The phone's own background uploader (URLSession on iOS, WorkManager on Android) sends each encrypted part **straight to Telegram**. The core prepares each part as a complete request body in the app's private storage and hands the uploader that file and the Telegram address — which holds the bot token: **the one exception to D21**, needed because only the operating system can upload while the app is suspended. The address goes only to the platform uploader, never to the screen, logs or analytics; the core still records every answer. The upload sends the **original file byte for byte** (no conversion) and dedupes on SHA-1 — base64 as the worker and the Immich app store it; *the website stores hex (found in P1 1.8), so the core asks about both*. | 2026-11-16 | operator |
 | D23 | **The phone does the heavy work; the worker keeps the books** (operator, 2026-11-16 — "the goal of writing our own app is to avoid expensive worker work and do heavy CPU work on the phone in Rust"): encryption, decryption, uploads and downloads run in the core; the worker only answers small metadata requests and never handles photo or video bytes. Therefore: **previews** for HEIC/HEIF/RAW are made by the phone's image engine at upload, encrypted and sent to Telegram by the core, and the worker records only their ids (replaces D18's route through the worker); **EXIF and video metadata** are read by the phone's native engine (ImageIO; `ExifInterface`/`MediaMetadataRetriever`) and sent as one `exif` field in the worker's `PhotoExif` shape — the worker never downloads an original to read it; the **viewer** shows the preview at once and, while the photo stays on screen, quietly downloads the original, keeps it and shows it at full quality (videos play the original); the app and the website must read each other's uploads. The worker's old byte paths (server-side upload, serving decrypted thumbnails/originals/video, the D18 route sending to Telegram, EXIF backfill from originals) are to be deleted once nothing uses them (Linux machine). | 2026-11-16 | operator |
 
 ---
@@ -253,14 +253,19 @@ Every Telegram read goes through it.
 - **Rate limit:** a token bucket ported from Nuke's (MIT). A token is taken
   only when a job actually starts, so **cancelled work never spends one** — a
   fast fling through thousands of thumbnails costs only what gets loaded. The
-  opened item skips the bucket (it still uses its reserved slot). Starting values
-  (to be measured in P1 1.8 with `dc-cli`): about 20 requests/s, burst 10,
-  6 downloads at once. A `429` pauses **all** reads for `retry_after`.
+  opened item skips the bucket (it still uses its reserved slot). **Measured in
+  P1 1.8** (`dc-cli bench reads`, 1,600 requests): the storage served 122 file
+  paths and 126 thumbnails a second with no rate limit; the core uses **12
+  downloads at once** (1 reserved for the opened item, at most 2 Next), **40
+  requests/s, burst 12** — 25 thumbnails a second through the core, from 11
+  with the starting values (6 at once, 20/s, burst 10). A `429` pauses **all**
+  reads for `retry_after`.
   *The website uses its own measured values* (Linux machine, 2026-10-12): 12
   jobs at once, 2 reserved for the opened photo, at most 3 Next, burst 12, rate
   20/s — over HTTP/2 a cold thumbnail is 3 sequential requests, and 6 slots
-  filled the grid slower than the old loader. The phone apps keep the values
-  above (HTTP/1.1 to the local server, about 6 connections per host).
+  filled the grid slower than the old loader. The phone app's HTTP client must
+  allow at least 12 connections to the grid listener (P2), or the core's slots
+  go unused.
 - **Fewer round-trips:** each `getFile` result is cached for its validity
   window, so a thumbnail usually costs one request, not two; decrypted
   thumbnails go to the disk cache (§4.7) because a `file_id` never changes.
@@ -425,7 +430,8 @@ into tasks.
 | What the current fork does after sign-in (it never reads `workerUrl`) | Decides how much of Immich's login flow changes | P0 — run it and see |
 | flutter_rust_bridge with Flutter 3.41.7 and Xcode 27 | Build risk | P0 |
 | iOS background limits for uploads | Big backups while the app is closed | P2 — may need encrypted parts written to disk and handed to a background `URLSession` |
-| Telegram rate limits on whole-library backups | Upload speed | P1 — measured with `dc-cli` |
+| Telegram rate limits on whole-library backups | Upload speed | **Measured in P1 1.8:** a channel takes about **20 messages a minute** (the 21st in a burst waited 40 s; at 1 per 3 s, one 3 s refusal after 40 sends). Every part, thumbnail and preview is a message, so a first backup runs at about **600 JPEGs or 400 HEICs an hour**; videos are bound by bandwidth. P2: whether `sendMediaGroup` (up to 10 files per call) counts as one message |
+| Checksums in two spellings (website hex, app base64) | The website uploads again what the app already stored | Found in P1 1.8; the core asks about both; the worker to normalise (Linux, W2) |
 | Does the accounts portal have account deletion? | App Store requirement (§5.3) | P2 — ask the Linux machine |
 | Fields the Immich app sends that the web does not (deviceAssetId, live photos, EXIF) | Backup screen, dedupe, map | P2 — may need an additive worker change |
 | Taking Immich updates later | Every change to the fork makes merges harder | Keep changes in few files; list them in `DESIGN_NOTES.md` |
@@ -450,3 +456,5 @@ into tasks.
 | 2026-11-15 | §4.6: a new secret per listener (not per launch), two listeners opened on first use and reopened after the phone closes them, 32 connections per listener; §4.7: the in-memory part cache (3 parts); C6 measured: an iPhone video opens after **two** parts, not one (P1 Task 1.6, Gate 2 and Gate 3) | Gate 3 (security), Gate 2 (measured); C6 cost to be confirmed by the operator |
 | 2026-11-16 | D22: automatic background backup through the platform uploader straight to Telegram (the one exception to D21); the original byte for byte; SHA-1 dedupe | operator |
 | 2026-11-16 | D23: the phone does the heavy work, the worker keeps the books — previews and EXIF made on the phone, the worker records ids and metadata only (replaces D18's worker route); the viewer shows the preview, then the original; the worker's old byte paths to go | operator |
+| 2026-11-17 | §4.9: the read limits from P1 1.8's measurement (12 at once, 40/s, burst 12); §10: the send limit measured (~20 messages a minute per channel; the core paces 1 per 3 s, burst 3) and what it means for a first backup | Gate 2 (measured); the backup-speed figure for the operator |
+| 2026-11-17 | D22 / §10: the website stores **hex** SHA-1, the app and the worker base64; the core asks about both, the website will re-upload what the app stored until the worker normalises (Linux, W2). C6 (start a video's last part early): built in 1.8, no gain measured end to end, removed | Gate 2 (found and measured); C6's removal for the operator to confirm |

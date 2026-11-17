@@ -972,3 +972,50 @@ keepalive. Mutation checks: the account check, the `creating` mark.
   met this Mac's network dropping for a while (timeouts on the worker); the
   tool deletes its leftovers at its next start.
 - G3: above. G4: the code commit and this docs commit.
+
+---
+
+## 1.8 — `dc-cli`, the measurements, the P1 exit            2026-11-17
+
+**Planned:** P1-core.md Part 2, Task 1.8 (written before the code).
+**Did:** `mobile/core/dc-cli` (whoami, list, upload, download, delete, serve,
+bench reads / sends / parts); the read limits and the send pacing set from
+measurement; a dedupe fix found by Gate 2. Differences from the plan: "As
+built (Task 1.8)" in P1-core.md.
+**Found by Gate 2:** the website stores **hex** SHA-1, the Immich app, the
+worker and the core **base64**, and the worker compares the text — the app
+would have uploaded again every photo the website had. The core now asks
+about both spellings (test; live: a website photo backed up through dc-cli →
+"already stored, nothing sent"). The other direction is the worker's (W2).
+**Measured (this Mac, release):** reads — no rate limit up to 122 paths and
+126 thumbnails a second; the core went from 11 to 25 thumbnails a second
+(12 at once, 40/s, burst 12). Sends — ~20 messages a minute per channel (the
+21st in a burst waits 40 s), half of what RESEARCH §12 assumed: a first
+backup runs at ~600 JPEGs or ~400 HEICs an hour; the pacer is now 1 per 3 s,
+burst 3. C6 — two parts at once ~40% faster than one after the other, but an
+early fetch of a video's last part showed no gain in AVFoundation's open
+(seven alternating pairs, medians 7.9 vs 8.3 s): built, measured, removed.
+Downloads 4–6 MB/s.
+**Security:** reviewer — 0 HIGH, 2 MEDIUM, 10 LOW. MEDIUM: Ctrl-C skipped
+the cleanup (decrypted thumbnails left in the temp folder, bench messages
+left in the channel) — now any command ends through it, checked live; the
+bench's deletion depended on a later worker request — the client is made
+first. LOW fixed: capped waits, leftover ids printed, the password in
+`Secret`, tools by `/usr/bin` path, absolute upload paths, poster files
+removed, a smaller read budget. Carried: the opened item's memory with 12
+slots (P2, on a device); pacing at the measured limit.
+**Spec:** reviewer — 1 HIGH (the P1 exit evidence not recorded — now in As
+built), 5 MEDIUM, 3 LOW: a stale comment, the two-spellings finding and C6's
+removal into SPEC §10/§11 and RESEARCH, the unpaced bench opening a client
+every 3 sends, the background uploader's pacing carried to P2, stale texts,
+two more tests.
+**Gate evidence:**
+- G1: tests first, failing; `cargo test` dc-core 171, dc-cli 9; clippy (deny
+  lints), fmt; `cargo deny check advisories` ok. Mutation checks: the hex
+  spelling (the new dedupe test fails without it).
+- G2: the P1 exit on the test account — sign-in; a JPEG and a 157 MB video
+  uploaded and read back byte-identical; a website upload downloaded and
+  decrypted, matching its stored checksum; the video served to AVFoundation
+  (a 1080p frame from its middle) and ranges checked with `curl` (206, 416,
+  403). **Open:** the operator's look at both uploads on the website.
+- G3: above. G4: the code commit and this docs commit.
