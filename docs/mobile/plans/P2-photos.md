@@ -1,6 +1,7 @@
 # P2 — Photos on the core
 
-**Part 1: the design, for the operator to approve before any code.** Part 2
+**Part 1: the design — approved by the operator 2026-11-17 (with SPEC D24
+approved and D8 changed: see P2-2).** Part 2
 (each task's steps) is written task by task, before that task's code, as in
 P1. Goal: SPEC §9 P2 — on the Simulator, an iPhone and Android with the test
 account: sign-in (all three D8 paths), the library loads, thumbnails, photos
@@ -8,8 +9,8 @@ and video work, a backup including a >100 MB video finishes, and the app and
 the website read each other's uploads (§7).
 
 Written 2026-11-17 after P1 (the core, `dc-cli`, the measured limits) and a
-read of the fork. Builds on SPEC D8, D14, D17, D21–D23, and **D24 (backup
-sending — still awaiting the operator)**.
+read of the fork. Builds on SPEC D8, D14, D17, D21–D23 and **D24 (backup
+sending in albums — approved 2026-11-17)**.
 
 ---
 
@@ -42,8 +43,12 @@ Immich's own store — `serverEndpoint = workerUrl + "/api"`, `accessToken` —
 so Immich's sync (`/api/sync/stream`), websocket and API keep working
 untouched, and the hosted path finally reaches the per-user worker. The
 session goes to the Keychain / Keystore (`flutter_secure_storage`) and back
-to `restore` on the next launch. "Create account" opens the accounts portal
-in an in-app browser sheet.
+to `restore` on the next launch. **The screen (operator, 2026-11-17):
+exactly the server address (always shown, filled in with the hosted
+address — self-hosted servers will be supported), email and password, and
+"Create account"** (the hosted portal's sign-up in an in-app browser sheet;
+for a self-hosted address, that server's own sign-up once self-hosting
+ships). No shortcut button.
 
 **P2-3. Media through the local server.** The four URL builders and the
 video viewer use the core's listeners: thumbnails → the **grid** listener;
@@ -128,8 +133,9 @@ iPhone (a free 7-day build with their Apple ID, P0).
 
 ## 4. For the operator
 
-1. Approve this design (P2-1 … P2-10), or change it.
-2. Approve **SPEC D24** (backups in albums) — P2-7 is written for it; without
-   it the background tasks are one part each (~5× slower for small photos).
-3. P2-9: HEVC on phones that cannot play it — "say so and offer the
-   download" (the default here), or an H.264 copy made at upload.
+1. ~~Approve this design~~ — approved 2026-11-17, with the sign-in screen
+   changed (P2-2).
+2. ~~Approve SPEC D24~~ — approved 2026-11-17.
+3. P2-9: HEVC on phones that cannot play it — **open**. Immich's own answer
+   is server-side transcoding (below); the operator asked why, and what
+   Immich did, before deciding.
