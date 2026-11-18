@@ -172,16 +172,18 @@ Detailed: `plans/P1-core.md` (design approved 2026-10-29, decisions C1–C11).
 
 ## P2 — Photos on the core
 
-Design: `plans/P2-photos.md` (Part 1, awaiting the operator's approval with
-SPEC D24).
+Design: `plans/P2-photos.md` (Part 1 approved by the operator 2026-11-17,
+with SPEC D24; Part 2 written task by task).
 
-- [ ] **2.1** Identity — iOS bundle ids `uz.daemonclient.photos*`; signing
-      with the operator's Apple ID for device builds; the Immich identity still
-      left (`CFBundleName` `immich_mobile`, the Share Extension and Widget names,
-      Android `notification_icon.png`). Home-screen names and app icons were
-      done in 0.4 (SPEC D20).
-- [ ] **2.2** Sign-in (SPEC D8) — server address, "Sign in with a
-      DaemonClient account", "Create account" in an in-app browser sheet;
+- [x] **2.1** Identity — iOS bundle ids `uz.daemonclient.photos*`, the app
+      group, background-task ids, Immich's signing team and web domain gone;
+      the Immich names left (`CFBundleName`, the Share Extension and Widget
+      names, Android's notification icon, channel and Recents title).
+      Home-screen names and app icons were done in 0.4 (SPEC D20). **Device
+      signing (the operator's Apple ID) → carried to 2.6.**
+- [ ] **2.2** Sign-in (SPEC D8, changed 2026-11-17) — one form for
+      everyone: server address (always shown, the hosted one filled in),
+      email, password, and "Create account" in an in-app browser sheet;
       `workerUrl`; secrets to secure storage.
 - [ ] **2.3** Media through the local server — thumbnails, photos, video, on
       iOS and Android.
@@ -194,9 +196,10 @@ SPEC D24).
 - [ ] **2.6** Background upload — the core's prepared bodies (parts, and
       albums under D24) handed to the background uploader straight to
       Telegram (SPEC D22, P2-7); verified on a real iPhone and Android.
-- [ ] **2.7** HEIC and video on Android — native HEIC decode (Android 9+),
-      thumbnail-quality on Android 8; HEVC playback with the H.264 rendition
-      fallback.
+      **First step: device signing with the operator's Apple ID** (from 2.1).
+- [ ] **2.7** HEIC and video — the HEIC original on Android 9+, the preview on
+      Android 8; the 720p H.264 copy made on the uploading phone and the
+      playback choice by what the device decodes (SPEC §5.1, P2-9).
 - [ ] **2.8** Live photos, EXIF/GPS, `deviceAssetId` dedupe.
 - [ ] **2.9** Account deletion entry (Apple requirement).
 - [ ] **2.10** Remove unused Immich features (approved list).

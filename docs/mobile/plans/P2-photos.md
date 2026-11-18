@@ -135,7 +135,7 @@ account deletion needs the accounts portal's flow (Linux; asked since 10-31).
 | 2.4 | Thumbnail, preview, thumbhash, EXIF made at upload (P2-5) | the pictures and EXIF of a JPEG, a HEIC and a video match the platform's own |
 | 2.5 | Foreground upload through the core (P2-6) | JPEG, HEIC, a live photo and a >100 MB video, each read back byte-identical and open on the website |
 | 2.6 | Background upload (P2-7) | a backup of the test set finishes with the app in the background, on a real iPhone and on Android |
-| 2.7 | HEIC on Android; the H.264 copy and the playback choice (P2-9) | HEIC opens on Android 9+; an iPhone HDR video plays as the original on iPhone and Safari, as the copy on an Android without HEVC and in Chrome without it |
+| 2.7 | HEIC on Android (the original on Android 9+, which decodes HEIC; the preview on Android 8, which never downloads the HEIC original it cannot draw); the H.264 copy and the playback choice (P2-9) | HEIC opens on Android 9+; an iPhone HDR video plays as the original on iPhone and Safari, as the copy on an Android without HEVC and in Chrome without it |
 | 2.8 | Live photos, EXIF/GPS, dedupe checks | a live photo plays; the map shows the photo; a re-backup sends nothing |
 | 2.9 | Account deletion entry (Apple 5.1.1(v)) | leads to the portal's deletion |
 | 2.10 | Remove unused Immich features (approved list) | the app still builds and passes 2.11 |
@@ -158,3 +158,94 @@ iPhone (a free 7-day build with their Apple ID, P0).
 4. **R2 contract (Linux, 2026-11-17):** the core must **always** send `exif`
    (`{}` when the engine found nothing) — the worker uses its presence to
    skip its own EXIF download. Done in 2.4.
+
+---
+
+# Part 2 — the tasks, each written before its code
+
+## Task 2.1 — Identity
+
+**Delivers:** the app is DaemonClient Photos to the system on both platforms:
+no Immich bundle id, app group, background-task id, signing team, verified
+web domain or user-visible name is left. Read from the fork 2026-11-18:
+
+| What | Where | Today | Becomes |
+|---|---|---|---|
+| iOS bundle ids (Release / Debug / Profile × app, ShareExtension, Widget — 9) | `ios/Runner.xcodeproj/project.pbxproj` | `app.alextran.immich*`, `app.futo.immich.{debug,profile}*` | `uz.daemonclient.photos`, `.debug`, `.profile`, each `+ .ShareExtension` / `.Widget` (Android's id is already `uz.daemonclient.photos`) |
+| App group (app ↔ extensions) | pbxproj `CUSTOM_GROUP_ID` (×6, *found by the check*), 4 entitlements files, `Runner/Core/URLSessionManager.swift:7`, `WidgetExtension/ImmichAPI.swift:5`, `lib/constants/constants.dart:33` | `group.app.immich.share` | `group.uz.daemonclient.photos` — all seven together |
+| Background task ids | `Runner/Info.plist:9-10`, `Runner/Background/BackgroundWorkerApiImpl.swift:25-26` (+ comments in `BackgroundWorker.swift`) | `app.alextran.immich.background.*` | `uz.daemonclient.photos.background.*` |
+| `CFBundleName` | `Runner/Info.plist:77` | `immich_mobile` | `Photos` |
+| Extension names (the share sheet shows the first) | pbxproj `INFOPLIST_KEY_CFBundleDisplayName` (3 + 3) | `ShareExtension`, `Widget` | `Photos` |
+| Verified web links to Immich's domain | `Runner.entitlements`, `RunnerProfile.entitlements` (`applinks:my.immich.app`); Android `AndroidManifest.xml:100-122` (`autoVerify` for `my.immich.app`) | claimed | removed (our domain's links come with P4) |
+| Signing team | pbxproj `DEVELOPMENT_TEAM = 2W7AC6T8T5` (×9 — Immich's team) | Immich's | removed; device builds use the operator's team, chosen in Xcode at the device step |
+| Widget text | `WidgetExtension/widgets/MemoryWidget.swift:168`, `ImmichAPI.swift:25,28` | "…from Immich", "Login to Immich", "…your Immich instance" | "See your memories.", "Sign in to Photos", "Unable to connect to your server" |
+| Android notification icon | `res/drawable-*/notification_icon.png` | Immich's | the approved icon's monochrome silhouette (`ic_launcher_monochrome`), 24 dp at each density |
+| Client certificate's keychain label *(found by the check)* | `URLSessionManager.swift:4` | `app.alextran.immich.client_identity` | `uz.daemonclient.photos.client_identity` |
+| Android names on system surfaces *(found by Gate 3)* | `BackgroundWorker.kt:72` (the notification channel's name), `lib/main.dart:241` (the task label in Recents / TalkBack), widget text (`strings.xml`, `PhotoWidget.kt`, `RandomConfigure.kt`) | "immich::background_worker::notif", "Immich", "…Immich…" | "Backup", "Photos", "Sign in to Photos" |
+
+**Not in 2.1, recorded:** the Kotlin package `app.alextran.immich` (internal,
+not seen by users; renaming it is a large diff against upstream — the Dart
+widget receiver names in `constants.dart:42-43` follow it), the `immich://` and `app.immich`
+URL schemes and the Dart links to immich.app (OAuth and Immich links go with
+2.10's approved removal list), and **the widgets**: they fetch pictures from
+the worker's byte routes, which D23 retires — keep them (the app would put a
+few thumbnails in the app group for them) or remove them is a 2.10 question
+for the operator.
+
+**Device signing — carried to Task 2.6** (decided at Gate 3: 2.1's Gate 2
+is the Simulator and Android, and 2.6 cannot pass without a real iPhone):
+with a free Apple ID (P0), on the operator's iPhone, at their next session at
+the Mac and no later than the start of 2.6. A free personal team may refuse
+the App Groups capability; then the device build needs the group removed from
+`Runner.entitlements` too (not only the extensions left out) until the paid
+account (D21).
+
+- [x] **Step 1:** a check that fails first — `mobile/tools/check-identity.sh`
+  (run in `mobile-build` CI): none of the old ids, group, team or domain in
+  the iOS and Android projects; the app group the same in the four
+  entitlements, the two Swift files and the Dart constant.
+- [x] **Step 2:** the changes above; the check passes; `flutter analyze` on
+  the touched Dart.
+- [x] **Step 3: Gate 2** — `flutter build ios --simulator` and
+  `flutter build apk --debug`: the built app's bundle ids, app-group
+  entitlement and names read back from the products (`plutil`,
+  `codesign -d --entitlements`, `aapt2 dump badging`); the app installs and
+  starts on the iOS Simulator and the Android emulator.
+- [x] **Step 4:** Gate 3 (one reviewer at a time); commit code, then docs.
+
+**As built (Task 2.1):**
+- The check found two rows the first table lacked (`CUSTOM_GROUP_ID`, the
+  keychain label) and Gate 3 two Android names (the notification channel,
+  the Recents title); all are in the table now. The Dart widget receiver names
+  (`constants.dart:42-43`) follow the Kotlin package and stay.
+- Android widget text also changed (Gate 3): "See your memories.", "Sign in
+  to Photos", "Sign in to Photos to set up this widget."
+- Gate 3 security: 0 HIGH, 2 MEDIUM (the check passed silently when a listed
+  file was missing; it did not check `CUSTOM_GROUP_ID`'s value — both fixed
+  and shown to fail on a copy with a missing file and with one typo), 5 LOW
+  (Android widget text — fixed; fixed-string matching and `bash` in CI —
+  fixed; `Podfile.lock`: the bridge's version 0.0.1 → 0.1.0, stale since
+  1.x, committed; the rest below).
+- **For 2.10's removal list (operator):** Immich's fastlane folders
+  (`ios/fastlane`, `android/fastlane`: Immich's bundle id, team and Apple ID —
+  running them would put Immich's identity back); the `immich://` scheme
+  (now that both apps can be installed side by side, iOS may open either);
+  the OAuth `app.immich` callback; the Dart links to immich.app; the widgets
+  (their data path).
+- A local Android build after the 10-27 disk clean-up had no `libsqlite3.so`
+  (the app stops at start: "library libsqlite3.so not found"): `build/` was
+  deleted but `.dart_tool`'s hook cache kept, so Flutter never rewrote
+  `build/native_assets/android`. CI's APK of `main` has it for all three
+  ABIs. Fix: `flutter clean` before building after deleting `build/` by hand.
+- Gate 3 spec: 0 HIGH, 3 MEDIUM (the two Android names above — fixed; the
+  check did not confirm the Android application id or all nine iOS bundle
+  ids, and banned `app.alextran.immich` in the manifest whose class names
+  keep that package — now it checks both ids positively and bans only the
+  domain there; device signing could be lost — carried to 2.6 above), LOW
+  fixed (table layout, stale PLAN rows, the 2.7 wording).
+- **For P4's rename (D21: "DaemonClient Photos" in the store):** 2.1 put
+  "Photos" in the pbxproj display names (×6), `ImmichAPI.swift:25`,
+  `PhotoWidget.kt:102`, `RandomConfigure.kt:147`, `main.dart:241` and the
+  Android channel name. The Android share label is "Upload to DaemonClient"
+  (`AndroidManifest.xml`) and the iOS share sheet shows "Photos" — the
+  operator settles the naming at P4.
