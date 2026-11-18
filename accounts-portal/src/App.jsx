@@ -2977,9 +2977,10 @@ function AuthOnly({ children, allowedStage }) {
 // that session after Turnstile, so when it is missing (or belongs to another
 // account) the visitor confirms once here.
 // The update service marks an account whose cloud can't be updated until its
-// owner reconnects Cloudflare: signing in then shows the dashboard's notice
-// instead of going straight back to an app. A slow or failed read never holds
-// up sign-in.
+// owner reconnects Cloudflare: signing in with the form then shows the
+// dashboard's notice instead of going straight back to an app. Only there: the
+// dashboard's own app links pass through ContinueToApp, so diverting that
+// would loop. A slow or failed read never holds up sign-in.
 async function needsReconnect(uid) {
   if (IS_SELF_HOST) return false
   const read = db.collection(configPath(uid)).doc('cloudflare').get()
@@ -2989,7 +2990,6 @@ async function needsReconnect(uid) {
 }
 
 function ContinueToApp({ user, returnUrl }) {
-  const navigate = useNavigate()
   const [needsCheck, setNeedsCheck] = useState(false)
   const [turnstileToken, setTurnstileToken] = useState('')
   const [error, setError] = useState('')
@@ -2999,10 +2999,6 @@ function ContinueToApp({ user, returnUrl }) {
   useEffect(() => {
     let cancelled = false
     ;(async () => {
-      if (await needsReconnect(user.uid)) {
-        if (!cancelled) navigate('/dashboard', { replace: true })
-        return
-      }
       try {
         const res = await fetch(`${AUTH_WORKER}/check-session`, { credentials: 'include' })
         const data = await res.json().catch(() => null)
@@ -3015,7 +3011,7 @@ function ContinueToApp({ user, returnUrl }) {
       if (!cancelled) setNeedsCheck(true)
     })()
     return () => { cancelled = true }
-  }, [returnUrl, user.email, user.uid, navigate])
+  }, [returnUrl, user.email])
 
   const onContinue = async () => {
     if (!turnstileToken) { setError('Please complete the verification below.'); return }
