@@ -438,16 +438,25 @@ async function handleOAuthExchange(request: Request, env: Env): Promise<Response
     const accessToken: string = tokenData.access_token;
     const refreshToken: string | undefined = tokenData.refresh_token;
 
-    // 2) which account did the user grant access to?
-    const accountId = await getCloudflareAccountId(accessToken);
+    // 2) which account did the user grant access to? Reconnecting an existing
+    // cloud must use the account that holds its database: another account
+    // would get a new, empty cloud and the user's index would vanish. So the
+    // old config must be read for sure (a failed read is not "no config").
+    let priorCfg: Record<string, string> | null;
+    try {
+      priorCfg = (await readWorkerConfig(uid, idToken, env, { strict: true }))?.cfg ?? null;
+    } catch {
+      return corsResponse(JSON.stringify({ error: 'Could not check your current setup. Please try again in a minute.' }), { status: 503 });
+    }
+    const granted = await getCloudflareAccountIds(accessToken);
+    const accountId = priorCfg?.accountId && granted.includes(priorCfg.accountId) ? priorCfg.accountId : granted[0];
     if (!accountId) {
       return corsResponse(JSON.stringify({ error: 'Could not read your Cloudflare account — make sure you approved account access.' }), { status: 502 });
     }
 
-    // 3) provision (reuses the exact paste-flow provisioning). Reconnecting an
-    // existing cloud must use the account that holds its database: another
-    // account would get a new, empty cloud and the user's index would vanish.
-    const priorCfg = await fetchWorkerConfig(uid, idToken, env).catch(() => null);
+    // 3) provision (reuses the exact paste-flow provisioning). The paste flow
+    // stays unguarded on purpose: it is the way out for someone who lost the
+    // old account (it builds a new, empty cloud).
     if (priorCfg?.accountId && priorCfg.accountId !== accountId) {
       return corsResponse(JSON.stringify({
         error: 'Please connect the same Cloudflare account you used before. Your cloud and its index live there.',
@@ -558,21 +567,22 @@ export async function handleAttachProcessor(request: Request, env: Env): Promise
   }
 }
 
-// The OAuth access token is scoped to the single account the user picked on the
-// consent screen, so /accounts returns exactly that one.
-async function getCloudflareAccountId(accessToken: string): Promise<string | null> {
+// The accounts the OAuth access token was granted (usually the one the user
+// picked on the consent screen).
+async function getCloudflareAccountIds(accessToken: string): Promise<string[]> {
   const res = await fetch('https://api.cloudflare.com/client/v4/accounts', {
     headers: { 'Authorization': `Bearer ${accessToken}` },
   });
-  if (!res.ok) return null;
+  if (!res.ok) return [];
   const data = await res.json() as any;
-  return data.result?.[0]?.id || null;
+  return Array.isArray(data.result) ? data.result.map((a: any) => a?.id).filter((id: unknown) => typeof id === 'string' && id) : [];
 }
 
 // Refresh an OAuth access token (public client → no secret). Cloudflare may
 // rotate the refresh token, so we return the new one when present. On failure,
 // `detail` is Cloudflare's status and OAuth error code (never a token), and
-// `definitive` says whether Cloudflare refused it (4xx) rather than failed.
+// `definitive` says whether Cloudflare refused the grant itself (invalid_grant:
+// revoked or expired), which only a reconnect fixes; anything else may pass.
 type Refreshed = { accessToken: string; refreshToken?: string } | { failed: true; detail: string; definitive: boolean };
 async function refreshCloudflareToken(refreshToken: string): Promise<Refreshed> {
   let res: Response;
@@ -592,7 +602,7 @@ async function refreshCloudflareToken(refreshToken: string): Promise<Refreshed> 
   const data = await res.json().catch(() => ({})) as any;
   if (!res.ok || !data.access_token) {
     const code = typeof data.error === 'string' && /^[a-z_]{1,64}$/.test(data.error) ? ` ${data.error}` : '';
-    return { failed: true, detail: `${res.status}${code}`, definitive: res.status >= 400 && res.status < 500 };
+    return { failed: true, detail: `${res.status}${code}`, definitive: data.error === 'invalid_grant' };
   }
   return { accessToken: data.access_token, refreshToken: data.refresh_token };
 }
@@ -756,7 +766,9 @@ async function updateUserWorker(
         if (refreshed.definitive && cfg.updateBlocked !== 'reconnect') {
           await saveWorkerConfig(uid, {
             updateBlocked: 'reconnect', updateBlockedReason: refreshed.detail, updateBlockedAt: new Date().toISOString(),
-          }, env, idToken, { onlyFields: UPDATE_BLOCKED_FIELDS }).catch((e) => console.error('[auto-update] could not record the reconnect mark:', e?.message));
+          }, env, idToken, { onlyFields: UPDATE_BLOCKED_FIELDS, ifUpdateTime: read?.updateTime })
+            // A reconnect (or a newer token) since our read makes this mark stale: skip it.
+            .catch((e) => console.error('[auto-update] reconnect mark not recorded:', e?.message));
         }
         return { status: 200, body: { updated: false, reason: 'refresh-failed', detail: refreshed.detail } };
       }
@@ -1019,10 +1031,12 @@ async function fetchWorkerConfig(uid: string, idToken: string, env: Env): Promis
 
 // The config plus the document's version (`updateTime`), for a write that must
 // only land if nobody else wrote in between (see handleAutoUpdate).
-async function readWorkerConfig(uid: string, idToken: string, env: Env): Promise<{ cfg: Record<string, string>; updateTime?: string } | null> {
+// strict: a failed read throws instead of looking like "no config".
+async function readWorkerConfig(uid: string, idToken: string, env: Env, opts: { strict?: boolean } = {}): Promise<{ cfg: Record<string, string>; updateTime?: string } | null> {
   const path = `artifacts/default-daemon-client/users/${uid}/config/cloudflare`;
   const url = `https://firestore.googleapis.com/v1/projects/${env.FIREBASE_PROJECT_ID}/databases/(default)/documents/${path}`;
   const res = await fetch(url, { headers: { 'Authorization': `Bearer ${idToken}` } });
+  if (opts.strict && !res.ok && res.status !== 404) throw new Error(`config read failed: ${res.status}`);
   if (!res.ok) return null;
   const data = await res.json() as any;
   if (!data.fields) return null;

@@ -11,7 +11,7 @@ const env = {
 } as any;
 
 type Call = { url: string; method: string; body?: string };
-function stub(cfg: Record<string, string>, token: { status: number; body: any }, account = 'acc') {
+function stub(cfg: Record<string, string> | null, token: { status: number; body: any }, accounts: string | string[] = 'acc', readStatus = 200) {
   const calls: Call[] = [];
   vi.stubGlobal('fetch', async (input: any, init: RequestInit = {}) => {
     const url = typeof input === 'string' ? input : input.url;
@@ -19,11 +19,13 @@ function stub(cfg: Record<string, string>, token: { status: number; body: any },
     calls.push({ url, method, body: typeof init.body === 'string' ? init.body : undefined });
     if (url.includes('identitytoolkit.googleapis.com')) return new Response(JSON.stringify({ users: [{ localId: 'uid1', email: 'u@example.com' }] }));
     if (url.includes('firestore.googleapis.com') && method === 'GET') {
+      if (readStatus !== 200) return new Response('{}', { status: readStatus });
+      if (!cfg) return new Response('{"error":{"status":"NOT_FOUND"}}', { status: 404 });
       return new Response(JSON.stringify({ fields: Object.fromEntries(Object.entries(cfg).map(([k, v]) => [k, { stringValue: v }])), updateTime: '2026-11-18T08:00:00.000000Z' }));
     }
     if (url.includes('firestore.googleapis.com') && method === 'PATCH') return new Response('{}');
     if (url.startsWith('https://dash.cloudflare.com/oauth2/token')) return new Response(JSON.stringify(token.body), { status: token.status });
-    if (url === 'https://api.cloudflare.com/client/v4/accounts') return new Response(JSON.stringify({ result: [{ id: account }] }));
+    if (url === 'https://api.cloudflare.com/client/v4/accounts') return new Response(JSON.stringify({ result: [accounts].flat().map((id) => ({ id })) }));
     if (url.includes('api.cloudflare.com')) return new Response(JSON.stringify({ success: true, result: {} }));
     return new Response('{}');
   });
@@ -48,13 +50,22 @@ describe('a renewal Cloudflare refuses', () => {
     expect(fields(save).updateBlocked?.stringValue).toBe('reconnect');
     expect(fields(save).updateBlockedReason?.stringValue).toBe('400 invalid_grant');
     expect(mask(save).sort()).toEqual(['updateBlocked', 'updateBlockedAt', 'updateBlockedReason']);
+    // Only onto the version this run read: a reconnect since then wins.
+    expect(new URL(save.url).searchParams.get('currentDocument.updateTime')).toBe('2026-11-18T08:00:00.000000Z');
     expect(save.body).not.toMatch(/refresh|access/);
     expect(calls.some((c) => c.url.includes('api.cloudflare.com/client/v4/accounts/'))).toBe(false);
   });
-  it('a temporary failure (Cloudflare down) marks nothing', async () => {
-    const calls = stub(await oauthCfg(), { status: 503, body: {} });
-    const res = await autoUpdate();
-    expect(await res.json()).toMatchObject({ updated: false, reason: 'refresh-failed' });
+  for (const [what, status, body] of [['Cloudflare down', 503, {}], ['rate-limited', 429, { error: 'slow_down' }], ['a challenge page', 403, {}], ['our client broken', 401, { error: 'invalid_client' }]] as const) {
+    it(`anything but a refused grant (${what}) marks nothing`, async () => {
+      const calls = stub(await oauthCfg(), { status, body });
+      const res = await autoUpdate();
+      expect(await res.json()).toMatchObject({ updated: false, reason: 'refresh-failed' });
+      expect(patches(calls)).toEqual([]);
+    });
+  }
+  it('an account already marked is not written again', async () => {
+    const calls = stub(await oauthCfg({ updateBlocked: 'reconnect' }), { status: 400, body: { error: 'invalid_grant' } });
+    await autoUpdate();
     expect(patches(calls)).toEqual([]);
   });
 });
@@ -75,6 +86,26 @@ describe('reconnecting', () => {
     method: 'POST', headers: { Authorization: 'Bearer user-id-token', 'Content-Type': 'application/json' },
     body: JSON.stringify({ code: 'c', codeVerifier: 'v', redirectUri: 'https://accounts.daemonclient.uz/setup/cloudflare/callback' }),
   }), env);
+  const built = (calls: Call[]) => calls.filter((c) => c.url.includes('api.cloudflare.com/client/v4/accounts/'));
+  it('when the current setup cannot be read, stops before anything is built or saved', async () => {
+    const calls = stub(await oauthCfg(), { status: 200, body: { access_token: 'a', refresh_token: 'r' } }, 'another-account', 500);
+    const res = await exchange();
+    expect(res.status).toBe(503);
+    expect([patches(calls), built(calls)]).toEqual([[], []]);
+  });
+  it('a first setup (no config yet) goes ahead', async () => {
+    const calls = stub(null, { status: 200, body: { access_token: 'a', refresh_token: 'r' } }, 'new-account');
+    const res = await exchange();
+    expect([409, 503]).not.toContain(res.status);
+    expect(built(calls).length).toBeGreaterThan(0);
+  });
+  it('with several accounts granted, uses the one that holds the cloud', async () => {
+    const calls = stub(await oauthCfg(), { status: 200, body: { access_token: 'a', refresh_token: 'r' } }, ['other', 'acc']);
+    const res = await exchange();
+    expect(res.status).not.toBe(409);
+    expect(built(calls).every((c) => c.url.includes('/accounts/acc/'))).toBe(true);
+    expect(built(calls).length).toBeGreaterThan(0);
+  });
   it('with a different Cloudflare account is refused before anything is built or saved', async () => {
     const calls = stub(await oauthCfg(), { status: 200, body: { access_token: 'a', refresh_token: 'r' } }, 'another-account');
     const res = await exchange();
