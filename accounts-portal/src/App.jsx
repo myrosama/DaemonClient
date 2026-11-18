@@ -425,7 +425,9 @@ function LoginPage() {
 
       // Only ever our own pages — `return_url` comes from the address bar.
       const params = new URLSearchParams(window.location.search)
-      const returnUrl = safeReturnUrl(params.get('return_url')) || '/dashboard'
+      const returnUrl = (await needsReconnect(userCredential.user.uid))
+        ? '/dashboard'
+        : safeReturnUrl(params.get('return_url')) || '/dashboard'
 
       // Create cross-domain session (non-blocking — Firebase Auth handles core auth)
       try {
@@ -2974,7 +2976,20 @@ function AuthOnly({ children, allowedStage }) {
 // in goes straight back to it, with the shared session. The hub only creates
 // that session after Turnstile, so when it is missing (or belongs to another
 // account) the visitor confirms once here.
+// The update service marks an account whose cloud can't be updated until its
+// owner reconnects Cloudflare: signing in then shows the dashboard's notice
+// instead of going straight back to an app. A slow or failed read never holds
+// up sign-in.
+async function needsReconnect(uid) {
+  if (IS_SELF_HOST) return false
+  const read = db.collection(configPath(uid)).doc('cloudflare').get()
+    .then((snap) => snap.data()?.updateBlocked === 'reconnect')
+    .catch(() => false)
+  return Promise.race([read, new Promise((resolve) => setTimeout(() => resolve(false), 3000))])
+}
+
 function ContinueToApp({ user, returnUrl }) {
+  const navigate = useNavigate()
   const [needsCheck, setNeedsCheck] = useState(false)
   const [turnstileToken, setTurnstileToken] = useState('')
   const [error, setError] = useState('')
@@ -2984,6 +2999,10 @@ function ContinueToApp({ user, returnUrl }) {
   useEffect(() => {
     let cancelled = false
     ;(async () => {
+      if (await needsReconnect(user.uid)) {
+        if (!cancelled) navigate('/dashboard', { replace: true })
+        return
+      }
       try {
         const res = await fetch(`${AUTH_WORKER}/check-session`, { credentials: 'include' })
         const data = await res.json().catch(() => null)
@@ -2996,7 +3015,7 @@ function ContinueToApp({ user, returnUrl }) {
       if (!cancelled) setNeedsCheck(true)
     })()
     return () => { cancelled = true }
-  }, [returnUrl, user.email])
+  }, [returnUrl, user.email, user.uid, navigate])
 
   const onContinue = async () => {
     if (!turnstileToken) { setError('Please complete the verification below.'); return }
