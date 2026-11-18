@@ -2,8 +2,11 @@
 
 **For the operator and the Linux machine.** Direction from the operator
 (2026-11-18): "rewrite the core for Photos too, then potentially Drive too,
-with this Rust logic where it's not worker heavy." This is the plan; nothing
-here is built. Written on the MacBook from the code as it is on `main`
+with this Rust logic where it's not worker heavy." **Approved by the
+operator 2026-11-18 (SPEC D25), with the order changed:** "focus on your work,
+finalize the mobile apps; we optimize and rebuild the websites after these
+works are finished — you two will be building that together." Nothing here is
+built yet. Written on the MacBook from the code as it is on `main`
 (`2aff3f6`) and the Linux machine's NOW.md of 2026-11-17.
 
 ---
@@ -118,12 +121,23 @@ Linux machine's.
 | **DE** | Linux | Drive phase 3's "shared scheduler module" **is** the engine's scheduler (wasm), not a new TypeScript module. Drive phase 4's writes go on the engine's upload queue. | E2 (E3 for writes) |
 | **P3** | Mac | The Drive app, native on `dc-core`. | P2 |
 
-**Order on the Mac:**
-1. P2 2.1–2.4: identity, sign-in, media through the local server, the
-   phone-made pictures. None of these depend on the engine.
-2. E1 → E2 → E3.
-3. P2 2.5 onwards (uploads), on the engine's queue, so that D24 is written
-   once.
+**Order (operator, 2026-11-18):**
+1. **The mobile apps first.** On the Mac:
+   - P2 2.1–2.4: identity, sign-in, media through the local server, the
+     phone-made pictures;
+   - then **E1** (the split) and **E3** (D24's queue in the engine), because
+     the apps' uploads are built on them;
+   - then P2 2.5 onwards, and P3 (the Drive app).
+
+   On Linux, only what the apps need from the worker: R2 (approved), and
+   `telegramPlaybackChunks` on `clientUpload`. The rest of L0 waits, unless
+   the operator says otherwise.
+2. **Then the websites, together:**
+   - **E2** (the wasm build);
+   - **WE** (the Photos website on the engine) and **DE** (Drive on the
+     engine);
+   - the remaining tutorial items, rebuilt and optimised with the Linux
+     machine.
 
 ---
 
