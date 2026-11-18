@@ -249,3 +249,76 @@ account (D21).
   Android channel name. The Android share label is "Upload to DaemonClient"
   (`AndroidManifest.xml`) and the iOS share sheet shows "Photos" — the
   operator settles the naming at P4.
+
+---
+
+## Task 2.2 — Sign-in through the core (D8)
+
+**Delivers** (SPEC D8 as changed 2026-11-17, P2-2): **one form for
+everyone** — server address (always shown, the hosted address filled in),
+email, password, a **Sign in** button and **Create account**. The core signs
+in; Immich's own machinery is then handed the result, so its sync, websocket
+and API keep working unchanged and finally reach the per-user worker.
+
+**Read from the fork (2026-11-18):**
+- Today's screen is two steps (address → **Next** → email/password), with
+  `/.well-known/immich` discovery (`api.service.dart:98-152`) — the central
+  address answers `{}` there, which is why the hosted path never found the
+  worker (RESEARCH §7 part 2).
+- Immich authenticates its native HTTP with the **`immich_access_token`
+  cookie**: `NetworkRepository.setHeaders(…, token:)` →
+  `setRequestHeaders` (iOS `NetworkApiImpl.swift:64`, Android
+  `HttpClientManager.kt:255`) writes it for the server's host; the worker
+  accepts that cookie (`relay-policy.ts:50`) and `Authorization: Bearer`.
+- `auth.provider.dart:81 login` → `saveAuthInfo(accessToken)` stores the
+  token in Immich's `Store`, writes the widget's credentials, fetches the
+  user (`/api/users/me`) and marks the app signed in.
+
+**Flow:**
+1. The core picks the deployment from the address: the hosted address
+   (`api.daemonclient.uz`, however typed) → hosted (the reply names the
+   per-user worker); anything else → self-hosted (that server is the worker).
+   A new `session::deployment_of(address)`, tested.
+2. Bridge (`dc_core_flutter`, FRB): `sign_in(address, email, password) →
+   {workerUrl, token, userId, email, name}`, `restore(…)`, `sign_out()`; the
+   core's error text is shown as is (wrong email or password, no server at
+   that address, account not set up yet, can't reach the server).
+3. Dart, after a sign-in: `serverEndpoint = workerUrl + "/api"` (no
+   `.well-known` lookup), the API client pointed there,
+   `NetworkRepository.setHeaders(…, [workerUrl], token: token)` (the
+   cookie), then Immich's own `saveAuthInfo(accessToken: token)`.
+4. The session (worker URL, token, user id, email, name) goes to secure
+   storage (`flutter_secure_storage`: Keychain / Keystore — the fork already
+   uses it for the PIN); at app start the core is `restore`d from it. Sign-out
+   deletes it and signs the core out (which also clears its caches and
+   uploads, P1).
+5. **Create account** opens `https://accounts.daemonclient.uz/signup` in an
+   in-app browser sheet (`url_launcher` `inAppBrowserView`:
+   SFSafariViewController / Custom Tabs — no new dependency). After sign-up
+   and setup there the user comes back and signs in (D8). For a self-hosted
+   address: the same link until self-hosting has its own sign-up.
+
+**Not in 2.2:** OAuth and demo login disappear from this screen (the form
+no longer asks the server for its features first); their code goes with
+2.10's list. **Known, recorded:** Immich's `Store` keeps its own copy of the
+token in the app's private database, as upstream does (its API client and
+background isolates read it there); the core's copy is in secure storage.
+Moving Immich's reads to secure storage is a later hardening, not 2.2.
+
+- [ ] **Step 1:** tests first, failing: `deployment_of` (the hosted address
+  with and without scheme, `/api`, trailing slash, capitals → hosted; other
+  hosts, a private-network `http://` → self-hosted; junk → refused); a
+  widget test of the form (the three fields, the hosted address filled in,
+  Sign in disabled until all three are filled, Create account opens the
+  sign-up URL); the session's round trip through secure storage (a fake
+  storage).
+- [ ] **Step 2:** implement; regenerate the bridge (`flutter_rust_bridge_codegen
+  generate`); Rust and Dart tests, clippy, `flutter analyze`.
+- [ ] **Step 3: Gate 2** — the **operator** signs in by hand on the iOS
+  Simulator and the Android emulator with the test account (the password is
+  never typed by me): the library loads from the worker; a wrong password
+  and a wrong address show their messages; quitting and reopening stays
+  signed in (restored from secure storage); signing out returns to the form
+  and empties the stored session. Create account opens the sign-up page in
+  the sheet.
+- [ ] **Step 4:** Gate 3 (one reviewer at a time); commit code, then docs.
