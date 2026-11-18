@@ -1022,6 +1022,26 @@ type UploadFlight = { promise: Promise<Response | null>; resolve: (r: Response |
 const inFlightAssetUploads = new Map<string, UploadFlight>();
 export type FlightHolder = { key: string };
 
+// A client upload's playback copy: a JSON list of parts plus its plaintext size,
+// as the stored JSON {size, chunks}, or null if either is missing or malformed
+// (the readers need the size for range requests). Never throws.
+export function clientPlayback(rawChunks: unknown, rawSize: unknown): string | null {
+  if (typeof rawChunks !== 'string' || typeof rawSize !== 'string' || rawChunks.length > 65536) return null;
+  const size = Number(rawSize);
+  if (!/^\d+$/.test(rawSize) || !Number.isSafeInteger(size) || size <= 0) return null;
+  let parts: any;
+  try { parts = JSON.parse(rawChunks); } catch { return null; }
+  if (!Array.isArray(parts) || parts.length === 0 || parts.length > 1000) return null;
+  const chunks = [];
+  for (const p of parts) {
+    if (!p || typeof p !== 'object' || !Number.isSafeInteger(p.index) || p.index < 0
+      || typeof p.file_id !== 'string' || !/^[A-Za-z0-9_-]{1,256}$/.test(p.file_id)
+      || (p.message_id !== undefined && !(Number.isSafeInteger(p.message_id) && p.message_id > 0))) return null;
+    chunks.push(p.message_id !== undefined ? { index: p.index, message_id: p.message_id, file_id: p.file_id } : { index: p.index, file_id: p.file_id });
+  }
+  return JSON.stringify({ size, chunks });
+}
+
 async function handleUpload(request: Request, env: Env, uid: string, idToken: string): Promise<Response> {
   const size = parseInt(request.headers.get('Content-Length') || '0', 10) || 8 * 1024 * 1024;
   const start = Date.now();
@@ -1318,6 +1338,7 @@ async function handleUploadImpl(request: Request, env: Env, uid: string, idToken
     let encryptionMode = isEncryptedByServer ? 'server' : 'off';
     let thumbEncrypted = false;
     let telegramPreviewId: string | null = null;
+    let telegramPlaybackChunks: string | null = null;
     let clientSentExif = false;
     let pendingThumbGen: any = null;
 
@@ -1335,6 +1356,9 @@ async function handleUploadImpl(request: Request, env: Env, uid: string, idToken
         // is dropped, never a failed upload.
         const previewId = formData.get('telegramPreviewId');
         if (typeof previewId === 'string' && /^[A-Za-z0-9_-]{1,256}$/.test(previewId)) telegramPreviewId = previewId;
+        // The phone's 720p H.264 copy of a video other players can't show
+        // (SPEC P2-9), stored as {size, chunks} like the server-made one.
+        telegramPlaybackChunks = clientPlayback(formData.get('telegramPlaybackChunks'), formData.get('playbackSize'));
         const sent = clientExif(formData.get('exif'));
         if (sent) {
           exif = sent;
@@ -1685,6 +1709,7 @@ async function handleUploadImpl(request: Request, env: Env, uid: string, idToken
       // every rendition with the same key). Readers decide by encryptionMode;
       // this column is a record.
       telegramPreviewId: telegramPreviewId || undefined,
+      telegramPlaybackChunks: telegramPlaybackChunks || undefined,
       previewEncrypted: telegramPreviewId ? (encryptionMode === 'server' || encryptionMode === 'client' ? 1 : 0) : undefined,
       thumbhash: thumbhash || undefined,
       livePhotoVideoId: livePhotoVideoId || undefined,

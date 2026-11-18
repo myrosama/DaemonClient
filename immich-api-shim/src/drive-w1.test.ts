@@ -490,11 +490,19 @@ describe('WebDAV under W1', () => {
       installTelegram((size, n) => (n === 1 ? tooMany(5) : ok(size, n)));
       const { req } = await dav([]);
       const pending = req('PUT', '/dav/new.txt', {}, 'hello');
-      for (let i = 0; i < 20 && sends === 0; i++) await new Promise((r) => setImmediate(r));
-      await vi.advanceTimersByTimeAsync(4000);
-      for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r));
-      expect(sends).toBe(1); // still waiting after 4 of the 5 seconds
-      expect((await settle(pending)).status).toBe(201);
+      let status = 0;
+      try {
+        // On a busy machine the first send takes many ticks; wait for it, not a fixed count.
+        for (let i = 0; i < 5000 && sends === 0; i++) await new Promise((r) => setImmediate(r));
+        expect(sends).toBe(1);
+        await vi.advanceTimersByTimeAsync(4000);
+        for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r));
+        expect(sends).toBe(1); // still waiting after 4 of the 5 seconds
+      } finally {
+        // Always finish the upload, so it can't leak into the next test.
+        status = (await settle(pending)).status;
+      }
+      expect(status).toBe(201);
       expect(sends).toBe(2);
     } finally {
       vi.useRealTimers();

@@ -7,6 +7,7 @@ vi.mock('./cached-config', () => ({
 }));
 
 import { handleAssets } from './assets';
+import { toAssetManifest } from './asset-manifest';
 import { sqliteD1 } from './test-d1';
 import { testSessionToken, testAuthEnv } from './test-session';
 // Another package, so the type check (rootDir = this package) skips this import.
@@ -15,6 +16,9 @@ import { MIGRATION_SQL } from '../../schema/schema.mjs';
 
 async function clientUpload(fields: Record<string, string>) {
   const DB = sqliteD1(MIGRATION_SQL);
+  // The worker adds this column with a once-per-isolate step that an earlier
+  // test in this file has already used up on its own database.
+  await DB.prepare('ALTER TABLE photos ADD COLUMN telegramPlaybackChunks TEXT').run();
   const form = new FormData();
   const base: Record<string, string> = {
     clientUpload: 'true', telegramChunks: JSON.stringify([{ index: 0, message_id: 1, file_id: 'orig' }]),
@@ -60,6 +64,21 @@ describe('a client upload with its own preview and EXIF', () => {
     for (const [lat, lon] of [['41.3', ''], ['', '69.2'], ['91', '69.2'], ['41.3', '181']]) {
       const { row } = await clientUpload({ latitude: lat, longitude: lon });
       expect([row.latitude ?? null, row.longitude ?? null]).toEqual([null, null]);
+    }
+  });
+  it("records the phone's playback copy of a video, which the manifest then offers", async () => {
+    const copy = [{ index: 0, message_id: 7, file_id: 'play-0' }, { index: 1, message_id: 8, file_id: 'play-1' }];
+    const { row } = await clientUpload({ mimeType: 'video/quicktime', fileName: 'IMG_0002.MOV', telegramPlaybackChunks: JSON.stringify(copy), playbackSize: '25000000' });
+    expect(JSON.parse(row.telegramPlaybackChunks)).toEqual({ size: 25000000, chunks: copy });
+    const m = toAssetManifest(row);
+    expect([m.playbackChunks, m.playbackSize]).toEqual([[{ index: 0, file_id: 'play-0' }, { index: 1, file_id: 'play-1' }], 25000000]);
+  });
+  it('a playback copy without a valid size, or with bad parts, is not stored, and the upload still succeeds', async () => {
+    const good = JSON.stringify([{ index: 0, file_id: 'p0' }]);
+    for (const [chunks, size] of [[good, ''], [good, '-5'], [good, '1.5'], ['not json', '10'], ['[]', '10'], [JSON.stringify([{ index: 0, file_id: 'bad id' }]), '10'], [JSON.stringify([{ index: -1, file_id: 'p0' }]), '10'], [JSON.stringify([null]), '10']]) {
+      const { res, row } = await clientUpload({ telegramPlaybackChunks: chunks, playbackSize: size });
+      expect([200, 201]).toContain(res.status);
+      expect(row.telegramPlaybackChunks ?? null).toBeNull();
     }
   });
   it('without EXIF, leaves it for the later check, as before', async () => {
