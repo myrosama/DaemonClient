@@ -459,7 +459,8 @@ async function handleOAuthExchange(request: Request, env: Env): Promise<Response
     // old account (it builds a new, empty cloud).
     if (priorCfg?.accountId && priorCfg.accountId !== accountId) {
       return corsResponse(JSON.stringify({
-        error: 'Please connect the same Cloudflare account you used before. Your cloud and its index live there.',
+        error: 'Please connect the same Cloudflare account you used before. Your cloud and its index live there. '
+          + 'If you no longer have that account, message us at t.me/daemonclient.',
       }), { status: 409 });
     }
     const prov = await provisionWorker(env, uid, accountId, accessToken, priorCfg?.sessionSecret);
@@ -471,7 +472,8 @@ async function handleOAuthExchange(request: Request, env: Env): Promise<Response
       accountId, workerName: prov.workerName, workerUrl: prov.workerUrl,
       databaseName: prov.dbName, databaseId: prov.databaseId,
       sessionSecret: prov.sessionSecret,
-      setupTimestamp: new Date().toISOString(),
+      // A reconnect keeps it, so the dashboard doesn't treat the cloud as new.
+      setupTimestamp: priorCfg?.setupTimestamp || new Date().toISOString(),
       lastDeployedVersion: SHIM_VERSION, autoUpdateEnabled: true,
     };
     if (refreshToken) config.refreshToken = await encryptToken(refreshToken, env.ENCRYPTION_MASTER_KEY);
@@ -611,6 +613,8 @@ async function refreshCloudflareToken(refreshToken: string): Promise<Refreshed> 
 // reconnects Cloudflare (the dashboard shows a banner). Cleared by the next
 // successful update; a reconnect writes a fresh config without them.
 const UPDATE_BLOCKED_FIELDS = ['updateBlocked', 'updateBlockedReason', 'updateBlockedAt'];
+// How long a claimed update keeps other runs off the same refresh token.
+const UPDATE_CLAIM_MS = 2 * 60_000;
 
 // Silently re-deploy the user's per-user worker if its embedded shim version
 // has drifted from the current SHIM_VERSION. Called fire-and-forget from the
@@ -756,9 +760,28 @@ async function updateUserWorker(
     // one). A failed refresh is non-fatal: skip this silent update.
     let apiToken: string;
     let rotatedRefresh: string | undefined;
+    // The config version later conditional writes must match.
+    let version = read?.updateTime;
     if (cfg.apiToken) {
       apiToken = await decryptToken(cfg.apiToken, env.ENCRYPTION_MASTER_KEY);
     } else {
+      // Claim the update before spending the refresh token. Sign-in, sync and
+      // the dashboard can each start one within a second, and each would spend
+      // the same single-use token; Cloudflare may then revoke the whole grant
+      // (a likely cause of accounts stuck on refresh-failed). Only the run whose
+      // write lands on the version it read goes on; a run that reads after it
+      // sees the fresh claim and stops too.
+      if (Date.parse(cfg.lastUpdatedAt || '') > Date.now() - UPDATE_CLAIM_MS) {
+        return { status: 200, body: { updated: false, reason: 'busy' } };
+      }
+      if (!version) return { status: 500, body: { updated: false, reason: 'config-version-unknown' } };
+      try {
+        version = await saveWorkerConfig(uid, { lastUpdatedAt: new Date().toISOString() }, env, idToken,
+          { onlyFields: ['lastUpdatedAt'], ifUpdateTime: version });
+      } catch (e: any) {
+        console.log(`[auto-update] ${cfg.workerName}: another update has it (${String(e?.message || '').includes('FAILED_PRECONDITION') ? 'raced' : 'claim failed'})`);
+        return { status: 200, body: { updated: false, reason: 'busy' } };
+      }
       const refresh = await decryptToken(cfg.refreshToken, env.ENCRYPTION_MASTER_KEY);
       const refreshed = await refreshCloudflareToken(refresh);
       if ('failed' in refreshed) {
@@ -766,7 +789,7 @@ async function updateUserWorker(
         if (refreshed.definitive && cfg.updateBlocked !== 'reconnect') {
           await saveWorkerConfig(uid, {
             updateBlocked: 'reconnect', updateBlockedReason: refreshed.detail, updateBlockedAt: new Date().toISOString(),
-          }, env, idToken, { onlyFields: UPDATE_BLOCKED_FIELDS, ifUpdateTime: read?.updateTime })
+          }, env, idToken, { onlyFields: UPDATE_BLOCKED_FIELDS, ifUpdateTime: version })
             // A reconnect (or a newer token) since our read makes this mark stale: skip it.
             .catch((e) => console.error('[auto-update] reconnect mark not recorded:', e?.message));
         }
@@ -804,7 +827,7 @@ async function updateUserWorker(
     // runs minting two secrets would leave the record and the worker
     // disagreeing. So the pending secret is written only if the config is
     // still the version this run read — the run that loses deploys nothing.
-    if (newlyMinted && !read?.updateTime) {
+    if (newlyMinted && !version) {
       // Nothing to make the write conditional on: don't risk it.
       return { status: 500, body: { updated: false, reason: 'config-version-unknown' } };
     }
@@ -818,7 +841,7 @@ async function updateUserWorker(
         };
         await saveWorkerConfig(uid, changes, env, idToken, {
           onlyFields: Object.keys(changes),
-          ...(newlyMinted ? { ifUpdateTime: read?.updateTime } : {}),
+          ...(newlyMinted ? { ifUpdateTime: version } : {}),
         });
         refreshSaved = true;
       } catch (e: any) {
@@ -1060,7 +1083,7 @@ async function readWorkerConfig(uid: string, idToken: string, env: Env, opts: { 
 export async function saveWorkerConfig(
   uid: string, config: any, env: Env, userIdToken?: string,
   opts: { ifUpdateTime?: string; onlyFields?: string[] } = {},
-): Promise<void> {
+): Promise<string | undefined> { // the document's new version (updateTime)
   if (typeof uid !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(uid)) {
     throw new Error('saveWorkerConfig: refusing a malformed uid');
   }
@@ -1102,7 +1125,7 @@ export async function saveWorkerConfig(
       }
       if (res.ok) {
         console.log('[config-write] saved with the service account');
-        return;
+        return ((await res.json().catch(() => ({}))) as any)?.updateTime;
       }
       const body = await res.text();
       serviceAccountError = `Firestore write failed: ${res.status} ${body}`;
@@ -1125,4 +1148,5 @@ export async function saveWorkerConfig(
   if (!res.ok) {
     throw new Error(`Firestore write failed: ${res.status} ${await res.text()}`);
   }
+  return ((await res.json().catch(() => ({}))) as any)?.updateTime;
 }

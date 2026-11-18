@@ -2,7 +2,7 @@
 // The update service records why and marks the account, so the dashboard can
 // ask the owner to reconnect; reconnecting must use the same Cloudflare account.
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import worker, { encryptToken } from './index';
+import worker, { encryptToken, decryptToken } from './index';
 
 const MASTER = 'm'.repeat(32);
 const env = {
@@ -11,7 +11,8 @@ const env = {
 } as any;
 
 type Call = { url: string; method: string; body?: string };
-function stub(cfg: Record<string, string> | null, token: { status: number; body: any }, accounts: string | string[] = 'acc', readStatus = 200) {
+const CLAIMED = '2026-11-18T08:00:01.000000Z'; // the version after this run's claim
+function stub(cfg: Record<string, string> | null, token: { status: number; body: any }, accounts: string | string[] = 'acc', readStatus = 200, dbExists = false) {
   const calls: Call[] = [];
   vi.stubGlobal('fetch', async (input: any, init: RequestInit = {}) => {
     const url = typeof input === 'string' ? input : input.url;
@@ -23,15 +24,20 @@ function stub(cfg: Record<string, string> | null, token: { status: number; body:
       if (!cfg) return new Response('{"error":{"status":"NOT_FOUND"}}', { status: 404 });
       return new Response(JSON.stringify({ fields: Object.fromEntries(Object.entries(cfg).map(([k, v]) => [k, { stringValue: v }])), updateTime: '2026-11-18T08:00:00.000000Z' }));
     }
-    if (url.includes('firestore.googleapis.com') && method === 'PATCH') return new Response('{}');
+    if (url.includes('firestore.googleapis.com') && method === 'PATCH') return new Response(JSON.stringify({ updateTime: CLAIMED }));
     if (url.startsWith('https://dash.cloudflare.com/oauth2/token')) return new Response(JSON.stringify(token.body), { status: token.status });
     if (url === 'https://api.cloudflare.com/client/v4/accounts') return new Response(JSON.stringify({ result: [accounts].flat().map((id) => ({ id })) }));
+    // The cloud's database already exists: creating it fails, the list has it.
+    if (dbExists && url.endsWith('/d1/database') && method === 'POST') return new Response(JSON.stringify({ success: false, errors: [{ message: 'database already exists' }] }), { status: 400 });
+    if (url.endsWith('/d1/database') && method === 'GET') return new Response(JSON.stringify({ success: true, result: [{ name: 'dc-photos-uid1', uuid: 'db-existing' }] }));
+    if (url.endsWith('/workers/subdomain')) return new Response(JSON.stringify({ success: true, result: { subdomain: 'acme' } }));
     if (url.includes('api.cloudflare.com')) return new Response(JSON.stringify({ success: true, result: {} }));
     return new Response('{}');
   });
   return calls;
 }
 const patches = (calls: Call[]) => calls.filter((c) => c.method === 'PATCH');
+const marks = (calls: Call[]) => patches(calls).filter((c) => fields(c).updateBlocked);
 const fields = (c: Call) => JSON.parse(c.body || '{}').fields || {};
 const mask = (c: Call) => new URL(c.url).searchParams.getAll('updateMask.fieldPaths');
 const autoUpdate = () => worker.fetch(new Request('https://deploy.example/auto-update', { method: 'POST', headers: { Authorization: 'Bearer user-id-token' } }), env);
@@ -46,12 +52,12 @@ describe('a renewal Cloudflare refuses', () => {
     const calls = stub(await oauthCfg(), { status: 400, body: { error: 'invalid_grant', error_description: 'expired' } });
     const res = await autoUpdate();
     expect(await res.json()).toMatchObject({ updated: false, reason: 'refresh-failed', detail: '400 invalid_grant' });
-    const [save] = patches(calls);
+    const [save] = marks(calls);
     expect(fields(save).updateBlocked?.stringValue).toBe('reconnect');
     expect(fields(save).updateBlockedReason?.stringValue).toBe('400 invalid_grant');
     expect(mask(save).sort()).toEqual(['updateBlocked', 'updateBlockedAt', 'updateBlockedReason']);
-    // Only onto the version this run read: a reconnect since then wins.
-    expect(new URL(save.url).searchParams.get('currentDocument.updateTime')).toBe('2026-11-18T08:00:00.000000Z');
+    // Only onto the version this run claimed: a reconnect since then wins.
+    expect(new URL(save.url).searchParams.get('currentDocument.updateTime')).toBe(CLAIMED);
     expect(save.body).not.toMatch(/refresh|access/);
     expect(calls.some((c) => c.url.includes('api.cloudflare.com/client/v4/accounts/'))).toBe(false);
   });
@@ -60,13 +66,13 @@ describe('a renewal Cloudflare refuses', () => {
       const calls = stub(await oauthCfg(), { status, body });
       const res = await autoUpdate();
       expect(await res.json()).toMatchObject({ updated: false, reason: 'refresh-failed' });
-      expect(patches(calls)).toEqual([]);
+      expect(marks(calls)).toEqual([]);
     });
   }
   it('an account already marked is not written again', async () => {
     const calls = stub(await oauthCfg({ updateBlocked: 'reconnect' }), { status: 400, body: { error: 'invalid_grant' } });
     await autoUpdate();
-    expect(patches(calls)).toEqual([]);
+    expect(marks(calls)).toEqual([]);
   });
 });
 
@@ -105,6 +111,20 @@ describe('reconnecting', () => {
     expect(res.status).not.toBe(409);
     expect(built(calls).every((c) => c.url.includes('/accounts/acc/'))).toBe(true);
     expect(built(calls).length).toBeGreaterThan(0);
+  });
+  it('with the same account keeps the cloud: same database and keys, same sign-in secret, a new token, no mark', async () => {
+    const calls = stub(await oauthCfg({ updateBlocked: 'reconnect', updateBlockedReason: '400 invalid_grant', databaseId: 'db-existing', setupTimestamp: '2026-06-01T00:00:00.000Z' }),
+      { status: 200, body: { access_token: 'a', refresh_token: 'r-new' } }, 'acc', 200, true);
+    const res = await exchange();
+    expect(res.status).toBe(200);
+    // No migration and no new encryption keys: the database is used as it is.
+    expect(calls.filter((c) => c.url.includes('/query'))).toEqual([]);
+    const [save] = patches(calls);
+    expect(new URL(save.url).searchParams.getAll('updateMask.fieldPaths')).toEqual([]); // the whole record is replaced…
+    const f = fields(save);
+    expect([f.databaseId?.stringValue, f.sessionSecret?.stringValue, f.setupTimestamp?.stringValue]).toEqual(['db-existing', 's'.repeat(40), '2026-06-01T00:00:00.000Z']);
+    expect(f.updateBlocked).toBeUndefined(); // …so the mark is gone
+    expect(await decryptToken(f.refreshToken.stringValue, MASTER)).toBe('r-new');
   });
   it('with a different Cloudflare account is refused before anything is built or saved', async () => {
     const calls = stub(await oauthCfg(), { status: 200, body: { access_token: 'a', refresh_token: 'r' } }, 'another-account');
