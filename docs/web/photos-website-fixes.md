@@ -43,7 +43,11 @@ thumbnail today. Items 2, 3 and 9 below are about this budget.
 
 ## The fixes, in order
 
-### 1. Worker release W2 — take the phone's preview, EXIF and message ids
+### 1. Worker release R2 — take the phone's preview, EXIF and message ids
+
+*(Built by the Linux machine as **R2** — the Mac called it W2; Drive's W2 is a
+different, later release. The operator approved R2's release 2026-11-18.
+Message ids are still to add.)*
 
 **Symptom.** iPhone photos backed up by the app (HEIC) show a thumbnail in
 the grid but do not open in Chrome, Firefox or on Android; there is no camera
@@ -183,6 +187,13 @@ about 57 MB), and when chunk *n* is served, start chunk *n+1* in the
 background at a low priority — exactly the phone core's fix (Task 1.6:
 `PartCache` + next-part prefetch), after which each part downloaded once.
 
+**Also — pick the file by what the browser can play.** Today the service
+worker plays `playbackChunks` whenever they exist. Once phones upload H.264
+copies of HEVC videos (SPEC §5.1, P2-9), Safari would get the 720p copy
+instead of the original. Use the original when
+`canPlayType('video/mp4; codecs="hvc1"')` (or `"hev1"`) says `probably`/`maybe`,
+the copy otherwise; downloads stay the original.
+
 **Verify.** Open a multi-part video in DevTools → Network: each chunk's
 Telegram download appears once; playback runs past the 19 MB marks without
 stopping on a normal connection.
@@ -264,10 +275,12 @@ until the website reads everything directly.
 
 ### 11. For the operator to decide
 
-- **iPhone videos are HEVC.** No H.264 copy exists, so they play in Safari,
-  in Chrome only with hardware HEVC, and mostly not in Firefox. The phone
-  could make an H.264 copy at upload (CPU, battery, and a second upload of the
-  same video), or the website could say "open in Safari".
+- ~~iPhone videos are HEVC~~ — **decided 2026-11-18:** the uploading phone
+  makes a 720p H.264 copy (`telegramPlaybackChunks`) for videos that are not
+  H.264 8-bit; the website plays the original where the browser can
+  (`video.canPlayType('video/mp4; codecs="hvc1"')`, Safari) and the copy
+  elsewhere — see item 6. The worker must accept `telegramPlaybackChunks`
+  (+ size) on `clientUpload`.
 - **A channel instead of a supergroup** for new accounts: Telegram documents
   the 20-a-minute limit for groups only. With albums (item 7) the ceiling is
   already ~5× higher, so this is worth testing only if backups are still too

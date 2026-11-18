@@ -98,10 +98,27 @@ upload task: a phone upload opens on photos.daemonclient.uz in Chrome, a
 website upload opens in the app. HEIC from the phone opens in Chrome only
 after the worker's W2 (preview id) — a dependency on the Linux machine.
 
-**P2-9. iPhone video on Android (2.7).** HEVC plays where the phone has a
-decoder (most Android phones from ~2018). No H.264 copy is ever made today;
-where HEVC cannot play, the viewer says so and offers the download. Making an
-H.264 copy at upload is an operator decision (tutorial item 10), not P2.
+**P2-9. Video everywhere (2.7) — decided by the operator 2026-11-18:**
+the original plays wherever the device can decode it — every iPhone the
+app supports (HEVC in hardware, with HDR), Android phones whose decoder takes
+that profile, Safari; elsewhere a **720p H.264 copy** (8-bit SDR, AAC) made by
+the **uploading phone's own hardware encoder** (AVFoundation; Android media3
+Transformer, HDR tone-mapped) — Immich's default rule (`server/src/config.ts`,
+`services/media.service.ts`: any video not H.264 8-bit 4:2:0 gets one), run
+on the phone instead of a server, never on the worker. iCloud.com works the
+same way (a 720p "compatible" copy plays; downloads offer the original). The
+copy is uploaded after the original (originals first) and recorded as
+`telegramPlaybackChunks`; players choose by capability; downloads are always
+the original. Estimated cost ~19 MB a minute (2.5 Mbps): about +30% data for
+the iPhone's default 1080p30 HEVC (~60 MB a minute), +11% for 4K30 (~170 MB)
+— from Apple's published sizes, measured in P2 2.7.
+In the app: the video viewer (`video_viewer.widget.dart:122`, which already
+chooses `original` or `video/playback`) picks the original when the device's
+decoder takes it (iOS: always; Android: `MediaCodecList` for the codec,
+profile and size), else `video/playback`, which the core serves from the
+copy. The copy is made in Swift/Kotlin over a method channel; the core
+uploads it as a second set of parts. Needs the worker to accept
+`telegramPlaybackChunks` on `clientUpload` (Linux).
 
 **P2-10. Identity, account deletion, clean-up** as PLAN 2.1, 2.9, 2.10 —
 account deletion needs the accounts portal's flow (Linux; asked since 10-31).
@@ -118,7 +135,7 @@ account deletion needs the accounts portal's flow (Linux; asked since 10-31).
 | 2.4 | Thumbnail, preview, thumbhash, EXIF made at upload (P2-5) | the pictures and EXIF of a JPEG, a HEIC and a video match the platform's own |
 | 2.5 | Foreground upload through the core (P2-6) | JPEG, HEIC, a live photo and a >100 MB video, each read back byte-identical and open on the website |
 | 2.6 | Background upload (P2-7) | a backup of the test set finishes with the app in the background, on a real iPhone and on Android |
-| 2.7 | HEIC and video on Android (P2-9) | HEIC opens on Android 9+; HEVC plays or says it cannot |
+| 2.7 | HEIC on Android; the H.264 copy and the playback choice (P2-9) | HEIC opens on Android 9+; an iPhone HDR video plays as the original on iPhone and Safari, as the copy on an Android without HEVC and in Chrome without it |
 | 2.8 | Live photos, EXIF/GPS, dedupe checks | a live photo plays; the map shows the photo; a re-backup sends nothing |
 | 2.9 | Account deletion entry (Apple 5.1.1(v)) | leads to the portal's deletion |
 | 2.10 | Remove unused Immich features (approved list) | the app still builds and passes 2.11 |
@@ -136,6 +153,8 @@ iPhone (a free 7-day build with their Apple ID, P0).
 1. ~~Approve this design~~ — approved 2026-11-17, with the sign-in screen
    changed (P2-2).
 2. ~~Approve SPEC D24~~ — approved 2026-11-17.
-3. P2-9: HEVC on phones that cannot play it — **open**. Immich's own answer
-   is server-side transcoding (below); the operator asked why, and what
-   Immich did, before deciding.
+3. ~~P2-9~~ — decided 2026-11-18: the original where it plays, a 720p
+   H.264 copy made on the uploading phone elsewhere.
+4. **R2 contract (Linux, 2026-11-17):** the core must **always** send `exif`
+   (`{}` when the engine found nothing) — the worker uses its presence to
+   skip its own EXIF download. Done in 2.4.
