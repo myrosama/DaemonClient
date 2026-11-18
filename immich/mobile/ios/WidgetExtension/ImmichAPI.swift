@@ -2,7 +2,7 @@ import Foundation
 import SwiftUI
 import WidgetKit
 
-let IMMICH_SHARE_GROUP = "group.app.immich.share"
+let IMMICH_SHARE_GROUP = "group.uz.daemonclient.photos"
 
 enum WidgetError: Error, Codable {
   case noLogin
@@ -22,10 +22,10 @@ extension WidgetError: LocalizedError {
   public var errorDescription: String? {
     switch self {
     case .noLogin:
-      return "Login to Immich"
+      return "Sign in to Photos"
 
     case .fetchFailed:
-      return "Unable to connect to your Immich instance"
+      return "Unable to connect to your server"
 
     case .albumNotFound:
       return "Album not found"

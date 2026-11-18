@@ -69,7 +69,7 @@ class BackgroundWorker(context: Context, params: WorkerParameters) :
 
     val notificationChannel = NotificationChannel(
       NOTIFICATION_CHANNEL_ID,
-      NOTIFICATION_CHANNEL_ID,
+      "Backup", // the name Android Settings shows for this channel
       NotificationManager.IMPORTANCE_LOW
     )
     notificationManager.createNotificationChannel(notificationChannel)

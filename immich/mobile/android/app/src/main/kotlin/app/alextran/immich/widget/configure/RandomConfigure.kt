@@ -144,7 +144,7 @@ fun RandomConfiguration(context: Context, appWidgetId: Int, glanceId: GlanceId, 
       Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
         when (state) {
           WidgetConfigState.LOADING -> CircularProgressIndicator(modifier = Modifier.size(48.dp))
-          WidgetConfigState.LOG_IN -> Text("You must log in inside the Immich App to configure this widget.")
+          WidgetConfigState.LOG_IN -> Text("Sign in to Photos to set up this widget.")
           else -> {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
               Text("View a random image from your library or a specific album.", style = MaterialTheme.typography.bodyMedium)
