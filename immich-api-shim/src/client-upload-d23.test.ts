@@ -14,11 +14,16 @@ import { testSessionToken, testAuthEnv } from './test-session';
 // @ts-ignore TS6059: outside rootDir on purpose; vitest resolves it fine.
 import { MIGRATION_SQL } from '../../schema/schema.mjs';
 
-async function clientUpload(fields: Record<string, string>) {
+async function freshDb() {
   const DB = sqliteD1(MIGRATION_SQL);
   // The worker adds this column with a once-per-isolate step that an earlier
   // test in this file has already used up on its own database.
   await DB.prepare('ALTER TABLE photos ADD COLUMN telegramPlaybackChunks TEXT').run();
+  return DB;
+}
+
+async function clientUpload(fields: Record<string, string>, DB?: any) {
+  DB = DB || await freshDb();
   const form = new FormData();
   const base: Record<string, string> = {
     clientUpload: 'true', telegramChunks: JSON.stringify([{ index: 0, message_id: 1, file_id: 'orig' }]),
@@ -75,11 +80,56 @@ describe('a client upload with its own preview and EXIF', () => {
   });
   it('a playback copy without a valid size, or with bad parts, is not stored, and the upload still succeeds', async () => {
     const good = JSON.stringify([{ index: 0, file_id: 'p0' }]);
-    for (const [chunks, size] of [[good, ''], [good, '-5'], [good, '1.5'], ['not json', '10'], ['[]', '10'], [JSON.stringify([{ index: 0, file_id: 'bad id' }]), '10'], [JSON.stringify([{ index: -1, file_id: 'p0' }]), '10'], [JSON.stringify([null]), '10']]) {
-      const { res, row } = await clientUpload({ telegramPlaybackChunks: chunks, playbackSize: size });
+    const parts = (...idx: number[]) => JSON.stringify(idx.map((index) => ({ index, file_id: `p${index}` })));
+    for (const [chunks, size] of [[good, ''], [good, '-5'], [good, '1.5'], ['not json', '10'], ['[]', '10'], [JSON.stringify([{ index: 0, file_id: 'bad id' }]), '10'], [JSON.stringify([{ index: -1, file_id: 'p0' }]), '10'], [JSON.stringify([null]), '10'],
+      // 25 MB is two 19 MiB parts: one, three, a gap or a repeat doesn't match it.
+      [parts(0), '25000000'], [parts(0, 1, 2), '25000000'], [parts(0, 2), '25000000'], [parts(0, 0), '25000000']]) {
+      const { res, row } = await clientUpload({ mimeType: 'video/quicktime', fileName: 'IMG_0002.MOV', telegramPlaybackChunks: chunks, playbackSize: size });
       expect([200, 201]).toContain(res.status);
       expect(row.telegramPlaybackChunks ?? null).toBeNull();
     }
+  });
+  it('parts sent out of order are stored in order', async () => {
+    const { row } = await clientUpload({ mimeType: 'video/quicktime', fileName: 'IMG_0002.MOV', playbackSize: '25000000',
+      telegramPlaybackChunks: JSON.stringify([{ index: 1, file_id: 'p1' }, { index: 0, file_id: 'p0' }]) });
+    expect(JSON.parse(row.telegramPlaybackChunks).chunks.map((c: any) => c.index)).toEqual([0, 1]);
+  });
+  it('a photo never gets a playback copy', async () => {
+    const { row } = await clientUpload({ telegramPlaybackChunks: JSON.stringify([{ index: 0, file_id: 'p0' }]), playbackSize: '10' });
+    expect(row.telegramPlaybackChunks ?? null).toBeNull();
+  });
+  it('a copy sent after the original, in a later request, attaches to it once', async () => {
+    const video = { mimeType: 'video/quicktime', fileName: 'IMG_0002.MOV' };
+    const DB = await freshDb();
+    await clientUpload(video, DB);
+    const copy = JSON.stringify([{ index: 0, message_id: 9, file_id: 'play-0' }]);
+    const { res } = await clientUpload({ ...video, telegramPlaybackChunks: copy, playbackSize: '1000' }, DB);
+    expect(res.status).toBe(200);
+    await clientUpload({ ...video, telegramPlaybackChunks: JSON.stringify([{ index: 0, file_id: 'other' }]), playbackSize: '1000' }, DB);
+    const rows = DB.rows('SELECT * FROM photos');
+    expect(rows.length).toBe(1);
+    expect(JSON.parse(rows[0].telegramPlaybackChunks)).toEqual({ size: 1000, chunks: [{ index: 0, message_id: 9, file_id: 'play-0' }] });
+  });
+  it("deleting the video for good deletes its playback copy's messages too", async () => {
+    const DB = await freshDb();
+    const { row } = await clientUpload({ mimeType: 'video/quicktime', fileName: 'IMG_0002.MOV', playbackSize: '1000',
+      telegramPlaybackChunks: JSON.stringify([{ index: 0, message_id: 9, file_id: 'play-0' }]) }, DB);
+    const deleted: number[] = [];
+    vi.stubGlobal('fetch', async (url: string, init: any) => {
+      if (String(url).endsWith('/deleteMessage')) deleted.push(JSON.parse(init.body).message_id);
+      return new Response('{"ok":true}');
+    });
+    try {
+      const request = new Request('https://worker.test/api/assets', {
+        method: 'DELETE', headers: { Authorization: `Bearer ${await testSessionToken()}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: [row.id], force: true }),
+      });
+      const res = await handleAssets(request, testAuthEnv({ DB, waitUntil: () => {} }) as any, '/api/assets', new URL(request.url));
+      expect(res.status).toBe(200);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    expect(deleted.sort()).toEqual([1, 9]);
   });
   it('without EXIF, leaves it for the later check, as before', async () => {
     const { row } = await clientUpload({});

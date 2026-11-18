@@ -538,11 +538,11 @@ export async function handleAssets(request: Request, env: Env, path: string, url
             const chunks = typeof photo.telegramChunks === 'string'
               ? JSON.parse(photo.telegramChunks || '[]')
               : (photo.telegramChunks || []);
-            for (const chunk of chunks) {
+            for (const message_id of [...chunks.map((c: any) => c.message_id), ...playbackMessageIds(photo.telegramPlaybackChunks)]) {
               try {
                 await fetch(`https://api.telegram.org/bot${botToken}/deleteMessage`, {
                   method: 'POST', headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ chat_id: channelId, message_id: chunk.message_id }),
+                  body: JSON.stringify({ chat_id: channelId, message_id }),
                 });
               } catch { /* best effort */ }
             }
@@ -769,11 +769,11 @@ async function handleDeleteAssets(request: Request, env: Env, uid: string, idTok
       const chunks = typeof photo.telegramChunks === 'string'
         ? JSON.parse(photo.telegramChunks || '[]')
         : (photo.telegramChunks || []);
-      for (const chunk of chunks) {
+      for (const message_id of [...chunks.map((c: any) => c.message_id), ...playbackMessageIds(photo.telegramPlaybackChunks)]) {
         try {
           await fetch(`https://api.telegram.org/bot${botToken}/deleteMessage`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ chat_id: channelId, message_id: chunk.message_id }),
+            body: JSON.stringify({ chat_id: channelId, message_id }),
           });
         } catch { /* best effort */ }
       }
@@ -967,8 +967,8 @@ async function ensureDeduplicationSchema(db: any): Promise<void> {
   // device eventually learns the asset is gone; it is reclaimed only after
   // TOMBSTONE_TTL_DAYS (see purgeExpiredTombstones).
   await addColumn('ALTER TABLE photos ADD COLUMN purgedAt TEXT');
-  // JSON array of the H.264/web-playable rendition's Telegram chunks (the
-  // Fix-Videos transcode of an HEVC/incompatible video). Served for
+  // JSON {size, chunks} of the H.264/web-playable rendition's Telegram parts
+  // (the phone's copy, or the Fix-Videos transcode of an HEVC/incompatible video). Served for
   // /video/playback so the browser can play it; the ORIGINAL is untouched and
   // still served for download. Mirrors the HEIC→JPEG preview idea, for video.
   await addColumn('ALTER TABLE photos ADD COLUMN telegramPlaybackChunks TEXT');
@@ -1039,7 +1039,20 @@ export function clientPlayback(rawChunks: unknown, rawSize: unknown): string | n
       || (p.message_id !== undefined && !(Number.isSafeInteger(p.message_id) && p.message_id > 0))) return null;
     chunks.push(p.message_id !== undefined ? { index: p.index, message_id: p.message_id, file_id: p.file_id } : { index: p.index, file_id: p.file_id });
   }
+  // Parts 0..n-1 of CHUNK_SIZE plaintext bytes each, as every reader assumes
+  // (the phone's reader refuses anything else and wouldn't fall back).
+  chunks.sort((a, b) => a.index - b.index);
+  if (chunks.length !== Math.ceil(size / CHUNK_SIZE) || chunks.some((c, i) => c.index !== i)) return null;
   return JSON.stringify({ size, chunks });
+}
+
+// The Telegram messages of a stored playback copy ({size, chunks}), so deleting
+// an asset for good deletes them too. Bad or missing data yields none.
+export function playbackMessageIds(raw: unknown): number[] {
+  let v: any = raw;
+  if (typeof raw === 'string') { try { v = JSON.parse(raw); } catch { return []; } }
+  const chunks = Array.isArray(v?.chunks) ? v.chunks : [];
+  return chunks.map((c: any) => c?.message_id).filter((id: unknown) => Number.isSafeInteger(id));
 }
 
 async function handleUpload(request: Request, env: Env, uid: string, idToken: string): Promise<Response> {
@@ -1137,7 +1150,10 @@ async function handleUploadImpl(request: Request, env: Env, uid: string, idToken
         // deviceAssetId, so a kind-blind single-row match returned the video's
         // DTO for the still's first upload and the still was never stored.
         const decision = earlyDedupDecision(rows, videoHintFromFields(fields));
-        if (decision.short) {
+        // A client upload has no file to skip, and its later fields may carry a
+        // video's playback copy, which the full check below attaches. Clients
+        // send `clientUpload` first, so it is known here.
+        if (decision.short && fields.get('clientUpload') !== 'true') {
           console.log(`[Upload] Early dedup (deviceAsset) ${deviceAssetId} uid=${uid} — skipped file, returning ${decision.photo.id}`);
           return json(toAssetResponseDto(D1Adapter.normalizeRow(decision.photo), uid));
         }
@@ -1296,6 +1312,19 @@ async function handleUploadImpl(request: Request, env: Env, uid: string, idToken
               console.warn(`[Upload] livePhotoVideoId backfill failed for ${existing.id}: ${e?.message}`);
             }
           }
+          // The phone uploads a video's playback copy after the original, which
+          // may be a later request: attach it if the asset has none yet.
+          if (clientUpload && isVideoMime && !existing.telegramPlaybackChunks) {
+            const copy = clientPlayback(formData.get('telegramPlaybackChunks'), formData.get('playbackSize'));
+            if (copy) {
+              try {
+                await adapter.updatePhoto(existing.id, { telegramPlaybackChunks: copy });
+                existing.telegramPlaybackChunks = copy;
+              } catch (e: any) {
+                console.warn(`[Upload] playback copy backfill failed for ${existing.id}: ${e?.message}`);
+              }
+            }
+          }
           console.log(`[Upload] Dedup hit (deviceAsset) for ${deviceAssetId} uid=${uid} — returning ${existing.id}`);
           return json(toAssetResponseDto(D1Adapter.normalizeRow(existing), uid));
         }
@@ -1358,7 +1387,7 @@ async function handleUploadImpl(request: Request, env: Env, uid: string, idToken
         if (typeof previewId === 'string' && /^[A-Za-z0-9_-]{1,256}$/.test(previewId)) telegramPreviewId = previewId;
         // The phone's 720p H.264 copy of a video other players can't show
         // (SPEC P2-9), stored as {size, chunks} like the server-made one.
-        telegramPlaybackChunks = clientPlayback(formData.get('telegramPlaybackChunks'), formData.get('playbackSize'));
+        if (mimeType.startsWith('video/')) telegramPlaybackChunks = clientPlayback(formData.get('telegramPlaybackChunks'), formData.get('playbackSize'));
         const sent = clientExif(formData.get('exif'));
         if (sent) {
           exif = sent;
