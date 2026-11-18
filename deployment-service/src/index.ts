@@ -782,6 +782,9 @@ async function updateUserWorker(
         console.log(`[auto-update] ${cfg.workerName}: another update has it (${String(e?.message || '').includes('FAILED_PRECONDITION') ? 'raced' : 'claim failed'})`);
         return { status: 200, body: { updated: false, reason: 'busy' } };
       }
+      // Without the new version the later conditional writes can't be made:
+      // stop before the token is spent, not after.
+      if (!version) return { status: 200, body: { updated: false, reason: 'busy' } };
       const refresh = await decryptToken(cfg.refreshToken, env.ENCRYPTION_MASTER_KEY);
       const refreshed = await refreshCloudflareToken(refresh);
       if ('failed' in refreshed) {
