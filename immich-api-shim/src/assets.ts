@@ -538,7 +538,7 @@ export async function handleAssets(request: Request, env: Env, path: string, url
             const chunks = typeof photo.telegramChunks === 'string'
               ? JSON.parse(photo.telegramChunks || '[]')
               : (photo.telegramChunks || []);
-            for (const message_id of [...chunks.map((c: any) => c.message_id), ...playbackMessageIds(photo.telegramPlaybackChunks)]) {
+            for (const message_id of [...(Array.isArray(chunks) ? chunks : []).map((c: any) => c?.message_id), ...playbackMessageIds(photo.telegramPlaybackChunks)]) {
               try {
                 await fetch(`https://api.telegram.org/bot${botToken}/deleteMessage`, {
                   method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -769,7 +769,7 @@ async function handleDeleteAssets(request: Request, env: Env, uid: string, idTok
       const chunks = typeof photo.telegramChunks === 'string'
         ? JSON.parse(photo.telegramChunks || '[]')
         : (photo.telegramChunks || []);
-      for (const message_id of [...chunks.map((c: any) => c.message_id), ...playbackMessageIds(photo.telegramPlaybackChunks)]) {
+      for (const message_id of [...(Array.isArray(chunks) ? chunks : []).map((c: any) => c?.message_id), ...playbackMessageIds(photo.telegramPlaybackChunks)]) {
         try {
           await fetch(`https://api.telegram.org/bot${botToken}/deleteMessage`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
