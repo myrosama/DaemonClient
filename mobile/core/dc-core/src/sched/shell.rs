@@ -222,6 +222,7 @@ async fn run(mut state: State, limits: Limits, fetch: Fetch, mut rx: mpsc::Unbou
                 let outcome = match &done {
                     Ok(_) => Outcome::Done,
                     Err(CoreError::RateLimited { retry_after }) => {
+                        log::warn!("rate limited: reads paused {retry_after} s");
                         Outcome::RateLimited(*retry_after)
                     }
                     Err(_) => Outcome::Failed,
@@ -384,6 +385,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn a_rate_limited_read_is_tried_again_after_the_pause() {
+        crate::logging::install(None);
         let (fetch, calls) = counting(|_, call| {
             Box::pin(async move {
                 if call == 1 {
@@ -405,6 +407,12 @@ mod tests {
         );
         assert!(started.elapsed() >= Duration::from_secs(3));
         assert_eq!(calls.load(Ordering::SeqCst), 2);
+        let logs = crate::logging::recent_logs();
+        assert!(
+            logs.iter()
+                .any(|l| l.contains("rate limited: reads paused 3 s")),
+            "{logs:?}"
+        );
     }
 
     #[tokio::test(start_paused = true)]

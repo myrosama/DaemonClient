@@ -143,6 +143,9 @@ downloading" possible: a byte range maps to the chunks that cover it.
   hits Cloudflare's limits.
 - `checksum = base64(SHA-1(plaintext))` is load-bearing: without it
   `bulk-upload-check` never matches and the app re-uploads the whole library.
+  *Corrected 2026-11-17 (P1 1.8): that is the Immich app's and the worker's
+  spelling; the website stores **hex** SHA-1 (`hash-file.ts`), and the worker
+  compares the text — the core asks about both.*
 
 **Consequence:** the mobile core is a port of what the web already does —
 the Drive uploader/downloader and the Photos service worker — into Rust. The
@@ -264,7 +267,8 @@ Read from `immich/web/src/lib/utils/file-uploader.ts:300-448`,
    channel: `GET {workerUrl}/api/server/telegram-config` (`server.ts:65`; the
    web's `daemonclient-drive.ts getConfig`).
 2. Checksum: `base64(SHA-1(plaintext))`; dedupe first with
-   `POST /api/assets/bulk-upload-check`.
+   `POST /api/assets/bulk-upload-check`. *(Corrected 2026-11-17: the website
+   sends **hex** SHA-1, `hash-file.ts` `bytesToHex`.)*
 3. Thumbnail generated on the client; `thumbhash` derived from it.
 4. Original sliced at 19 MiB → each slice encrypted → `sendDocument` →
    `telegramChunks: [{index, message_id, file_id}]`.
@@ -575,6 +579,17 @@ rate and never waste a send token — e.g. dedupe by checksum *before* sending.
 This is a property of Telegram bots, not of the app; it belongs in the
 product's expectations (first full backup of a big library takes hours).
 
+**Corrected 2026-11-17 (P1 1.8, measured with `dc-cli bench sends` on the test
+bot):** the limit is about **20 messages a minute** per channel, not 20 per
+30 s — 20 sends in 20.6 s, then the 21st was refused with `retry_after` 40 s;
+paced at 1 per 3 s, 40 sends in 2 minutes, then one refusal with `retry_after`
+3 s. A library of small photos therefore backs up at about **10 photos a
+minute (~600 an hour)** with a thumbnail each, ~400 an hour for HEIC (a
+preview too). The core now paces 1 per 3 s, burst 3. Reads have no such
+limit in practice: 126 thumbnails a second without a refusal. *(Superseded
+by Task 1.9, §14: the safe pace is 1 per 3.5 s — ~510 JPEGs / ~340 HEICs an
+hour one file a request — and albums lift it ~5×.)*
+
 ---
 
 ## 9b. Nuke — the parts read in full for Task 1.4        2026-10-13
@@ -654,3 +669,130 @@ Read from the fork and the platforms:
   video metadata (ImageIO properties, `ExifInterface`,
   `MediaMetadataRetriever`) while the file is open for the thumbnail; a Rust
   parser (`nom-exif`, JPEG/HEIC/TIFF/MOV/MP4) is the alternative.
+
+---
+
+## 14. Telegram's official limits, and how the website reads phone uploads        2026-11-17
+
+**Telegram's own words** (Bot FAQ, `core.telegram.org/bots/faq#my-bot-is-hitting-limits-how-do-i-avoid-this`;
+Bot API, `core.telegram.org/bots/api`):
+- "In a single chat, avoid sending more than one message per second" — bursts
+  are tolerated, "eventually you'll begin receiving 429 errors".
+- "In a group, bots are not able to send more than **20 messages per minute**."
+  The account setup makes a **supergroup**, and P1 1.8 measured exactly that:
+  20 sends in 20.6 s, the 21st refused with `retry_after` 40 s. So the backup
+  ceiling with one file a request (~510 JPEGs an hour at the safe 17 a
+  minute) is a documented rule, not luck — albums lift it (below, SPEC D24). Channels are
+  not named in the FAQ — only the one-a-second guidance would apply; untested.
+- Broadcasts: about 30 messages a second across chats; paid broadcasts reach
+  1,000 a second (0.1 Stars a message) — for messaging many users, no help
+  for one storage chat.
+- `retry_after` (`ResponseParameters`) is the wait before the request may be
+  repeated; ignoring it makes the waits grow (community reports).
+- `sendMediaGroup`: 2–10 items per call, returns an array of Messages;
+  "documents and audio files can be only grouped in an album with messages of
+  the same type". How an album counts is not documented — **measured in P1
+  1.9: an album counts as one request.** 30 albums of 10 documents one at a
+  time: 300 files in 192.6 s, no refusal (each album request takes ~6 s);
+  three albums in flight: refused after 3 with `retry_after` 6 s (the
+  one-a-second rule). So a backup that batches small files into albums, one
+  album at a time, moves ~93 files a minute against ~17 single sends.
+- Files: `sendDocument` up to 50 MB; `getFile` downloads up to 20 MB; a file
+  link is valid at least an hour. A local Bot API server lifts these (2,000 MB
+  up, no download limit) but needs a server — not for the hosted product.
+- Deleting: "a message can only be deleted if it was sent less than **48
+  hours** ago" (the admin rules beside it may lift this in a supergroup — a
+  test message `14362` was kept in the test chat on 2026-11-17 ~07:45 UTC to
+  try after 48 hours). `deleteMessages` deletes 1–100 at once. File ids "can
+  be treated as persistent" — and measured: **a deleted message's file still
+  downloads by its file id**. Deleting removes the message, not the file:
+  encrypted libraries leave only ciphertext behind; plain ones cannot be
+  fully erased. The product should say so.
+
+**How the website reads what the phone uploads** (the website's service worker
+`immich/web/src/service-worker/` and `telegram-media.ts` `selectFileIds`; the
+worker's `assets.ts`, `asset-manifest.ts`):
+- **Grid:** the thumbnail by `thumbId`, decrypted in the browser — works
+  (the phone sends it exactly as the website does).
+- **Opening a photo:** `size=preview` → `previewId`, else the original. The
+  phone sends a JPEG preview for HEIC, but the worker drops it until W2, so
+  the website serves the raw HEIC as `image/heic`: **phone HEICs do not open
+  outside Safari** until W2. JPEGs open (the original is shown).
+- **Video:** `playback` takes an H.264 rendition when one exists — none ever
+  does — so the original `.mov` plays: iPhone video is HEVC, which Safari
+  plays, Chrome only with hardware support, Firefox mostly not. Each range
+  request downloads and decrypts a whole 19 MiB part again (no part cache, no
+  next-part prefetch): opening re-reads the first part two or three times and
+  playback stalls at each part boundary — the lag the operator saw on the P1
+  exit video. The core fixed the same in 1.6 (a 3-part cache, the next part
+  fetched while one plays).
+- **EXIF:** until W2 the worker ignores the phone's EXIF and leaves
+  `exifChecked` unset, so its background EXIF backfill downloads and decrypts
+  the first part of every phone image to read EXIF — the heavy work D23 takes
+  off the worker.
+- **Deleting:** the worker deletes only the messages in `telegramChunks`; it
+  never stores the thumbnail's or preview's message ids, so their messages
+  stay in the chat (a visible picture in a plain library). The tombstone row
+  keeps its file ids, and the manifest still answers for it: a deleted photo
+  stayed downloadable through the manifest (P1 1.8, `dc-cli download` after
+  `dc-cli delete`). `deleteMessage`'s answer is not checked.
+- **Duplicates:** the website stores hex SHA-1, the phone base64 (see 1.8);
+  the website re-uploads what the phone stored until the worker normalises.
+- **Sending:** the website's own uploader does not pace at all (it waits out
+  each 429), and the worker's pacer allows 1 per 1.5 s — twice the group
+  limit, so long website uploads stall 40 s at a time.
+
+**Measured in P1 Task 1.9 (2026-11-17, this Mac: upload ~2 MB/s, download ~3
+MB/s a connection, ~8 MB/s in all; the test account; every run in
+`plans/P1-core.md` "As built (Task 1.9)"):**
+
+| Test | Result |
+|---|---|
+| Single sends, 1 per 3.5 s, burst 3, 10 minutes | 170 sends, 17.4 a minute, **no refusal** |
+| The same at burst 2 (the core's pace: ≤ 19 in any minute) | 170 sends in 589 s, **no refusal** |
+| Single sends, 1 per 3 s | one refusal after 40 sends |
+| A new process right after another's sends | refused after 4 (`retry_after` 19 s) — the minute is per account |
+| Albums of 10 tiny files, one at a time | 300 files in 192.6 s (93 a minute), no refusal; ~6 s an album |
+| Albums of 5 / 10 | ~4 / ~6 s each: **~0.6–0.8 s a file** (the run of 2 measured the pacer, not the album) |
+| Albums started together (3, or 2) | refused after 3 (`retry_after` 6 s / 5 s) |
+| Album of 47.1 MB / 52.4 MB | sent / **HTTP 413** — a request is capped at ~50 MB |
+| 3 MB files: one by one / albums of 10 | 19.2 files a minute, 0.98 MB/s / **37.7 a minute, 1.93 MB/s** |
+| 19 MiB parts: one / two in flight | 1.95 / 1.80 MB/s — the uplink is the bound |
+| Album files read back by file id | byte-identical |
+| Downloads: 1 / 2 / 3 / 4 parts at once | ~3.2 / 3.9–6.4 / 5.3–7.9 / 3.1–6.2 MB/s |
+| Fling of 2,000 thumbnails: 12/40 → 24/60 → 32/80 (at once / per s) | 21.7 → 43.5 → 44.9 a second, no refusal |
+| A photo tapped mid-fling, without / with the manifest gate | 13.1 or 4.5 s / **2.1 or 2.5 s** (1.9 s with nothing running) |
+| A video's first bytes | 9.2 s cold (one run); 2.6–5.0 s when Telegram had the part warm (a whole 19 MiB first part) |
+
+**Cloudflare's free plan (each user's own account):** 100,000 worker
+requests a day (Error 1027 until 00:00 UTC), no per-second limit, 10 ms CPU a
+request; D1 5 M rows read and **100,000 rows written** a day, 500 MB a
+database. A new photo writes ~6–7 D1 rows (the row, 5 index entries, and
+perhaps the primary key's) — so a backup can add **~14,000–16,000 photos a
+day at most**, whatever the upload speed; dropping the `isTrashed` index
+(one boolean, no use as an index) saves a row a photo. (The worker can read
+the exact count from `meta.rows_written` on one insert.)
+
+**What it means — photos backed up an hour** (HEIC = original + thumbnail +
+preview, 3 files; JPEG = 2 files; ~3 MB a photo):
+
+| | Today: one file a request | With albums (one at a time, ≤ 10 files, ≤ 45 MB) |
+|---|---|---|
+| Bound | 17 requests a minute | ~95 files a minute, or the uplink |
+| HEIC, this Mac (~2 MB/s up) | ~340 an hour | **~1,900 an hour** (5.5×) |
+| JPEG, this Mac | ~510 an hour | **~2,200 an hour** (4×) |
+| Any faster uplink | the same — the request limit | ~1,900 HEIC / ~2,800 JPEG — the per-file cap |
+| A day, free plan | — | ~14,000–16,000 photos (D1 writes), then tomorrow |
+| Video | the uplink: ~7 GB an hour at 2 MB/s; capped at ~5.6 MB/s (20 GB/h) by the request limit on faster links | the same (parts go alone) |
+
+Telegram's per-file time in an album overlaps the upload (the 3 MB album:
+15.9 s against ~15.7 s of pure upload), so the bound is whichever is slower,
+not their sum.
+
+**Downloads:** thumbnails ~44 a second (from ~22) — a whole 10,000-photo
+library in ~4 minutes (extrapolated from 2,000-thumbnail flings), a screen of
+40 in about a second; a photo opens in ~2 s even mid-fling; originals ~4–6
+MB/s (two parts at once); a video's first bytes took 9.2 s cold on this link
+(one run) — one encrypted 19 MiB part has to arrive before
+its first byte can be checked (SPEC C6); only a smaller first part would
+change that, a format change on both sides.

@@ -99,7 +99,7 @@ class PhotoWidget : GlanceAppWidget() {
                 modifier = GlanceModifier.fillMaxWidth().padding(16.dp),
                 contentAlignment = Alignment.Center
               ) {
-                Text("Log in to your Immich server", style = TextStyle(textAlign = TextAlign.Center, color = GlanceTheme.colors.primary))
+                Text("Sign in to Photos", style = TextStyle(textAlign = TextAlign.Center, color = GlanceTheme.colors.primary))
               }
             } else {
               Row(

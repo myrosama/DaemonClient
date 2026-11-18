@@ -22,8 +22,8 @@ class BackgroundWorkerApiImpl: BackgroundWorkerFgHostApi {
     print("BackgroundWorkerApiImpl:disableUploadWorker Disabled background workers")
   }
   
-  private static let refreshTaskID = "app.alextran.immich.background.refreshUpload"
-  private static let processingTaskID = "app.alextran.immich.background.processingUpload"
+  private static let refreshTaskID = "uz.daemonclient.photos.background.refreshUpload"
+  private static let processingTaskID = "uz.daemonclient.photos.background.processingUpload"
   private static let taskSemaphore = DispatchSemaphore(value: 1)
 
   public static func registerBackgroundWorkers() {

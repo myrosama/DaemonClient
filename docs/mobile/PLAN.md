@@ -159,34 +159,47 @@ Detailed: `plans/P1-core.md` (design approved 2026-10-29, decisions C1–C11).
 - [x] **1.7** Upload engine — prepare encrypted parts on disk, send, resume
       journal, metadata post (`POST /api/assets`, `clientUpload`) and, for
       HEIC/HEIF/RAW, the thumbnail + preview route.
-- [ ] **1.8** `dc-cli` and Gate 2 for the whole core against the test
+- [x] **1.8** `dc-cli` and Gate 2 for the whole core against the test
       account, both directions with photos.daemonclient.uz.
+- [x] **1.9** Limits to the edge (operator, 2026-11-17): reads, sends and
+      albums measured on the test account; read defaults 24/60/24 and a
+      manifest gate; the send pace 1 per 3.5 s with a restart memory; albums
+      and batch delete in the Telegram client; the backup sending algorithm
+      proposed as SPEC D24 (operator to approve); the website fix tutorial
+      `docs/web/photos-website-fixes.md`.
 
 **Exit:** SPEC §9 P1.
 
 ## P2 — Photos on the core
 
-- [ ] **2.1** Identity — iOS bundle ids `uz.daemonclient.photos*`; signing
-      with the operator's Apple ID for device builds; the Immich identity still
-      left (`CFBundleName` `immich_mobile`, the Share Extension and Widget names,
-      Android `notification_icon.png`). Home-screen names and app icons were
-      done in 0.4 (SPEC D20).
-- [ ] **2.2** Sign-in (SPEC D8) — server address, "Sign in with a
-      DaemonClient account", "Create account" in an in-app browser sheet;
+Design: `plans/P2-photos.md` (Part 1 approved by the operator 2026-11-17,
+with SPEC D24; Part 2 written task by task).
+
+- [x] **2.1** Identity — iOS bundle ids `uz.daemonclient.photos*`, the app
+      group, background-task ids, Immich's signing team and web domain gone;
+      the Immich names left (`CFBundleName`, the Share Extension and Widget
+      names, Android's notification icon, channel and Recents title).
+      Home-screen names and app icons were done in 0.4 (SPEC D20). **Device
+      signing (the operator's Apple ID) → carried to 2.6.**
+- [ ] **2.2** Sign-in (SPEC D8, changed 2026-11-17) — one form for
+      everyone: server address (always shown, the hosted one filled in),
+      email, password, and "Create account" in an in-app browser sheet;
       `workerUrl`; secrets to secure storage.
 - [ ] **2.3** Media through the local server — thumbnails, photos, video, on
       iOS and Android.
-- [ ] **2.4** Thumbnails at upload (SPEC §5.1, D14, D18) — 256 px JPEG +
-      thumbhash from the platform image engine; for HEIC/HEIF/RAW also a
-      ~1440 px JPEG preview through the existing `POST /api/assets/:id/thumbnail`
-      route; local thumbnails for assets that have none. No worker change.
-      Gate 2 includes opening an app-uploaded HEIC on the website in Chrome.
+- [ ] **2.4** What the phone makes at upload (SPEC D23, P2-5) — 256 px JPEG
+      thumbnail + thumbhash, a ~1440 px JPEG preview for HEIC/HEIF/RAW, EXIF,
+      all from the platform image engine; the core sends the pictures to
+      Telegram (the worker's D18 route is retired). Opening an app-uploaded
+      HEIC on the website in Chrome needs the worker's W2 (Linux).
 - [ ] **2.5** Foreground automatic upload through the core.
-- [ ] **2.6** Background upload — encrypted parts handed to the background
-      uploader (SPEC §5.2); Android WorkManager.
-- [ ] **2.7** HEIC and video on Android — native HEIC decode (Android 9+),
-      thumbnail-quality on Android 8; HEVC playback with the H.264 rendition
-      fallback.
+- [ ] **2.6** Background upload — the core's prepared bodies (parts, and
+      albums under D24) handed to the background uploader straight to
+      Telegram (SPEC D22, P2-7); verified on a real iPhone and Android.
+      **First step: device signing with the operator's Apple ID** (from 2.1).
+- [ ] **2.7** HEIC and video — the HEIC original on Android 9+, the preview on
+      Android 8; the 720p H.264 copy made on the uploading phone and the
+      playback choice by what the device decodes (SPEC §5.1, P2-9).
 - [ ] **2.8** Live photos, EXIF/GPS, `deviceAssetId` dedupe.
 - [ ] **2.9** Account deletion entry (Apple requirement).
 - [ ] **2.10** Remove unused Immich features (approved list).

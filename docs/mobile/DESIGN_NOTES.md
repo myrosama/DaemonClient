@@ -972,3 +972,96 @@ keepalive. Mutation checks: the account check, the `creating` mark.
   met this Mac's network dropping for a while (timeouts on the worker); the
   tool deletes its leftovers at its next start.
 - G3: above. G4: the code commit and this docs commit.
+
+---
+
+## 1.8 — `dc-cli`, the measurements, the P1 exit            2026-11-17
+
+**Planned:** P1-core.md Part 2, Task 1.8 (written before the code).
+**Did:** `mobile/core/dc-cli` (whoami, list, upload, download, delete, serve,
+bench reads / sends / parts); the read limits and the send pacing set from
+measurement; a dedupe fix found by Gate 2. Differences from the plan: "As
+built (Task 1.8)" in P1-core.md.
+**Found by Gate 2:** the website stores **hex** SHA-1, the Immich app, the
+worker and the core **base64**, and the worker compares the text — the app
+would have uploaded again every photo the website had. The core now asks
+about both spellings (test; live: a website photo backed up through dc-cli →
+"already stored, nothing sent"). The other direction is the worker's (W2).
+**Measured (this Mac, release):** reads — no rate limit up to 122 paths and
+126 thumbnails a second; the core went from 11 to 25 thumbnails a second
+(12 at once, 40/s, burst 12). Sends — ~20 messages a minute per channel (the
+21st in a burst waits 40 s), half of what RESEARCH §12 assumed: a first
+backup runs at ~600 JPEGs or ~400 HEICs an hour; the pacer is now 1 per 3 s,
+burst 3. C6 — two parts at once ~40% faster than one after the other, but an
+early fetch of a video's last part showed no gain in AVFoundation's open
+(seven alternating pairs, medians 7.9 vs 8.3 s): built, measured, removed.
+Downloads 4–6 MB/s.
+**Security:** reviewer — 0 HIGH, 2 MEDIUM, 10 LOW. MEDIUM: Ctrl-C skipped
+the cleanup (decrypted thumbnails left in the temp folder, bench messages
+left in the channel) — now any command ends through it, checked live; the
+bench's deletion depended on a later worker request — the client is made
+first. LOW fixed: capped waits, leftover ids printed, the password in
+`Secret`, tools by `/usr/bin` path, absolute upload paths, poster files
+removed, a smaller read budget. Carried: the opened item's memory with 12
+slots (P2, on a device); pacing at the measured limit.
+**Spec:** reviewer — 1 HIGH (the P1 exit evidence not recorded — now in As
+built), 5 MEDIUM, 3 LOW: a stale comment, the two-spellings finding and C6's
+removal into SPEC §10/§11 and RESEARCH, the unpaced bench opening a client
+every 3 sends, the background uploader's pacing carried to P2, stale texts,
+two more tests.
+**Gate evidence:**
+- G1: tests first, failing; `cargo test` dc-core 171, dc-cli 9; clippy (deny
+  lints), fmt; `cargo deny check advisories` ok. Mutation checks: the hex
+  spelling (the new dedupe test fails without it).
+- G2: the P1 exit on the test account — sign-in; a JPEG and a 157 MB video
+  uploaded and read back byte-identical; a website upload downloaded and
+  decrypted, matching its stored checksum; the video served to AVFoundation
+  (a 1080p frame from its middle) and ranges checked with `curl` (206, 416,
+  403). The operator opened both on the website: they open and the video
+  plays, with lag from the website's video path (RESEARCH §14). **P1 exit
+  met** (SPEC §9).
+- G3: above. G4: the code commit and this docs commit.
+
+---
+
+## 1.9 — Limits to the edge: reads, sends, albums            2026-11-17
+
+**Planned:** P1-core.md, Task 1.9 (written before the code, extended mid-task
+for the operator's questions: an adaptive album algorithm, upload and
+download speeds, the worker's limits). Operator: "learn the rate limits
+perfectly… never hits 429 and if it does make sure it will be fixable…
+scroll through 10k thumbnails freely and fast, open any photo and any video,
+backups should be perfect"; "run every test possible and consult with the
+advisor".
+**Did:** ~20 measurement runs on the test account (every one in As built and
+RESEARCH §14's table), and from them: read defaults 24 at once, 60/s, burst
+24 (a fling 22 → 44 thumbnails a second, no rate limit; 32/80 no faster); a
+manifest gate (16 in flight for the grid, the opened and the next item skip
+it: a photo tapped mid-fling 13 s → 2 s, A/B); the send pace 1 per 3.5 s,
+burst 2 (≤ 19 in any minute; two 10-minute runs of 170 sends without a refusal), not respent after a restart within
+a minute (a per-account mark); every rate limit logged; albums and batch
+delete in the Telegram client; the limits checked at start.
+**Found:** Telegram's group limit counts **requests** — an album of 10
+documents is one; Telegram spends ~0.6–0.8 s a file in an album; requests
+must go one at a time (albums started together are refused; two parts in
+flight gain nothing); a request is capped at ~50 MB (45 MB albums). The
+uplink (~2 MB/s here) bounds videos and big photos; downloads fill the link
+with 2–3 parts. Cloudflare's free plan bounds a backup at ~14,000–16,000 new
+photos a day (D1 writes) and a scroll costs one worker request per thumbnail.
+**Proposed:** SPEC D24 — backups batched into albums by the pacer's token
+(~1,900 HEIC / ~2,200–2,800 JPEG an hour instead of ~340 / ~510), for the
+operator to approve; the website's side in `docs/web/photos-website-fixes.md`.
+**Security:** reviewer — 0 HIGH, 2 MEDIUM, 5 LOW, all fixed (manifest fetches
+queued before a sign-out now end there; benches delete what was in flight
+after Ctrl-C or a failure; complete limit checks; cleaned multipart names;
+an unreadable album answer deletes its messages; the mark's path from the
+session snapshot).
+**Spec:** reviewer — 0 HIGH, 4 MEDIUM, ~15 LOW, fixed or recorded (burst 2,
+D24 split into built and proposed, the albums-of-2 figure dropped, the next
+item exempt from the gate, more tests, stale text).
+**Gate evidence:**
+- G1: tests first, failing; dc-core 184, dc-cli 9; clippy (deny lints), fmt;
+  `cargo deny check advisories`. Mutation checks: the gate (open and next
+  bypass), the restart mark's wiring, name cleaning.
+- G2: the runs above on the test account.
+- G3: above. G4: the code commit and this docs commit.

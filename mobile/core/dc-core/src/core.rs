@@ -31,6 +31,13 @@ const PART_CACHE: u64 = 3 * crate::chunk_plan::PART_SIZE;
 const MAX_KEPT: usize = 4 * 1024 * 1024;
 const MANIFEST_TTL: Duration = Duration::from_secs(10 * 60);
 const MANIFESTS_MAX: usize = 4096;
+/// Manifest requests a fling may have in flight; what the user opened and the
+/// viewer's next item skip the queue (Task 1.9: behind ~2,000 of them a
+/// tapped photo took 5–13 s).
+const MANIFEST_GATE: usize = 16;
+/// A manifest is a small answer; a worker that trickles it must not hold a
+/// place in the gate for ever.
+const MANIFEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone)]
 pub struct CoreConfig {
@@ -41,6 +48,9 @@ pub struct CoreConfig {
     /// Telegram's address: a setting, so tests can use a fake and a fallback
     /// can be added later (P1 decision C11).
     pub telegram_api: String,
+    /// The read scheduler's numbers (SPEC §4.9): the app keeps the default;
+    /// benches try others.
+    pub limits: Limits,
 }
 
 impl CoreConfig {
@@ -49,6 +59,7 @@ impl CoreConfig {
             data_dir,
             cache_dir,
             telegram_api: TELEGRAM_API.to_owned(),
+            limits: Limits::default(),
         }
     }
 }
@@ -63,6 +74,7 @@ pub struct Core {
     media: Arc<DiskCache>,
     server: Mutex<Listeners>,
     uploading: Arc<Mutex<std::collections::HashSet<PathBuf>>>,
+    manifest_gate: Arc<tokio::sync::Semaphore>,
 }
 
 /// One signed-in session and what is made for it on first use. All of it
@@ -93,6 +105,20 @@ type Manifests = HashMap<String, (Arc<AssetManifest>, Instant)>;
 impl Core {
     pub fn start(config: CoreConfig) -> Result<Self, CoreError> {
         crate::logging::install(None);
+        let limits = &config.limits;
+        // Numbers like these would stall reads (or a class of them) without
+        // an error, or switch the rate limit off.
+        let rate_ok = limits.reads_per_sec.is_finite() && limits.reads_per_sec >= 0.01;
+        let burst_ok = limits.read_burst.is_finite() && limits.read_burst >= 1.0;
+        let slots_ok = limits.max_running > limits.reserved_high
+            && limits.max_next >= 1
+            && limits.max_background >= 1
+            && limits.max_sending >= 1;
+        if !(rate_ok && burst_ok && slots_ok && !limits.job_timeout.is_zero()) {
+            return Err(CoreError::Internal(
+                "the read limits would stall every read".to_owned(),
+            ));
+        }
         for dir in [&config.data_dir, &config.cache_dir] {
             std::fs::create_dir_all(dir).map_err(|e| {
                 CoreError::Internal(format!("cannot create the core's folders: {e}"))
@@ -120,6 +146,7 @@ impl Core {
             media,
             server: Mutex::default(),
             uploading: Arc::default(),
+            manifest_gate: Arc::new(tokio::sync::Semaphore::new(MANIFEST_GATE)),
         })
     }
 
@@ -225,17 +252,31 @@ impl Core {
             let account = account.as_ref().ok_or(CoreError::SignedOut)?;
             (account.worker.clone(), account.telegram.clone())
         };
+        // Per account: a restart within a minute of a send must not spend a
+        // fresh burst (Task 1.9).
+        let session = worker.session().clone();
         let telegram = cell
             .get_or_try_init(|| async {
                 let config = self
                     .run(async move { worker.telegram_config().await })
                     .await??;
-                Ok::<_, CoreError>(Arc::new(Telegram::new(
-                    self.http.clone(),
-                    self.config.telegram_api.clone(),
-                    config.bot_token,
-                    config.channel_id,
-                )?))
+                let account = <sha2::Sha256 as sha2::Digest>::digest(format!(
+                    "{}\n{}",
+                    session.worker_url, session.user_id
+                ));
+                let mark = self.config.data_dir.join(format!(
+                    "sent-{}",
+                    crate::disk_cache::hex(account.get(..8).unwrap_or_default())
+                ));
+                Ok::<_, CoreError>(Arc::new(
+                    Telegram::new(
+                        self.http.clone(),
+                        self.config.telegram_api.clone(),
+                        config.bot_token,
+                        config.channel_id,
+                    )?
+                    .remembering(mark),
+                ))
             })
             .await?
             .clone();
@@ -336,7 +377,10 @@ impl Core {
                     })
                 });
                 let _runtime = self.handle.enter();
-                Ok::<_, CoreError>(Arc::new(Scheduler::start(Limits::default(), fetch)))
+                Ok::<_, CoreError>(Arc::new(Scheduler::start(
+                    self.config.limits.clone(),
+                    fetch,
+                )))
             })
             .await?
             .clone();
@@ -344,7 +388,8 @@ impl Core {
         Ok(scheduler)
     }
 
-    async fn manifest(&self, asset_id: &str) -> Result<Arc<AssetManifest>, CoreError> {
+    /// `gated`: anything but what the user opened waits for a place.
+    async fn manifest(&self, asset_id: &str, gated: bool) -> Result<Arc<AssetManifest>, CoreError> {
         let (worker, manifests) = {
             let account = self.account.read().map_err(|_| poisoned())?;
             let account = account.as_ref().ok_or(CoreError::SignedOut)?;
@@ -355,10 +400,30 @@ impl Core {
         {
             return Ok(manifest.clone());
         }
+        let place = match gated {
+            true => {
+                let place = self
+                    .manifest_gate
+                    .clone()
+                    .acquire_owned()
+                    .await
+                    .map_err(|_| CoreError::Internal("the manifest gate closed".to_owned()))?;
+                // A fetch queued before a sign-out (or another account) ends here.
+                self.still_signed_in(|a| Arc::ptr_eq(&a.manifests, &manifests))?;
+                Some(place)
+            }
+            false => None,
+        };
         let id = asset_id.to_owned();
         let manifest = Arc::new(
-            self.run(async move { worker.manifest(&id).await })
-                .await??,
+            self.run(async move {
+                // Held until the request ends, even if its caller gave up.
+                let _place = place;
+                tokio::time::timeout(MANIFEST_TIMEOUT, worker.manifest(&id))
+                    .await
+                    .map_err(|_| CoreError::Network("the worker took too long".to_owned()))?
+            })
+            .await??,
         );
         let mut cached = lock(&manifests);
         if cached.len() >= MANIFESTS_MAX {
@@ -379,7 +444,7 @@ impl Core {
     ) -> Result<Image, CoreError> {
         // Taken first: a sign-out or another account from here on drops the write.
         let generation = self.media.generation();
-        let manifest = self.manifest(asset_id).await?;
+        let manifest = self.manifest(asset_id, class <= Class::Visible).await?;
         let picture = |s: &reader::Selection| s.mime.starts_with("image/");
         let selection = match reader::select(&manifest, rendition)? {
             s if picture(&s) => s,
@@ -427,7 +492,7 @@ impl Core {
 
     /// The size, part count and type of an original or of a video's playback.
     pub async fn layout(&self, asset_id: &str, rendition: Rendition) -> Result<Layout, CoreError> {
-        let manifest = self.manifest(asset_id).await?;
+        let manifest = self.manifest(asset_id, false).await?;
         let selection = reader::select(&manifest, rendition)?;
         let mut size = selection.size;
         if size == 0 {
@@ -460,7 +525,7 @@ impl Core {
         slices: PartSlices,
         class: Class,
     ) -> Result<RangeReader, CoreError> {
-        let manifest = self.manifest(asset_id).await?;
+        let manifest = self.manifest(asset_id, class <= Class::Visible).await?;
         let selection = reader::select(&manifest, rendition)?;
         // `slices` were planned on `size`: a manifest renewed since (a
         // rendition added, say) must not have its bytes sent under them.
@@ -689,6 +754,23 @@ pub(crate) mod tests {
         files: Vec<(&str, Vec<u8>, u64)>,
         manifest_fetches: u64,
     ) -> (wiremock::MockServer, Core, tempfile::TempDir) {
+        library_with(
+            manifest,
+            encryption,
+            files,
+            manifest_fetches,
+            Limits::default(),
+        )
+        .await
+    }
+
+    pub(crate) async fn library_with(
+        manifest: serde_json::Value,
+        encryption: bool,
+        files: Vec<(&str, Vec<u8>, u64)>,
+        manifest_fetches: u64,
+        limits: Limits,
+    ) -> (wiremock::MockServer, Core, tempfile::TempDir) {
         use wiremock::matchers::path;
         use wiremock::{Mock, ResponseTemplate};
         let server = bot_server(0, 0..=1).await; // HEAD needs no bot
@@ -708,6 +790,7 @@ pub(crate) mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut config = config_in(&dir);
         config.telegram_api = server.uri();
+        config.limits = limits;
         let core = Core::start(config).unwrap();
         core.sign_in(&server.uri(), Deployment::SelfHosted, "a@b.uz", "pw")
             .await
@@ -793,6 +876,219 @@ pub(crate) mod tests {
             .await
             .unwrap();
         assert_eq!(read_all(&mut reader).await.unwrap(), b"\x07\x07\x07012");
+    }
+
+    #[tokio::test]
+    async fn a_fling_cannot_hold_up_the_manifest_of_what_was_opened() {
+        use wiremock::matchers::path_regex;
+        use wiremock::{Mock, ResponseTemplate};
+        let (server, core, _dir) = library(photo(serde_json::json!({})), true, vec![], 1).await;
+        let slow = photo(serde_json::json!({"thumbId": "t"}));
+        Mock::given(path_regex("^/api/assets/b[0-9]+/dc-manifest$"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(slow)
+                    .set_delay(std::time::Duration::from_secs(3)),
+            )
+            .mount(&server)
+            .await;
+        let core = Arc::new(core);
+        let fling: Vec<_> = (0..MANIFEST_GATE + 4)
+            .map(|n| {
+                let core = core.clone();
+                tokio::spawn(async move {
+                    let _ = core
+                        .image(&format!("b{n}"), Rendition::Thumbnail, Class::Visible)
+                        .await;
+                })
+            })
+            .collect();
+        let opened = {
+            let core = core.clone();
+            tokio::spawn(async move {
+                let _ = core.image("a1", Rendition::Thumbnail, Class::Opened).await;
+            })
+        };
+        // The viewer's next item does not wait behind a fling either.
+        Mock::given(wiremock::matchers::path("/api/assets/c1/dc-manifest"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(photo(serde_json::json!({}))))
+            .mount(&server)
+            .await;
+        let next = {
+            let core = core.clone();
+            tokio::spawn(async move {
+                let _ = core.image("c1", Rendition::Thumbnail, Class::Next).await;
+            })
+        };
+        // Until the requests stop arriving (a slow runner is slow to start them).
+        let (mut asked, mut flung) = (Vec::new(), 0);
+        for _ in 0..50 {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            asked = server
+                .received_requests()
+                .await
+                .unwrap()
+                .iter()
+                .map(|r| r.url.path().to_owned())
+                .filter(|p| p.ends_with("/dc-manifest"))
+                .collect::<Vec<String>>();
+            let now = asked
+                .iter()
+                .filter(|p| p.starts_with("/api/assets/b"))
+                .count();
+            let opened_asked = asked.iter().any(|p| p == "/api/assets/a1/dc-manifest");
+            let next_asked = asked.iter().any(|p| p == "/api/assets/c1/dc-manifest");
+            let settled = now == flung && now > 0 && opened_asked && next_asked;
+            flung = now;
+            if settled {
+                break;
+            }
+        }
+        assert_eq!(flung, MANIFEST_GATE, "the rest of the fling waits");
+        assert!(
+            asked.iter().any(|p| p == "/api/assets/a1/dc-manifest"),
+            "the opened one does not"
+        );
+        assert!(
+            asked.iter().any(|p| p == "/api/assets/c1/dc-manifest"),
+            "nor the next one"
+        );
+        for task in fling {
+            task.abort();
+        }
+        opened.abort();
+        next.abort();
+    }
+
+    #[tokio::test]
+    async fn a_fetch_queued_at_the_gate_ends_at_sign_out() {
+        use wiremock::matchers::path_regex;
+        use wiremock::{Mock, ResponseTemplate};
+        let (server, core, _dir) = library(photo(serde_json::json!({})), true, vec![], 0).await;
+        Mock::given(path_regex("^/api/assets/b[0-9]+/dc-manifest$"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(photo(serde_json::json!({"thumbId": "t"})))
+                    .set_delay(Duration::from_secs(2)),
+            )
+            .mount(&server)
+            .await;
+        let core = Arc::new(core);
+        let tasks: Vec<_> = (0..=MANIFEST_GATE)
+            .map(|n| {
+                let core = core.clone();
+                tokio::spawn(async move {
+                    core.image(&format!("b{n}"), Rendition::Thumbnail, Class::Visible)
+                        .await
+                })
+            })
+            .collect();
+        let asked = || async {
+            server
+                .received_requests()
+                .await
+                .unwrap()
+                .iter()
+                .filter(|r| r.url.path().starts_with("/api/assets/b"))
+                .count()
+        };
+        for _ in 0..50 {
+            if asked().await == MANIFEST_GATE {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        core.sign_out().unwrap();
+        let mut signed_out = 0;
+        for task in tasks {
+            if matches!(task.await.unwrap(), Err(CoreError::SignedOut)) {
+                signed_out += 1;
+            }
+        }
+        assert!(signed_out >= 1, "the queued one ended at sign-out");
+        assert_eq!(asked().await, MANIFEST_GATE, "and never reached the worker");
+    }
+
+    #[test]
+    fn limits_that_would_stall_every_read_are_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        for bad in [
+            Limits {
+                reads_per_sec: 0.0,
+                ..Limits::default()
+            },
+            Limits {
+                reads_per_sec: f64::NAN,
+                ..Limits::default()
+            },
+            Limits {
+                read_burst: 0.5,
+                ..Limits::default()
+            },
+            Limits {
+                max_running: 1,
+                reserved_high: 1,
+                ..Limits::default()
+            },
+            Limits {
+                reads_per_sec: 1e-300,
+                ..Limits::default()
+            },
+            Limits {
+                reads_per_sec: f64::INFINITY,
+                ..Limits::default()
+            },
+            Limits {
+                read_burst: f64::INFINITY,
+                ..Limits::default()
+            },
+            Limits {
+                max_next: 0,
+                ..Limits::default()
+            },
+            Limits {
+                max_background: 0,
+                ..Limits::default()
+            },
+            Limits {
+                max_sending: 0,
+                ..Limits::default()
+            },
+            Limits {
+                job_timeout: Duration::ZERO,
+                ..Limits::default()
+            },
+        ] {
+            let mut config = config_in(&dir);
+            config.limits = bad;
+            assert!(matches!(Core::start(config), Err(CoreError::Internal(_))));
+        }
+    }
+
+    #[tokio::test]
+    async fn the_configured_limits_reach_the_scheduler() {
+        let size = PART_SIZE + 10;
+        let manifest = photo(serde_json::json!({"fileSize": size,
+            "chunks": [{"index": 0, "file_id": "c0"}, {"index": 1, "file_id": "c1"}]}));
+        let first = vec![7u8; usize::try_from(PART_SIZE).unwrap()];
+        let files = vec![("c0", sealed(&first), 1), ("c1", sealed(b"0123456789"), 1)];
+        // One read every two seconds: the second part must wait for its token.
+        let slow = Limits {
+            reads_per_sec: 0.5,
+            read_burst: 1.0,
+            ..Limits::default()
+        };
+        let (_server, core, _dir) = library_with(manifest, true, files, 1, slow).await;
+        let RangePlan::Partial(slices) = plan_range(size, 0, size - 1) else {
+            panic!("no range")
+        };
+        let started = std::time::Instant::now();
+        let mut reader = core
+            .range("a1", Rendition::Original, size, slices, Class::Visible)
+            .await
+            .unwrap();
+        read_all(&mut reader).await.unwrap();
+        assert!(started.elapsed() >= std::time::Duration::from_millis(1500));
     }
 
     #[tokio::test]
