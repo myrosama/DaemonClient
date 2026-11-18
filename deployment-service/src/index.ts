@@ -444,8 +444,15 @@ async function handleOAuthExchange(request: Request, env: Env): Promise<Response
       return corsResponse(JSON.stringify({ error: 'Could not read your Cloudflare account — make sure you approved account access.' }), { status: 502 });
     }
 
-    // 3) provision (reuses the exact paste-flow provisioning)
+    // 3) provision (reuses the exact paste-flow provisioning). Reconnecting an
+    // existing cloud must use the account that holds its database: another
+    // account would get a new, empty cloud and the user's index would vanish.
     const priorCfg = await fetchWorkerConfig(uid, idToken, env).catch(() => null);
+    if (priorCfg?.accountId && priorCfg.accountId !== accountId) {
+      return corsResponse(JSON.stringify({
+        error: 'Please connect the same Cloudflare account you used before. Your cloud and its index live there.',
+      }), { status: 409 });
+    }
     const prov = await provisionWorker(env, uid, accountId, accessToken, priorCfg?.sessionSecret);
     if (!prov.success) return corsResponse(JSON.stringify({ error: prov.error }), { status: 500 });
 
@@ -563,9 +570,14 @@ async function getCloudflareAccountId(accessToken: string): Promise<string | nul
 }
 
 // Refresh an OAuth access token (public client → no secret). Cloudflare may
-// rotate the refresh token, so we return the new one when present.
-async function refreshCloudflareToken(refreshToken: string): Promise<{ accessToken: string; refreshToken?: string } | null> {
-  const res = await fetch(CF_OAUTH_TOKEN_URL, {
+// rotate the refresh token, so we return the new one when present. On failure,
+// `detail` is Cloudflare's status and OAuth error code (never a token), and
+// `definitive` says whether Cloudflare refused it (4xx) rather than failed.
+type Refreshed = { accessToken: string; refreshToken?: string } | { failed: true; detail: string; definitive: boolean };
+async function refreshCloudflareToken(refreshToken: string): Promise<Refreshed> {
+  let res: Response;
+  try {
+    res = await fetch(CF_OAUTH_TOKEN_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
@@ -573,12 +585,22 @@ async function refreshCloudflareToken(refreshToken: string): Promise<{ accessTok
       client_id: CF_OAUTH_CLIENT_ID,
       refresh_token: refreshToken,
     }).toString(),
-  });
-  if (!res.ok) return null;
-  const data = await res.json() as any;
-  if (!data.access_token) return null;
+    });
+  } catch {
+    return { failed: true, detail: 'network', definitive: false };
+  }
+  const data = await res.json().catch(() => ({})) as any;
+  if (!res.ok || !data.access_token) {
+    const code = typeof data.error === 'string' && /^[a-z_]{1,64}$/.test(data.error) ? ` ${data.error}` : '';
+    return { failed: true, detail: `${res.status}${code}`, definitive: res.status >= 400 && res.status < 500 };
+  }
   return { accessToken: data.access_token, refreshToken: data.refresh_token };
 }
+
+// Fields that mark an account whose worker can't be updated until its owner
+// reconnects Cloudflare (the dashboard shows a banner). Cleared by the next
+// successful update; a reconnect writes a fresh config without them.
+const UPDATE_BLOCKED_FIELDS = ['updateBlocked', 'updateBlockedReason', 'updateBlockedAt'];
 
 // Silently re-deploy the user's per-user worker if its embedded shim version
 // has drifted from the current SHIM_VERSION. Called fire-and-forget from the
@@ -608,8 +630,7 @@ const FLEET_PERIOD_MS = 10 * 60_000; // matches the cron in wrangler.toml
 const FLEET_BATCH = 1;
 const FLEET_FIELDS = [
   'accountId', 'workerName', 'databaseId', 'apiToken', 'refreshToken', 'sessionSecret',
-  'pendingSessionSecret', 'lastDeployedVersion', 'autoUpdateEnabled', 'lastUpdatedAt',
-];
+  'pendingSessionSecret', 'lastDeployedVersion', 'autoUpdateEnabled', 'lastUpdatedAt', 'updateBlocked'];
 // A worker touched this recently is being updated by its owner's sign-in;
 // leave it, so the two never spend the same single-use Cloudflare token.
 const FLEET_QUIET_MS = 15 * 60_000;
@@ -730,8 +751,14 @@ async function updateUserWorker(
     } else {
       const refresh = await decryptToken(cfg.refreshToken, env.ENCRYPTION_MASTER_KEY);
       const refreshed = await refreshCloudflareToken(refresh);
-      if (!refreshed) {
-        return { status: 200, body: { updated: false, reason: 'refresh-failed' } };
+      if ('failed' in refreshed) {
+        console.log(`[auto-update] ${cfg.workerName}: Cloudflare refused to renew (${refreshed.detail})`);
+        if (refreshed.definitive && cfg.updateBlocked !== 'reconnect') {
+          await saveWorkerConfig(uid, {
+            updateBlocked: 'reconnect', updateBlockedReason: refreshed.detail, updateBlockedAt: new Date().toISOString(),
+          }, env, idToken, { onlyFields: UPDATE_BLOCKED_FIELDS }).catch((e) => console.error('[auto-update] could not record the reconnect mark:', e?.message));
+        }
+        return { status: 200, body: { updated: false, reason: 'refresh-failed', detail: refreshed.detail } };
       }
       apiToken = refreshed.accessToken;
       if (refreshed.refreshToken && refreshed.refreshToken !== refresh) {
@@ -832,7 +859,8 @@ async function updateUserWorker(
       lastDeployedVersion: SHIM_VERSION,
       lastUpdatedAt: new Date().toISOString(),
     };
-    const settledFields = { onlyFields: [...Object.keys(settledConfig), 'pendingSessionSecret'] };
+    // Fields named in the mask but absent from the body are deleted.
+    const settledFields = { onlyFields: [...Object.keys(settledConfig), 'pendingSessionSecret', ...UPDATE_BLOCKED_FIELDS] };
     await saveWorkerConfig(uid, settledConfig, env, idToken, settledFields)
       .catch((e) => {
         console.error('[auto-update] post-deploy config save failed; retrying once:', e?.message);
