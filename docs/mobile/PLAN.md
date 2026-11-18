@@ -181,7 +181,7 @@ with SPEC D24; Part 2 written task by task).
       names, Android's notification icon, channel and Recents title).
       Home-screen names and app icons were done in 0.4 (SPEC D20). **Device
       signing (the operator's Apple ID) → carried to 2.6.**
-- [ ] **2.2** Sign-in (SPEC D8, changed 2026-11-17) — one form for
+- [x] **2.2** Sign-in (SPEC D8, changed 2026-11-17) — one form for
       everyone: server address (always shown, the hosted one filled in),
       email, password, and "Create account" in an in-app browser sheet;
       `workerUrl`; secrets to secure storage.
