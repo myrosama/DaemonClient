@@ -6,6 +6,8 @@
 import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
+// These functions are ignored because they are not marked as `pub`: `core`
+
 /// The core's version, shown in the apps so a build can be traced to a commit.
 String coreVersion() => RustLib.instance.api.crateApiCoreCoreVersion();
 
@@ -22,3 +24,62 @@ Future<void> startCore({required String dataDir, required String cacheDir}) =>
 
 /// One HTTPS request from the device to Telegram; the HTTP status.
 Future<int> checkTelegram() => RustLib.instance.api.crateApiCoreCheckTelegram();
+
+/// Signs in with the one form (SPEC D8): the hosted address, however typed,
+/// is the hosted service; any other address is a self-hosted server. Errors
+/// carry the core's own words ("wrong email or password", …).
+Future<SignedIn> signIn({
+  required String address,
+  required String email,
+  required String password,
+}) => RustLib.instance.api.crateApiCoreSignIn(
+  address: address,
+  email: email,
+  password: password,
+);
+
+/// Resumes a session kept in the phone's secure storage, without the password.
+void restore({required SignedIn session}) =>
+    RustLib.instance.api.crateApiCoreRestore(session: session);
+
+/// Forgets the session and empties what the core kept for it (pictures,
+/// uploads under way).
+void signOut() => RustLib.instance.api.crateApiCoreSignOut();
+
+/// What a sign-in gives the app. Immich's own client needs the worker's
+/// address and the session token (it sends it as its auth cookie); the
+/// storage credentials stay in the core (SPEC D21).
+class SignedIn {
+  final String workerUrl;
+  final String token;
+  final String userId;
+  final String email;
+  final String name;
+
+  const SignedIn({
+    required this.workerUrl,
+    required this.token,
+    required this.userId,
+    required this.email,
+    required this.name,
+  });
+
+  @override
+  int get hashCode =>
+      workerUrl.hashCode ^
+      token.hashCode ^
+      userId.hashCode ^
+      email.hashCode ^
+      name.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is SignedIn &&
+          runtimeType == other.runtimeType &&
+          workerUrl == other.workerUrl &&
+          token == other.token &&
+          userId == other.userId &&
+          email == other.email &&
+          name == other.name;
+}

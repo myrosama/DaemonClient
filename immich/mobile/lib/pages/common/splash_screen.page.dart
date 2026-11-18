@@ -22,6 +22,7 @@ import 'package:immich_mobile/theme/color_scheme.dart';
 import 'package:immich_mobile/theme/theme_data.dart';
 import 'package:immich_mobile/widgets/common/immich_logo.dart';
 import 'package:immich_mobile/widgets/common/immich_title_text.dart';
+import 'package:immich_mobile/services/core_session.service.dart';
 import 'package:logging/logging.dart';
 import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
@@ -308,7 +309,8 @@ class SplashScreenPageState extends ConsumerState<SplashScreenPage> {
     final endpoint = Store.tryGet(StoreKey.serverEndpoint);
     final accessToken = Store.tryGet(StoreKey.accessToken);
 
-    if (accessToken != null && serverUrl != null && endpoint != null) {
+    // P2 2.2: only when the core came up signed in too (else they disagree).
+    if (accessToken != null && serverUrl != null && endpoint != null && CoreSessionService.restoredAtStart) {
       final infoProvider = ref.read(serverInfoProvider.notifier);
       final wsProvider = ref.read(websocketProvider.notifier);
       final backgroundManager = ref.read(backgroundSyncProvider);
@@ -348,7 +350,7 @@ class SplashScreenPageState extends ConsumerState<SplashScreenPage> {
             }
           },
           onError: (exception) => {
-            log.severe('Failed to update auth info with access token: $accessToken'),
+            log.severe('Failed to update auth info'),
             ref.read(authProvider.notifier).logout(),
             context.replaceRoute(const LoginRoute()),
           },

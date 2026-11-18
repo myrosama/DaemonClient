@@ -27,12 +27,63 @@ pub fn start_core(data_dir: String, cache_dir: String) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn core() -> anyhow::Result<&'static dc_core::Core> {
+    CORE.get()
+        .ok_or_else(|| anyhow::anyhow!("the core is not started"))
+}
+
 /// One HTTPS request from the device to Telegram; the HTTP status.
 pub async fn check_telegram() -> anyhow::Result<u16> {
-    let core = CORE
-        .get()
-        .ok_or_else(|| anyhow::anyhow!("the core is not started"))?;
-    Ok(core.check_telegram().await?)
+    Ok(core()?.check_telegram().await?)
+}
+
+/// What a sign-in gives the app. Immich's own client needs the worker's
+/// address and the session token (it sends it as its auth cookie); the
+/// storage credentials stay in the core (SPEC D21).
+pub struct SignedIn {
+    pub worker_url: String,
+    pub token: String,
+    pub user_id: String,
+    pub email: String,
+    pub name: String,
+}
+
+/// Signs in with the one form (SPEC D8): the hosted address, however typed,
+/// is the hosted service; any other address is a self-hosted server. Errors
+/// carry the core's own words ("wrong email or password", …).
+pub async fn sign_in(address: String, email: String, password: String) -> anyhow::Result<SignedIn> {
+    let deployment = dc_core::session::deployment_of(&address)?;
+    let session = core()?
+        .sign_in(&address, deployment, &email, &password)
+        .await?;
+    Ok(SignedIn {
+        worker_url: session.worker_url,
+        token: session.token.expose().clone(),
+        user_id: session.user_id,
+        email: session.email,
+        name: session.name,
+    })
+}
+
+/// Resumes a session kept in the phone's secure storage, without the password.
+#[flutter_rust_bridge::frb(sync)]
+pub fn restore(session: SignedIn) -> anyhow::Result<()> {
+    core()?.restore(dc_core::session::Session {
+        worker_url: session.worker_url,
+        token: dc_core::Secret::new(session.token),
+        user_id: session.user_id,
+        email: session.email,
+        name: session.name,
+    })?;
+    Ok(())
+}
+
+/// Forgets the session and empties what the core kept for it (pictures,
+/// uploads under way).
+#[flutter_rust_bridge::frb(sync)]
+pub fn sign_out() -> anyhow::Result<()> {
+    core()?.sign_out()?;
+    Ok(())
 }
 
 /// Runs once when Dart calls `RustLib.init()`. Deliberately empty: FRB's

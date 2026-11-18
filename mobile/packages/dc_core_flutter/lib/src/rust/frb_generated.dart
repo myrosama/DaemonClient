@@ -66,7 +66,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.13.0';
 
   @override
-  int get rustContentHash => -1054890094;
+  int get rustContentHash => -1514672026;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -85,6 +85,16 @@ abstract class RustLibApi extends BaseApi {
   Future<void> crateApiCoreInitApp();
 
   BigInt crateApiCorePartCount({required BigInt fileSize});
+
+  void crateApiCoreRestore({required SignedIn session});
+
+  Future<SignedIn> crateApiCoreSignIn({
+    required String address,
+    required String email,
+    required String password,
+  });
+
+  void crateApiCoreSignOut();
 
   Future<void> crateApiCoreStartCore({
     required String dataDir,
@@ -200,6 +210,87 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       const TaskConstMeta(debugName: "part_count", argNames: ["fileSize"]);
 
   @override
+  void crateApiCoreRestore({required SignedIn session}) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_box_autoadd_signed_in(session, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 5)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiCoreRestoreConstMeta,
+        argValues: [session],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiCoreRestoreConstMeta =>
+      const TaskConstMeta(debugName: "restore", argNames: ["session"]);
+
+  @override
+  Future<SignedIn> crateApiCoreSignIn({
+    required String address,
+    required String email,
+    required String password,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(address, serializer);
+          sse_encode_String(email, serializer);
+          sse_encode_String(password, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 6,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_signed_in,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiCoreSignInConstMeta,
+        argValues: [address, email, password],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiCoreSignInConstMeta => const TaskConstMeta(
+    debugName: "sign_in",
+    argNames: ["address", "email", "password"],
+  );
+
+  @override
+  void crateApiCoreSignOut() {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 7)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiCoreSignOutConstMeta,
+        argValues: [],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiCoreSignOutConstMeta =>
+      const TaskConstMeta(debugName: "sign_out", argNames: []);
+
+  @override
   Future<void> crateApiCoreStartCore({
     required String dataDir,
     required String cacheDir,
@@ -213,7 +304,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 5,
+            funcId: 8,
             port: port_,
           );
         },
@@ -246,9 +337,30 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  SignedIn dco_decode_box_autoadd_signed_in(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dco_decode_signed_in(raw);
+  }
+
+  @protected
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw as Uint8List;
+  }
+
+  @protected
+  SignedIn dco_decode_signed_in(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 5)
+      throw Exception('unexpected arr length: expect 5 but see ${arr.length}');
+    return SignedIn(
+      workerUrl: dco_decode_String(arr[0]),
+      token: dco_decode_String(arr[1]),
+      userId: dco_decode_String(arr[2]),
+      email: dco_decode_String(arr[3]),
+      name: dco_decode_String(arr[4]),
+    );
   }
 
   @protected
@@ -290,10 +402,33 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  SignedIn sse_decode_box_autoadd_signed_in(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return (sse_decode_signed_in(deserializer));
+  }
+
+  @protected
   Uint8List sse_decode_list_prim_u_8_strict(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var len_ = sse_decode_i_32(deserializer);
     return deserializer.buffer.getUint8List(len_);
+  }
+
+  @protected
+  SignedIn sse_decode_signed_in(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_workerUrl = sse_decode_String(deserializer);
+    var var_token = sse_decode_String(deserializer);
+    var var_userId = sse_decode_String(deserializer);
+    var var_email = sse_decode_String(deserializer);
+    var var_name = sse_decode_String(deserializer);
+    return SignedIn(
+      workerUrl: var_workerUrl,
+      token: var_token,
+      userId: var_userId,
+      email: var_email,
+      name: var_name,
+    );
   }
 
   @protected
@@ -347,6 +482,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_box_autoadd_signed_in(
+    SignedIn self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_signed_in(self, serializer);
+  }
+
+  @protected
   void sse_encode_list_prim_u_8_strict(
     Uint8List self,
     SseSerializer serializer,
@@ -354,6 +498,16 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_i_32(self.length, serializer);
     serializer.buffer.putUint8List(self);
+  }
+
+  @protected
+  void sse_encode_signed_in(SignedIn self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.workerUrl, serializer);
+    sse_encode_String(self.token, serializer);
+    sse_encode_String(self.userId, serializer);
+    sse_encode_String(self.email, serializer);
+    sse_encode_String(self.name, serializer);
   }
 
   @protected

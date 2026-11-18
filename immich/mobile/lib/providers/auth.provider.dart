@@ -11,6 +11,8 @@ import 'package:immich_mobile/providers/api.provider.dart';
 import 'package:immich_mobile/providers/infrastructure/user.provider.dart';
 import 'package:immich_mobile/services/api.service.dart';
 import 'package:immich_mobile/services/auth.service.dart';
+import 'package:immich_mobile/services/core_session.service.dart';
+import 'package:immich_mobile/infrastructure/repositories/network.repository.dart';
 import 'package:immich_mobile/services/foreground_upload.service.dart';
 import 'package:immich_mobile/services/secure_storage.service.dart';
 import 'package:immich_mobile/services/background_upload.service.dart';
@@ -42,6 +44,11 @@ class AuthNotifier extends StateNotifier<AuthState> {
   final _log = Logger("AuthenticationNotifier");
 
   static const Duration _timeoutDuration = Duration(seconds: 7);
+
+  /// A first sign-in has no saved user to fall back on, so a slow first
+  /// answer (a worker waking up, a cold emulator) must not fail it — the
+  /// 7 s limit undid sign-ins on the Android emulator (P2 2.2, Gate 2).
+  static const Duration _firstSignInTimeout = Duration(seconds: 30);
 
   AuthNotifier(
     this._authService,
@@ -76,6 +83,44 @@ class AuthNotifier extends StateNotifier<AuthState> {
     } catch (_) {
       return false;
     }
+  }
+
+  /// Step one of a sign-in through DaemonClient's core (SPEC D8, P2 task
+  /// 2.2): the core signs in, and Immich's own API client is pointed at the
+  /// per-user worker with the token as its auth cookie (no `.well-known`
+  /// lookup). Returns the token. The caller then invalidates the API
+  /// providers and calls [saveAuthInfo] — in that order, as Immich's own
+  /// sign-in sets its endpoint first (else the user fetch goes to the old
+  /// address) — and [undoCoreSignIn] if that fails.
+  Future<String> signInWithCore(String address, String email, String password) async {
+    final session = await _ref
+        .read(coreSessionServiceProvider)
+        .signIn(address: address, email: email, password: password);
+    try {
+      final endpoint = '${session.workerUrl}/api';
+      _apiService.setEndpoint(endpoint);
+      await Store.put(StoreKey.serverEndpoint, endpoint);
+      // What was typed, for the form next time; the worker is the endpoint.
+      await Store.put(StoreKey.serverUrl, address.trim());
+      await _apiService.setDeviceInfoHeader();
+      // Immich's native HTTP authenticates with the token as its auth cookie.
+      await NetworkRepository.setHeaders(
+        ApiService.getRequestHeaders(),
+        ApiService.getServerUrls(),
+        token: session.token,
+      );
+      return session.token;
+    } catch (_) {
+      await undoCoreSignIn();
+      rethrow;
+    }
+  }
+
+  /// Half signed in is not signed in: nothing of it may resume at the next start.
+  Future<void> undoCoreSignIn() async {
+    await _ref.read(coreSessionServiceProvider).signOut();
+    await Store.delete(StoreKey.accessToken);
+    await _widgetService.clearCredentials();
   }
 
   Future<LoginResponse> login(String email, String password) async {
@@ -136,7 +181,9 @@ class AuthNotifier extends StateNotifier<AuthState> {
     UserDto? user = _userService.tryGetMyUser();
 
     try {
-      final serverUser = await _userService.refreshMyUser().timeout(_timeoutDuration);
+      final serverUser = await _userService.refreshMyUser().timeout(
+        user == null ? _firstSignInTimeout : _timeoutDuration,
+      );
       if (serverUser == null) {
         _log.severe("Unable to get user information from the server.");
       } else {
