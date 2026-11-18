@@ -11,7 +11,7 @@ import Turnstile from './components/Turnstile'
 import { toast } from './components/ui/Toast'
 import { SetupWorker } from './pages/SetupWorker'
 import { SetupProcessor } from './pages/SetupProcessor'
-import { consumeOAuthState, CF_OAUTH_REDIRECT_URI, DEPLOYMENT_WORKER } from './config/cloudflareOauth'
+import { consumeOAuthState, CF_OAUTH_REDIRECT_URI, DEPLOYMENT_WORKER, startCloudflareOAuth } from './config/cloudflareOauth'
 import { waitForWorker } from './utils/waitForWorker'
 import { safeReturnUrl, isAbsoluteUrl, appReturnUrl, cameFromOurApp } from './utils/safeReturnUrl'
 import { isFreshSetup, shouldHoldLink, appHosts, mustNotContactWorker } from './utils/cloudStartup'
@@ -1895,6 +1895,29 @@ function DashboardPage() {
       <DashboardBackground preset={bgPreset} />
 
       <div className="min-h-screen" onClickCapture={holdAppLinks}>
+        {/* The update service marks an account whose Cloudflare authorization
+            no longer renews: its worker keeps working but gets no updates. */}
+        {!IS_SELF_HOST && backend?.updateBlocked === 'reconnect' && (
+          <div role="status" className="px-4 sm:px-8 lg:px-12 pt-5">
+            <div className="max-w-[1020px] mx-auto dc-card rounded-[11px] px-5 py-4 flex flex-col sm:flex-row sm:items-center gap-3 ring-1 ring-amber-300/60">
+              <div className="text-[13px] leading-relaxed flex-1">
+                <p className="text-white font-medium">Your private cloud needs a quick reconnect</p>
+                <p className="text-[rgba(255,255,255,0.6)]">
+                  Photos and Drive keep working, but your cloud can't receive fixes and new features until you
+                  reconnect Cloudflare. It takes about a minute and keeps all your files. Use the same Cloudflare
+                  account as before.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => startCloudflareOAuth().catch((e) => console.error('Could not start Cloudflare authorization:', e))}
+                className="shrink-0 h-9 px-4 rounded-full bg-daemon-green hover:bg-daemon-green-hover text-white text-[13px] font-semibold transition-all duration-150"
+              >
+                Reconnect Cloudflare
+              </button>
+            </div>
+          </div>
+        )}
         {(cloud === 'starting' || (cloud === 'checking' && heldClick)) && (
           <div role="status" className="px-4 sm:px-8 lg:px-12 pt-5">
             <div className={`max-w-[1020px] mx-auto dc-card rounded-[11px] px-5 py-4 flex items-start gap-3 ${heldClick ? 'ring-1 ring-amber-300/60' : ''}`}>
