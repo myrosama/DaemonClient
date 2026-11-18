@@ -382,3 +382,71 @@ Moving Immich's reads to secure storage is a later hardening, not 2.2.
   run — a constant only; checked by the analyzer and the 677 Dart tests.)
 - Thumbnails, photos and videos still come through the worker's old byte
   routes — exactly what 2.3 replaces (the core's local server).
+
+---
+
+## Task 2.3 — Photos and video through the core's local server
+
+**Delivers** (P2-3, P2-4; the operator, 2026-11-18: "make sure to not use
+[the old worker byte routes] but our core"): every thumbnail, photo, video
+and download the app shows or saves is read by the core — straight from
+Telegram, decrypted on the phone, ordered by the scheduler — through its
+local server. The worker serves no bytes to the app any more; it keeps the
+metadata (timeline, sync).
+
+**Read from the fork (2026-11-18):** every byte URL comes from four
+functions in `lib/utils/image_url_builder.dart` (thumbnail, original,
+playback, face) and the video viewer's own (`video_viewer.widget.dart:122-127`),
+all as `${serverEndpoint}/assets/<id>/…`. Callers: the grid and viewer
+(`remote_image_provider.dart`), downloads (`download.repository.dart:91,124`),
+the map (`asset_marker_icon.dart`), shared links, Chromecast
+(`gcast.service.dart:167`), people avatars. The local server already
+answers `/api/assets/<id>/{thumbnail?size=…, original, video/playback}` and
+ignores Immich's other query fields (`edited`, `c`). iOS allows plain http
+(`NSAllowsArbitraryLoads`), Android cleartext (`network_security_config`).
+
+**Changes:**
+1. Bridge: `media_server() → {gridBase, viewerBase}` (the core held as
+   `Arc<Core>`, which `media_server` needs).
+2. Dart: the addresses fetched once the core is up (`_startCore`, after the
+   restore) and again on every resume (the listeners may have been closed);
+   when they change, Flutter's image cache is cleared so tiles load again.
+3. The URL builders: grid thumbnails → `gridBase`; preview, full size,
+   original and playback → `viewerBase` (the opened item never queues behind
+   the grid, D17); the video viewer the same. Downloads → `viewerBase`
+   original.
+4. **The viewer shows the preview, then quietly the original** (D23, P2-4):
+   Immich's "load original" setting defaults to on.
+5. A check in `mobile-build` CI: no byte URL (`/assets/<id>/thumbnail`,
+   `/original`, `/video/playback`) is built from `serverEndpoint` anywhere
+   in `lib/` — except Chromecast, listed.
+
+**Not in 2.3, recorded:** Chromecast keeps the worker's URL (a cast device
+fetches the URL itself; `127.0.0.1` would be its own) — remove or keep it is
+a 2.10 question; people avatars stay on the worker (the worker has no faces —
+2.10); the widgets (2.10); a download the OS finishes while the app is
+suspended cannot reach the local server (the listener stops) — downloads
+are short and foreground; to revisit if seen.
+
+**Android's 6 connections a host (P2-3):** Cronet queues the grid's
+requests beyond 6, which would cap cold thumbnails near 13 a second against
+the core's ~44. Measured first, on the emulator: the core logs how many
+requests each listener served every 5 s (debug builds only); a fast fling
+(`adb shell input swipe`) through the test library, one grid listener. Only
+if it is well below iOS: four grid listeners, a thumbnail sent to one by a
+hash of its asset id.
+
+- [ ] **Step 1:** tests first, failing: the URL builders (thumbnail on the
+  grid base, preview/original/playback on the viewer base, the asset id and
+  size kept, no worker host); the addresses refreshed and the image cache
+  cleared when they change; the CI check fails on a worker byte URL.
+- [ ] **Step 2:** implement; regenerate the bridge; Rust and Dart tests,
+  clippy, `flutter analyze`.
+- [ ] **Step 3: Gate 2**, signed in with the test account on the iOS
+  Simulator and the Android emulator: scroll the whole timeline, fast —
+  thumbnails appear, and the core's log shows them served by its listeners;
+  open photos (preview, then the original); play a multi-part video and seek
+  across parts; save one photo to the device; background the app, come
+  back — everything still loads (a re-opened listener). The Android
+  measurement above, and the decision on its listeners.
+- [ ] **Step 4:** Gate 3 (one reviewer at a time); commit code, then docs.
