@@ -54,13 +54,7 @@ dist/
 lib/
 lib-es6/
 !immich/web/src/lib/
-# ...and the Flutter fork's lib/ trees are source too: the app, the generated
-# openapi client it imports, and the workspace UI packages. Without these
-# negations the entire Dart codebase was untracked — CI checked out a skeleton
-# and a fresh clone could not build the mobile app at all.
-!immich/mobile/**/lib/
-# ...and the same for the shared mobile core's Flutter plugin (and, later, the
-# Drive app) under mobile/: without it the plugin's Dart API is never committed.
+# ...and the native apps' and core's lib/ trees under mobile/ are source too.
 # Re-include the lib/ DIRECTORIES only — a `lib/**` negation would also
 # re-include .env files and keys inside them, overriding the SECRETS rules.
 !mobile/**/lib/

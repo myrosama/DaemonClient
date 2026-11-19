@@ -1,8 +1,10 @@
 # This directory is a fork of Immich
 
 Upstream: <https://github.com/immich-app/immich> — AGPL-3.0, copyright the
-Immich contributors. `README.md` in this directory is theirs. This file
-describes what DaemonClient changed and why.
+Immich contributors. This file describes what DaemonClient kept, changed and
+why. Only the web client is kept (2026-11-19): upstream's server, machine
+learning, mobile app, CLI, e2e tests, docs and tooling were removed — none of
+it was deployed.
 
 **If you want a conventional self-hosted photo server on your own hardware, use
 Immich itself.** It is excellent, actively developed, and this project would not
@@ -14,8 +16,9 @@ Docker, storage in your own Telegram channel.
 | Path | Status |
 |---|---|
 | `web/` | **live** — deployed to `photos.daemonclient.uz` |
-| `mobile/` | forked, **not released**, not currently worked on |
-| `server/`, `machine-learning/`, `docker/`, `e2e/`, `cli/` | upstream code, not deployed by us |
+| `i18n/`, `open-api/typescript-sdk/` | what `web/` builds from (translations; `@immich/sdk`) |
+| upstream's `mobile/` | **removed 2026-11-19** — DaemonClient's mobile apps are native, on the Rust core (`../mobile`, SPEC D26) |
+| upstream's `server/`, `machine-learning/`, `docker/`, `e2e/`, `cli/`, … | **removed 2026-11-19** — never deployed |
 
 The upstream **server is not used at all**. Everything it does is done by
 [`../immich-api-shim`](../immich-api-shim), a Cloudflare Worker that impersonates
