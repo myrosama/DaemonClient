@@ -726,7 +726,12 @@ async function handleDeleteAssets(request: Request, env: Env, uid: string, idTok
   // Always permanently delete — no trash needed.
   const adapter = env.DB ? new D1Adapter(env.DB) : null;
   if (adapter) await ensureDeduplicationSchema(env.DB);
-  const load = (id: string): Promise<any> => adapter ? adapter.getPhoto(id) : firestoreGet(env, uid, `photos/${id}`, idToken);
+  // Only the caller's own rows (the owner gate is the boundary; this is the
+  // second check). Firestore documents already live under the caller's path.
+  const load = async (id: string): Promise<any> => {
+    const photo: any = adapter ? await adapter.getPhoto(id) : await firestoreGet(env, uid, `photos/${id}`, idToken);
+    return photo && (!adapter || photo.ownerId === uid) ? photo : null;
+  };
   const photos = new Map<string, any>();
   for (const id of ids) {
     const photo = await load(id);

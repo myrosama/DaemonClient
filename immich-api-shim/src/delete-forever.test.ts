@@ -123,6 +123,18 @@ describe('deleting photos for good', () => {
     expect(cleared()).toBe(40);
   });
 
+  it("another owner's row is never deleted, even when named directly or as a live-photo pair", async () => {
+    const DB = await library([
+      { id: 'mine', telegramChunks: parts(1, 1), livePhotoVideoId: 'theirs-pair' },
+      { id: 'theirs', ownerId: 'u2', telegramChunks: parts(50, 1) },
+      { id: 'theirs-pair', ownerId: 'u2', telegramChunks: parts(60, 1) },
+    ]);
+    const calls = telegram();
+    await call(DB, 'DELETE', '/api/assets', { ids: ['mine', 'theirs'] });
+    expect(calls.flat()).toEqual([1]);
+    expect([row(DB, 'theirs').isTrashed, row(DB, 'theirs-pair').isTrashed]).toEqual([0, 0]);
+  });
+
   it('Empty Trash leaves finished tombstones alone, so they still expire on time', async () => {
     const DB = await library([
       { id: 't1', isTrashed: 1, telegramChunks: '[]', purgedAt: '2026-01-01T00:00:00.000Z' },
