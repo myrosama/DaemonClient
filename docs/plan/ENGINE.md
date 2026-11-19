@@ -170,3 +170,122 @@ Linux machine's.
   P2's uploads.
 - Approve that the browser's crypto (wasm or WebCrypto) is chosen by the E2
   measurement.
+
+---
+
+# Part 2 — The rebuild (SPEC D26): native apps on one core
+
+**Decided by the operator 2026-11-19:** the Immich Flutter mobile fork is
+dropped; Photos (and later Drive) become native apps — **SwiftUI on iOS
+(iPhone first), Kotlin + Jetpack Compose on Android** — thin over the Rust
+core. *"First … a big research and a plan … the core beyond perfect and
+bulletproof … the drive and photos will be rewritten for that … build it all
+together with central planning"* (with the Linux machine). **The Photos
+website stays an Immich fork, cleaned up.** This Part is that plan; nothing in
+it is built yet. Status: **research in progress** (§12).
+
+## 8. The layers
+
+| Layer | What it is | Who |
+|---|---|---|
+| `dc-engine` | the rules, pure Rust, no I/O (Part 1 §2): format, ranges, scheduler, pacing, albums (D24), journal, dedupe, the worker's fields | Mac |
+| `dc-core` | the I/O on a phone: worker + Telegram clients, **the library index and sync** (new — Immich's app did this), the upload queue's execution, the local media server, caches, logs | Mac |
+| `dc-ffi` (new) | the bridge: UniFFI → a Swift package (XCFramework) and a Kotlin library (AAR); one API for both apps | Mac |
+| iOS app (new) | SwiftUI screens + platform work: PhotoKit (library, changes, resources), ImageIO/AVFoundation (thumbnails, previews, EXIF, the H.264 copy), the background URLSession uploader, AVKit playback | Mac |
+| Android app (new) | Compose screens + MediaStore, ImageDecoder/MediaMetadataRetriever, Media3 (Transformer, ExoPlayer), WorkManager | Mac |
+| Worker | keeps the books (D23); a v2 contract designed with the apps (§12 Q9) | Linux |
+| Websites | the Photos website (Immich fork, cleaned) and Drive, later on the engine as wasm (Part 1 WE, DE) | Linux + Mac |
+
+The look: system components, so iOS 26 gives Liquid Glass and Android
+Material 3 by themselves; behaviour modelled on Apple Photos and Immich (the
+grid, the scrubber, the viewer's gestures) — never Apple's branding.
+
+## 9. Order
+
+1. **R0 — Research** (§12), Mac and Linux; the operator approves the plan.
+2. **R1 — Repo cleanup** (§11), once Linux confirms the website's build
+   closure and has pushed its own work.
+3. **R2 — Spikes** that settle the unknowns by measurement, not prose:
+   S1 the bridge (UniFFI: async calls, a callback, a stream) on the Simulator
+   and the emulator; S2 the library index fed by the worker's sync; S3 a
+   10k–100k-item timeline on synthetic data (UICollectionView vs LazyVGrid;
+   Compose LazyGrid); S4 iOS background upload (background URLSession +
+   BGTask + the core's hand-off); S5 Android WorkManager upload; S6 the media
+   made on the phone (thumbnail, preview, thumbhash, EXIF, width, height,
+   duration, the H.264 copy).
+4. **C — the core, bulletproof**, each task through the four gates:
+   C1 the engine split (Part 1 E1); C2 the worker contract v2, with Linux;
+   C3 the library index + sync; C4 the upload engine (E3: D24's queue, the
+   platform's pictures and metadata, background hand-off); C5 reads (the
+   media server, already built — its 2.3 fixes come back here from
+   `archive/p2-flutter-2.3`); C6 albums, favorites, archive, trash; C7 **the
+   differential harnesses** (§10); C8 `dc-cli` exercising every function.
+5. **I — the iOS app**: sign-in and settings → timeline → viewer (photo, live
+   photo, zoom, swipe) → video → backup (foreground, then background) →
+   albums / favorites / archive / trash → save, share, delete → the exit run
+   on the Simulator, then a release build on the operator's iPhone.
+6. **A — the Android app**, the same list.
+7. **W — the websites on the engine** (Part 1 E2, WE, DE), with Linux.
+8. **P3 — the Drive apps**, native, on the same core.
+
+## 10. How the core is proven
+
+**Differential harnesses** (the method of "Horizon", the Rust rewrite of
+Minecraft checked against the real game): for every behaviour, the core and
+what exists today get the same input and must agree —
+- every asset the core reads matches, byte for byte, what the website's
+  service worker and the worker's manifest give;
+- every upload the core makes opens on the website, with the same thumbnail,
+  EXIF and dimensions the website would make;
+- the core's library index equals the worker's sync stream, after every
+  change;
+- pacing and rate limits measured against Telegram, as in P1 1.9.
+
+Plus the gates as before (TDD, Gate 2 on the Simulator and emulator, two
+Gate 3 reviews), and the audit harness idea from 2.3 (timings, thumbnails
+loaded, frames, every screen) rebuilt for the native apps.
+
+**Requirements already learned on the fork** (2026-11-18/19):
+- an upload carries width, height and duration (a 0×0 asset crashed the viewer);
+- iPhone HDR video (Dolby Vision HEVC) needs the H.264 copy where it cannot decode;
+- the old uploads lack durations and split live photos — a one-time repair;
+- the worker stubs most Immich features (people, tags, search, partners,
+  shared links, sessions, API keys, libraries, memories, duplicates, stacks,
+  jobs, workflows); auth is login / logout / status / exchange — build only
+  what it serves: sync, the viewer, albums, favorites, archive, trash, map
+  markers, download, upload;
+- the local server's replies are `no-store`; its secret never reaches a log;
+  the opened item first (D17), neighbours at Next, saves at the grid's class;
+- a free personal Apple team cannot sign App Groups, Wi-Fi info or push —
+  iOS v1 ships none (no widget, no share extension yet).
+
+## 11. Repo cleanup — proposal, pending Linux
+
+Nothing is deleted until the Linux machine confirms the website's build and
+has pushed its own commits (asked 2026-11-19).
+
+| Path | Live / needed | Owner | Proposal |
+|---|---|---|---|
+| `immich/web`, `immich/i18n`, `immich/open-api/typescript-sdk`, the workspace root files | the Photos website's build (as read 2026-11-19) | Linux | **keep**, cleaned; `pnpm-workspace.yaml` trimmed to what is kept |
+| `immich/mobile` | the Flutter fork (D26 drops it) | Mac | delete — with `.github/workflows/mobile-build.yml`, `mobile/tools/check-identity.sh`, `mobile/packages/dc_core_flutter` |
+| `immich/server`, `machine-learning`, `cli`, `e2e`, `e2e-auth-server`, `docs`, `fastlane`, `design`, `docker`, `deployment`, `misc`, `plugins`, `readme_i18n`, `immich/.github`, its Makefile and installers | nothing deployed from them (to confirm) | — | delete once confirmed |
+| `immich-api-shim`, `deployment-service`, `accounts-portal`, `auth-worker`, `drive`, `daemonclient-site` | live | Linux | keep |
+| `daemonclient-proxy`, `processor`, `hosting`, `docs-site`, `schema`, `selfhost`, `install.sh`, `scripts` | unknown (`scripts/scan-secrets.mjs` is used) | Linux | Linux says which are live |
+
+## 12. Research — questions to answer before C starts
+
+| # | Question | Answer (filled in as found) |
+|---|---|---|
+| Q1 | The bridge: UniFFI's async (Swift async/await, Kotlin coroutines), callbacks and streams (logs, progress), errors; packaging (XCFramework, cargo-ndk + AAR), CI, binary size | |
+| Q2 | The library index in the core: SQLite (bundled) schema; the timeline's queries (months, days, counts, paging); how Immich's local database does it | |
+| Q3 | Sync: the worker's `/api/sync/stream` wire format (`immich-api-shim/src/sync.ts`), acks, full vs delta; a v2? | |
+| Q4 | The timeline at 10k–100k items on each platform; how pictures reach the grid (local server URLs vs bytes over the bridge); thumbhash on the platform | |
+| Q5 | The viewer: zoom, paging, live photos, video (AVPlayer / ExoPlayer from the local server), HDR | |
+| Q6 | The backup source: PhotoKit (changes, resources, iCloud originals, limited access), MediaStore and Android's media permissions | |
+| Q7 | Background upload: background URLSession from prepared files + BGTask (limits), WorkManager and Android 14/15 foreground-service rules | |
+| Q8 | What the phone makes: thumbnail and preview sizes and formats, thumbhash, EXIF, dimensions, duration, the H.264 copy (AVAssetExportSession, Media3 Transformer), HEIC on Android | |
+| Q9 | The worker contract v2 with Linux: bulk create, every field above, idempotency, the free plan's D1 write budget, sync v2 | |
+| Q10 | The look and behaviour: Apple Photos' grid (zoom levels, Years / Months / All), scrubber, selection, viewer gestures; iOS 26 Liquid Glass APIs; Material 3 | |
+| Q11 | Distribution: the free team's limits (no App Group in v1), the paid account for TestFlight / App Store, Android signing | |
+| Q12 | The differential harnesses: what each compares, fixtures, where they run | |
+| Q13 | Test data: a fresh test account with synthetic fixtures — **the operator decides** (the current one holds real ID documents) | |
