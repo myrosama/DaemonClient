@@ -305,20 +305,148 @@ token in the app's private database, as upstream does (its API client and
 background isolates read it there); the core's copy is in secure storage.
 Moving Immich's reads to secure storage is a later hardening, not 2.2.
 
-- [ ] **Step 1:** tests first, failing: `deployment_of` (the hosted address
+- [x] **Step 1:** tests first, failing: `deployment_of` (the hosted address
   with and without scheme, `/api`, trailing slash, capitals → hosted; other
   hosts, a private-network `http://` → self-hosted; junk → refused); a
   widget test of the form (the three fields, the hosted address filled in,
   Sign in disabled until all three are filled, Create account opens the
   sign-up URL); the session's round trip through secure storage (a fake
   storage).
-- [ ] **Step 2:** implement; regenerate the bridge (`flutter_rust_bridge_codegen
+- [x] **Step 2:** implement; regenerate the bridge (`flutter_rust_bridge_codegen
   generate`); Rust and Dart tests, clippy, `flutter analyze`.
-- [ ] **Step 3: Gate 2** — the **operator** signs in by hand on the iOS
+- [x] **Step 3: Gate 2** — the **operator** signs in by hand on the iOS
   Simulator and the Android emulator with the test account (the password is
   never typed by me): the library loads from the worker; a wrong password
   and a wrong address show their messages; quitting and reopening stays
   signed in (restored from secure storage); signing out returns to the form
   and empties the stored session. Create account opens the sign-up page in
   the sheet.
+- [x] **Step 4:** Gate 3 (one reviewer at a time); commit code, then docs.
+
+**As built (Task 2.2):**
+- **Sign-in replies (found on the emulator):** `example.com` answered 405 and
+  the form showed "The server said: 405". Now: 401 → wrong email or
+  password; 404 → not a usable server address; 5xx → a network problem
+  (try again); another refusal → the server's own JSON `message`, cleaned
+  (no tokens or bidi characters, 200 at most), else not a usable server
+  address; a success that is not a sign-in answer → not a usable server
+  address. An https server cannot hand the token to a plain-http worker.
+- **The order (Gate 3 spec, HIGH):** the first version invalidated Immich's
+  API providers *before* pointing them at the worker, so the user fetch
+  after a first sign-in would have gone to an empty address. Now
+  `signInWithCore` (core sign-in, endpoint, `Store` keys, the cookie) →
+  the form invalidates the providers → `saveAuthInfo`; if that fails,
+  `undoCoreSignIn` (core, secure storage, `Store` token, widget). A secure
+  storage write that fails undoes the core's sign-in too.
+- Immich resumes at start only when the core restored its session
+  (`CoreSessionService.restoredAtStart`); a session the core refuses is
+  dropped from secure storage. Every sign-out path — the menu and a token
+  the server refuses (the auth guard) — goes through
+  `AuthService.clearLocalData`, which now signs the core out.
+- The form validates on submit (Immich's `ImmichForm`), not by disabling
+  Login: address, email, and a password (now required) — the plan's
+  "disabled until filled" differs. **Settings stays** on the form (custom
+  headers and certificates, for self-hosters).
+- Gate 3 security: 0 HIGH, 2 MEDIUM (the refusal text was shown raw — now
+  cleaned, a regression against `read_json`; older code logged the token
+  on the splash screen — removed), 4 LOW (fixed: half sign-ins undone,
+  refused sessions dropped, no https→http worker; recorded: look-alike
+  addresses — showing a self-hosted address's punycode under the field is
+  a later polish). Gate 3 spec: 1 HIGH (the order above), 1 MEDIUM (resume
+  only with the core), 7 LOW (fixed: the forced sign-out, the 404 rule, the
+  undo of a failed write, the required password, the key's sort order, a
+  stale comment; recorded: the widget's own copy of the token, as upstream).
+- **Known, recorded:** Immich keeps copies of the token where upstream does —
+  its `Store` (the app's private database) and the home-screen widget's
+  storage; the core's copy is in secure storage. Untested in code (needs
+  the app): `signInWithCore`/`undoCoreSignIn` end to end — Gate 2 covers it.
+- **Decided by the operator 2026-11-18:** the hosted address stays filled in
+  (users need only email and password); typing one's own worker address
+  (`https://dc-….workers.dev`) also works — the core treats it as a
+  self-hosted server and signs in to the worker directly (checked: a
+  per-user worker answers `/api/auth/login` itself). The accounts portal's
+  dashboard is to show "Your server address" for those who want it (Linux).
+- **Gate 2 (2026-11-18, test account; the operator typed the password —
+  pasted from the Keychain on the Mac's clipboard, cleared after):** iOS
+  Simulator and Android emulator both signed in; the timeline loaded; the
+  profile shows **Server URL `https://dc-ozkv3fuz.sadrikov49.workers.dev`**
+  (the per-user worker, found through `api.daemonclient.uz`); force-closed
+  and reopened → straight to the timeline on both (restored from secure
+  storage); signed out on Android → the form, the address kept, and a
+  reopen does not resume. Wrong password, a non-DaemonClient address, an
+  empty email and Create account were checked earlier on the emulator.
+- **Found by Gate 2:** on Android the first tries failed after the core had
+  signed in: Immich's `refreshMyUser` gives up after **7 s** ("TimeoutException
+  after 0:00:07"), and with no saved user that undid the sign-in. A first
+  sign-in now waits up to 30 s; resuming keeps 7 s. (Made after the Gate 2
+  run — a constant only; checked by the analyzer and the 677 Dart tests.)
+- Thumbnails, photos and videos still come through the worker's old byte
+  routes — exactly what 2.3 replaces (the core's local server).
+
+---
+
+## Task 2.3 — Photos and video through the core's local server
+
+**Delivers** (P2-3, P2-4; the operator, 2026-11-18: "make sure to not use
+[the old worker byte routes] but our core"): every thumbnail, photo, video
+and download the app shows or saves is read by the core — straight from
+Telegram, decrypted on the phone, ordered by the scheduler — through its
+local server. The worker serves no bytes to the app any more; it keeps the
+metadata (timeline, sync).
+
+**Read from the fork (2026-11-18):** every byte URL comes from four
+functions in `lib/utils/image_url_builder.dart` (thumbnail, original,
+playback, face) and the video viewer's own (`video_viewer.widget.dart:122-127`),
+all as `${serverEndpoint}/assets/<id>/…`. Callers: the grid and viewer
+(`remote_image_provider.dart`), downloads (`download.repository.dart:91,124`),
+the map (`asset_marker_icon.dart`), shared links, Chromecast
+(`gcast.service.dart:167`), people avatars. The local server already
+answers `/api/assets/<id>/{thumbnail?size=…, original, video/playback}` and
+ignores Immich's other query fields (`edited`, `c`). iOS allows plain http
+(`NSAllowsArbitraryLoads`), Android cleartext (`network_security_config`).
+
+**Changes:**
+1. Bridge: `media_server() → {gridBase, viewerBase}` (the core held as
+   `Arc<Core>`, which `media_server` needs).
+2. Dart: the addresses fetched once the core is up (`_startCore`, after the
+   restore) and again on every resume (the listeners may have been closed);
+   when they change, Flutter's image cache is cleared so tiles load again.
+3. The URL builders: grid thumbnails → `gridBase`; preview, full size,
+   original and playback → `viewerBase` (the opened item never queues behind
+   the grid, D17); the video viewer the same. Downloads → `viewerBase`
+   original.
+4. **The viewer shows the preview, then quietly the original** (D23, P2-4):
+   Immich's "load original" setting defaults to on.
+5. A check in `mobile-build` CI: no byte URL (`/assets/<id>/thumbnail`,
+   `/original`, `/video/playback`) is built from `serverEndpoint` anywhere
+   in `lib/` — except Chromecast, listed.
+
+**Not in 2.3, recorded:** Chromecast keeps the worker's URL (a cast device
+fetches the URL itself; `127.0.0.1` would be its own) — remove or keep it is
+a 2.10 question; people avatars stay on the worker (the worker has no faces —
+2.10); the widgets (2.10); a download the OS finishes while the app is
+suspended cannot reach the local server (the listener stops) — downloads
+are short and foreground; to revisit if seen.
+
+**Android's 6 connections a host (P2-3):** Cronet queues the grid's
+requests beyond 6, which would cap cold thumbnails near 13 a second against
+the core's ~44. Measured first, on the emulator: the core logs how many
+requests each listener served every 5 s (debug builds only); a fast fling
+(`adb shell input swipe`) through the test library, one grid listener. Only
+if it is well below iOS: four grid listeners, a thumbnail sent to one by a
+hash of its asset id.
+
+- [ ] **Step 1:** tests first, failing: the URL builders (thumbnail on the
+  grid base, preview/original/playback on the viewer base, the asset id and
+  size kept, no worker host); the addresses refreshed and the image cache
+  cleared when they change; the CI check fails on a worker byte URL.
+- [ ] **Step 2:** implement; regenerate the bridge; Rust and Dart tests,
+  clippy, `flutter analyze`.
+- [ ] **Step 3: Gate 2**, signed in with the test account on the iOS
+  Simulator and the Android emulator: scroll the whole timeline, fast —
+  thumbnails appear, and the core's log shows them served by its listeners;
+  open photos (preview, then the original); play a multi-part video and seek
+  across parts; save one photo to the device; background the app, come
+  back — everything still loads (a re-opened listener). The Android
+  measurement above, and the decision on its listeners.
 - [ ] **Step 4:** Gate 3 (one reviewer at a time); commit code, then docs.

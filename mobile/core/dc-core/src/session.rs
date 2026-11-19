@@ -4,7 +4,7 @@ use std::net::IpAddr;
 
 use crate::{CoreError, Secret};
 
-/// The hosted service's sign-in address ("Sign in with a DaemonClient account").
+/// The hosted service's sign-in address (filled in on the sign-in form, D8).
 pub const HOSTED_API: &str = "https://api.daemonclient.uz";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -53,6 +53,23 @@ pub fn normalize_server(input: &str) -> Result<String, CoreError> {
     Ok(trimmed.strip_suffix("/api").unwrap_or(trimmed).to_owned())
 }
 
+/// Which kind of server an address typed on the sign-in form is (D8: one
+/// form for everyone): the hosted address, however typed, is the hosted
+/// service; any other address is a self-hosted server.
+pub fn deployment_of(address: &str) -> Result<Deployment, CoreError> {
+    // `Url` lowercases the scheme and host, so case does not matter.
+    Ok(match normalize_server(address)? == HOSTED_API {
+        true => Deployment::Hosted,
+        false => Deployment::SelfHosted,
+    })
+}
+
+/// A server reached over https must not send the session to a plain-http
+/// worker (the token would cross the network in the clear).
+fn downgrades(server: &str, worker: &str) -> bool {
+    server.starts_with("https://") && !worker.starts_with("https://")
+}
+
 fn is_local(url: &reqwest::Url) -> bool {
     let Some(host) = url.host_str() else {
         return false;
@@ -98,19 +115,53 @@ pub async fn sign_in(
         .json(&serde_json::json!({ "email": email, "password": password }))
         .send()
         .await?;
-    match reply.status() {
-        reqwest::StatusCode::UNAUTHORIZED => return Err(CoreError::WrongCredentials),
-        // Nothing answers sign-in there: a mistyped self-hosted address.
-        reqwest::StatusCode::NOT_FOUND => return Err(CoreError::BadAddress),
-        _ => {}
+    let mut reply = reply;
+    let status = reply.status();
+    if status == reqwest::StatusCode::UNAUTHORIZED {
+        return Err(CoreError::WrongCredentials);
     }
-    let login: LoginReply = crate::worker::read_json(reply, crate::http::JSON_CAP).await?;
+    // Nothing signs in there, whatever the page says (a mistyped address).
+    if status == reqwest::StatusCode::NOT_FOUND {
+        return Err(CoreError::BadAddress);
+    }
+    if status.is_server_error() {
+        // A DaemonClient server in trouble, or its host: worth trying again.
+        return Err(CoreError::Network(format!(
+            "the server answered {}",
+            status.as_u16()
+        )));
+    }
+    if !status.is_success() {
+        // A DaemonClient server explains a refusal; anything else answering
+        // there is not one (a web page, a mistyped address).
+        let body = crate::http::body(&mut reply, crate::http::JSON_CAP)
+            .await
+            .ok();
+        let message = body
+            .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+            .and_then(|v| v.get("message")?.as_str().map(str::to_owned))
+            .filter(|m| !m.is_empty());
+        // Cleaned like any server's words: no tokens, no bidi tricks, 200 at most.
+        let message = message
+            .map(|m| crate::error::clean(&m))
+            .filter(|m| !m.is_empty());
+        return Err(message.map_or(CoreError::BadAddress, CoreError::Server));
+    }
+    // A success that is not a sign-in answer is not a DaemonClient server.
+    let login: LoginReply = crate::worker::read_json(reply, crate::http::JSON_CAP)
+        .await
+        .map_err(|e| match e {
+            CoreError::Server(_) => CoreError::BadAddress,
+            other => other,
+        })?;
     let worker_url = match (login.worker_url.filter(|u| !u.is_empty()), deployment) {
         // Hosted workers are always https; local-network http is for self-hosters only.
         (Some(url), Deployment::Hosted) => Some(normalize_server(&url)?)
             .filter(|u| u.starts_with("https://"))
             .ok_or(CoreError::BadAddress)?,
-        (Some(url), Deployment::SelfHosted) => normalize_server(&url)?,
+        (Some(url), Deployment::SelfHosted) => Some(normalize_server(&url)?)
+            .filter(|u| !downgrades(&base, u))
+            .ok_or(CoreError::BadAddress)?,
         (None, Deployment::SelfHosted) => base,
         (None, Deployment::Hosted) => return Err(CoreError::NotProvisioned),
     };
@@ -131,6 +182,39 @@ mod tests {
 
     fn http() -> reqwest::Client {
         crate::http::client().unwrap()
+    }
+
+    #[test]
+    fn the_hosted_address_however_typed_is_hosted() {
+        for typed in [
+            "https://api.daemonclient.uz",
+            "api.daemonclient.uz",
+            " https://api.daemonclient.uz/ ",
+            "https://api.daemonclient.uz/api",
+            "HTTPS://API.DaemonClient.UZ",
+        ] {
+            assert_eq!(deployment_of(typed).unwrap(), Deployment::Hosted, "{typed}");
+        }
+        for typed in [
+            "https://photos.example.com",
+            "http://192.168.1.20:2283",
+            "https://api.daemonclient.uz.evil.example",
+            "https://dc-x.workers.dev",
+        ] {
+            assert_eq!(
+                deployment_of(typed).unwrap(),
+                Deployment::SelfHosted,
+                "{typed}"
+            );
+        }
+        for junk in [
+            "",
+            "not a url ::",
+            "ftp://api.daemonclient.uz",
+            "http://api.daemonclient.uz",
+        ] {
+            assert!(deployment_of(junk).is_err(), "{junk:?}");
+        }
     }
 
     #[test]
@@ -185,6 +269,99 @@ mod tests {
             "accessToken": "tok", "userId": "u1", "userEmail": "a@b.uz", "name": "A",
             "workerUrl": worker_url, "isAdmin": true
         }))
+    }
+
+    #[tokio::test]
+    async fn a_server_that_is_not_daemonclient_is_a_bad_address() {
+        // Seen on the emulator (2.2): example.com answered 405 — "the server
+        // said: 405" told the user nothing.
+        for reply in [
+            ResponseTemplate::new(405).set_body_string("<html>Method Not Allowed</html>"),
+            ResponseTemplate::new(403).set_body_string("Forbidden"),
+            ResponseTemplate::new(200).set_body_string("<html>welcome</html>"),
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({"hello": "world"})),
+        ] {
+            let server = login_server(reply).await;
+            let result = sign_in(
+                &http(),
+                &server.uri(),
+                Deployment::SelfHosted,
+                "a@b.uz",
+                "pw",
+            )
+            .await;
+            assert!(matches!(result, Err(CoreError::BadAddress)), "{result:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn nothing_answering_sign_in_is_a_bad_address_whatever_it_says() {
+        // A 404 means nothing signs in there — even when a framework explains
+        // it ("Cannot POST /api/auth/login").
+        let server = login_server(
+            ResponseTemplate::new(404)
+                .set_body_json(serde_json::json!({"message": "Cannot POST /api/auth/login"})),
+        )
+        .await;
+        let result = sign_in(
+            &http(),
+            &server.uri(),
+            Deployment::SelfHosted,
+            "a@b.uz",
+            "pw",
+        )
+        .await;
+        assert!(matches!(result, Err(CoreError::BadAddress)), "{result:?}");
+    }
+
+    #[tokio::test]
+    async fn a_server_in_trouble_is_worth_trying_again_and_its_words_are_kept() {
+        let server =
+            login_server(ResponseTemplate::new(503).set_body_string("Service Unavailable")).await;
+        let result = sign_in(&http(), &server.uri(), Deployment::Hosted, "a@b.uz", "pw").await;
+        assert!(matches!(result, Err(CoreError::Network(_))), "{result:?}");
+        let server = login_server(
+            ResponseTemplate::new(400)
+                .set_body_json(serde_json::json!({"message": "This account is disabled"})),
+        )
+        .await;
+        let result = sign_in(&http(), &server.uri(), Deployment::Hosted, "a@b.uz", "pw").await;
+        assert!(
+            matches!(&result, Err(CoreError::Server(m)) if m == "This account is disabled"),
+            "{result:?}"
+        );
+        // Its words are cleaned like any server's: no bidi tricks, 200 at most.
+        let spoof = format!("Locked \u{202e}moc.live{}", "x".repeat(300));
+        let server = login_server(
+            ResponseTemplate::new(400).set_body_json(serde_json::json!({"message": spoof})),
+        )
+        .await;
+        let result = sign_in(
+            &http(),
+            &server.uri(),
+            Deployment::SelfHosted,
+            "a@b.uz",
+            "pw",
+        )
+        .await;
+        assert!(
+            matches!(&result, Err(CoreError::Server(m)) if !m.contains('\u{202e}') && m.chars().count() <= 200),
+            "{result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_https_server_cannot_hand_the_token_to_a_plain_http_worker() {
+        // (A fake server here is plain http, so the rule is tested on its own.)
+        assert!(downgrades(
+            "https://photos.example",
+            "http://192.168.1.20:2283"
+        ));
+        assert!(!downgrades("https://photos.example", "https://nas.example"));
+        assert!(
+            !downgrades("http://192.168.1.5", "http://192.168.1.20:2283"),
+            "http to http is the user's own choice"
+        );
     }
 
     #[tokio::test]

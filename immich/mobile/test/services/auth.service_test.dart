@@ -23,6 +23,7 @@ void main() {
   late MockNetworkService networkService;
   late MockBackgroundSyncManager backgroundSyncManager;
   late MockAppSettingService appSettingsService;
+  late MockCoreSessionService coreSessionService;
   late Drift db;
 
   setUp(() async {
@@ -32,6 +33,8 @@ void main() {
     networkService = MockNetworkService();
     backgroundSyncManager = MockBackgroundSyncManager();
     appSettingsService = MockAppSettingService();
+    coreSessionService = MockCoreSessionService();
+    when(() => coreSessionService.signOut()).thenAnswer((_) async {});
 
     sut = AuthService(
       authApiRepository,
@@ -40,6 +43,7 @@ void main() {
       networkService,
       backgroundSyncManager,
       appSettingsService,
+      coreSessionService,
     );
 
     registerFallbackValue(Uri());
@@ -122,6 +126,8 @@ void main() {
       verify(() => authApiRepository.logout()).called(1);
       verify(() => backgroundSyncManager.cancel()).called(1);
       verify(() => authRepository.clearLocalData()).called(1);
+      // P2 2.2: the core and its kept session go too.
+      verify(() => coreSessionService.signOut()).called(1);
     });
 
     test('Should clear local data even on server error', () async {
@@ -136,6 +142,8 @@ void main() {
       verify(() => authApiRepository.logout()).called(1);
       verify(() => backgroundSyncManager.cancel()).called(1);
       verify(() => authRepository.clearLocalData()).called(1);
+      // P2 2.2: the core and its kept session go too.
+      verify(() => coreSessionService.signOut()).called(1);
     });
   });
 

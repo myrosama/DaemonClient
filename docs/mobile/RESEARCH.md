@@ -516,6 +516,12 @@ the `flutter run` log:
 Conclusion for the plan: the hosted sign-in path is broken today, and media
 loading is untested until an account with photos is used.
 
+> **Resolved 2026-11-18 (P2 task 2.2):** sign-in goes through the core, which
+> gets the per-user worker from the hosted login reply; the app no longer
+> looks up `/.well-known/immich`. Signed in on the iOS Simulator and the
+> Android emulator with the test account; the profile shows the worker as
+> the server.
+
 > **Update, 2026-10-12 (operator):** signed in with their own account, the
 > app showed their photos — through the old worker-heavy path (whole files
 > through the worker), which P1/P2 replace. The empty timeline in item 2 was

@@ -5,6 +5,8 @@ import 'dart:math';
 import 'package:auto_route/auto_route.dart';
 import 'package:background_downloader/background_downloader.dart';
 import 'package:dc_core_flutter/dc_core_flutter.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/foundation.dart';
@@ -42,6 +44,7 @@ import 'package:immich_mobile/utils/migration.dart';
 import 'package:immich_mobile/wm_executor.dart';
 import 'package:immich_ui/immich_ui.dart';
 import 'package:intl/date_symbol_data_local.dart';
+import 'package:immich_mobile/services/core_session.service.dart';
 import 'package:logging/logging.dart';
 import 'package:timezone/data/latest.dart';
 
@@ -62,8 +65,22 @@ void main() async {
   }
 }
 
+/// DaemonClient's core: started once, then resumed from the session kept in
+/// secure storage (P2 task 2.2). Its folders are the app's own.
+Future<void> _startCore() async {
+  final (data, cache) = await (getApplicationSupportDirectory(), getApplicationCacheDirectory()).wait;
+  await startCore(dataDir: p.join(data.path, 'core'), cacheDir: p.join(cache.path, 'core'));
+  try {
+    CoreSessionService.restoredAtStart = await CoreSessionService.atStart().restore();
+  } catch (error, stack) {
+    // Signed out in the core; the next sign-in starts afresh.
+    Logger('Core').severe('Could not resume the session', error, stack);
+  }
+}
+
 Future<void> initApp() async {
   await RustLib.init();
+  await _startCore();
   await initializeDateFormatting();
 
   if (Platform.isAndroid) {

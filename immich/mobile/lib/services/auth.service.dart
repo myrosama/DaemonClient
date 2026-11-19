@@ -14,6 +14,7 @@ import 'package:immich_mobile/repositories/auth.repository.dart';
 import 'package:immich_mobile/repositories/auth_api.repository.dart';
 import 'package:immich_mobile/services/api.service.dart';
 import 'package:immich_mobile/services/app_settings.service.dart';
+import 'package:immich_mobile/services/core_session.service.dart';
 import 'package:immich_mobile/services/network.service.dart';
 import 'package:logging/logging.dart';
 import 'package:openapi/api.dart';
@@ -26,6 +27,7 @@ final authServiceProvider = Provider(
     ref.watch(networkServiceProvider),
     ref.watch(backgroundSyncProvider),
     ref.watch(appSettingsServiceProvider),
+    ref.watch(coreSessionServiceProvider),
   ),
 );
 
@@ -36,6 +38,7 @@ class AuthService {
   final NetworkService _networkService;
   final BackgroundSyncManager _backgroundSyncManager;
   final AppSettingsService _appSettingsService;
+  final CoreSessionService _coreSessionService;
   final _log = Logger("AuthService");
 
   AuthService(
@@ -45,6 +48,7 @@ class AuthService {
     this._networkService,
     this._backgroundSyncManager,
     this._appSettingsService,
+    this._coreSessionService,
   );
 
   /// Validates the provided server URL by resolving and setting the endpoint.
@@ -120,6 +124,10 @@ class AuthService {
     // Cancel any ongoing background sync operations before clearing data
     await _backgroundSyncManager.cancel();
     await Future.wait([
+      // The core and its kept session too (logout, and a token the server refused).
+      _coreSessionService.signOut().catchError((Object error, StackTrace stack) {
+        _log.severe("Error signing the core out", error, stack);
+      }),
       _authRepository.clearLocalData(),
       Store.delete(StoreKey.currentUser),
       Store.delete(StoreKey.accessToken),
