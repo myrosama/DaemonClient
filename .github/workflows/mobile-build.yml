@@ -36,6 +36,11 @@ jobs:
       # No Immich identity the system sees, one app group (P2 task 2.1).
       - name: App identity
         run: bash ../../mobile/tools/check-identity.sh
+      # No picture or video read through the worker's byte routes (P2 task 2.3).
+      - name: Media through the core
+        run: |
+          bash ../../mobile/tools/test-check-media-paths.sh
+          bash ../../mobile/tools/check-media-paths.sh
       - uses: actions/setup-java@v4
         with:
           distribution: temurin

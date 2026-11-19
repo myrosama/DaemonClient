@@ -450,3 +450,124 @@ hash of its asset id.
   back — everything still loads (a re-opened listener). The Android
   measurement above, and the decision on its listeners.
 - [ ] **Step 4:** Gate 3 (one reviewer at a time); commit code, then docs.
+
+**As built (Task 2.3):**
+- **Changes 1–5 as planned**, except where Gate 3 changed them (below).
+  `CoreMedia` (`lib/services/core_media.service.dart`) holds the two
+  addresses, refreshed after the restore at start and on every resume; a
+  change clears Flutter's image cache. Until the first refresh the addresses
+  point at a closed port (`127.0.0.1:9`), which fails quietly.
+- **Also built:** the core's log lines stream into the app's log
+  (`core_logs`, a `sync` bridge call made before `start_core`, so the logger
+  is in place first); each listener logs how many requests it answered every
+  5 s (debug builds). Share reads through the core too, and the API's
+  `downloadAsset` — its last caller gone — is removed. The video viewer
+  builds its URLs with the shared builders. On-device photos read the same
+  load-original setting (they read a stored `false` before).
+- **Changed by Gate 3, security review** (no HIGH):
+  - **MEDIUM:** every reply says `Cache-Control: no-store` (SPEC §4.6) — the
+    phones' own HTTP caches (iOS 1 GB URLCache, Cronet's) were keeping
+    decrypted originals on disk past sign-out.
+  - **MEDIUM:** `scrubLocalSecrets` in `LogService` replaces the local
+    server's secret in every message, error and stack the app keeps (an iOS
+    load error quotes the full URL); the image provider no longer adds the
+    URL to its error details.
+  - **LOW:** downloads send no headers (custom proxy headers went to the
+    loopback port); the CI check catches the API's byte calls and has a
+    self-test (`mobile/tools/test-check-media-paths.sh`).
+- **Changed by Gate 3, spec review:**
+  - **HIGH:** saves and Share go to the **grid's** listener
+    (`getDownloadUrlForRemoteId`), not the viewer's as Change 3 said: at
+    Opened a multi-photo save held back the whole grid and skipped the rate
+    limit. A save is not "opened" (D17).
+  - **MEDIUM:** the viewer's neighbour preloads (and the memories page's next
+    item) ask for `next=1`, which the core maps to its Next class — rate
+    limited, held back while the opened item runs (§4.9). The flag is not part
+    of the image provider's `==`, so a swipe still reuses the preload.
+  - **MEDIUM:** a media server that cannot open at start no longer stops the
+    app; pictures stay blank until the next resume retries.
+- **Found in Gate 2 (Android), fixed:** Immich's `ImmichTextInput` showed a
+  validator's message but returned `null`, so `ImmichForm` always submitted —
+  the login form sent an empty password, and the core's 401 ("Wrong email or
+  password") showed beside "Password Required". It now returns the error
+  (`packages/ui/lib/src/components/text_input.dart`;
+  `test/widgets/forms/immich_form_test.dart`). The message now stays until
+  the next submit instead of clearing when the field is tapped.
+- **The CI check's rules** (`mobile/tools/check-media-paths.sh`): a URL
+  under `/assets/` is built only on `CoreMedia`'s addresses (or inside the
+  builder, which builds them); the API's `downloadAsset`, `downloadArchive`,
+  `viewAsset`, `playAssetVideo` are never called; a line may opt out with
+  `media-paths: allowed (<why>)` — Chromecast's two, and the uploader's
+  thumbnail POST until 2.6.
+- **Known limits, recorded:**
+  - **A changed address does not reach what is already on screen.** Clearing
+    the cache rebuilds nothing: tiles that failed on a closed port stay
+    blank until scrolled; an open video resumes on its old URL; an original
+    still loading fails. Fix (a `ValueNotifier` the viewer and grid listen
+    to) before the 2.11 exit run, once a real iPhone shows how often the
+    listeners close.
+  - **The load-original default** applies only where nothing is stored:
+    Immich stores the setting only when the user toggles it, so an install
+    that chose "off" keeps it.
+  - **Still on the worker** (2.10's list): people avatars and face thumbnails,
+    "open in browser", Chromecast, the home-screen widgets. Profile pictures
+    (`user_avatar.dart`, `user_circle_avatar.dart`,
+    `partner_user_avatar.widget.dart`) are metadata-sized and stay.
+  - Flutter's in-memory image cache keeps the signed-out account's decoded
+    pictures until evicted; its keys are asset ids, so another account never
+    sees them.
+  - Resume waits for the refresh (up to ~3.5 s when a listener is busy)
+    before the rest of the resume work, so nothing loads from an old address.
+- **Tests:** core 192 (no-store on every reply; the class flag lowers, never
+  raises; the tally), Dart 684 (grid vs viewer per size, saves on the grid,
+  `next=1`, refresh clearing on a change, the secret scrub, a failing field
+  stops the form), the check's
+  self-test (6 cases).
+- **Found in Gate 2, fixed:** the core's logger was set once per process, to
+  the first Flutter engine's stream. Android may start a new engine in the
+  same process (the activity closed with Back and reopened): the core went on
+  serving, but its lines went nowhere. `core_logs` now replaces the sink
+  (`logging::set_sink`; test `a_new_sink_replaces_the_old_one`).
+- **The Android measurement (P2-3), emulator, test account, one grid
+  listener:** the app's log (`immich_logs.sqlite`, logcat dropped the lines)
+  counted, per 5 s window — your own scroll 27–46 requests (5–9/s); a fling
+  with the core's cache emptied 56, 123, 121 (11–24/s); the same fling warm
+  138, 239 (27–47/s). Well above the ~13/s the 6-connection limit was feared
+  to cap cold thumbnails at. **Decision: one grid listener** unless the real
+  iPhone is far faster.
+- **Found in Gate 2 (2026-11-19), fixed:**
+  - **Android video never started:** ExoPlayer gives up opening a stream
+    after 8 s, and the core answers only once the first part (up to 19 MiB)
+    is in and checked. Video now waits 60 s, as iOS's player does
+    (`HttpClientManager.createDataSourceFactory`). Android sends no headers to
+    the local server at all now (`getAuthHeaders` returns none for
+    `127.0.0.1`: the security review's LOW for Android; iOS still sets them
+    on the whole session — recorded).
+  - **Resume crashed on a null** (`handleAppResume`): a pause completes the
+    running resume, a second resume starts its own, and the first one's
+    cleanup cleared the second's. Each resume now cleans up only its own.
+    Upstream code; 2.3's longer resume (the media-server refresh) widened it.
+  - **401 on everything after a restart, iPhone (free Apple account):** iOS
+    keeps the login cookie in the App Group's cookie store, which a build
+    without the App Group cannot keep. The splash screen now puts the session
+    token back into the native HTTP at resume, as sign-in does.
+- **Found in Gate 2, for later tasks:**
+  - **A core upload has no dimensions or length, and the viewer crashes on
+    it** (0×0 → NaN constraints). 2.4 sends width, height and duration; the
+    viewer must not crash on 0×0 either (a guard in 2.4).
+  - **iPhone HDR video (Dolby Vision HEVC, `dvhe.08.05`) does not decode on
+    the Android emulator** (`c2.goldfish.hevc.decoder` error 0xe) — the case
+    2.7's H.264 copy is for. Video play/seek moves to 2.4/2.5's Gate 2, on a
+    video uploaded through the core with its metadata.
+  - Opening `immich://asset?id=` during a cold start hit a framework
+    assertion — the scheme is on 2.10's removal list.
+- **Found in Gate 2, from the old uploads** (the operator, 2026-11-19: they
+  come from the old upload paths through the worker, not the core):
+  - **"00:00" on video tiles:** 223 of the test library's 260 visible videos
+    have no duration — the old paths never sent it. New uploads send it from
+    the phone (2.4); the existing ones need a one-time backfill (to plan).
+  - **Live photos split in two:** 93 of those are 4:3 `.MOV`s, the shape of
+    a live photo's moving part, with no still beside them. The 271 linked
+    motion parts are fine (hidden, the photo shows as live). Pair or hide the
+    orphans in 2.8.
+  - **The logo** inside the app becomes the Photos logo (the operator, later).

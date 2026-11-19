@@ -4,23 +4,23 @@ import 'dart:io';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/widgets.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
+import 'package:http/http.dart' as http;
 import 'package:immich_mobile/domain/models/asset/base_asset.model.dart';
 import 'package:immich_mobile/extensions/build_context_extensions.dart';
 import 'package:immich_mobile/extensions/platform_extensions.dart';
 import 'package:immich_mobile/extensions/response_extensions.dart';
-import 'package:immich_mobile/repositories/asset_api.repository.dart';
+import 'package:immich_mobile/utils/image_url_builder.dart';
 import 'package:logging/logging.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:photo_manager/photo_manager.dart';
 import 'package:share_plus/share_plus.dart';
 
-final assetMediaRepositoryProvider = Provider((ref) => AssetMediaRepository(ref.watch(assetApiRepositoryProvider)));
+final assetMediaRepositoryProvider = Provider((ref) => const AssetMediaRepository());
 
 class AssetMediaRepository {
-  final AssetApiRepository _assetApiRepository;
   static final Logger _log = Logger("AssetMediaRepository");
 
-  const AssetMediaRepository(this._assetApiRepository);
+  const AssetMediaRepository();
 
   Future<bool> _androidSupportsTrash() async {
     if (Platform.isAndroid) {
@@ -114,7 +114,8 @@ class AssetMediaRepository {
         final tempDir = await getTemporaryDirectory();
         final name = asset.name;
         final tempFile = await File('${tempDir.path}/$name').create();
-        final res = await _assetApiRepository.downloadAsset(remoteId, edited: true);
+        // Through the core's local server (P2 task 2.3), not the worker.
+        final res = await http.get(Uri.parse(getDownloadUrlForRemoteId(remoteId)));
 
         if (res.statusCode != 200) {
           _log.severe("Download for $name failed", res.toLoggerString());

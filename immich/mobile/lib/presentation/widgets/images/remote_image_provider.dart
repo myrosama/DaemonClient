@@ -29,10 +29,7 @@ class RemoteImageProvider extends CancellableImageProvider<RemoteImageProvider>
   ImageStreamCompleter loadImage(RemoteImageProvider key, ImageDecoderCallback decode) {
     return OneFramePlaceholderImageStreamCompleter(
       _codec(key, decode),
-      informationCollector: () => <DiagnosticsNode>[
-        DiagnosticsProperty<ImageProvider>('Image provider', this),
-        DiagnosticsProperty<String>('URL', key.url),
-      ],
+      informationCollector: () => <DiagnosticsNode>[DiagnosticsProperty<ImageProvider>('Image provider', this)],
       onLastListenerRemoved: cancel,
     );
   }
@@ -63,12 +60,17 @@ class RemoteFullImageProvider extends CancellableImageProvider<RemoteFullImagePr
   final bool isAnimated;
   final bool edited;
 
+  /// Preloaded beside the opened item: read at the core's Next class. Not part
+  /// of `==`, so the viewer reuses what was preloaded.
+  final bool neighbour;
+
   RemoteFullImageProvider({
     required this.assetId,
     required this.thumbhash,
     required this.assetType,
     required this.isAnimated,
     this.edited = true,
+    this.neighbour = false,
   });
 
   @override
@@ -119,6 +121,7 @@ class RemoteFullImageProvider extends CancellableImageProvider<RemoteFullImagePr
         type: AssetMediaSize.preview,
         thumbhash: key.thumbhash,
         edited: key.edited,
+        next: key.neighbour,
       ),
     );
     final loadOriginal = assetType == AssetType.image && AppSetting.get(Setting.loadOriginal);
@@ -133,7 +136,7 @@ class RemoteFullImageProvider extends CancellableImageProvider<RemoteFullImagePr
     }
 
     final originalRequest = request = RemoteImageRequest(
-      uri: getOriginalUrlForRemoteId(key.assetId, edited: key.edited),
+      uri: getOriginalUrlForRemoteId(key.assetId, edited: key.edited, next: key.neighbour),
     );
     yield* loadRequest(originalRequest, decode, isFinal: true);
   }
@@ -151,6 +154,7 @@ class RemoteFullImageProvider extends CancellableImageProvider<RemoteFullImagePr
         type: AssetMediaSize.preview,
         thumbhash: key.thumbhash,
         edited: key.edited,
+        next: key.neighbour,
       ),
     );
     yield* loadRequest(previewRequest, decode, isFinal: false);
@@ -161,7 +165,7 @@ class RemoteFullImageProvider extends CancellableImageProvider<RemoteFullImagePr
 
     // always try original for animated, since previews don't support animation
     final originalRequest = request = RemoteImageRequest(
-      uri: getOriginalUrlForRemoteId(key.assetId, edited: key.edited),
+      uri: getOriginalUrlForRemoteId(key.assetId, edited: key.edited, next: key.neighbour),
     );
     final codec = await loadCodecRequest(originalRequest, isFinal: true);
     if (codec == null) {

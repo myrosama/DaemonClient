@@ -197,6 +197,13 @@ or repurpose them, and every value must survive the app's strict parser
   `/api/assets/:id/thumbnail`, `/original`, `/video/playback` — by fetching the
   manifest, then the Telegram chunks, then decrypting. `Range` requests map to
   the chunks that cover them, so seeking in a 2 GB video fetches two chunks.
+- **Classes (D17):** the grid's listener reads at Visible, the viewer's at
+  Opened; a request may lower its class to Next with `next=1` (the viewer's
+  neighbour preloads), never raise it. Saves and Share use the grid's
+  listener — they are not opened (P2 task 2.3).
+- Every reply says `Cache-Control: no-store`: decrypted bytes never land in
+  the phone's own HTTP caches (URLSession's, Cronet's); the core keeps its own
+  (§4.7).
 - Drive's viewers use the same server.
 
 ### 4.7 Cache
@@ -220,8 +227,9 @@ or repurpose them, and every value must survive the app's strict parser
 
 - Errors reaching the UI say what the user can do ("Telegram rejected the
   bot token — check Settings"), not stack traces.
-- Logs never contain tokens, keys, passwords, or Telegram URLs (which embed the
-  bot token).
+- Logs never contain tokens, keys, passwords, Telegram URLs (which embed the
+  bot token), or the local server's secret — the app scrubs
+  `127.0.0.1:<port>/<secret>` from every line it keeps (P2 task 2.3).
 
 ### 4.9 Fetch scheduler — smart loading (D15, D17, D19)
 

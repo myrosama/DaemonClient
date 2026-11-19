@@ -147,7 +147,11 @@ class DriftMemoryPage extends HookConsumerWidget {
 
       // Precache the asset
       final size = MediaQuery.sizeOf(context);
-      await precacheImage(getFullImageProvider(asset, size: Size(size.width, size.height)), context, size: size);
+      await precacheImage(
+        getFullImageProvider(asset, size: Size(size.width, size.height), neighbour: true),
+        context,
+        size: size,
+      );
     }
 
     // Precache the next page right away if we are on the first page

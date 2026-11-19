@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:hooks_riverpod/hooks_riverpod.dart';
+import 'package:immich_mobile/services/core_media.service.dart';
 import 'package:immich_mobile/domain/models/store.model.dart';
 import 'package:immich_mobile/domain/services/log.service.dart';
 import 'package:immich_mobile/entities/store.entity.dart';
@@ -49,17 +50,22 @@ class AppLifeCycleNotifier extends StateNotifier<AppLifeCycleEnum> {
       _pauseOperation!.complete();
     }
 
-    _resumeOperation = Completer<void>();
+    // This resume's own: a pause may complete it, and a later resume start its
+    // own before this one ends — cleaning up only this one (P2 task 2.3 found
+    // the null this raced into).
+    final operation = _resumeOperation = Completer<void>();
 
     try {
       await _performResume();
     } catch (e, stackTrace) {
       _log.severe("Error during app resume", e, stackTrace);
     } finally {
-      if (!_resumeOperation!.isCompleted) {
-        _resumeOperation!.complete();
+      if (!operation.isCompleted) {
+        operation.complete();
       }
-      _resumeOperation = null;
+      if (identical(_resumeOperation, operation)) {
+        _resumeOperation = null;
+      }
     }
   }
 
@@ -67,6 +73,13 @@ class AppLifeCycleNotifier extends StateNotifier<AppLifeCycleEnum> {
     // no need to resume because app was never really paused
     if (!_wasPaused) return;
     _wasPaused = false;
+
+    // The phone may have closed the core's listeners while away (P2 task 2.3).
+    try {
+      await CoreMedia.refresh();
+    } catch (error, stackTrace) {
+      _log.severe("Could not reopen the core's media server", error, stackTrace);
+    }
 
     final isAuthenticated = _ref.read(authProvider).isAuthenticated;
 

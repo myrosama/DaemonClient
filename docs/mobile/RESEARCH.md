@@ -406,7 +406,10 @@ server (SPEC §4.6). Read from the fork:
   0 (`:49-51`). The cache is keyed by URL: a local server on a random port with
   a per-launch secret in the URL gets a fresh key every launch, so this cache
   only helps within one run. **The core's own disk cache (SPEC §4.7) is what
-  survives restarts.**
+  survives restarts.** *Corrected 2026-11-18 (P2 task 2.3, Gate 3):* the
+  local server now answers `Cache-Control: no-store`, so this cache (and
+  Android's Cronet cache) stores nothing — it had been keeping decrypted
+  originals on disk past sign-out.
 - Decoding is ImageIO (`CGImageSourceCreateThumbnailAtIndex`, transform
   applied) on a background queue of 2 × cores — HEIC decodes natively.
 - No priorities and no rate limit of its own: ordering is entirely the core's job.

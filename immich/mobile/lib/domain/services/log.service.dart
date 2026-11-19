@@ -13,6 +13,13 @@ import 'package:logging/logging.dart';
 /// It listens to Dart's [Logger.root], buffers logs in memory (optionally),
 /// writes them to a persistent [ILogRepository], and manages log levels
 /// via [IStoreRepository]
+final _localSecret = RegExp(r'(127\.0\.0\.1:\d+/)[0-9a-f]{64}');
+
+/// The core's local media server puts a secret in its addresses; an error that
+/// quotes one (a failed image load) must not carry it into the log the user
+/// can export and share (P2 task 2.3, Gate 3).
+String scrubLocalSecrets(String text) => text.replaceAllMapped(_localSecret, (m) => '${m[1]}[secret]');
+
 class LogService {
   final LogRepository _logRepository;
   final DriftStoreRepository _storeRepository;
@@ -66,20 +73,23 @@ class LogService {
   }
 
   void _handleLogRecord(LogRecord r) {
+    final message = scrubLocalSecrets(r.message);
+    final error = r.error == null ? null : scrubLocalSecrets(r.error.toString());
+    final stack = r.stackTrace == null ? null : scrubLocalSecrets(r.stackTrace.toString());
     dPrint(
       () =>
-          '[${r.level.name}] [${r.time}] [${r.loggerName}] ${r.message}'
-          '${r.error == null ? '' : '\nError: ${r.error}'}'
-          '${r.stackTrace == null ? '' : '\nStack: ${r.stackTrace}'}',
+          '[${r.level.name}] [${r.time}] [${r.loggerName}] $message'
+          '${error == null ? '' : '\nError: $error'}'
+          '${stack == null ? '' : '\nStack: $stack'}',
     );
 
     final record = LogMessage(
-      message: r.message,
+      message: message,
       level: r.level.toLogLevel(),
       createdAt: r.time,
       logger: r.loggerName,
-      error: r.error?.toString(),
-      stack: r.stackTrace?.toString(),
+      error: error,
+      stack: stack,
     );
 
     if (_shouldBuffer) {

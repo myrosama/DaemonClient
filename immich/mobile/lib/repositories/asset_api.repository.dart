@@ -1,5 +1,4 @@
 import 'package:hooks_riverpod/hooks_riverpod.dart';
-import 'package:http/http.dart';
 import 'package:immich_mobile/constants/enums.dart';
 import 'package:immich_mobile/domain/models/asset_edit.model.dart' hide AssetEditAction;
 import 'package:immich_mobile/domain/models/stack.model.dart';
@@ -55,10 +54,6 @@ class AssetApiRepository extends ApiRepository {
 
   Future<void> unStack(List<String> ids) async {
     return _stacksApi.deleteStacks(BulkIdsDto(ids: ids));
-  }
-
-  Future<Response> downloadAsset(String id, {required bool edited}) {
-    return _api.downloadAssetWithHttpInfo(id, edited: edited);
   }
 
   _mapVisibility(AssetVisibilityEnum visibility) => switch (visibility) {

@@ -44,6 +44,7 @@ import 'package:immich_mobile/utils/migration.dart';
 import 'package:immich_mobile/wm_executor.dart';
 import 'package:immich_ui/immich_ui.dart';
 import 'package:intl/date_symbol_data_local.dart';
+import 'package:immich_mobile/services/core_media.service.dart';
 import 'package:immich_mobile/services/core_session.service.dart';
 import 'package:logging/logging.dart';
 import 'package:timezone/data/latest.dart';
@@ -68,6 +69,10 @@ void main() async {
 /// DaemonClient's core: started once, then resumed from the session kept in
 /// secure storage (P2 task 2.2). Its folders are the app's own.
 Future<void> _startCore() async {
+  // The core's own lines (scrubbed of tokens) into the app's log; before the
+  // start, as the core's logger is set once.
+  final coreLog = Logger('Core');
+  coreLogs().listen(coreLog.info);
   final (data, cache) = await (getApplicationSupportDirectory(), getApplicationCacheDirectory()).wait;
   await startCore(dataDir: p.join(data.path, 'core'), cacheDir: p.join(cache.path, 'core'));
   try {
@@ -75,6 +80,13 @@ Future<void> _startCore() async {
   } catch (error, stack) {
     // Signed out in the core; the next sign-in starts afresh.
     Logger('Core').severe('Could not resume the session', error, stack);
+  }
+  // Where every picture and video is read (P2 task 2.3). Failing, pictures stay
+  // blank until the next resume tries again; the app still starts.
+  try {
+    await CoreMedia.refresh();
+  } catch (error, stack) {
+    Logger('Core').severe("Could not open the core's media server", error, stack);
   }
 }
 

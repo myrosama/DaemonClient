@@ -22,6 +22,14 @@ Future<void> startCore({required String dataDir, required String cacheDir}) =>
       cacheDir: cacheDir,
     );
 
+/// The core's log lines — bot tokens scrubbed, and the core logs no URL or
+/// secret of its own —
+/// for the app's own logger (its Logs page, and the console in debug builds).
+/// Call before `start_core`: the core's logger is set once per process, so this
+/// is `sync` — it is in place before `start_core` is even sent. Debug builds
+/// log info and up, release builds warnings and up.
+Stream<String> coreLogs() => RustLib.instance.api.crateApiCoreCoreLogs();
+
 /// One HTTPS request from the device to Telegram; the HTTP status.
 Future<int> checkTelegram() => RustLib.instance.api.crateApiCoreCheckTelegram();
 
@@ -42,9 +50,37 @@ Future<SignedIn> signIn({
 void restore({required SignedIn session}) =>
     RustLib.instance.api.crateApiCoreRestore(session: session);
 
+/// Where the app reads every picture and video (P2 task 2.3): the core's
+/// local server, `http://127.0.0.1:<port>/<secret>`. The grid's thumbnails
+/// on one listener, what the user opened on the other (D17). Call it at
+/// start and on every resume — a listener the phone closed opens again on a
+/// new port — and use the addresses it returns. May take ~2 s per listener,
+/// so it is not `sync`.
+Future<MediaAddresses> mediaServer() =>
+    RustLib.instance.api.crateApiCoreMediaServer();
+
 /// Forgets the session and empties what the core kept for it (pictures,
 /// uploads under way).
 void signOut() => RustLib.instance.api.crateApiCoreSignOut();
+
+/// The core's local media server: its two listeners' base addresses.
+class MediaAddresses {
+  final String gridBase;
+  final String viewerBase;
+
+  const MediaAddresses({required this.gridBase, required this.viewerBase});
+
+  @override
+  int get hashCode => gridBase.hashCode ^ viewerBase.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is MediaAddresses &&
+          runtimeType == other.runtimeType &&
+          gridBase == other.gridBase &&
+          viewerBase == other.viewerBase;
+}
 
 /// What a sign-in gives the app. Immich's own client needs the worker's
 /// address and the session token (it sends it as its auth cookie); the

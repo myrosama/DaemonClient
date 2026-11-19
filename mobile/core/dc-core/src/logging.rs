@@ -72,7 +72,7 @@ pub struct CoreLogger {
     level: log::LevelFilter,
     capacity: usize,
     recent: Mutex<VecDeque<String>>,
-    sink: Option<Sink>,
+    sink: Mutex<Option<Sink>>,
 }
 
 impl CoreLogger {
@@ -81,7 +81,14 @@ impl CoreLogger {
             level,
             capacity,
             recent: Mutex::new(VecDeque::with_capacity(capacity)),
-            sink,
+            sink: Mutex::new(sink),
+        }
+    }
+
+    /// Where lines go from now on, in place of the old sink.
+    pub fn set_sink(&self, sink: Option<Sink>) {
+        if let Ok(mut current) = self.sink.lock() {
+            *current = sink;
         }
     }
 
@@ -108,7 +115,9 @@ impl log::Log for CoreLogger {
             record.target(),
             record.args()
         ));
-        if let Some(sink) = &self.sink {
+        if let Ok(sink) = self.sink.lock()
+            && let Some(sink) = sink.as_ref()
+        {
             sink(&line);
         }
         if self.capacity == 0 {
@@ -144,6 +153,16 @@ pub fn install(sink: Option<Sink>) -> bool {
         logger
     });
     installed
+}
+
+/// Sends the core's lines to `sink` from now on, installing the logger if
+/// needed. A later call replaces the sink: Android may start a new Flutter
+/// engine in the same process, and the old one's stream is gone.
+pub fn set_sink(sink: Sink) {
+    install(None);
+    if let Some(logger) = LOGGER.get() {
+        logger.set_sink(Some(sink));
+    }
 }
 
 /// The most recent log lines, oldest first (for the app's log screen).
@@ -240,6 +259,26 @@ mod tests {
         );
         record_into(&logger, log::Level::Info, TOKEN);
         assert_eq!(*seen.lock().unwrap(), vec!["INFO t: [redacted]".to_owned()]);
+    }
+
+    #[test]
+    fn a_new_sink_replaces_the_old_one() {
+        // Android may start a new Flutter engine in the same process (the
+        // activity closed and reopened): its log stream replaces the dead one.
+        let first = std::sync::Arc::new(Mutex::new(0));
+        let second = std::sync::Arc::new(Mutex::new(0));
+        let (a, b) = (
+            std::sync::Arc::clone(&first),
+            std::sync::Arc::clone(&second),
+        );
+        let logger = CoreLogger::new(
+            log::LevelFilter::Info,
+            0,
+            Some(Box::new(move |_: &str| *a.lock().unwrap() += 1)),
+        );
+        logger.set_sink(Some(Box::new(move |_: &str| *b.lock().unwrap() += 1)));
+        record_into(&logger, log::Level::Info, "line");
+        assert_eq!((*first.lock().unwrap(), *second.lock().unwrap()), (0, 1));
     }
 
     #[test]

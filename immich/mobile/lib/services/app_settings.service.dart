@@ -4,7 +4,7 @@ import 'package:immich_mobile/entities/store.entity.dart';
 
 enum AppSettingsEnum<T> {
   loadPreview<bool>(StoreKey.loadPreview, "loadPreview", true),
-  loadOriginal<bool>(StoreKey.loadOriginal, "loadOriginal", false),
+  loadOriginal<bool>(StoreKey.loadOriginal, "loadOriginal", true),
   themeMode<String>(StoreKey.themeMode, "themeMode", "system"), // "light","dark","system"
   primaryColor<String>(StoreKey.primaryColor, "primaryColor", defaultColorPresetName),
   dynamicTheme<bool>(StoreKey.dynamicTheme, "dynamicTheme", false),

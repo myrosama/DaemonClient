@@ -147,7 +147,12 @@ mixin CancellableImageProviderMixin<T extends Object> on CancellableImageProvide
   }
 }
 
-ImageProvider getFullImageProvider(BaseAsset asset, {Size size = const Size(1080, 1920), bool edited = true}) {
+ImageProvider getFullImageProvider(
+  BaseAsset asset, {
+  Size size = const Size(1080, 1920),
+  bool edited = true,
+  bool neighbour = false,
+}) {
   // Create new provider and cache it
   final ImageProvider provider;
   if (_shouldUseLocalAsset(asset)) {
@@ -171,6 +176,7 @@ ImageProvider getFullImageProvider(BaseAsset asset, {Size size = const Size(1080
       assetType: asset.type,
       isAnimated: asset.isAnimatedImage,
       edited: edited,
+      neighbour: neighbour,
     );
   }
 

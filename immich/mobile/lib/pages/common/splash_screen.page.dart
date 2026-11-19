@@ -6,6 +6,8 @@ import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
+import 'package:immich_mobile/services/api.service.dart';
+import 'package:immich_mobile/infrastructure/repositories/network.repository.dart';
 import 'package:immich_mobile/constants/colors.dart';
 import 'package:immich_mobile/constants/locales.dart';
 import 'package:immich_mobile/domain/models/store.model.dart';
@@ -316,6 +318,13 @@ class SplashScreenPageState extends ConsumerState<SplashScreenPage> {
       final backgroundManager = ref.read(backgroundSyncProvider);
       final backupProvider = ref.read(driftBackupProvider.notifier);
 
+      // The token back into Immich's native HTTP, as at sign-in: its cookie store
+      // may not have kept it (an iOS build without the App Group does not).
+      await NetworkRepository.setHeaders(
+        ApiService.getRequestHeaders(),
+        ApiService.getServerUrls(),
+        token: accessToken,
+      );
       unawaited(
         ref.read(authProvider.notifier).saveAuthInfo(accessToken: accessToken).then(
           (_) async {

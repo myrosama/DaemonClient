@@ -8,7 +8,7 @@
 use std::convert::Infallible;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::{Arc, Weak};
+use std::sync::{Arc, Mutex, Weak};
 use std::task::{Context, Poll, ready};
 use std::time::{Duration, Instant};
 
@@ -189,6 +189,7 @@ fn listen(core: &Arc<Core>, class: Class) -> Result<Listener, CoreError> {
     let secret_for_check = secret.clone();
     let core = Arc::downgrade(core);
     let slots = Arc::new(tokio::sync::Semaphore::new(MAX_CONNECTIONS));
+    let tally = Arc::new(Mutex::new(Tally::new(std::time::Instant::now())));
     let task = handle.spawn(async move {
         // Its connections belong to this task: when it ends or is aborted
         // (a reopen), they end too, and the secret with them (invariant a).
@@ -215,10 +216,20 @@ fn listen(core: &Arc<Core>, class: Class) -> Result<Listener, CoreError> {
                 }
             };
             errors = 0;
-            let (core, secret) = (core.clone(), secret.clone());
+            let (core, secret, tally) = (core.clone(), secret.clone(), tally.clone());
             connections.spawn(async move {
                 let _slot = slot; // freed when the connection ends
                 let service = hyper::service::service_fn(move |request| {
+                    let report = tally
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .note(std::time::Instant::now());
+                    if let Some((answered, window)) = report {
+                        log::info!(
+                            "media {class:?}: {answered} requests in {:.1} s",
+                            window.as_secs_f64()
+                        );
+                    }
                     answer(core.clone(), secret.clone(), class, request)
                 });
                 // `half_close` stays off: a hang-up ends the connection and drops the work.
@@ -240,15 +251,51 @@ fn listen(core: &Arc<Core>, class: Class) -> Result<Listener, CoreError> {
 
 type Reply = Response<UnsyncBoxBody<Bytes, std::io::Error>>;
 
+/// Requests a listener answered, reported every 5 s at info level — debug
+/// builds only (release logs warnings and up): how many thumbnails a second
+/// the app's loader gets through (P2 task 2.3, Android's 6 connections).
+pub(crate) struct Tally {
+    since: std::time::Instant,
+    answered: usize,
+}
+
+impl Tally {
+    pub(crate) fn new(now: std::time::Instant) -> Self {
+        Self {
+            since: now,
+            answered: 0,
+        }
+    }
+
+    /// Counts one; the count and its window once 5 s have passed.
+    pub(crate) fn note(&mut self, now: std::time::Instant) -> Option<(usize, Duration)> {
+        self.answered += 1;
+        let window = now.saturating_duration_since(self.since);
+        if window < Duration::from_secs(5) {
+            return None;
+        }
+        let report = (self.answered, window);
+        *self = Self::new(now);
+        Some(report)
+    }
+}
+
 async fn answer(
     core: Weak<Core>,
     secret: Arc<str>,
     class: Class,
     request: Request<Incoming>,
 ) -> Result<Reply, Infallible> {
-    Ok(route(core, &secret, class, &request)
+    let mut reply = route(core, &secret, class, &request)
         .await
-        .unwrap_or_else(empty))
+        .unwrap_or_else(empty);
+    // Decrypted bytes: never into the phone's own HTTP caches (URLSession,
+    // Cronet) — the core keeps its own, emptied at sign-out (SPEC §4.7).
+    reply.headers_mut().insert(
+        hyper::header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store"),
+    );
+    Ok(reply)
 }
 
 /// The response, or the status of an empty one.
@@ -294,6 +341,7 @@ async fn route(
         return Err(StatusCode::NOT_FOUND);
     };
     let core = core.upgrade().ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let class = class_of(class, request.uri().query());
     match what {
         ["thumbnail"] => {
             let size = request
@@ -311,6 +359,18 @@ async fn route(
         ["original"] => media(&core, id, Rendition::Original, class, request, head).await,
         ["video", "playback"] => media(&core, id, Rendition::Playback, class, request, head).await,
         _ => Err(StatusCode::NOT_FOUND),
+    }
+}
+
+/// The listener's class, or Next when the request asks (`next=1`: the
+/// viewer's neighbour preloads, §4.9). A request may lower its class, never
+/// raise it.
+fn class_of(listener: Class, query: Option<&str>) -> Class {
+    let next = query.unwrap_or_default().split('&').any(|p| p == "next=1");
+    if next {
+        listener.min(Class::Next)
+    } else {
+        listener
     }
 }
 
@@ -503,6 +563,23 @@ impl Body for Parts {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_tally_reports_once_a_window_has_passed() {
+        let start = std::time::Instant::now();
+        let mut tally = Tally::new(start);
+        for n in 1..=3 {
+            assert_eq!(tally.note(start + Duration::from_millis(n * 100)), None);
+        }
+        let report = tally.note(start + Duration::from_secs(5));
+        assert_eq!(report, Some((4, Duration::from_secs(5))));
+        // A new window starts from there.
+        assert_eq!(tally.note(start + Duration::from_secs(6)), None);
+        assert_eq!(
+            tally.note(start + Duration::from_secs(10)),
+            Some((2, Duration::from_secs(5)))
+        );
+    }
     use crate::CoreConfig;
     use crate::chunk_plan::PART_SIZE;
     use crate::core::tests::{library, mount_file, photo, sealed};
@@ -619,6 +696,44 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(posted.status().as_u16(), 405);
+    }
+
+    #[test]
+    fn a_request_may_lower_its_class_to_next_never_raise_it() {
+        // The viewer's neighbour preloads (§4.9) — never ahead of the opened item.
+        assert_eq!(
+            class_of(Class::Opened, Some("size=preview&next=1")),
+            Class::Next
+        );
+        assert_eq!(class_of(Class::Opened, Some("edited=true")), Class::Opened);
+        assert_eq!(class_of(Class::Opened, None), Class::Opened);
+        assert_eq!(class_of(Class::Visible, Some("next=1")), Class::Visible);
+        assert_eq!(
+            class_of(Class::Opened, Some("nextx=1&next=0")),
+            Class::Opened
+        );
+    }
+
+    #[tokio::test]
+    async fn no_reply_may_be_stored_by_the_phones_own_http_caches() {
+        // Decrypted pictures must not land in URLSession's or Cronet's disk
+        // caches (SPEC §4.7; Gate 3, P2 2.3) — the core keeps its own.
+        let m = photo(
+            json!({"thumbId": "t", "fileSize": 10, "mimeType": "image/jpeg", "originalId": "o"}),
+        );
+        let files = vec![
+            ("t", sealed(b"\xff\xd8thumb"), 1),
+            ("o", sealed(b"0123456789"), 1),
+        ];
+        let (_server, _core, urls, _dir) = served(m, files).await;
+        for url in [
+            format!("{}/api/assets/a1/thumbnail?size=thumbnail", urls.grid_base),
+            format!("{}/api/assets/a1/original", urls.viewer_base),
+            format!("{}/api/assets/nothing/original", urls.viewer_base),
+        ] {
+            let (_, headers, _) = get(&url, None).await;
+            assert_eq!(header(&headers, "cache-control"), "no-store", "{url}");
+        }
     }
 
     #[tokio::test]

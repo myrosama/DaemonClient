@@ -4,9 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:immich_mobile/domain/models/asset/base_asset.model.dart';
 import 'package:immich_mobile/domain/models/setting.model.dart';
-import 'package:immich_mobile/domain/models/store.model.dart';
 import 'package:immich_mobile/domain/services/setting.service.dart';
-import 'package:immich_mobile/entities/store.entity.dart';
 import 'package:immich_mobile/extensions/platform_extensions.dart';
 import 'package:immich_mobile/infrastructure/repositories/storage.repository.dart';
 import 'package:immich_mobile/providers/asset_viewer/asset_viewer.provider.dart';
@@ -16,8 +14,8 @@ import 'package:immich_mobile/providers/asset_viewer/video_player_provider.dart'
 import 'package:immich_mobile/providers/cast.provider.dart';
 import 'package:immich_mobile/providers/infrastructure/asset.provider.dart';
 import 'package:immich_mobile/providers/infrastructure/setting.provider.dart';
-import 'package:immich_mobile/services/api.service.dart';
 import 'package:immich_mobile/services/app_settings.service.dart';
+import 'package:immich_mobile/utils/image_url_builder.dart';
 import 'package:logging/logging.dart';
 import 'package:native_video_player/native_video_player.dart';
 
@@ -119,14 +117,12 @@ class _NativeVideoViewerState extends ConsumerState<NativeVideoViewer> with Widg
 
       final remoteId = (videoAsset as RemoteAsset).id;
 
-      final serverEndpoint = Store.get(StoreKey.serverEndpoint);
+      // The core's local server (P2 task 2.3): no worker, no auth headers.
       final isOriginalVideo = ref.read(settingsProvider).get<bool>(Setting.loadOriginalVideo);
-      final String postfixUrl = isOriginalVideo ? 'original' : 'video/playback';
-      final String videoUrl = videoAsset.livePhotoVideoId != null
-          ? '$serverEndpoint/assets/${videoAsset.livePhotoVideoId}/$postfixUrl'
-          : '$serverEndpoint/assets/$remoteId/$postfixUrl';
+      final id = videoAsset.livePhotoVideoId ?? remoteId;
+      final videoUrl = isOriginalVideo ? getOriginalUrlForRemoteId(id) : getPlaybackUrlForRemoteId(id);
 
-      return VideoSource.init(path: videoUrl, type: VideoSourceType.network, headers: ApiService.getRequestHeaders());
+      return VideoSource.init(path: videoUrl, type: VideoSourceType.network);
     } catch (error) {
       _log.severe('Error creating video source for asset ${videoAsset.name}: $error');
       return null;

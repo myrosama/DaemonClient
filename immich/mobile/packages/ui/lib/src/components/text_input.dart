@@ -56,7 +56,9 @@ class _ImmichTextInputState extends State<ImmichTextInput> {
     setState(() {
       _error = widget.validator?.call(value);
     });
-    return null;
+    // Returned, so a failing field stops the form's submit (it used to show the
+    // message and send anyway — the login form sent an empty password).
+    return _error;
   }
 
   bool get _hasError => _error != null && _error!.isNotEmpty;

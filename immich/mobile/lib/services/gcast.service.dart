@@ -2,13 +2,14 @@ import 'dart:async';
 
 import 'package:cast/session.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
+import 'package:immich_mobile/domain/models/store.model.dart';
+import 'package:immich_mobile/entities/store.entity.dart';
 import 'package:immich_mobile/domain/models/asset/base_asset.model.dart';
 import 'package:immich_mobile/models/cast/cast_manager_state.dart';
 import 'package:immich_mobile/models/sessions/session_create_response.model.dart';
 import 'package:immich_mobile/repositories/asset_api.repository.dart';
 import 'package:immich_mobile/repositories/gcast.repository.dart';
 import 'package:immich_mobile/repositories/sessions_api.repository.dart';
-import 'package:immich_mobile/utils/image_url_builder.dart';
 // ignore: import_rule_openapi, we are only using the AssetMediaSize enum
 import 'package:openapi/api.dart';
 
@@ -163,9 +164,12 @@ class GCastService {
       );
     }
 
+    // A cast device fetches the URL itself, so not the phone's local server
+    // (127.0.0.1 would be its own): the worker's address (2.10's list).
+    final serverEndpoint = Store.get(StoreKey.serverEndpoint);
     final unauthenticatedUrl = asset.isVideo
-        ? getPlaybackUrlForRemoteId(asset.id)
-        : getThumbnailUrlForRemoteId(asset.id, type: AssetMediaSize.fullsize);
+        ? '$serverEndpoint/assets/${asset.id}/video/playback?' // media-paths: allowed (a cast device fetches it)
+        : '$serverEndpoint/assets/${asset.id}/thumbnail?size=${AssetMediaSize.fullsize.value}'; // media-paths: allowed (a cast device fetches it)
 
     final authenticatedURL = "$unauthenticatedUrl&sessionKey=${sessionKey?.token}";
 

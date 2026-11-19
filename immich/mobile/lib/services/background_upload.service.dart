@@ -288,7 +288,7 @@ class BackgroundUploadService {
 
       final thumbBody = {'thumbData_base64': thumbBase64};
       final thumbResponse = await http.post(
-        Uri.parse('$serverEndpoint/assets/$assetId/thumbnail'),
+        Uri.parse('$serverEndpoint/assets/$assetId/thumbnail'), // media-paths: allowed (until 2.6 rewrites the uploader)
         headers: headers,
         body: thumbBody,
       );

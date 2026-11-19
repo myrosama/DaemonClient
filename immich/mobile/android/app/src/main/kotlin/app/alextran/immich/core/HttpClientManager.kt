@@ -274,6 +274,9 @@ object HttpClientManager {
   }
 
   fun getAuthHeaders(url: String): Map<String, String> {
+    // The core's local server (P2 task 2.3) needs none: the user's custom
+    // headers never go to a loopback port.
+    if (url.toHttpUrlOrNull()?.host == "127.0.0.1") return emptyMap()
     val result = mutableMapOf<String, String>()
     headers.forEach { (key, value) -> result[key] = value }
     loadCookieHeader(url)?.let { result["Cookie"] = it }
@@ -296,13 +299,20 @@ object HttpClientManager {
 
   val cronetStoragePath: File get() = cronetStorageDir
 
+  // The core answers a video only once its first part (up to 19 MiB) has
+  // arrived and been checked (P2 task 2.3): wait as long as iOS's player does,
+  // not ExoPlayer's 8 s.
+  private const val VIDEO_TIMEOUT_MS = 60_000L
+
   @OptIn(UnstableApi::class)
   fun createDataSourceFactory(headers: Map<String, String>): DataSource.Factory {
     return if (isMtls) {
-      OkHttpDataSource.Factory(client.newBuilder().cache(null).build())
+      OkHttpDataSource.Factory(client.newBuilder().cache(null).readTimeout(VIDEO_TIMEOUT_MS, TimeUnit.MILLISECONDS).build())
     } else {
       ResolvingDataSource.Factory(
         CronetDataSource.Factory(cronetEngine!!, cronetExecutor)
+          .setConnectionTimeoutMs(VIDEO_TIMEOUT_MS.toInt())
+          .setReadTimeoutMs(VIDEO_TIMEOUT_MS.toInt())
       ) { dataSpec ->
         val newHeaders = dataSpec.httpRequestHeaders.toMutableMap()
         newHeaders.putAll(getAuthHeaders(dataSpec.uri.toString()))

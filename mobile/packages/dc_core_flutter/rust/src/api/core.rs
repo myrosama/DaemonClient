@@ -1,8 +1,9 @@
 //! What the apps can call. Deliberately thin: the logic lives in dc-core.
 
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
-static CORE: OnceLock<dc_core::Core> = OnceLock::new();
+// An `Arc`: the local media server holds the core weakly (`media_server`).
+static CORE: OnceLock<Arc<dc_core::Core>> = OnceLock::new();
 
 /// The core's version, shown in the apps so a build can be traced to a commit.
 #[flutter_rust_bridge::frb(sync)]
@@ -19,17 +20,36 @@ pub fn part_count(file_size: u64) -> u64 {
 /// Starts the core once per app process; later calls do nothing.
 pub fn start_core(data_dir: String, cache_dir: String) -> anyhow::Result<()> {
     if CORE.get().is_none() {
-        let core =
-            dc_core::Core::start(dc_core::CoreConfig::new(data_dir.into(), cache_dir.into()))?;
+        let core = Arc::new(dc_core::Core::start(dc_core::CoreConfig::new(
+            data_dir.into(),
+            cache_dir.into(),
+        ))?);
         // If another call won the race, its core stays and this one is dropped.
         let _ = CORE.set(core);
     }
     Ok(())
 }
 
-fn core() -> anyhow::Result<&'static dc_core::Core> {
+fn core() -> anyhow::Result<&'static Arc<dc_core::Core>> {
     CORE.get()
         .ok_or_else(|| anyhow::anyhow!("the core is not started"))
+}
+
+/// The core's log lines — bot tokens scrubbed, and the core logs no URL or
+/// secret of its own —
+/// for the app's own logger (its Logs page, and the console in debug builds).
+/// Call before `start_core` (`sync`, so it is in place before `start_core` is
+/// even sent); calling it again moves the lines to the new stream. Debug builds
+/// log info and up, release builds warnings and up.
+#[flutter_rust_bridge::frb(sync)]
+pub fn core_logs(sink: crate::frb_generated::StreamSink<String>) {
+    let sink = std::sync::Mutex::new(sink);
+    // Replaces any earlier stream: a new Flutter engine in the same process.
+    dc_core::logging::set_sink(Box::new(move |line: &str| {
+        if let Ok(sink) = sink.lock() {
+            let _ = sink.add(line.to_owned());
+        }
+    }));
 }
 
 /// One HTTPS request from the device to Telegram; the HTTP status.
@@ -76,6 +96,26 @@ pub fn restore(session: SignedIn) -> anyhow::Result<()> {
         name: session.name,
     })?;
     Ok(())
+}
+
+/// The core's local media server: its two listeners' base addresses.
+pub struct MediaAddresses {
+    pub grid_base: String,
+    pub viewer_base: String,
+}
+
+/// Where the app reads every picture and video (P2 task 2.3): the core's
+/// local server, `http://127.0.0.1:<port>/<secret>`. The grid's thumbnails
+/// on one listener, what the user opened on the other (D17). Call it at
+/// start and on every resume — a listener the phone closed opens again on a
+/// new port — and use the addresses it returns. May take ~2 s per listener,
+/// so it is not `sync`.
+pub fn media_server() -> anyhow::Result<MediaAddresses> {
+    let server = core()?.media_server()?;
+    Ok(MediaAddresses {
+        grid_base: server.grid_base,
+        viewer_base: server.viewer_base,
+    })
 }
 
 /// Forgets the session and empties what the core kept for it (pictures,
