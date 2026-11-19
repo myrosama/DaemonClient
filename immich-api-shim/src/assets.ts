@@ -523,46 +523,28 @@ export async function handleAssets(request: Request, env: Env, path: string, url
   // Trash — empty (permanently delete all trashed photos). Immich app uses
   // POST; accept DELETE too for robustness.
   if (path === '/api/trash/empty' && (request.method === 'POST' || request.method === 'DELETE')) {
+    let count = 0;
     if (env.DB) {
-      const adapter = new D1Adapter(env.DB);
-      const rows = await adapter.queryPhotos({ ownerId: uid, isTrashed: 1 });
-      const ids = rows.map(r => r.id);
-      if (ids.length > 0) {
-        // Delegate to handleDeleteAssets logic with force=true — call inline
-        const config = await getCachedConfig<any>(env, uid, idToken, 'telegram');
-        const botToken = config?.botToken || config?.bot_token;
-        const channelId = config?.channelId || config?.channel_id;
-        for (const id of ids) {
-          const photo = await adapter.getPhoto(id);
-          if (photo && botToken && channelId) {
-            const chunks = typeof photo.telegramChunks === 'string'
-              ? JSON.parse(photo.telegramChunks || '[]')
-              : (photo.telegramChunks || []);
-            for (const message_id of [...(Array.isArray(chunks) ? chunks : []).map((c: any) => c?.message_id), ...playbackMessageIds(photo.telegramPlaybackChunks)]) {
-              try {
-                await fetch(`https://api.telegram.org/bot${botToken}/deleteMessage`, {
-                  method: 'POST', headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ chat_id: channelId, message_id }),
-                });
-              } catch { /* best effort */ }
-            }
-          }
-          // Keep the row as a tombstone instead of DELETEing it. A hard delete
-          // erased the only record sync has of the asset's existence, so any
-          // device that had not synced between "trash" and "empty trash" never
-          // received an AssetDeleteV1 and kept the asset forever as a ghost —
-          // which later collides on checksum and can abort its whole sync.
-          // purgedAt lets a tombstone be reclaimed once every device has had
-          // ample time to see it (see purgeExpiredTombstones).
-          await adapter.updatePhoto(id, {
-            isTrashed: 1,
-            telegramChunks: '[]',
-            purgedAt: new Date().toISOString(),
-          } as any);
+      await ensureDeduplicationSchema(env.DB);
+      // Only deletions not finished yet. A finished tombstone has purgedAt;
+      // stamping it again would keep it from ever expiring.
+      const rows: any[] = (await env.DB.prepare(
+        'SELECT * FROM photos WHERE ownerId = ? AND isTrashed = 1 AND purgedAt IS NULL',
+      ).bind(uid).all()).results || [];
+      if (rows.length > 0) {
+        const gone = await deleteFromTelegram(env, uid, idToken, rows);
+        // The row stays as a tombstone, so every device still learns the
+        // asset is gone (AssetDeleteV1); purgedAt lets purgeExpiredTombstones
+        // reclaim it once they all had time to.
+        const adapter = new D1Adapter(env.DB);
+        const now = new Date().toISOString();
+        for (const id of gone) {
+          await adapter.updatePhoto(id, { telegramChunks: '[]', telegramPlaybackChunks: null, purgedAt: now } as any);
         }
+        count = gone.size;
       }
     }
-    return json({});
+    return json({ count });
   }
 
   // Notifications — real count of assets needing the HEIC/thumbnail fix,
@@ -742,53 +724,105 @@ async function handleDeleteAssets(request: Request, env: Env, uid: string, idTok
   const ids: string[] = body.ids || [];
 
   // Always permanently delete — no trash needed.
-  const config = await getCachedConfig<any>(env, uid, idToken, 'telegram');
-  const botToken = config?.botToken || config?.bot_token;
-  const channelId = config?.channelId || config?.channel_id;
-
-  // Expand the delete set to include live-photo companions. When a still is
-  // deleted its paired MOV must go too (and vice versa), otherwise the orphaned
-  // video shows up as a standalone clip after the next sync.
-  const expandedIds = new Set<string>(ids);
-  if (env.DB) {
-    for (const id of ids) {
-      const photo = await new D1Adapter(env.DB).getPhoto(id);
-      if (photo?.livePhotoVideoId) expandedIds.add(photo.livePhotoVideoId);
+  const adapter = env.DB ? new D1Adapter(env.DB) : null;
+  if (adapter) await ensureDeduplicationSchema(env.DB);
+  const load = (id: string): Promise<any> => adapter ? adapter.getPhoto(id) : firestoreGet(env, uid, `photos/${id}`, idToken);
+  const photos = new Map<string, any>();
+  for (const id of ids) {
+    const photo = await load(id);
+    if (!photo) continue;
+    photos.set(id, { ...photo, id });
+    // A live photo's still and motion video go together, or the orphaned video
+    // shows up as a standalone clip after the next sync.
+    const pair = photo.livePhotoVideoId;
+    if (adapter && pair && !photos.has(pair)) {
+      const video = await load(pair);
+      if (video) photos.set(pair, { ...video, id: pair });
     }
   }
 
-  for (const id of expandedIds) {
-    let photo: any;
-    if (env.DB) {
-      photo = await new D1Adapter(env.DB).getPhoto(id);
-    } else {
-      photo = await firestoreGet(env, uid, `photos/${id}`, idToken);
-    }
-
-    if (photo && botToken && channelId) {
-      const chunks = typeof photo.telegramChunks === 'string'
-        ? JSON.parse(photo.telegramChunks || '[]')
-        : (photo.telegramChunks || []);
-      for (const message_id of [...(Array.isArray(chunks) ? chunks : []).map((c: any) => c?.message_id), ...playbackMessageIds(photo.telegramPlaybackChunks)]) {
-        try {
-          await fetch(`https://api.telegram.org/bot${botToken}/deleteMessage`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ chat_id: channelId, message_id }),
-          });
-        } catch { /* best effort */ }
-      }
-    }
-
-    if (env.DB) {
-      // Soft-delete: keep the D1 row as a sync tombstone. The Telegram data is
-      // already gone above. Sync stream will emit AssetDeleteV1 for isTrashed=1
-      // rows so the mobile removes them from its local DB on the next sync.
-      await new D1Adapter(env.DB).updatePhoto(id, { isTrashed: 1, telegramChunks: '[]' });
-    } else {
+  const gone = await deleteFromTelegram(env, uid, idToken, [...photos.values()]);
+  const now = new Date().toISOString();
+  for (const id of photos.keys()) {
+    if (adapter) {
+      // Always a tombstone: the photo leaves the library now, and sync tells
+      // every device (AssetDeleteV1). Its parts are forgotten only once
+      // Telegram confirmed the delete; until then Empty Trash retries.
+      await adapter.updatePhoto(id, gone.has(id)
+        ? { isTrashed: 1, telegramChunks: '[]', telegramPlaybackChunks: null, purgedAt: now } as any
+        : { isTrashed: 1 });
+    } else if (gone.has(id)) {
       await firestoreDelete(env, uid, `photos/${id}`, idToken);
     }
   }
   return json({});
+}
+
+// Telegram calls one request may spend on deleting: the free plan allows 50
+// outside calls per request, and the request makes a few of its own.
+const DELETE_CALLS_PER_REQUEST = 40;
+
+// The Telegram messages a photo row still holds: its parts and its playback copy.
+function photoMessageIds(photo: any): number[] {
+  let chunks: any = photo?.telegramChunks;
+  if (typeof chunks === 'string') { try { chunks = JSON.parse(chunks || '[]'); } catch { chunks = []; } }
+  const ids = (Array.isArray(chunks) ? chunks : []).map((c: any) => c?.message_id).filter((id: unknown) => Number.isSafeInteger(id));
+  return [...ids, ...playbackMessageIds(photo?.telegramPlaybackChunks)];
+}
+
+// Deletes the photos' Telegram messages, up to 100 per call (deleteMessages),
+// and returns the ids of the photos whose messages are all gone. A photo with
+// none counts as gone; one whose call Telegram refused, or that this request's
+// call budget didn't reach, does not, so its record is kept for a retry.
+async function deleteFromTelegram(env: Env, uid: string, idToken: string, photos: any[]): Promise<Set<string>> {
+  const gone = new Set<string>(photos.filter((p) => photoMessageIds(p).length === 0).map((p) => p.id));
+  if (gone.size === photos.length) return gone;
+  const config = await getCachedConfig<any>(env, uid, idToken, 'telegram');
+  const botToken = config?.botToken || config?.bot_token;
+  const channelId = config?.channelId || config?.channel_id;
+  if (!botToken || !channelId) return gone;
+
+  let calls = DELETE_CALLS_PER_REQUEST;
+  const send = async (ids: number[]): Promise<boolean> => {
+    if (calls <= 0) return false;
+    calls--;
+    try {
+      const res = await fetch(`https://api.telegram.org/bot${botToken}/deleteMessages`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: channelId, message_ids: ids }),
+      });
+      const data: any = await res.json().catch(() => null);
+      if (data?.ok) return true; // messages already gone are skipped, not refused
+      console.warn(`[delete] Telegram refused ${ids.length} message(s): ${String(data?.description || res.status).slice(0, 120)}`);
+    } catch {
+      console.warn('[delete] Telegram unreachable');
+    }
+    return false;
+  };
+
+  // Small photos share a call; a photo of more than 100 parts gets its own.
+  let batch: number[] = [];
+  let batchPhotos: string[] = [];
+  const flush = async () => {
+    if (batchPhotos.length > 0 && await send(batch)) batchPhotos.forEach((id) => gone.add(id));
+    batch = [];
+    batchPhotos = [];
+  };
+  for (const photo of photos) {
+    const ids = photoMessageIds(photo);
+    if (ids.length === 0) continue;
+    if (ids.length > 100) {
+      let ok = true;
+      for (let i = 0; ok && i < ids.length; i += 100) ok = await send(ids.slice(i, i + 100));
+      if (ok) gone.add(photo.id);
+      continue;
+    }
+    if (batch.length + ids.length > 100) await flush();
+    batch.push(...ids);
+    batchPhotos.push(photo.id);
+  }
+  await flush();
+  return gone;
 }
 
 async function handleBulkUpdate(request: Request, env: Env, uid: string, idToken: string): Promise<Response> {

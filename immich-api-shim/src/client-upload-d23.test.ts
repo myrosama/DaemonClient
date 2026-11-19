@@ -19,6 +19,7 @@ async function freshDb() {
   // The worker adds this column with a once-per-isolate step that an earlier
   // test in this file has already used up on its own database.
   await DB.prepare('ALTER TABLE photos ADD COLUMN telegramPlaybackChunks TEXT').run();
+  await DB.prepare('ALTER TABLE photos ADD COLUMN purgedAt TEXT').run();
   return DB;
 }
 
@@ -116,8 +117,8 @@ describe('a client upload with its own preview and EXIF', () => {
       telegramPlaybackChunks: JSON.stringify([{ index: 0, message_id: 9, file_id: 'play-0' }]) }, DB);
     const deleted: number[] = [];
     vi.stubGlobal('fetch', async (url: string, init: any) => {
-      if (String(url).endsWith('/deleteMessage')) deleted.push(JSON.parse(init.body).message_id);
-      return new Response('{"ok":true}');
+      if (String(url).endsWith('/deleteMessages')) deleted.push(...JSON.parse(init.body).message_ids);
+      return new Response('{"ok":true,"result":true}');
     });
     try {
       const request = new Request('https://worker.test/api/assets', {
