@@ -5,7 +5,6 @@
 | | |
 |---|---|
 | **[SELF_HOSTING.md](SELF_HOSTING.md)** | Set up your own instance on your own Telegram, Cloudflare and Firebase accounts. **Start here** if you want to run this yourself. |
-| [SETUP_GUIDE.md](SETUP_GUIDE.md) | Signing up and connecting your storage on the hosted service at daemonclient.uz. |
 
 ## Understanding it
 
