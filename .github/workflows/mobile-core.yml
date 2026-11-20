@@ -51,7 +51,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - run: cargo run -q --locked -p dc-core --example emit_vectors | node core/compat/verify-rust-output.mjs
+      - run: cargo run -q --locked -p dc-core --example emit_vectors | node compat/verify-rust-output.mjs
 
   audit:
     runs-on: ubuntu-latest
