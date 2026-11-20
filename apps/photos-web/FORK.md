@@ -62,7 +62,7 @@ enum — throws. The batch is then never acked, so the server replays the same
 record forever, and backup is gated on sync succeeding at five separate call
 sites. A single bad value stops backup permanently, on every trigger.
 
-This is why `immich-api-shim/src/sync.ts` writes `!!photo.isFavorite` rather
+This is why `workers/user-worker/src/sync.ts` writes `!!photo.isFavorite` rather
 than passing the raw column through, and why anything it emits needs a test.
 
 ## Keeping up with upstream

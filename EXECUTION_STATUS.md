@@ -19,7 +19,7 @@
 |---|---|
 | **Date** | 2026-10-05 |
 | **Phase** | **Self-host installer PAUSED.** Shipped before the pause: P11, P8, P6, P0, P1/P2/P4, P5, P9, P10; Phase 0 done. |
-| **Just finished** | 2026-10-12: Photos media scheduler (PR #3, on the priority model the mobile apps use — `immich/web/src/service-worker/media-scheduler.ts`), with three rounds of review fixes, deployed and measured in a real browser on a real library: grid fill after a fling 8–25% faster than before, the opened photo ahead of the grid. Before that (2026-10-06): per-user worker release `9e7badce0e86` to every worker, and the scheduled fleet update. |
+| **Just finished** | 2026-10-12: Photos media scheduler (PR #3, on the priority model the mobile apps use — `apps/photos-web/web/src/service-worker/media-scheduler.ts`), with three rounds of review fixes, deployed and measured in a real browser on a real library: grid fill after a fling 8–25% faster than before, the opened photo ahead of the grid. Before that (2026-10-06): per-user worker release `9e7badce0e86` to every worker, and the scheduled fleet update. |
 | **Live on the web** | 2026-11-20: `daemonclient-deployment` version `88544f81` (previous `006e9e04`) from `main` `faa8134`: worker release R3 (`4d636f7c2d20`, the delete fix) to every worker, one per 10-minute run: deletes go to Telegram in batches of 100 (deleteMessages), a photo's parts are forgotten only once Telegram confirms, a deleted photo is never served or restored, and old tombstones expire again. 2026-11-18: `daemonclient-deployment` version `006e9e04` (previous `b1bf0fce`) from `main` `d4cc468`: worker release R2 (`ffbe63b44e9a`: the phone's preview, EXIF and playback copy on a client upload) to every worker, one per 10-minute run; Cloudflare's reason is logged when a renewal fails and a refused account is marked for a reconnect; one update at a time spends a worker's refresh token. Firebase Hosting `accounts` version `65b85276c6ec5cb0` (previous `5afc339c91325860`) from the same commit: the dashboard asks a marked account to reconnect Cloudflare, shown after signing in with the form. 2026-11-15: `daemonclient-deployment` version `b1bf0fce` (previous `abc2d3d5`, before that `d34f3b97`) releases worker W1 (`a7656240c9ad`) to every worker, one per 10-minute run; on `main` since merge `4ba30e4`. Firebase Hosting `drive` version `be57d21e38aaf46f` (previous `039836ec32ca364d`) from `main` `74199f8`: "not set up" is re-checked once with a fresh shared session. Checked live on a new account: sign-in through the portal, upload and byte-identical download, W1 Trash/restore/delete-forever on its real database. 2026-11-14: Firebase Hosting `accounts` version `5afc339c91325860` (previous `e3672116a7ed1618`) from `main` `9689705`: a new account's worker is contacted only once public DNS has its address. 2026-11-10: Firebase Hosting `accounts` (version `e3672116a7ed1618`, previous `4d08d3b056133e97`) and `drive` (version `039836ec32ca364d`, previous `8e2dfef1702f345f`) from `main` `ebcc314`: Drive signs in through the accounts portal, sign-out through the portal. `daemonclient-deployment` version `abc2d3d5` from `feat/drive-w1` `862bcb5` with worker release W1 (`a7656240c9ad`) limited to the test account; previous `d34f3b97`. 2026-10-12: Firebase Hosting `photos` from `main` `aea5b2d` (the media scheduler). 2026-10-06: `daemonclient-deployment` (version d34f3b97, from `main` `289eb0e`) with the fleet update on a 10-minute schedule; per-user worker bundle `9e7badce0e86`; central `immich-api` (version 11fb5586) from `7445da4`. 2026-10-05: auth hub `daemonclient-auth` (version fb3b7c32), Hosting `accounts`, Firestore rules — from `9b498b4`. Each checked live. Update this row on every deploy. |
 | **Working on now** | **2026-11-20:** worker release R3 (the delete fix from the 2026-11-18 audit) released after Gate 3 twice (security + correctness, 440 worker tests). The MacBook cleanup (PR #6) built clean from a fresh worktree; merge waits for the operator. Operator decisions relayed by the MacBook: the repo regroups by role (`docs/plan/REPO_LAYOUT.md`, approved; Linux moves its folders after the Mac’s PR #7) and the HEIC processor is deprecated (Linux removes it). Next: the repo move, the processor removal, then the docs website, changelog and README. **2026-11-18, operator: the new Drive web app is stopped — both websites (Photos and Drive) get a full rewrite after the mobile apps (on the shared engine, D25). No phase 3/4, no `/next/` deploy.** History: the new Drive web app: **phase 1 done 2026-11-09** on local branch `feat/drive-web` (13 commits, `e5f96fa`..`60103f2`; not pushed, not live — awaits the operator's review). The File Browser shell is stripped, rebranded, built to `/next/` with a strict CSP and Trusted Types, and writes a third-party licences file; checked on a Firebase preview channel (expires 2026-11-16) and by three separate Gate 3 agents (security twice, spec conformance), findings fixed or tracked. Record: `docs/drive/PHASE1.md` (on that branch). Changed from the spec: the shared scheduler module moves to phase 3 (needs the operator's OK and a spec edit on PR #5). Once `/next/` is live, Drive deploys must use `npm run build:all` in `drive/` (`npm run build` drops `next/`). Phase 2 (worker release W1): built and reviewed on `feat/drive-w1` (Gate 3 twice, security and spec; 402 worker tests); canary-checked on a new account's real database 2026-11-15 (the test account's Cloudflare authorization no longer renews), released to every worker 2026-11-15. Record: `docs/drive/W1.md` there. Drive sign-in through the portal is live, awaiting the operator's browser test. Spec: draft PR #5. **2026-11-17:** W1 rollout reached 19 of the 42 out-of-date workers in two days; 23 can't update (their saved Cloudflare authorization no longer renews, and one worker's database is gone) and stay on the previous version. **2026-11-18:** worker release R2 released (the phone's preview id, EXIF and 720p playback copy on a client upload, SPEC D23 item 1 and P2-9; 424 worker tests; Gate 3 security and spec twice). The 23 stuck accounts: every user is treated as real (the operator can't tell test accounts apart), so nothing is deleted. The update service now records why a renewal fails and marks the account; the dashboard asks the owner to reconnect Cloudflare (same account only, keeps the cloud), shown on sign-in with the form. Likely cause, unconfirmed: sign-in, sync and the dashboard spent the same single-use refresh token at once; one update at a time now claims it. Photos-only users never see the dashboard: a Photos announcement awaits the operator's decision. |
 | **Next up** | Delete-account flow and a privacy policy page (App Store requirement for the mobile apps). Photos: the viewer's own metadata step before the preview, and stored previews for older photos (HEIC). A plan for one central release control (hosted workers, self-host, mobile). |
@@ -39,7 +39,7 @@ above is not edited from there, so the two machines never touch the same lines.
 | **Shipped** | P0 (CI), P1 core 1.0–1.9, P2 2.1–2.2 (on the Flutter fork, now superseded). `27106eb`, `3479142`: D26 + the rebuild plan and its first research (sync, upload contract, bridge, grid, background, video copy, Liquid Glass). |
 | **Working on now** | **2026-11-20:** the repo regroup (operator-approved `docs/plan/REPO_LAYOUT.md` §2). Merged: **PR #6** (the cleanup — `immich/` down to the website; verified by Linux from a fresh worktree) and **PR #7** (`mobile/` → `core/`, flattened; `apps/ios`, `apps/android`, `apps/brand`; core CI green incl. the crypto cross-check). `processor/` deprecated by the operator (Linux removes it). **Next:** Linux's move PR (websites → `apps/`, workers → `workers/`, schema → `packages/`), then the iPhone app from HomeRoll's code (SPEC D27, ENGINE.md §9 I0). |
 | **Blocked on** | Nothing. Disk: a cleanup on 2026-10-29 freed 22 GB; about 85 GB is used outside this account (likely the admin account) — the operator can check in System Settings → Storage as `macbookair`. |
-| **Rules** | Plan first, approved by the operator. Every change through `GATES.md`. Message the Linux session before touching `immich-api-shim`, `deployment-service` or anything the per-user workers run — the app talks to them, and the native sync parser aborts all sync on one unexpected value. |
+| **Rules** | Plan first, approved by the operator. Every change through `GATES.md`. Message the Linux session before touching `workers/user-worker`, `deployment-service` or anything the per-user workers run — the app talks to them, and the native sync parser aborts all sync on one unexpected value. |
 
 ## Paused 2026-09-30 — how to resume
 
@@ -47,7 +47,7 @@ Paused after `883b132`, the last code commit. First, see what moved under the
 installer while it was paused — bug fixes to the worker reach self-hosters too:
 
 ```
-git log --oneline 883b132..HEAD -- selfhost/ install.sh immich-api-shim/
+git log --oneline 883b132..HEAD -- selfhost/ install.sh workers/user-worker/
 ```
 
 Then run the test baseline below. A lower count means tests were skipped.
@@ -149,12 +149,12 @@ All four re-run and confirmed 2026-09-30.
 
 | Suite | Count | Command |
 |---|---|---|
-| `immich-api-shim` | 297 | `npm test` |
+| `workers/user-worker` | 297 | `npm test` |
 | `selfhost` | 278 | `npm ci && npm test` |
 | `deployment-service` | 8 | `npm test` |
 | `processor` | 5 | `npm test` |
 
-Typecheck clean: `immich-api-shim`, `deployment-service`.
+Typecheck clean: `workers/user-worker`, `deployment-service`.
 
 ## Where things live
 
@@ -247,7 +247,7 @@ was what would have activated them.
 the same source" as an unbuilt gap. A is closed in the direction that matters —
 managed users are no longer told something false. Reporting a *real* build
 string on managed workers is still open: it needs the version threaded through
-`deployment-service`, whose embed script (`deployment-service/scripts/`) is
+`deployment-service`, whose embed script (`workers/deployment/scripts/`) is
 gitignored, so it is not a two-line change. Tracked below.
 
 ## Follow-ups, tracked not dropped
@@ -255,7 +255,7 @@ gitignored, so it is not a two-line change. Tracked below.
 - **Managed workers still report `build: null`.** Harmless now that the update
   check is gated, but `/api/selfhost/status` cannot identify which bundle a
   hosted worker runs. Needs `BUILD_VERSION` threaded through
-  `deployment-service/src/index.ts:106` from the `VERSION` file at embed time;
+  `workers/deployment/src/index.ts:106` from the `VERSION` file at embed time;
   the embed script is gitignored, so this is tooling work, not a one-liner.
 
 - ~~Delete `selfhost/src/deploy.mjs` and `selfhost/src/env.mjs`~~ — **done**
@@ -295,7 +295,7 @@ The chain:
 | Nothing ever seeds `owner_uid` | it appears **once** in the whole repo, as a key constant — `owner-gate.ts:22`. `setup.mjs` writes only the schema and the ZKE keys. |
 | An unclaimed install can only be claimed by a credential with `mayClaim` | `owner-gate.ts:89-98` — `if (!mayClaim) throw new Error('Not authenticated')` |
 | A Firebase ID token never has it | `helpers.ts:119` — `requireOwner(env, session.uid, false)` |
-| The dashboard only ever presents a Firebase ID token | `accounts-portal/src/App.jsx:411,617,876,1346,1720` — `getIdToken()`, never `POST /api/auth/login` |
+| The dashboard only ever presents a Firebase ID token | `apps/accounts-web/src/App.jsx:411,617,876,1346,1720` — `getIdToken()`, never `POST /api/auth/login` |
 | `/api/auth/exchange` does not help — it authenticates the same way | `auth.ts handleExchange` → `requireAuth` → the Firebase branch |
 
 So the only thing that can claim a self-hosted install is `POST /api/auth/login`,
@@ -387,7 +387,7 @@ every HIGH/MEDIUM fixed and re-reviewed. G4 — this commit.
 means a long wait before thumbnails appear: loading starts at the top and works
 through a queue. Opening a photo also waits behind thumbnail loads.
 
-**Cause (read in code, `immich/web/src/service-worker/index.ts`).** One
+**Cause (read in code, `apps/photos-web/web/src/service-worker/index.ts`).** One
 first-in-first-out queue of 6 (`thumbAcquire`/`thumbRelease`) serves
 thumbnails and opened photos alike; queued requests are never dropped when the
 page cancels them; each thumbnail's manifest is fetched from the user's worker

@@ -44,7 +44,7 @@ if they have drifted, so fixes land without the user doing anything.
 ## The embedded bundle
 
 `src/shim-bundle.ts` is generated, not written — it is the built
-`immich-api-shim` worker as a string, so this service can deploy it via the
+`workers/user-worker` worker as a string, so this service can deploy it via the
 Cloudflare API without a build step at runtime. It is gitignored. Regenerate it
 with `scripts/embed-shim.mjs` as part of the four-step deploy documented in
 [../immich-api-shim/README.md](../immich-api-shim/README.md).

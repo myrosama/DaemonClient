@@ -1,4 +1,4 @@
-# immich-api-shim — the per-user API worker
+# workers/user-worker — the per-user API worker
 
 This is the product. Everything else provisions it, deploys it, or talks to it.
 
@@ -88,7 +88,7 @@ cd ../deployment-service && npx wrangler deploy    # ship the provisioner
 cd ../immich-api-shim && npx wrangler deploy       # ship the shared worker
 ```
 
-Then grep the regenerated `deployment-service/src/shim-bundle.ts` to confirm
+Then grep the regenerated `workers/deployment/src/shim-bundle.ts` to confirm
 your change actually reached the artefact users run. Wait ~30 seconds before
 checking anything live; deploys propagate, and a too-fast check has produced a
 false result more than once.

@@ -267,11 +267,11 @@
 
     <h2 id="components">What's in the repository</h2>
     <table><thead><tr><th>Directory</th><th>What it is</th></tr></thead><tbody>
-      <tr><td><code>immich-api-shim/</code></td><td>The per-user worker — the entire Photos + Drive API. Deployed once per user.</td></tr>
+      <tr><td><code>workers/user-worker/</code></td><td>The per-user worker — the entire Photos + Drive API. Deployed once per user.</td></tr>
       <tr><td><code>selfhost/</code></td><td>The self-hosting CLI. Dependency-free, runs from a fresh clone.</td></tr>
-      <tr><td><code>deployment-service/</code></td><td>Provisions workers for the hosted service. Not used when self-hosting.</td></tr>
-      <tr><td><code>accounts-portal/</code></td><td>Sign-up, the setup wizard, the dashboard.</td></tr>
-      <tr><td><code>immich/web/</code></td><td>The Photos app — a fork of Immich's frontend. The upstream server is not used at all.</td></tr>
+      <tr><td><code>workers/deployment/</code></td><td>Provisions workers for the hosted service. Not used when self-hosting.</td></tr>
+      <tr><td><code>apps/accounts-web/</code></td><td>Sign-up, the setup wizard, the dashboard.</td></tr>
+      <tr><td><code>apps/photos-web/web/</code></td><td>The Photos app — a fork of Immich's frontend. The upstream server is not used at all.</td></tr>
       <tr><td><code>drive/</code></td><td>The Drive app. Not a fork.</td></tr>
       <tr><td><code>processor/</code></td><td>Optional HEIC thumbnailer, deployed to your own Vercel.</td></tr>
       <tr><td><code>schema/</code></td><td>The database schema, defined once for both provisioners.</td></tr>

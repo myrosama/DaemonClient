@@ -10,8 +10,8 @@ Everything below waits on the web being genuinely good.
 
 **Consolidating the storage primitive.** Chunk, encrypt, upload, record a
 manifest — this is implemented independently in four places
-(`immich-api-shim/src/assets.ts`, `webdav.ts`, `drive/src/App.jsx`,
-`immich/web/.../daemonclient-drive.ts`), and `19 * 1024 * 1024` appears in five
+(`workers/user-worker/src/assets.ts`, `webdav.ts`, `apps/drive-web/src/App.jsx`,
+`apps/photos-web/web/.../daemonclient-drive.ts`), and `19 * 1024 * 1024` appears in five
 files. A chunking bug currently has to be fixed four times, correctly, every
 time. This is the single biggest obstacle to "fix it once and everyone gets the
 fix", and the most valuable work available.

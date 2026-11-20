@@ -1,6 +1,6 @@
 # The DaemonClient API — technical specification
 
-The worker in `immich-api-shim/` is the entire API for Photos, Drive and the
+The worker in `workers/user-worker/` is the entire API for Photos, Drive and the
 mobile app. It impersonates an Immich server closely enough that a stock Immich
 client works against it, while storing everything in the user's own Telegram
 channel and D1 database.
@@ -57,7 +57,7 @@ repository actually calls it, verified by grep, not by inference.
 
 | Method | Path | Auth | Callers |
 |---|---|---|---|
-| POST | `/api/auth/login` | no | web, mobile, `drive/src/api.js:48` |
+| POST | `/api/auth/login` | no | web, mobile, `apps/drive-web/src/api.js:48` |
 | POST | `/api/auth/logout` | no | web, mobile |
 | GET | `/api/auth/status` | yes | web, mobile |
 
@@ -258,7 +258,7 @@ crashes on an unexpected 404.
 
 ---
 
-## The deployment service — `deployment-service/`
+## The deployment service — `workers/deployment/`
 
 Provisions a per-user worker. Not part of the self-hosted product.
 
@@ -275,7 +275,7 @@ Provisions a per-user worker. Not part of the self-hosted product.
 it to Cloudflare to name the account it belongs to. It **used to be
 unauthenticated** — an open validation oracle with `ACAO: *`, one outbound
 request per anonymous call. It now requires a Firebase ID token first
-(`deployment-service/src/index.ts:616`), so only a signed-in user (the setup
+(`workers/deployment/src/index.ts:616`), so only a signed-in user (the setup
 wizard, its one real caller) can reach it. Fixed in commit `29d61e0`.
 
 ## The processor — `processor/`

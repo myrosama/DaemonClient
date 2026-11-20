@@ -7,7 +7,7 @@ the native apps, they are resized into every iOS and Android slot when
 removed with the fork, 2026-11-20).
 
 **Launch screens and in-app logos** are rendered from the one DaemonClient
-logo in the repository, `drive/public/logo.png` (536 × 446). There is no
+logo in the repository, `apps/drive-web/public/logo.png` (536 × 446). There is no
 vector version, so they are drawn from that PNG on macOS:
 
 ```sh

@@ -22,7 +22,7 @@ prefer otherwise.
 
 ## What is in scope
 
-The API worker (`immich-api-shim`), the provisioning service
+The API worker (`workers/user-worker`), the provisioning service
 (`deployment-service`), the accounts portal, the self-hosting CLI (`selfhost`),
 and the media processor (`processor`).
 

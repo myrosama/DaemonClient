@@ -5,7 +5,7 @@ Notable changes, newest first. Format loosely follows
 
 > **Releases matter more here than in most projects.** A self-hosted install
 > checks this repository's **GitHub releases** feed once a day and shows a note
-> in the dashboard when a newer tag exists (`immich-api-shim/src/update-check.ts`).
+> in the dashboard when a newer tag exists (`workers/user-worker/src/update-check.ts`).
 > That feed is the only way a self-hoster learns a fix exists. A change that
 > ships to the hosted service without a tagged release reaches nobody who runs
 > this themselves.

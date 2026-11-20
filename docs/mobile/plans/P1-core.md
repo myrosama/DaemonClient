@@ -33,7 +33,7 @@ and the core's local media server streams a video with seeking.
 
 | What | Result |
 |---|---|
-| Key derivation | Rust derives the same AES key as `drive/src/crypto.js` for three passwords, including an empty one and one with Cyrillic, Chinese and emoji. |
+| Key derivation | Rust derives the same AES key as `apps/drive-web/src/crypto.js` for three passwords, including an empty one and one with Cyrillic, Chinese and emoji. |
 | JS → Rust | Rust decrypts parts that the production `encryptChunk` made (0 B to 4 KB). |
 | Rust → JS | The production `decryptChunk` decrypts parts Rust made, from 0 bytes to a full 19 MiB part. |
 | Byte-identical | With the same IV, Rust's 19 MiB part is identical to WebCrypto's (SHA-256 compared). |
@@ -41,7 +41,7 @@ and the core's local media server streams a video with seeking.
 | Drive key check | The `check` value the worker release adds to `/api/drive/zke` verifies the right key and rejects a wrong one. |
 | Networking | The TLS stack (below) builds for iPhone, the iOS Simulator and three Android CPU types, with no CMake; from the Mac it reached `api.telegram.org`, `api.daemonclient.uz` and a per-user worker over HTTP/2. |
 
-The vectors come from a Node script that imports `drive/src/crypto.js`
+The vectors come from a Node script that imports `apps/drive-web/src/crypto.js`
 itself, so the Rust is checked against the real code, not a copy. The spike
 lives outside the repo on the MacBook (`~/dc-work/p1-spike`, re-run
 2026-10-29: 8 tests, no lint findings, all five Rust parts decrypted by the
@@ -154,7 +154,7 @@ and runs off the async threads. CI runs both vector directions with Node
   `workerUrl` means the account is not set up yet → "Finish setting up your
   account at accounts.daemonclient.uz", never a silent fallback.
   **Self-hosted** (an address typed by the user): a missing `workerUrl` means
-  that server is the worker (as `drive/src/api.js` does).
+  that server is the worker (as `apps/drive-web/src/api.js` does).
 - Addresses: `https://` required, except `http://` to a local-network or
   loopback address for self-hosters testing at home. Trailing `/` and `/api`
   are trimmed.
@@ -1022,7 +1022,7 @@ later task):
 ## Task 1.1 — Crypto
 
 **Delivers:** the spike's crypto (proven 2026-10-27/29 against
-`drive/src/crypto.js`, both directions, up to a full 19 MiB part) moved into
+`apps/drive-web/src/crypto.js`, both directions, up to a full 19 MiB part) moved into
 `dc-core`, with the production-JavaScript checks in CI.
 
 **Files:**
@@ -1082,7 +1082,7 @@ pub(crate) fn encrypt_part_with_iv(key: &Key, iv: &[u8; IV_LEN], plaintext: &[u8
   `cargo run -q -p dc-core --example emit_vectors | node mobile/core/compat/verify-rust-output.mjs`
   → five `ok` lines, exit 0. In `mobile-core.yml`'s `core` job add
   `actions/setup-node` (Node 22) and that command as a step, and add
-  `drive/src/crypto.js` to both `paths:` lists — a change to the production
+  `apps/drive-web/src/crypto.js` to both `paths:` lists — a change to the production
   crypto must re-run the check.
 - [x] **Step 6: Gate 2** — the vectors are the real-conditions check (the
   production code itself produced and verified them); paste both directions'
@@ -1413,7 +1413,7 @@ the Photos key, the manifest cache), `src/error.rs`, `src/worker.rs` and
 - `reader::Rendition::{Thumbnail, Preview, Original, Playback}`.
 - `reader::select(&AssetManifest, Rendition) -> Selection { file_ids, size,
   mime }` — pure. Thumbnail/Preview: the web's `selectFileIds` exactly
-  (`immich/web/src/service-worker/telegram-media.ts`): grid thumbnail → thumb
+  (`apps/photos-web/web/src/service-worker/telegram-media.ts`): grid thumbnail → thumb
   → preview → (single-part) original; preview/fullsize → preview →
   (single-part) original or thumb → (multi-part) thumb; thumb/preview are
   `image/jpeg`. Original: parts sorted by index, or `originalId` for one-part
@@ -1669,7 +1669,7 @@ fallback is not observable (the unit test is the evidence).
 **Delivers:** design §5.8 steps 1–7, in the foreground: a file on the phone
 becomes an asset of the account, its bytes sent to Telegram by the core
 itself, the worker given only the metadata (`clientUpload`), exactly as the
-website's uploader does it (`immich/web/src/lib/utils/file-uploader.ts`,
+website's uploader does it (`apps/photos-web/web/src/lib/utils/file-uploader.ts`,
 `daemonclient-drive.ts` `uploadMedia`) plus the phone's improvements
 (C3 random part names, C7 a few parts on disk, the resume journal).
 
@@ -1945,7 +1945,7 @@ many pending jobs (1.4) and the part cache's size (1.6) on a real device.
 
 **As built (Task 1.8), differences from the steps above:**
 - **Found by Gate 2 — checksums in two spellings.** The website stores
-  **hex** SHA-1 (`immich/web/src/lib/workers/hash-file.ts`), the Immich app,
+  **hex** SHA-1 (`apps/photos-web/web/src/lib/workers/hash-file.ts`), the Immich app,
   the worker's backfill and the core **base64**, and the worker compares them
   as text: the app would have uploaded again every photo the website already
   had. The core now asks `bulk-upload-check` about both spellings (a test,

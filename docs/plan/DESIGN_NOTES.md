@@ -335,7 +335,7 @@ G4 this commit.
 ### Correction to P6 — I committed work that was not mine            2026-08-16
 
 `a7791a7` claims to be the password-persistence change. It also contains **420
-changed lines of `drive/public/sw.js` and 47 of `drive/src/App.jsx`** that I did
+changed lines of `apps/drive-web/public/sw.js` and 47 of `apps/drive-web/src/App.jsx`** that I did
 not write and did not review — real work, apparently from another session:
 persisting Drive's service-worker registrations to IndexedDB so a video does not
 404 after the SW is killed for idling.

@@ -14,7 +14,7 @@ not.**
 **Today:** a self-hoster must create a Google Firebase project, enable
 Email/Password auth, add themselves as a user, and register a web app to get the
 config. Sign-in then goes through Firebase Identity Toolkit
-(`immich-api-shim/src/auth.ts`, `handleLogin`).
+(`workers/user-worker/src/auth.ts`, `handleLogin`).
 
 **The tension:** the project's stated premise is *"depends on nothing we run,
 and keeps working if we disappear."* Firebase satisfies that literally — it is

@@ -1,5 +1,8 @@
 # Repo layout — APPROVED by the operator 2026-11-20 (§2, the full regroup)
 
+**Done 2026-11-20 (Linux's part):** the folders below live at their new paths
+since the `repo-move` PR; this page keeps the old names as the map from old to new.
+
 **Asked by the operator 2026-11-20:** *"keep the whole repo cleaned up and
 organized … plan an optimal folder architecture, then comes the iPhone
 development, then the Android."* Written on the MacBook; **the Linux machine

@@ -299,7 +299,7 @@ Simulator and on Android.
 - **Branding (operator, 2026-10-12, SPEC D20):** home-screen name "Photos"
   (`CFBundleDisplayName`; Android `android:label`, debug build "Photos-Debug"),
   app icon, launch/splash images and in-app logos drawn from
-  `drive/public/logo.png` on white; the Immich logo no longer spins on the
+  `apps/drive-web/public/logo.png` on white; the Immich logo no longer spins on the
   sign-in screen. The drawing scripts are `mobile/tools/brand/` — they
   reproduce all 58 committed images byte for byte. The icon/splash generator
   sources (`assets/immich-logo-android-adaptive-icon.png`,
@@ -611,7 +611,7 @@ plan; the spike's scripts are byte-identical; `sha1` dropped (not needed
 until 1.7). From Gate 3: aes-gcm's `zeroize` feature (the expanded key is
 wiped); the Rust→JS check refuses an empty part list; salts accept trailing
 bits like `atob`; the Drive key-check vector is made by
-`drive/src/zke-unlock.js`'s `makeKeyCheck`; a test pins the SHA-256 of both
+`apps/drive-web/src/zke-unlock.js`'s `makeKeyCheck`; a test pins the SHA-256 of both
 JavaScript sources, so a change to either fails CI until `vectors.json` is
 regenerated (`node mobile/core/compat/gen-vectors.mjs`). `vectors.json` changes
 on every regeneration (random IVs in two sections); keys and fixed-IV answers
@@ -636,7 +636,7 @@ key-check constant not from production code — all fixed).
   (trailing bits failed before its fix). `cargo test -p dc-core` 42 passed;
   clippy and fmt clean; `cargo deny check advisories` ok.
 - G2 (the production code is the real condition): JS→Rust — the vectors were
-  produced by `drive/src/crypto.js` (SHA-256 `aa2a05f2…`) and `zke-unlock.js`,
+  produced by `apps/drive-web/src/crypto.js` (SHA-256 `aa2a05f2…`) and `zke-unlock.js`,
   and all crypto tests pass against them; Rust→JS — `emit_vectors | node
   mobile/core/compat/verify-rust-output.mjs` → `ok 0 / 1 / 16 / 1000 /
   19922944 bytes`, exit 0.

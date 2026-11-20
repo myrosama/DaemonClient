@@ -11,21 +11,21 @@ Start with the [README](README.md) for what the thing is, then:
 
 | You want to work on | Go to |
 |---|---|
-| The API — uploads, sync, thumbnails, albums, Drive | `immich-api-shim/` |
-| Provisioning and fleet updates for hosted accounts | `deployment-service/` |
-| Signup, setup wizard, dashboard | `accounts-portal/` |
-| The Photos web app | `immich/web/` (a fork) |
+| The API — uploads, sync, thumbnails, albums, Drive | `workers/user-worker/` |
+| Provisioning and fleet updates for hosted accounts | `workers/deployment/` |
+| Signup, setup wizard, dashboard | `apps/accounts-web/` |
+| The Photos web app | `apps/photos-web/web/` (a fork) |
 | The mobile apps (native, being built) | `apps/ios/`, `apps/android/`, on the Rust core in `core/` |
 | The Drive web app | `drive/` |
 | Self-hosting CLI | `selfhost/` |
 | HEIC conversion | `processor/` |
 
-`immich-api-shim` is where most of the interesting problems are.
+`workers/user-worker` is where most of the interesting problems are.
 
 ## Running things
 
 ```bash
-cd immich-api-shim
+cd workers/user-worker
 npm install
 npm test          # vitest
 npx tsc --noEmit  # types
