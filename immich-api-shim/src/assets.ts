@@ -790,15 +790,17 @@ function photoMessageIds(photo: any): number[] {
     .filter((id: unknown): id is number => Number.isSafeInteger(id) && (id as number) > 0);
 }
 
-// Telegram's refusals that only these messages cause, so retrying can't help.
-// Anything else (no rights, wrong chat, rate limit, outage) may pass: retry.
-const UNDELETABLE = /message can't be deleted|message_id_invalid|message to delete not found/i;
+// Telegram's answers about the messages themselves. Gone: nothing left to
+// delete. Cannot: maybe the bot's rights or the message's age, which may change,
+// so the photo waits for a retry without holding back the others. Anything else
+// (wrong chat, rate limit, outage) would refuse every call: stop and retry later.
+const GONE = /message_id_invalid|message to delete not found/i;
+const CANNOT = /message can't be deleted/i;
 
 // Deletes the photos' Telegram messages, up to 100 per call (deleteMessages),
-// and returns the ids of the photos whose messages are dealt with: deleted,
-// already gone, or refused for good (logged; nothing more can be done). A photo
-// whose call failed for another reason, or that this request's budget didn't
-// reach, is not returned, so its record is kept for a retry.
+// and returns the ids of the photos whose messages are all deleted or already
+// gone. A photo Telegram refused, or that this request's budget didn't reach,
+// is not returned, so its record is kept for a retry.
 async function deleteFromTelegram(env: Env, uid: string, idToken: string, photos: any[]): Promise<Set<string>> {
   const gone = new Set<string>(photos.filter((p) => photoMessageIds(p).length === 0).map((p) => p.id));
   if (gone.size === photos.length) return gone;
@@ -808,7 +810,7 @@ async function deleteFromTelegram(env: Env, uid: string, idToken: string, photos
   if (!botToken || !channelId) return gone;
 
   let calls = DELETE_CALLS_PER_REQUEST;
-  const send = async (ids: number[]): Promise<'done' | 'undeletable' | 'retry'> => {
+  const send = async (ids: number[]): Promise<'done' | 'cannot' | 'retry'> => {
     if (calls <= 0) return 'retry';
     calls--;
     try {
@@ -819,7 +821,8 @@ async function deleteFromTelegram(env: Env, uid: string, idToken: string, photos
       const data: any = await res.json().catch(() => null);
       if (data?.ok) return 'done'; // messages already gone are skipped, not refused
       const why = String(data?.description || res.status).slice(0, 120);
-      if (UNDELETABLE.test(why)) return 'undeletable';
+      if (GONE.test(why)) return 'done';
+      if (CANNOT.test(why)) return 'cannot';
       console.warn(`[delete] Telegram refused ${ids.length} message(s), will retry: ${why}`);
     } catch {
       console.warn('[delete] Telegram unreachable, will retry');
@@ -829,26 +832,27 @@ async function deleteFromTelegram(env: Env, uid: string, idToken: string, photos
     calls = 0;
     return 'retry';
   };
-  // One photo on its own calls; refused for good counts as dealt with.
+  // One photo on its own calls.
   const deletePhoto = async (photo: any) => {
     const ids = photoMessageIds(photo);
-    let undeletable = false;
     for (let i = 0; i < ids.length; i += 100) {
       const r = await send(ids.slice(i, i + 100));
       if (r === 'retry') return;
-      if (r === 'undeletable') undeletable = true;
+      if (r === 'cannot') {
+        console.warn(`[delete] Telegram can't delete messages of asset ${photo.id} (rights or age?); will retry`);
+        return;
+      }
     }
-    if (undeletable) console.warn(`[delete] Telegram won't delete some messages of asset ${photo.id}; forgetting them`);
     gone.add(photo.id);
   };
 
-  // Small photos share a call. If Telegram refuses a shared call for good,
-  // one of them is to blame: each then gets its own call.
+  // Small photos share a call. If Telegram refuses a shared call over the
+  // messages themselves, one of them is to blame: each then gets its own call.
   let batch: any[] = [];
   const flush = async () => {
     const r = batch.length === 0 ? 'retry' : await send(batch.flatMap(photoMessageIds));
     if (r === 'done') batch.forEach((p) => gone.add(p.id));
-    else if (r === 'undeletable') for (const p of batch) await deletePhoto(p);
+    else if (r === 'cannot') for (const p of batch) await deletePhoto(p);
     batch = [];
   };
   let size = 0;

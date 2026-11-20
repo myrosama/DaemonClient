@@ -61,7 +61,7 @@ async function call(DB: any, method: string, path: string, body?: object) {
 }
 
 const row = (DB: any, id: string) => DB.rows('SELECT * FROM photos WHERE id = ?', id)[0];
-// A refusal that may pass (retry later), and one only these messages cause.
+// A refusal that stops the request (retry later), and one about the messages.
 const busy = { ok: false, error_code: 429, description: 'Too Many Requests: retry after 5' };
 const undeletable = { ok: false, error_code: 400, description: "Bad Request: message can't be deleted" };
 
@@ -142,8 +142,17 @@ describe('deleting photos for good', () => {
     const calls = telegram((_, ids) => (ids.includes(2) ? undeletable : { ok: true, result: true }));
     await call(DB, 'DELETE', '/api/assets', { ids: ['s1', 's2', 's3'] });
     expect(calls).toEqual([[1, 2, 3], [1], [2], [3]]);
-    // s2 can never be deleted: it is forgotten (and logged), not retried forever.
-    expect(DB.rows("SELECT id FROM photos WHERE telegramChunks = '[]' AND purgedAt IS NOT NULL").length).toBe(3);
+    // s1 and s3 finish; s2 keeps its parts for a retry (the bot's rights or the
+    // message's age may change), and is logged.
+    expect(DB.rows("SELECT id FROM photos WHERE purgedAt IS NOT NULL ORDER BY id").map((r: any) => r.id)).toEqual(['s1', 's3']);
+    expect([row(DB, 's2').isTrashed, JSON.parse(row(DB, 's2').telegramChunks).length]).toEqual([1, 1]);
+  });
+
+  it("a message Telegram no longer has (not found, invalid id) counts as deleted", async () => {
+    const DB = await library([{ id: 'nf', telegramChunks: parts(8, 1) }]);
+    telegram(() => ({ ok: false, error_code: 400, description: 'Bad Request: message to delete not found' }));
+    await call(DB, 'DELETE', '/api/assets', { ids: ['nf'] });
+    expect([row(DB, 'nf').telegramChunks, !!row(DB, 'nf').purgedAt]).toEqual(['[]', true]);
   });
 
   it('a refusal about the channel itself (a wrong chat, no rights) keeps every photo for a retry', async () => {
