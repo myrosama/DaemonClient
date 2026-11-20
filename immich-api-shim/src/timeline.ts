@@ -111,7 +111,8 @@ async function getTimeBuckets(env: Env, uid: string, idToken: string, url: URL):
   // Hide live photo companion videos from timeline
   filtered = filtered.filter(p => !livePhotoVideoIds.has(p._id));
   if (isFavorite) filtered = filtered.filter(p => p.isFavorite);
-  if (isTrashed) filtered = filtered.filter(p => p.isTrashed);
+  // The Trash view: a deletion Telegram already finished has nothing left to act on.
+  if (isTrashed) filtered = filtered.filter(p => p.isTrashed && !p.purgedAt);
   else filtered = filtered.filter(p => !p.isTrashed);
   if (visibility === 'archive') filtered = filtered.filter(p => p.visibility === 'archive');
   else if (visibility !== 'all') filtered = filtered.filter(p => p.visibility !== 'archive');
@@ -159,7 +160,8 @@ async function getTimeBucket(env: Env, uid: string, idToken: string, url: URL): 
   });
 
   if (isFavorite) filtered = filtered.filter(p => p.isFavorite);
-  if (isTrashed) filtered = filtered.filter(p => p.isTrashed);
+  // The Trash view: a deletion Telegram already finished has nothing left to act on.
+  if (isTrashed) filtered = filtered.filter(p => p.isTrashed && !p.purgedAt);
   else filtered = filtered.filter(p => !p.isTrashed);
 
   // Build TimeBucketAssetResponseDto — columnar format

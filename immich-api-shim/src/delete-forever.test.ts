@@ -188,8 +188,8 @@ describe('deleting photos for good', () => {
     expect(row(DB, 'other-photo').isTrashed).toBe(0);
   });
 
-  it('message ids that cannot exist (0, negative) are never sent', async () => {
-    const DB = await library([{ id: 'z', telegramChunks: JSON.stringify([{ index: 0, message_id: 0, file_id: 'f' }, { index: 1, message_id: -3, file_id: 'g' }]) }]);
+  it('message ids that cannot exist (0, negative, past 32 bits) are never sent', async () => {
+    const DB = await library([{ id: 'z', telegramChunks: JSON.stringify([{ index: 0, message_id: 0, file_id: 'f' }, { index: 1, message_id: -3, file_id: 'g' }, { index: 2, message_id: 2 ** 31, file_id: 'h' }]) }]);
     const calls = telegram();
     await call(DB, 'DELETE', '/api/assets', { ids: ['z'] });
     expect(calls).toEqual([]);
@@ -210,7 +210,7 @@ describe('deleting photos for good', () => {
   it('nothing can be restored: a deleted photo stays deleted', async () => {
     const DB = await library([{ id: 'gone1', isTrashed: 1, telegramChunks: '[]', purgedAt: '2026-01-01T00:00:00.000Z' }]);
     for (const [path, body] of [['/api/trash/restore', undefined], ['/api/trash/restore/assets', { ids: ['gone1'] }]] as const) {
-      expect((await call(DB, 'POST', path, body)).status).toBe(200);
+      expect((await call(DB, 'POST', path, body)).status).toBe(400); // the website then says it couldn't restore
     }
     expect(row(DB, 'gone1').isTrashed).toBe(1);
   });

@@ -506,9 +506,10 @@ export async function handleAssets(request: Request, env: Env, path: string, url
   // Trash — restore. Nothing can be restored: on this worker every trash is a
   // permanent delete, and a trashed row is a tombstone whose Telegram parts are
   // gone or going. Setting isTrashed back to 0 put broken photos back in the
-  // library and on every device.
+  // library and on every device. An error, so the website's Undo and Restore
+  // say so instead of showing photos that are gone.
   if ((path === '/api/trash/restore/assets' || path === '/api/trash/restore') && request.method === 'POST') {
-    return json({ count: 0 });
+    return json({ message: "Deleted photos can't be restored" }, 400);
   }
   // Trash — empty (permanently delete all trashed photos). Immich app uses
   // POST; accept DELETE too for robustness.
@@ -787,7 +788,7 @@ function photoMessageIds(photo: any): number[] {
   if (typeof chunks === 'string') { try { chunks = JSON.parse(chunks || '[]'); } catch { chunks = []; } }
   const ids = (Array.isArray(chunks) ? chunks : []).map((c: any) => c?.message_id);
   return [...ids, ...playbackMessageIds(photo?.telegramPlaybackChunks)]
-    .filter((id: unknown): id is number => Number.isSafeInteger(id) && (id as number) > 0);
+    .filter((id: unknown): id is number => Number.isInteger(id) && (id as number) > 0 && (id as number) <= 2147483647);
 }
 
 // Telegram's answers about the messages themselves. Gone: nothing left to
