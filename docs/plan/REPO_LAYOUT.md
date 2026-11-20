@@ -27,8 +27,11 @@ apps/                     what people install or open
   site/                   ← daemonclient-site/      the landing site
   docs-web/               ← docs-site/
   app-redirect/           ← hosting/app-redirect/
-core/                     ← mobile/                 the Rust workspace: dc-core, dc-cli;
-                                                    later dc-engine, dc-ffi (ENGINE.md)
+core/                     ← mobile/                 the Rust workspace, shared by EVERY client:
+                                                    dc-engine (the rules, pure — apps natively,
+                                                    Photos web + Drive web as WebAssembly, D25),
+                                                    dc-core (phone I/O), dc-ffi (Swift/Kotlin),
+                                                    dc-wasm (browsers), dc-cli (testing)
 workers/                  Cloudflare Workers
   user-worker/            ← immich-api-shim/        each user's worker (Photos + Drive API)
   deployment/             ← deployment-service/
@@ -62,6 +65,10 @@ files, `.github/`.
 | `deployment-service/`, `auth-worker/`, `daemonclient-proxy/` → `workers/` | Linux | `ci.yml`; each `wrangler` config moves with its folder — worker names do not change |
 | `processor/` → `services/heic-processor/` | Linux + operator | `ci.yml`; **the Vercel project's root directory** (dashboard setting) |
 | `schema/` → `packages/schema/` | Linux | every `../schema` import (shim tests, deployment-service, selfhost) |
+
+**Progress:** the MacBook's part is PR #7 (`mobile/` → `core/`, flattened;
+`apps/ios`, `apps/android`, `apps/brand`), stacked on PR #6 — merge #6, then
+#7, then Linux's moves.
 
 ## 4. Order
 
