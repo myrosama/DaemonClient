@@ -37,13 +37,13 @@ async function library(rows: Array<Record<string, any>>) {
 }
 
 // Telegram's deleteMessages; `answer` decides the reply to the n-th call.
-function telegram(answer: (n: number) => object = () => ({ ok: true, result: true })) {
+function telegram(answer: (n: number, ids: number[]) => object = () => ({ ok: true, result: true })) {
   const calls: number[][] = [];
   vi.stubGlobal('fetch', async (url: any, init: any) => {
     const u = String(url);
     if (u.endsWith('/deleteMessages')) {
       calls.push(JSON.parse(init.body).message_ids);
-      return new Response(JSON.stringify(answer(calls.length)));
+      return new Response(JSON.stringify(answer(calls.length, calls[calls.length - 1])));
     }
     if (u.endsWith('/deleteMessage')) throw new Error('one call per message: use deleteMessages');
     return new Response('{}');
@@ -61,7 +61,9 @@ async function call(DB: any, method: string, path: string, body?: object) {
 }
 
 const row = (DB: any, id: string) => DB.rows('SELECT * FROM photos WHERE id = ?', id)[0];
-const refused = { ok: false, error_code: 400, description: "Bad Request: message can't be deleted" };
+// A refusal that may pass (retry later), and one only these messages cause.
+const busy = { ok: false, error_code: 429, description: 'Too Many Requests: retry after 5' };
+const undeletable = { ok: false, error_code: 400, description: "Bad Request: message can't be deleted" };
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -78,9 +80,9 @@ describe('deleting photos for good', () => {
     }
   });
 
-  it('when Telegram refuses, the photo still leaves the library but keeps its parts until Empty Trash succeeds', async () => {
+  it('when Telegram refuses for now, the photo still leaves the library but keeps its parts until Empty Trash succeeds', async () => {
     const DB = await library([{ id: 'p1', telegramChunks: parts(5, 1) }]);
-    telegram(() => refused);
+    telegram(() => busy);
     await call(DB, 'DELETE', '/api/assets', { ids: ['p1'] });
     expect([row(DB, 'p1').isTrashed, JSON.parse(row(DB, 'p1').telegramChunks)[0].message_id, row(DB, 'p1').purgedAt]).toEqual([1, 5, null]);
 
@@ -96,7 +98,7 @@ describe('deleting photos for good', () => {
       id: 'v1', mimeType: 'video/mp4', telegramChunks: parts(1, 250),
       telegramPlaybackChunks: JSON.stringify({ size: 10, chunks: [{ index: 0, message_id: 900, file_id: 'pb' }] }),
     }]);
-    const failed = telegram((n) => (n === 2 ? refused : { ok: true, result: true }));
+    const failed = telegram((n) => (n === 2 ? busy : { ok: true, result: true }));
     await call(DB, 'DELETE', '/api/assets', { ids: ['v1'] });
     expect(failed.length).toBe(2); // stops at the refusal
     expect(JSON.parse(row(DB, 'v1').telegramChunks).length).toBe(250);
@@ -133,6 +135,56 @@ describe('deleting photos for good', () => {
     await call(DB, 'DELETE', '/api/assets', { ids: ['mine', 'theirs'] });
     expect(calls.flat()).toEqual([1]);
     expect([row(DB, 'theirs').isTrashed, row(DB, 'theirs-pair').isTrashed]).toEqual([0, 0]);
+  });
+
+  it('a refusal only one photo can cause does not hold back the others sharing its call', async () => {
+    const DB = await library([1, 2, 3].map((i) => ({ id: `s${i}`, telegramChunks: parts(i, 1) })));
+    const calls = telegram((_, ids) => (ids.includes(2) ? undeletable : { ok: true, result: true }));
+    await call(DB, 'DELETE', '/api/assets', { ids: ['s1', 's2', 's3'] });
+    expect(calls).toEqual([[1, 2, 3], [1], [2], [3]]);
+    // s2 can never be deleted: it is forgotten (and logged), not retried forever.
+    expect(DB.rows("SELECT id FROM photos WHERE telegramChunks = '[]' AND purgedAt IS NOT NULL").length).toBe(3);
+  });
+
+  it('a refusal about the channel itself (a wrong chat, no rights) keeps every photo for a retry', async () => {
+    const DB = await library([1, 2].map((i) => ({ id: `c${i}`, telegramChunks: parts(i, 1) })));
+    const calls = telegram(() => ({ ok: false, error_code: 400, description: 'Bad Request: chat not found' }));
+    await call(DB, 'DELETE', '/api/assets', { ids: ['c1', 'c2'] });
+    expect(calls.length).toBe(1);
+    expect(DB.rows("SELECT id FROM photos WHERE isTrashed = 1 AND purgedAt IS NULL AND telegramChunks != '[]'").length).toBe(2);
+  });
+
+  it('with Telegram unreachable the photos still leave the library first, keeping their parts', async () => {
+    const DB = await library([{ id: 'u1p', telegramChunks: parts(7, 1) }]);
+    vi.stubGlobal('fetch', async () => { throw new Error('network'); });
+    expect((await call(DB, 'DELETE', '/api/assets', { ids: ['u1p'] })).status).toBe(200);
+    expect([row(DB, 'u1p').isTrashed, row(DB, 'u1p').purgedAt, JSON.parse(row(DB, 'u1p').telegramChunks).length]).toEqual([1, null, 1]);
+  });
+
+  it('deleting a finished tombstone again changes nothing, so it still expires on time', async () => {
+    const DB = await library([{ id: 'done', isTrashed: 1, telegramChunks: '[]', purgedAt: '2026-01-01T00:00:00.000Z' }]);
+    const calls = telegram();
+    await call(DB, 'DELETE', '/api/assets', { ids: ['done'] });
+    expect([calls, row(DB, 'done').purgedAt]).toEqual([[], '2026-01-01T00:00:00.000Z']);
+  });
+
+  it("a still's pair is deleted with it only when the pair is a video", async () => {
+    const DB = await library([
+      { id: 'still', telegramChunks: parts(1, 1), livePhotoVideoId: 'other-photo' },
+      { id: 'other-photo', telegramChunks: parts(2, 1) },
+    ]);
+    const calls = telegram();
+    await call(DB, 'DELETE', '/api/assets', { ids: ['still'] });
+    expect(calls.flat()).toEqual([1]);
+    expect(row(DB, 'other-photo').isTrashed).toBe(0);
+  });
+
+  it('message ids that cannot exist (0, negative) are never sent', async () => {
+    const DB = await library([{ id: 'z', telegramChunks: JSON.stringify([{ index: 0, message_id: 0, file_id: 'f' }, { index: 1, message_id: -3, file_id: 'g' }]) }]);
+    const calls = telegram();
+    await call(DB, 'DELETE', '/api/assets', { ids: ['z'] });
+    expect(calls).toEqual([]);
+    expect(!!row(DB, 'z').purgedAt).toBe(true);
   });
 
   it('Empty Trash leaves finished tombstones alone, so they still expire on time', async () => {

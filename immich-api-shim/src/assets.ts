@@ -528,19 +528,17 @@ export async function handleAssets(request: Request, env: Env, path: string, url
       await ensureDeduplicationSchema(env.DB);
       // Only deletions not finished yet. A finished tombstone has purgedAt;
       // stamping it again would keep it from ever expiring.
+      // At most 1,000 per request (the free plan's per-request limits); the
+      // rest waits for the next Empty Trash.
       const rows: any[] = (await env.DB.prepare(
-        'SELECT * FROM photos WHERE ownerId = ? AND isTrashed = 1 AND purgedAt IS NULL',
+        'SELECT * FROM photos WHERE ownerId = ? AND isTrashed = 1 AND purgedAt IS NULL ORDER BY id LIMIT 1000',
       ).bind(uid).all()).results || [];
       if (rows.length > 0) {
         const gone = await deleteFromTelegram(env, uid, idToken, rows);
         // The row stays as a tombstone, so every device still learns the
         // asset is gone (AssetDeleteV1); purgedAt lets purgeExpiredTombstones
         // reclaim it once they all had time to.
-        const adapter = new D1Adapter(env.DB);
-        const now = new Date().toISOString();
-        for (const id of gone) {
-          await adapter.updatePhoto(id, { telegramChunks: '[]', telegramPlaybackChunks: null, purgedAt: now } as any);
-        }
+        await forgetParts(env.DB, uid, [...gone]);
         count = gone.size;
       }
     }
@@ -721,46 +719,76 @@ async function handleUpdateAsset(request: Request, env: Env, uid: string, assetI
 
 async function handleDeleteAssets(request: Request, env: Env, uid: string, idToken: string): Promise<Response> {
   const body = await request.json() as any;
-  const ids: string[] = body.ids || [];
+  const ids: string[] = [...new Set<string>((Array.isArray(body?.ids) ? body.ids : []).filter((id: unknown) => typeof id === 'string' && id))];
 
   // Always permanently delete — no trash needed.
-  const adapter = env.DB ? new D1Adapter(env.DB) : null;
-  if (adapter) await ensureDeduplicationSchema(env.DB);
-  // Only the caller's own rows (the owner gate is the boundary; this is the
-  // second check). Firestore documents already live under the caller's path.
-  const load = async (id: string): Promise<any> => {
-    const photo: any = adapter ? await adapter.getPhoto(id) : await firestoreGet(env, uid, `photos/${id}`, idToken);
-    return photo && (!adapter || photo.ownerId === uid) ? photo : null;
-  };
-  const photos = new Map<string, any>();
-  for (const id of ids) {
-    const photo = await load(id);
-    if (!photo) continue;
-    photos.set(id, { ...photo, id });
-    // A live photo's still and motion video go together, or the orphaned video
-    // shows up as a standalone clip after the next sync.
-    const pair = photo.livePhotoVideoId;
-    if (adapter && pair && !photos.has(pair)) {
-      const video = await load(pair);
-      if (video) photos.set(pair, { ...video, id: pair });
+  if (!env.DB) {
+    // The central worker: the documents live under the caller's own path.
+    const photos: any[] = [];
+    for (const id of ids) {
+      const photo = await firestoreGet(env, uid, `photos/${id}`, idToken);
+      if (photo) photos.push({ ...photo, id });
     }
+    const gone = await deleteFromTelegram(env, uid, idToken, photos);
+    for (const id of gone) await firestoreDelete(env, uid, `photos/${id}`, idToken);
+    return gone.size === photos.length
+      ? json({})
+      : json({ message: 'Some photos could not be deleted from Telegram. Try again.' }, 502);
   }
 
-  const gone = await deleteFromTelegram(env, uid, idToken, [...photos.values()]);
-  const now = new Date().toISOString();
-  for (const id of photos.keys()) {
-    if (adapter) {
-      // Always a tombstone: the photo leaves the library now, and sync tells
-      // every device (AssetDeleteV1). Its parts are forgotten only once
-      // Telegram confirmed the delete; until then Empty Trash retries.
-      await adapter.updatePhoto(id, gone.has(id)
-        ? { isTrashed: 1, telegramChunks: '[]', telegramPlaybackChunks: null, purgedAt: now } as any
-        : { isTrashed: 1 });
-    } else if (gone.has(id)) {
-      await firestoreDelete(env, uid, `photos/${id}`, idToken);
-    }
-  }
+  await ensureDeduplicationSchema(env.DB);
+  // Only the caller's own rows (the owner gate is the boundary; this is the
+  // second check), and a finished deletion stays as it is.
+  const rows = (await ownRows(env.DB, uid, ids)).filter((r) => !r.purgedAt);
+  // A live photo's still and motion video go together, or the orphaned video
+  // shows up as a standalone clip after the next sync. The pair must be a video.
+  const have = new Set(rows.map((r) => r.id));
+  const pairs = [...new Set(rows.map((r) => r.livePhotoVideoId).filter((id) => typeof id === 'string' && id && !have.has(id)))];
+  const pairRows = (await ownRows(env.DB, uid, pairs))
+    .filter((r) => !r.purgedAt && String(r.mimeType || '').startsWith('video/'));
+  const all = [...rows, ...pairRows];
+
+  // Leave the library first: a photo whose messages are gone must never stay
+  // visible. Sync tells every device (AssetDeleteV1). Its parts are forgotten
+  // only once Telegram confirmed the delete; until then Empty Trash retries.
+  await updateOwnRows(env.DB, uid, all.map((r) => r.id), 'isTrashed = 1');
+  const gone = await deleteFromTelegram(env, uid, idToken, all);
+  await forgetParts(env.DB, uid, [...gone]);
   return json({});
+}
+
+// D1 takes up to 100 bound values per statement; leave room for the others.
+const ROWS_PER_STATEMENT = 90;
+
+// The caller's rows among `ids`, a few statements at a time.
+async function ownRows(db: any, uid: string, ids: string[]): Promise<any[]> {
+  const out: any[] = [];
+  for (let i = 0; i < ids.length; i += ROWS_PER_STATEMENT) {
+    const part = ids.slice(i, i + ROWS_PER_STATEMENT);
+    const res = await db.prepare(`SELECT * FROM photos WHERE ownerId = ? AND id IN (${part.map(() => '?').join(', ')})`)
+      .bind(uid, ...part).all();
+    out.push(...(res.results || []));
+  }
+  return out;
+}
+
+// One batch (a single query against the per-request limit) that sets `set` on
+// the caller's rows among `ids`.
+async function updateOwnRows(db: any, uid: string, ids: string[], set: string, values: unknown[] = []): Promise<void> {
+  const stmts = [];
+  for (let i = 0; i < ids.length; i += ROWS_PER_STATEMENT) {
+    const part = ids.slice(i, i + ROWS_PER_STATEMENT);
+    stmts.push(db.prepare(`UPDATE photos SET ${set} WHERE ownerId = ? AND id IN (${part.map(() => '?').join(', ')})`)
+      .bind(...values, uid, ...part));
+  }
+  if (stmts.length > 0) await db.batch(stmts);
+}
+
+// A deletion Telegram confirmed: the tombstone forgets its parts, and purgedAt
+// lets purgeExpiredTombstones reclaim it once every device had time to sync.
+function forgetParts(db: any, uid: string, ids: string[]): Promise<void> {
+  return updateOwnRows(db, uid, ids,
+    "isTrashed = 1, telegramChunks = '[]', telegramPlaybackChunks = NULL, purgedAt = ?", [new Date().toISOString()]);
 }
 
 // Telegram calls one request may spend on deleting: the free plan allows 50
@@ -771,14 +799,20 @@ const DELETE_CALLS_PER_REQUEST = 40;
 function photoMessageIds(photo: any): number[] {
   let chunks: any = photo?.telegramChunks;
   if (typeof chunks === 'string') { try { chunks = JSON.parse(chunks || '[]'); } catch { chunks = []; } }
-  const ids = (Array.isArray(chunks) ? chunks : []).map((c: any) => c?.message_id).filter((id: unknown) => Number.isSafeInteger(id));
-  return [...ids, ...playbackMessageIds(photo?.telegramPlaybackChunks)];
+  const ids = (Array.isArray(chunks) ? chunks : []).map((c: any) => c?.message_id);
+  return [...ids, ...playbackMessageIds(photo?.telegramPlaybackChunks)]
+    .filter((id: unknown): id is number => Number.isSafeInteger(id) && (id as number) > 0);
 }
 
+// Telegram's refusals that only these messages cause, so retrying can't help.
+// Anything else (no rights, wrong chat, rate limit, outage) may pass: retry.
+const UNDELETABLE = /message can't be deleted|message_id_invalid|message to delete not found/i;
+
 // Deletes the photos' Telegram messages, up to 100 per call (deleteMessages),
-// and returns the ids of the photos whose messages are all gone. A photo with
-// none counts as gone; one whose call Telegram refused, or that this request's
-// call budget didn't reach, does not, so its record is kept for a retry.
+// and returns the ids of the photos whose messages are dealt with: deleted,
+// already gone, or refused for good (logged; nothing more can be done). A photo
+// whose call failed for another reason, or that this request's budget didn't
+// reach, is not returned, so its record is kept for a retry.
 async function deleteFromTelegram(env: Env, uid: string, idToken: string, photos: any[]): Promise<Set<string>> {
   const gone = new Set<string>(photos.filter((p) => photoMessageIds(p).length === 0).map((p) => p.id));
   if (gone.size === photos.length) return gone;
@@ -788,8 +822,8 @@ async function deleteFromTelegram(env: Env, uid: string, idToken: string, photos
   if (!botToken || !channelId) return gone;
 
   let calls = DELETE_CALLS_PER_REQUEST;
-  const send = async (ids: number[]): Promise<boolean> => {
-    if (calls <= 0) return false;
+  const send = async (ids: number[]): Promise<'done' | 'undeletable' | 'retry'> => {
+    if (calls <= 0) return 'retry';
     calls--;
     try {
       const res = await fetch(`https://api.telegram.org/bot${botToken}/deleteMessages`, {
@@ -797,34 +831,45 @@ async function deleteFromTelegram(env: Env, uid: string, idToken: string, photos
         body: JSON.stringify({ chat_id: channelId, message_ids: ids }),
       });
       const data: any = await res.json().catch(() => null);
-      if (data?.ok) return true; // messages already gone are skipped, not refused
-      console.warn(`[delete] Telegram refused ${ids.length} message(s): ${String(data?.description || res.status).slice(0, 120)}`);
+      if (data?.ok) return 'done'; // messages already gone are skipped, not refused
+      const why = String(data?.description || res.status).slice(0, 120);
+      if (UNDELETABLE.test(why)) return 'undeletable';
+      console.warn(`[delete] Telegram refused ${ids.length} message(s), will retry: ${why}`);
     } catch {
-      console.warn('[delete] Telegram unreachable');
+      console.warn('[delete] Telegram unreachable, will retry');
     }
-    return false;
+    return 'retry';
+  };
+  // One photo on its own calls; refused for good counts as dealt with.
+  const deletePhoto = async (photo: any) => {
+    const ids = photoMessageIds(photo);
+    let undeletable = false;
+    for (let i = 0; i < ids.length; i += 100) {
+      const r = await send(ids.slice(i, i + 100));
+      if (r === 'retry') return;
+      if (r === 'undeletable') undeletable = true;
+    }
+    if (undeletable) console.warn(`[delete] Telegram won't delete some messages of one asset; forgetting them`);
+    gone.add(photo.id);
   };
 
-  // Small photos share a call; a photo of more than 100 parts gets its own.
-  let batch: number[] = [];
-  let batchPhotos: string[] = [];
+  // Small photos share a call. If Telegram refuses a shared call for good,
+  // one of them is to blame: each then gets its own call.
+  let batch: any[] = [];
   const flush = async () => {
-    if (batchPhotos.length > 0 && await send(batch)) batchPhotos.forEach((id) => gone.add(id));
+    const r = batch.length === 0 ? 'retry' : await send(batch.flatMap(photoMessageIds));
+    if (r === 'done') batch.forEach((p) => gone.add(p.id));
+    else if (r === 'undeletable') for (const p of batch) await deletePhoto(p);
     batch = [];
-    batchPhotos = [];
   };
+  let size = 0;
   for (const photo of photos) {
-    const ids = photoMessageIds(photo);
-    if (ids.length === 0) continue;
-    if (ids.length > 100) {
-      let ok = true;
-      for (let i = 0; ok && i < ids.length; i += 100) ok = await send(ids.slice(i, i + 100));
-      if (ok) gone.add(photo.id);
-      continue;
-    }
-    if (batch.length + ids.length > 100) await flush();
-    batch.push(...ids);
-    batchPhotos.push(photo.id);
+    const n = photoMessageIds(photo).length;
+    if (n === 0) continue;
+    if (n > 100) { await deletePhoto(photo); continue; }
+    if (size + n > 100) { await flush(); size = 0; }
+    batch.push(photo);
+    size += n;
   }
   await flush();
   return gone;
