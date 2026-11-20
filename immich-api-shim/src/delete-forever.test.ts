@@ -68,7 +68,7 @@ const undeletable = { ok: false, error_code: 400, description: "Bad Request: mes
 afterEach(() => vi.unstubAllGlobals());
 
 describe('deleting photos for good', () => {
-  it('250 photos at once take three Telegram calls and leave nothing behind', async () => {
+  it('250 photos at once take three Telegram calls, and every one finishes', async () => {
     const DB = await library(Array.from({ length: 250 }, (_, i) => ({ id: `p${i}`, telegramChunks: parts(i + 1, 1) })));
     const calls = telegram();
     const res = await call(DB, 'DELETE', '/api/assets', { ids: Array.from({ length: 250 }, (_, i) => `p${i}`) });
@@ -185,6 +185,33 @@ describe('deleting photos for good', () => {
     await call(DB, 'DELETE', '/api/assets', { ids: ['z'] });
     expect(calls).toEqual([]);
     expect(!!row(DB, 'z').purgedAt).toBe(true);
+  });
+
+  it('a new delete also finishes an earlier one Telegram had not confirmed', async () => {
+    const DB = await library([
+      { id: 'pending', isTrashed: 1, telegramChunks: parts(3, 1) },
+      { id: 'fresh', telegramChunks: parts(9, 1) },
+    ]);
+    const calls = telegram();
+    await call(DB, 'DELETE', '/api/assets', { ids: ['fresh'] });
+    expect(calls.flat().sort()).toEqual([3, 9]);
+    expect([!!row(DB, 'pending').purgedAt, !!row(DB, 'fresh').purgedAt]).toEqual([true, true]);
+  });
+
+  it('nothing can be restored: a deleted photo stays deleted', async () => {
+    const DB = await library([{ id: 'gone1', isTrashed: 1, telegramChunks: '[]', purgedAt: '2026-01-01T00:00:00.000Z' }]);
+    for (const [path, body] of [['/api/trash/restore', undefined], ['/api/trash/restore/assets', { ids: ['gone1'] }]] as const) {
+      expect((await call(DB, 'POST', path, body)).status).toBe(200);
+    }
+    expect(row(DB, 'gone1').isTrashed).toBe(1);
+  });
+
+  it('a deleted photo is never served, even while its Telegram parts linger', async () => {
+    const DB = await library([{ id: 'linger', isTrashed: 1, telegramChunks: parts(4, 1) }]);
+    vi.stubGlobal('fetch', async () => { throw new Error('no outside calls expected'); });
+    for (const path of ['/api/assets/linger/original', '/api/assets/linger/dc-manifest', '/api/assets/linger/video/playback']) {
+      expect([path, (await call(DB, 'GET', path)).status]).toEqual([path, 404]);
+    }
   });
 
   it('Empty Trash leaves finished tombstones alone, so they still expire on time', async () => {

@@ -412,7 +412,7 @@ export async function handleAssets(request: Request, env: Env, path: string, url
   // round-trip here, so it can't hit the CPU/memory/subrequest limits.
   if (resourceId && path.endsWith('/dc-manifest') && request.method === 'GET') {
     const photo = await loadPhotoById(env, uid, resourceId, idToken);
-    if (!photo) return json({ message: 'Not found' }, 404);
+    if (!photo || photo.isTrashed) return json({ message: 'Not found' }, 404);
     return json(toAssetManifest(photo));
   }
   if (resourceId && path.endsWith('/thumbnail') && request.method === 'GET') {
@@ -503,22 +503,12 @@ export async function handleAssets(request: Request, env: Env, path: string, url
     return json({ ocr: null });
   }
 
-  // Trash — restore selected assets
-  if (path === '/api/trash/restore/assets' && request.method === 'POST') {
-    const body = await request.json() as any;
-    const ids: string[] = body.ids || [];
-    if (env.DB) {
-      const adapter = new D1Adapter(env.DB);
-      for (const id of ids) await adapter.updatePhoto(id, { isTrashed: 0 });
-    }
-    return json({});
-  }
-  // Trash — restore all
-  if (path === '/api/trash/restore' && request.method === 'POST') {
-    if (env.DB) {
-      await env.DB.prepare(`UPDATE photos SET isTrashed = 0 WHERE ownerId = ? AND isTrashed = 1`).bind(uid).run();
-    }
-    return json({});
+  // Trash — restore. Nothing can be restored: on this worker every trash is a
+  // permanent delete, and a trashed row is a tombstone whose Telegram parts are
+  // gone or going. Setting isTrashed back to 0 put broken photos back in the
+  // library and on every device.
+  if ((path === '/api/trash/restore/assets' || path === '/api/trash/restore') && request.method === 'POST') {
+    return json({ count: 0 });
   }
   // Trash — empty (permanently delete all trashed photos). Immich app uses
   // POST; accept DELETE too for robustness.
@@ -739,12 +729,12 @@ async function handleDeleteAssets(request: Request, env: Env, uid: string, idTok
   await ensureDeduplicationSchema(env.DB);
   // Only the caller's own rows (the owner gate is the boundary; this is the
   // second check), and a finished deletion stays as it is.
-  const rows = (await ownRows(env.DB, uid, ids)).filter((r) => !r.purgedAt);
+  const rows = (await loadOwnedPhotos(env, uid, ids)).filter((r) => !r.purgedAt);
   // A live photo's still and motion video go together, or the orphaned video
   // shows up as a standalone clip after the next sync. The pair must be a video.
   const have = new Set(rows.map((r) => r.id));
   const pairs = [...new Set(rows.map((r) => r.livePhotoVideoId).filter((id) => typeof id === 'string' && id && !have.has(id)))];
-  const pairRows = (await ownRows(env.DB, uid, pairs))
+  const pairRows = (await loadOwnedPhotos(env, uid, pairs))
     .filter((r) => !r.purgedAt && String(r.mimeType || '').startsWith('video/'));
   const all = [...rows, ...pairRows];
 
@@ -752,25 +742,21 @@ async function handleDeleteAssets(request: Request, env: Env, uid: string, idTok
   // visible. Sync tells every device (AssetDeleteV1). Its parts are forgotten
   // only once Telegram confirmed the delete; until then Empty Trash retries.
   await updateOwnRows(env.DB, uid, all.map((r) => r.id), 'isTrashed = 1');
-  const gone = await deleteFromTelegram(env, uid, idToken, all);
+  // Earlier deletions Telegram hasn't confirmed ride along, so they finish
+  // without anyone pressing Empty Trash (the phone has no such button).
+  const taken = new Set(all.map((r) => r.id));
+  const earlier = ((await env.DB.prepare(
+    'SELECT * FROM photos WHERE ownerId = ? AND isTrashed = 1 AND purgedAt IS NULL ORDER BY id LIMIT 100',
+  ).bind(uid).all()).results || []).filter((r: any) => !taken.has(r.id));
+  const todo = [...all, ...earlier];
+  const gone = await deleteFromTelegram(env, uid, idToken, todo);
   await forgetParts(env.DB, uid, [...gone]);
+  if (gone.size < todo.length) console.log(`[delete] ${todo.length - gone.size} deletion(s) still pending`);
   return json({});
 }
 
 // D1 takes up to 100 bound values per statement; leave room for the others.
 const ROWS_PER_STATEMENT = 90;
-
-// The caller's rows among `ids`, a few statements at a time.
-async function ownRows(db: any, uid: string, ids: string[]): Promise<any[]> {
-  const out: any[] = [];
-  for (let i = 0; i < ids.length; i += ROWS_PER_STATEMENT) {
-    const part = ids.slice(i, i + ROWS_PER_STATEMENT);
-    const res = await db.prepare(`SELECT * FROM photos WHERE ownerId = ? AND id IN (${part.map(() => '?').join(', ')})`)
-      .bind(uid, ...part).all();
-    out.push(...(res.results || []));
-  }
-  return out;
-}
 
 // One batch (a single query against the per-request limit) that sets `set` on
 // the caller's rows among `ids`.
@@ -788,7 +774,7 @@ async function updateOwnRows(db: any, uid: string, ids: string[], set: string, v
 // lets purgeExpiredTombstones reclaim it once every device had time to sync.
 function forgetParts(db: any, uid: string, ids: string[]): Promise<void> {
   return updateOwnRows(db, uid, ids,
-    "isTrashed = 1, telegramChunks = '[]', telegramPlaybackChunks = NULL, purgedAt = ?", [new Date().toISOString()]);
+    "isTrashed = 1, telegramChunks = '[]', telegramPlaybackChunks = NULL, purgedAt = COALESCE(purgedAt, ?)", [new Date().toISOString()]);
 }
 
 // Telegram calls one request may spend on deleting: the free plan allows 50
@@ -838,6 +824,9 @@ async function deleteFromTelegram(env: Env, uid: string, idToken: string, photos
     } catch {
       console.warn('[delete] Telegram unreachable, will retry');
     }
+    // A rate limit, missing rights or an outage would refuse every later call
+    // too: stop spending this request's budget.
+    calls = 0;
     return 'retry';
   };
   // One photo on its own calls; refused for good counts as dealt with.
@@ -849,7 +838,7 @@ async function deleteFromTelegram(env: Env, uid: string, idToken: string, photos
       if (r === 'retry') return;
       if (r === 'undeletable') undeletable = true;
     }
-    if (undeletable) console.warn(`[delete] Telegram won't delete some messages of one asset; forgetting them`);
+    if (undeletable) console.warn(`[delete] Telegram won't delete some messages of asset ${photo.id}; forgetting them`);
     gone.add(photo.id);
   };
 
@@ -1907,7 +1896,7 @@ async function handleUploadPlan(request: Request, env: Env, uid: string, idToken
 
 async function handleChunkManifest(env: Env, uid: string, assetId: string, idToken: string): Promise<Response> {
   const photo = await loadPhotoById(env, uid, assetId, idToken);
-  if (!photo) return json({ message: 'Asset not found' }, 404);
+  if (!photo || photo.isTrashed) return json({ message: 'Asset not found' }, 404);
   return json({ chunks: photo.telegramChunks || [] });
 }
 
@@ -2355,7 +2344,8 @@ async function handleMediaHead(env: Env, uid: string, assetId: string, idToken: 
 export async function handleOriginal(request: Request, env: Env, uid: string, assetId: string, idToken: string): Promise<Response> {
   console.log(`[handleOriginal] AssetID: ${assetId}, Path: ${new URL(request.url).pathname}`);
   const photo = await loadPhotoById(env, uid, assetId, idToken);
-  if (!photo) return json({ message: 'Not found' }, 404);
+  // A deleted photo is never served, even while its Telegram parts linger.
+  if (!photo || photo.isTrashed) return json({ message: 'Not found' }, 404);
 
   // /video/playback: if an H.264 rendition exists (Fix Videos transcoded an
   // HEVC original), serve THAT instead so the browser can play it. Point the
@@ -2808,7 +2798,7 @@ export async function handleDownload(request: Request, env: Env, path: string): 
       ).bind(body.albumId).all<{ assetId: string }>();
       ids = (rows.results || []).map(r => r.assetId);
     }
-    const photos = await loadOwnedPhotos(env, uid, ids);
+    const photos = (await loadOwnedPhotos(env, uid, ids)).filter((p) => !p.isTrashed);
     const target = Math.min(Number(body.archiveSize) || MAX_ARCHIVE_BYTES, MAX_ARCHIVE_BYTES);
     const archives: Array<{ size: number; assetIds: string[] }> = [];
     let cur = { size: 0, assetIds: [] as string[] };
@@ -2830,7 +2820,7 @@ export async function handleDownload(request: Request, env: Env, path: string): 
   if (path === '/api/download/archive' && request.method === 'POST') {
     const body = await request.json().catch(() => ({})) as any;
     const ids: string[] = Array.isArray(body.assetIds) ? body.assetIds : [];
-    const photos = await loadOwnedPhotos(env, uid, ids);
+    const photos = (await loadOwnedPhotos(env, uid, ids)).filter((p) => !p.isTrashed);
     if (!photos.length) return json({ message: 'No assets found' }, 404);
 
     const config = await getCachedConfig<any>(env, uid, idToken, 'telegram');
