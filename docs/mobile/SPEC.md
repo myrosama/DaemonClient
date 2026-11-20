@@ -68,50 +68,48 @@ because of it (Cloudflare body and CPU limits).
 
 ## 3. Architecture
 
+*Rewritten 2026-11-20 for D26/D27 (native apps on the core).*
+
 ```
-┌────────────── phone ──────────────┐
-│  Photos UI (Immich fork, Flutter) │      Drive UI (Flutter, later)
-│            │                      │            │
-│            ▼                      │            ▼
-│   dc_core_flutter (Flutter plugin, generated bindings)
+┌──────────────────────── phone ────────────────────────┐
+│  Photos for iPhone (SwiftUI, from HomeRoll — D27)     │   Photos for Android (Kotlin + Compose)
+│            │                                          │            │
+│            ▼                                          │            ▼
+│   dc-ffi (UniFFI: a Swift package / a Kotlin library — one API for both)
 │            │
 │            ▼
-│   dc-core (Rust)
+│   dc-core (Rust: the phone's I/O)  ──uses──▶  dc-engine (Rust: the rules, pure — shared with the websites as wasm, D25)
 │    ├─ session      login, the worker URL, token
-│    ├─ crypto       PBKDF2 + AES-256-GCM, the existing chunk format
 │    ├─ worker       metadata calls to the user's worker
-│    ├─ telegram     sendDocument / getFile / download / deleteMessage
-│    ├─ transfer     upload + download queues, resume, retries
+│    ├─ telegram     sendDocument / sendMediaGroup / getFile / download / delete
+│    ├─ index        the library, in SQLite on the phone (ENGINE.md §12 Q2)
+│    ├─ transfer     upload queue, resume, retries, the background hand-off
 │    ├─ media        local server on 127.0.0.1 for images and video
 │    └─ cache        bounded on-disk cache
-└───────────┬───────────────┬───────┘
-            │ metadata      │ encrypted chunks
+└───────────┬───────────────┬───────────────────────────┘
+            │ metadata      │ encrypted parts
             ▼               ▼
    user's worker (D1)    api.telegram.org (the user's own bot + channel)
 ```
 
 No byte of a photo or file passes through the worker. The phone needs no
 `/proxy` relay either: that exists only because browsers block cross-site
-calls, and an app is not a browser.
+calls, and an app is not a browser. The platform makes thumbnails, previews
+and the H.264 copy (ImageIO / AVFoundation, MediaCodec / Media3); the core
+owns the format, the queue, the pacing and the journal.
 
 ### Where the code lives
 
 | Path | What |
 |---|---|
-| `mobile/Cargo.toml` | the Cargo workspace (one lockfile, one build folder) |
-| `mobile/core/dc-core/` | the core library — pure Rust, no FFI, fully unit-tested |
-| `mobile/core/dc-cli/` | a command-line front end to the core, for testing against real Telegram and a real worker without an app (Gate 2) |
-| `mobile/core/compat/` | test vectors produced by the **production** JavaScript crypto (`apps/drive-web/src/crypto.js`), so Rust is checked against the real thing |
-| `mobile/packages/dc_core_flutter/` | Flutter plugin: a thin binding crate over `dc-core` (flutter_rust_bridge 2.x) plus the generated Dart API |
-| `immich/mobile/` | the Photos app — stays where it is; moving it would make taking Immich updates harder |
-| `mobile/drive/` | the Drive app (Phase 3) |
+| `core/Cargo.toml` | the Cargo workspace (one lockfile, one build folder) |
+| `core/dc-core/` | the core library — pure Rust, no FFI, fully unit-tested |
+| `core/dc-cli/` | a command-line front end to the core, for testing against real Telegram and a real worker without an app (Gate 2) |
+| `core/compat/` | test vectors produced by the **production** JavaScript crypto (`apps/drive-web/src/crypto.js`), so Rust is checked against the real thing |
+| `core/dc-engine/`, `core/dc-ffi/`, `core/dc-wasm/` | to come (ENGINE.md): the pure rules, the Swift/Kotlin bridge, the browser bridge |
+| `apps/ios/`, `apps/android/` | the native apps |
 
-Keeping `dc-core` free of any binding code means a Swift binding (uniffi) can
-sit beside the Flutter one later without touching the core.
-
-**One core, two apps:** both apps list `dc_core_flutter` as a path dependency.
-There is one copy of the source; each app compiles it into its own bundle
-(iOS apps cannot share a library at run time, and do not need to).
+The plan and order: [`docs/plan/ENGINE.md`](../plan/ENGINE.md) Part 2.
 
 ---
 
@@ -283,35 +281,26 @@ Every Telegram read goes through it.
 
 ---
 
-## 5. DaemonClient Photos (Phase 2)
+## 5. DaemonClient Photos
 
-What changes in `immich/mobile`; everything else stays Immich's:
+*Rewritten 2026-11-20 for D26/D27.* The iPhone app starts from HomeRoll's
+code (D27); its server layer is replaced by the core, and only what the
+worker serves is kept (timeline, viewer, video, albums, favorites, archive,
+trash, map, save/share, backup). What carries over from the earlier design:
 
-1. **Identity on iOS** — bundle ids are still Immich's (R§5). Becomes
-   `uz.daemonclient.photos` (+ `.ShareExtension`, `.Widget`). Store name
-   "DaemonClient Photos" (D9); the home-screen name "Photos" and the
-   DaemonClient logo arrived early, in P0 task 0.4 (D20). Android is already
-   `uz.daemonclient.photos`.
-2. **Sign-in (D8, changed 2026-11-17)**
-   - The form asks for exactly three things: **server address** (always
-     shown, filled in with the hosted address; self-hosted servers will be
-     supported), **email**, **password**. No shortcut button.
-   - **"Create account"** opens `accounts.daemonclient.uz` sign-up in an in-app
-     browser sheet (`SFSafariViewController` on iOS, Custom Tabs on Android).
-     After sign-up and setup there, the user returns and signs in.
-   - After sign-in, the app's server address becomes `workerUrl`.
+1. **Identity** — `uz.daemonclient.photos`; store name "DaemonClient Photos"
+   (D9); home-screen name "Photos" (D20).
+2. **Sign-in (D8)** — server address (always shown, the hosted address filled
+   in; self-hosted servers will be supported), email, password; **"Create
+   account"** opens `accounts.daemonclient.uz` sign-up in an in-app browser
+   sheet; after sign-in the core talks to the returned `workerUrl`.
 3. **Account deletion** — required by Apple once the app offers account
-   creation. A "Delete account" entry in Settings that leads to deletion.
-   Whether the accounts portal already has a deletion flow is an open question
-   (§10).
-4. **Reading media** — the URLs built in `lib/utils/image_url_builder.dart` and
-   `video_viewer.widget.dart` point at the core's local server instead of the
-   worker (R§3). Immich's native image loader keeps working because it only
-   sees a URL.
-5. **Uploading** — the foreground and background upload services hand files
-   to the core, which uses the client-side path. No file is posted to the
-   worker.
-6. **Sync** — unchanged: `/api/sync/stream` on `workerUrl`.
+   creation (§10, APP_STORE.md).
+4. **Reading media** — through the core's local server (§4.6).
+5. **Uploading** — through the core's engine (D22–D24): the phone makes the
+   thumbnail, preview, metadata and, where needed, the H.264 copy.
+6. **The library** — the core's index (ENGINE.md §12 Q2), fed by the worker
+   (contract v2, `docs/plan/CONTRACT_V2.md`).
 
 ### 5.1 Thumbnails, HEIC and video (D11, D14)
 
@@ -358,20 +347,6 @@ uploader (`background_downloader`, which uses `URLSession` on iOS) sends each
 part straight to Telegram's `sendDocument`. That keeps uploads running while
 the app is in the background, within iOS limits. The core then posts the
 metadata. Verified in P2 before it is relied on.
-
-### 5.7 Clean-up (D12)
-
-`immich/` holds the whole upstream Immich monorepo; `FORK.md` says `server/`,
-`machine-learning/`, `docker/`, `e2e/` and `cli/` are not used. The website's
-build (production, deployed from Linux) runs through the same pnpm workspace,
-so removals are proposed as a list, approved by the operator, and checked
-against the web build on the Linux machine before they land. Unused Immich
-features inside the app (demo logins, OAuth, Immich support and licence
-screens) are listed and removed in P2.
-
-Open items to settle **during** Phase 2, by reading code and testing — not
-assumed here: R§6 "Open items" (deviceAssetId, live photos, EXIF, iOS
-background limits).
 
 ---
 
@@ -430,17 +405,14 @@ The four gates of `docs/plan/GATES.md`, applied as follows:
 
 ## 9. Phases
 
-Each phase ends with its exit criteria met and shown. `PLAN.md` breaks them
-into tasks.
-
-| Phase | What | Exit criteria |
-|---|---|---|
-| **P0** | Toolchain and skeleton | Rust, Flutter 3.41.7 and CocoaPods installed; the **existing** Photos fork run in the Simulator and its current behaviour recorded; `dc-core` + `dc_core_flutter` exist; the Photos app calls a Rust function on the iOS Simulator and Android; CI runs the core's tests. |
-| **P1** | The core | Crypto vectors pass both ways; `dc-cli` signs in to the test account, uploads a photo and a >100 MB video that then open on photos.daemonclient.uz, and downloads and decrypts a file the website uploaded; the local server streams a video with seeking. |
-| **P2** | Photos on the core | On Simulator, iPhone and Android with the test account: sign-in (all three paths of D8), library loads, thumbnails / photos / video work, a backup including a >100 MB video finishes, and both directions of §7 hold. |
-| **P3** | Drive | Design approved first; then §6 scope working on all three targets, both directions of §7. |
-| **P4** | Release | TestFlight builds of both apps through the friend's App Store Connect account; Android builds; store listings. |
-| Later | — | iOS Files extension and Android DocumentsProvider (Swift/Kotlin over the core), starred, sharing, cross-device Drive thumbnails. |
+*Rewritten 2026-11-20.* P0 (toolchain, CI) and P1 (the core, 1.0–1.9) are
+done. The native rebuild's order — research, the repo layout, spikes, the
+core made bulletproof, the iPhone app, the Android app, the websites on the
+engine, the Drive apps — is in [`docs/plan/ENGINE.md`](../plan/ENGINE.md)
+§9, with each task's exit criteria written before its code (GATES.md).
+Release (TestFlight through the friend's App Store Connect account, Android
+builds, store listings) follows the apps; HomeRoll's author is asked first
+(D27).
 
 ---
 

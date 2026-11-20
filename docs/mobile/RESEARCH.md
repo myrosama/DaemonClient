@@ -6,6 +6,10 @@ Append; when a finding turns out wrong, add a correction under it.
 
 ---
 
+
+> **2026-11-20 — pruned (SPEC D26).** The sections on the dropped Immich
+> Flutter fork were removed: "3. Where the Immich fork touches media", "5. Toolchain on the MacBook", "10. The Immich fork's own photo loaders — what the local server must suit", "7. What the existing Photos fork does today — part 1: it does not build", "7 (part 2). What the fork does after sign-in". They are in git history (and on branch
+> `archive/p2-flutter-2.3`). Section numbers were kept, so gaps are expected.
 ## 1. Drive UI/UX — what to model the Drive app on        2026-10-04
 
 **Question:** which open-source app gives the Drive app a slick,
@@ -154,34 +158,6 @@ machine first (rule in `project_ios_app` memory).
 
 ---
 
-## 3. Where the Immich fork touches media        2026-10-04
-
-- Every media URL is built in **one file**: `immich/mobile/lib/utils/image_url_builder.dart`
-  (`/assets/:id/thumbnail`, `/assets/:id/video/playback`, `/people/:id/thumbnail`);
-  `video_viewer.widget.dart:124` picks `original` vs `video/playback`.
-- Remote images are loaded natively through Pigeon APIs
-  (`lib/platform/remote_image_api.g.dart`, Swift side in `ios/Runner/Images`).
-- Image requests are **cancellable** end to end: Dart `ImageRequest.cancel()`
-  (`lib/infrastructure/loaders/image_request.dart:29`) → native
-  `cancel()` → `URLSessionDataTask.cancel()`
-  (`ios/Runner/Images/RemoteImagesImpl.swift:15-17`). Scrolling a thumbnail off
-  screen closes its HTTP request.
-- Uploads: `lib/services/background_upload.service.dart` plus the foreground
-  upload service; iOS background work in `ios/Runner/Background`.
-- Metadata sync stays on `/api/sync/stream` — see the strict-parse traps in the
-  `project_int64_mobile_trap` memory before touching anything it emits.
-- Size: ~79k lines of Dart in `lib/` (excluding generated), ~5.5k Swift,
-  ~5.8k Kotlin.
-
-**Idea to validate in the spec:** run a small HTTP server inside the Rust core
-on `127.0.0.1` that answers the same `/assets/:id/thumbnail|original|video/playback`
-paths by fetching from Telegram and decrypting — an on-device version of the
-web's service worker. The Immich screens keep requesting the same URLs; only the
-base address changes. The same server streams Drive files to the video player
-and to previews.
-
----
-
 ## 4. Rust core — technology        2026-10-04
 
 Versions from crates.io / pub.dev on 2026-10-04.
@@ -198,17 +174,6 @@ Versions from crates.io / pub.dev on 2026-10-04.
 **Precedents:** Filen (`filen-rs`, AGPL-3.0) — a Rust SDK for an encrypted
 drive with uniffi mobile bindings and a native cache crate; Ente — Flutter apps
 on a Rust core via flutter_rust_bridge.
-
----
-
-## 5. Toolchain on the MacBook        2026-10-04
-
-- Xcode **27.0** (27A266a) installed, `xcode-select -p` →
-  `/Applications/Xcode.app/Contents/Developer`.
-- **Not installed yet:** `rustc`/`cargo` (rustup), Flutter **3.41.7** (pinned by
-  `immich/mobile/pubspec.yaml`), CocoaPods. iOS Simulator runtime: unchecked.
-- The fork's iOS bundle ids are still Immich's (`app.alextran.immich`,
-  `app.futo.immich.*`); only Android was renamed (`uz.daemonclient.photos`).
 
 ---
 
@@ -388,145 +353,6 @@ below "opened", plus a reserved slot so the opened item never waits for one.
 
 Licence: porting Nuke's design (MIT) into Rust needs its copyright notice
 kept — add it to `NOTICE` and the module header when P1 Task 1.4 lands.
-
----
-
-## 10. The Immich fork's own photo loaders — what the local server must suit        2026-10-06
-
-The apps keep Immich's native loaders; they will fetch from the core's local
-server (SPEC §4.6). Read from the fork:
-
-**iOS** — `ios/Runner/Images/RemoteImagesImpl.swift`, `Core/URLSessionManager.swift`:
-- One `URLSessionDataTask` per image; `cancel()` cancels the task, which closes
-  the connection — the core sees the hang-up.
-- `httpMaximumConnectionsPerHost = 64` (`URLSessionManager.swift:151`), so up
-  to 64 requests reach the local server at once and **the core's scheduler can
-  order them** (newest first, opened first).
-- `cachePolicy = .returnCacheDataElseLoad` with a 1 GB disk `URLCache`, memory
-  0 (`:49-51`). The cache is keyed by URL: a local server on a random port with
-  a per-launch secret in the URL gets a fresh key every launch, so this cache
-  only helps within one run. **The core's own disk cache (SPEC §4.7) is what
-  survives restarts.**
-- Decoding is ImageIO (`CGImageSourceCreateThumbnailAtIndex`, transform
-  applied) on a background queue of 2 × cores — HEIC decodes natively.
-- No priorities and no rate limit of its own: ordering is entirely the core's job.
-
-**Android** — `android/.../images/RemoteImagesImpl.kt`, `core/HttpClientManager.kt`:
-- Remote images go through **Cronet** (Chromium's network stack), OkHttp only
-  for mTLS. Chromium allows **6 connections per host** over HTTP/1.1, and a
-  plain-HTTP loopback server cannot use HTTP/2. Requests beyond 6 wait inside
-  Cronet, first-in-first-out, where the core cannot see or reorder them.
-- Cancelled requests leave Cronet's queue, so after a fast scroll mostly
-  on-screen thumbnails remain — cancellation does most of the work.
-- **The risk:** an opened photo can wait behind 6 thumbnail downloads, which
-  breaks D17. Remedy to design in P1 Task 1.6: serve the opened item and video
-  from a **second listener (another port)** — Chromium pools connections per
-  host *and port*, so opened media never queues behind thumbnails.
-
----
-
-## 7. What the existing Photos fork does today — part 1: it does not build        2026-10-06
-
-P0 Task 0.2. Mac: Xcode 27.0, iOS 27.0 Simulator (iPhone 18 Pro), Flutter
-3.41.7 (the fork's pin), CocoaPods 1.17.0.
-
-**The fork has never built for iOS in CI either.** The four `mobile-build`
-runs (June 2026): `d64da81` — android-apk success, ios-simulator failure;
-`b1a466d` — both failed; `7349bde` — one run failed (both jobs), one was
-cancelled. The logs have expired; the failing iOS step was
-`flutter build ios --simulator`. (Corrected 2026-10-06 at Gate 3: an earlier
-draft said all four failed on iOS while Android passed.)
-
-**Locally, three causes, found in order:**
-
-1. **iOS minimum too low.** Xcode 27 supports deployment targets 15.0–27.0 and
-   treats anything lower as an *error* ("Target Integrity"). The fork had
-   13.0/14.0 in `Runner.xcodeproj` and forced 14.0 onto every pod
-   (`ios/Podfile`: `platform :ios, '14.0'` and the `post_install` override).
-   Upstream Immich already uses 15.0 (16.0 ShareExtension, 17.0 Widget). Fix:
-   the same values as upstream — the target counts now match upstream exactly.
-   No device is lost: iOS 15 supports every iPhone iOS 14 did; anyone still on
-   iOS 14 must update first. The app is not distributed yet.
-2. **Swift macros built for the wrong platform.** `sqlite-data` →
-   `swift-structured-queries` uses Swift macros, which are small programs the
-   compiler runs **on the Mac**. For simulator builds, Flutter passes
-   `-sdk iphonesimulator` (`flutter_tools/lib/src/ios/mac.dart:410` in 3.41.7,
-   `:446` in 3.47.2; not when the app has a watchOS companion), which makes Xcode build those macro programs for
-   the Simulator; the compiler cannot run them (`dyld: DYLD_ROOT_PATH not set
-   for simulator program`) and reports "produced malformed response".
-   Evidence: `vtool -show-build` on the built `StructuredQueriesMacros` →
-   `platform IOSSIMULATOR`. Reported to Flutter as
-   [flutter#146122](https://github.com/flutter/flutter/issues/146122), which
-   was **closed 2024-04-04** — a Flutter maintainer called it an Xcode/SwiftPM
-   problem, and Xcode 16 beta notes listed a related fix — yet it still
-   reproduces with Xcode 27 + Flutter 3.41.7. (Corrected at Gate 3: an earlier
-   draft said the issue was open.) **Upstream Immich's fix** (PR #30821, commit `f88fb628`,
-   2026-08-20): `mobile/ios/scripts/xcode_flutter_patch.sh`, run as a mise
-   `postinstall` hook, deletes that one line from the installed Flutter's
-   `mac.dart` (simulator builds only). Upstream also reported the symptom as
-   issue #28420.
-
-3. **`swift-sharing` 2.7.4 does not link against the iOS 27 SDK** — undefined
-   symbols `variable initialization expression of Sharing.SharedReader…
-   SwiftUI.State<Swift.Int>`. swift-sharing **2.8.1** shipped "Fixed: Xcode 27
-   Beta 1 Support" (pointfreeco/swift-sharing#216). Upstream Immich pins
-   2.9.1. Fix: our three outdated Point-Free pins moved to upstream's exact
-   versions and commits — swift-sharing 2.7.4 → 2.9.1, swift-structured-queries
-   0.31.1 → 0.34.0, combine-schedulers 1.0.3 → 1.1.0 — in the workspace
-   `Package.resolved` (the one Flutter's build uses). The project-level copy
-   (`Runner.xcodeproj/project.xcworkspace/...`) was brought to the same pins,
-   plus GRDB 7.8.0 → 7.9.0; upstream's own project-level copy is stale (still
-   2.7.4 / 0.31.1), so ours is deliberately ahead of upstream there.
-
-How cause 2 was confirmed: the same `xcodebuild` **without** `-sdk` built the
-macro program as `platform MACOS` and the macro errors disappeared, exposing
-cause 3.
-
-**Note on a false lead:** a manual `xcodebuild -sdk iphonesimulator` produced
-the macro error too, and was briefly blamed on the manual command; building
-through Flutter showed the same error, because Flutter passes the same flag.
-
-Part 2 (what the app does after sign-in) follows once it builds.
-
-## 7 (part 2). What the fork does after sign-in        2026-10-06
-
-The operator signed in on the iOS 27 Simulator (build from Task 0.2a). From
-the `flutter run` log:
-
-1. **Via `https://api.daemonclient.uz`** (the prefilled hosted address): sign-in
-   succeeds, but the background sync fails at once —
-   `ApiException 400: HTTP connection failed: GET /server/version (… unsupported
-   URL …), uri=/server/version` — a request with **no host**. The sync isolate
-   has no usable server address; the app never learns the per-user
-   `workerUrl` (it reads it nowhere, R§6). A likely contributor, **not yet
-   verified**: the central `/.well-known/immich` answers `{}` (no
-   `api.endpoint`), which is where Immich derives its API address. → P2 Task
-   2.2 (sign-in) owns this.
-2. **Via the per-user worker typed by hand** (`https://dc-…workers.dev/api`):
-   sign-in works; remote sync completes without errors (616 ms, then "Resetting
-   sync state as requested by server", then 475 ms); the websocket connects.
-   **The timeline is empty** — whether that account has photos is being checked
-   with the operator.
-3. The app is still branded "immich" on iOS (logo, name) — P2 Task 2.1.
-   > **Correction, 2026-10-27:** no longer true. P0 task 0.4 renamed it
-   > "Photos" on the home screen and put the DaemonClient logo on the icon,
-   > launch screen and sign-in screen on iOS and Android (SPEC D20). Bundle
-   > ids and the remaining Immich names stay with P2 task 2.1.
-
-Conclusion for the plan: the hosted sign-in path is broken today, and media
-loading is untested until an account with photos is used.
-
-> **Resolved 2026-11-18 (P2 task 2.2):** sign-in goes through the core, which
-> gets the per-user worker from the hosted login reply; the app no longer
-> looks up `/.well-known/immich`. Signed in on the iOS Simulator and the
-> Android emulator with the test account; the profile shows the worker as
-> the server.
-
-> **Update, 2026-10-12 (operator):** signed in with their own account, the
-> app showed their photos — through the old worker-heavy path (whole files
-> through the worker), which P1/P2 replace. The empty timeline in item 2 was
-> most likely an account with no photos (asked of the Linux machine). Both are what P1
-(core) and P2 (sign-in, media through the core) replace.
 
 ---
 
@@ -750,7 +576,7 @@ worker's `assets.ts`, `asset-manifest.ts`):
 
 **Measured in P1 Task 1.9 (2026-11-17, this Mac: upload ~2 MB/s, download ~3
 MB/s a connection, ~8 MB/s in all; the test account; every run in
-`plans/P1-core.md` "As built (Task 1.9)"):**
+P1 task 1.9, in git history):**
 
 | Test | Result |
 |---|---|
