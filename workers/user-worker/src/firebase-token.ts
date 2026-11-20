@@ -6,9 +6,6 @@
 // call answered 401 "Session expired" and the cards silently rendered zeros.
 // Accepting the ID token directly is also what lets one sign-in serve all three
 // apps instead of each minting its own session.
-//
-// The hardening here mirrors processor/api/convert.js, which has verified these
-// tokens in production for a while. Keep the two in step.
 
 const CERTS_URL =
   'https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com';
@@ -80,8 +77,7 @@ async function keyFromCert(pem: string): Promise<CryptoKey> {
   // workerd's importKey('spki') rejects trailing bytes — the certificate's own
   // signature follows the SPKI, so slicing to the end fails with "Invalid N
   // trailing bytes after SPKI input". Node happens to tolerate it, which is why
-  // this only shows up once deployed. (processor/api/convert.js runs on Node
-  // and still slices to the end; it works there, but this is the correct form.)
+  // this only shows up once deployed.
   const end = derSequenceEnd(der, start);
   if (end > der.length) throw new Error('unsupported certificate');
   return crypto.subtle.importKey(

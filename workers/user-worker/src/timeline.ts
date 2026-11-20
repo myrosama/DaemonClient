@@ -1,7 +1,7 @@
 import type { Env } from './index';
 import { requireAuth, firestoreQuery, firestoreGet, json } from './helpers';
 import { D1Adapter } from './d1-adapter';
-import { backfillChecksumBatch, backfillHeicThumbBatch } from './assets';
+import { backfillChecksumBatch } from './assets';
 
 // Per-user workers store photos in D1 (env.DB). The central worker (no D1
 // binding) still uses Firestore. Read from whichever is present and normalize
@@ -68,7 +68,6 @@ export async function handleTimeline(request: Request, env: Env, path: string, u
   if (env.DB && env.waitUntil) {
     const jobs: Array<{ name: string; run: () => Promise<void> }> = [
       { name: 'ChecksumBackfill', run: () => backfillChecksumBatch(env, session.uid, session.idToken) },
-      { name: 'HeicThumbBackfill', run: () => backfillHeicThumbBatch(env, session.uid, session.idToken) },
     ];
     const job = jobs[timelineJobCursor % jobs.length];
     timelineJobCursor++;

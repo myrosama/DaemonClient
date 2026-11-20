@@ -1,7 +1,7 @@
 import type { Env } from './index';
 import { requireAuth, firestoreQuery } from './helpers';
 import { D1Adapter } from './d1-adapter';
-import { backfillExifBatch, backfillChecksumBatch, backfillHeicThumbBatch, purgeExpiredTombstones } from './assets';
+import { backfillExifBatch, backfillChecksumBatch, purgeExpiredTombstones } from './assets';
 import { repairLivePhotoLinks } from './link-live-photos';
 
 // Fire at most once per Worker isolate lifetime (typically 30 min – a few hours).
@@ -292,7 +292,6 @@ export async function handleSyncStream(request: Request, env: Env): Promise<Resp
       { name: 'ChecksumBackfill', run: () => backfillChecksumBatch(env, session.uid, session.idToken) },
       { name: 'LivePhotoRepair', run: () => repairLivePhotoLinks(env, session.uid) },
       { name: 'ExifBackfill', run: () => backfillExifBatch(env, session.uid, session.idToken) },
-      { name: 'HeicThumbBackfill', run: () => backfillHeicThumbBatch(env, session.uid, session.idToken) },
       { name: 'Tombstones', run: () => purgeExpiredTombstones(env, session.uid) },
     ];
     const job = jobs[healJobCursor % jobs.length];
