@@ -81,7 +81,6 @@ into the token so later requests need no lookup.
 | GET | `/api/server/ping` | no | mobile |
 | GET | `/api/server/telegram-config` | **yes** | Photos SW, `daemonclient-drive.ts:25` |
 | GET | `/api/server/zke-config` | **yes** | Photos SW, `daemonclient-drive.ts:38` |
-| GET/POST/DELETE | `/api/server/processor` | **yes** | *none yet — UI not built* |
 | GET | `/api/server/setup`, `/theme`, `/onboarding` | no | *none* |
 
 **`telegram-config` and `zke-config` return real secrets** — the bot token, and
@@ -89,10 +88,6 @@ the ZKE password and salt. That is deliberate: the browser fetches media bytes
 straight from Telegram and decrypts locally, which is what keeps the worker
 inside its free-tier limits. Removing those fields would push every byte back
 through the worker. They are protected by the owner gate, not by obscurity.
-
-`POST /api/server/processor` attaches a HEIC processor. It refuses anything that
-is not https, is an internal address, is not a DaemonClient processor, has no
-`OWNER_UID`, or — the check that matters — does not accept **this user's** token.
 
 ### Assets — `assets.ts`
 
@@ -277,20 +272,6 @@ unauthenticated** — an open validation oracle with `ACAO: *`, one outbound
 request per anonymous call. It now requires a Firebase ID token first
 (`workers/deployment/src/index.ts:616`), so only a signed-in user (the setup
 wizard, its one real caller) can reach it. Fixed in commit `29d61e0`.
-
-## The processor — `processor/`
-
-One stateless edge function. `POST /convertHeicThumbnail` with a Firebase bearer
-token, `GET /health` unauthenticated. Verifies RS256 against Google's certs,
-pins `aud`/`iss`/`exp`, and enforces `uid === OWNER_UID`.
-
-Exists because Cloudflare Workers cannot decode HEIC — libheif needs far more
-CPU than an invocation is allowed — and Telegram will not generate a thumbnail
-for HEIC the way it does for every other format.
-
-**Each user runs their own.** Plaintext never reaches operator infrastructure.
-
----
 
 ## Rules this API is held to
 

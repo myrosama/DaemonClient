@@ -34,7 +34,6 @@ directly.
 | `apps/ios/`, `apps/android/` + `core/` | not released | Native mobile apps (SwiftUI, Kotlin + Compose) on a shared Rust core — being built (`docs/plan/ENGINE.md` Part 2). |
 | `drive/` | `drive.daemonclient.uz` | The Drive app. Not a fork — a standalone React SPA. |
 | `workers/telegram-proxy/` | `daemonclient-proxy` Worker | A CORS relay for `api.telegram.org`, which sends no CORS headers of its own. |
-| `processor/` | the user's own Vercel | One stateless function that converts HEIC to a thumbnail. Optional. |
 | `apps/site/` | `daemonclient.uz` | The marketing page. Static HTML. |
 | `apps/docs-web/` | `docs.daemonclient.uz` | This documentation, as a site. |
 | `schema/` | imported, not deployed | The D1 schema. One definition, shared by both provisioners. |
@@ -167,8 +166,6 @@ Places where plaintext still reaches Telegram, stated plainly:
 - The thumbnail round-trip. The original goes up so Telegram will thumbnail it,
   and the message is deleted immediately afterwards. Reviewed and accepted.
 - WebDAV uploads to Drive when no `drive_zke` config exists.
-- HEIC sent to the media processor — which is the user's own deployment, pinned
-  to their own uid.
 
 ---
 
@@ -262,7 +259,7 @@ Cloudflare Workers **free** plan, from
 
 | Limit | Value | What it forces |
 |---|---|---|
-| CPU time | **10 ms** per invocation | No image decoding, no video transcoding, no large buffers. HEIC goes to `processor/`. |
+| CPU time | **10 ms** per invocation | No image decoding, no video transcoding, no large buffers. HEIC thumbnails are made in the browser. |
 | Memory | 128 MB | Responses stream; never more than about two chunks are held at once. |
 | Subrequests | **50** external per invocation | A 50-chunk file is already at the ceiling. Background repair jobs run **one per request**, round-robin — two together would blow the budget. |
 | Requests | 100,000/day | Why bytes go browser↔Telegram directly instead of through the Worker. |
@@ -351,10 +348,10 @@ and several caches there are keyed by bot token with no eviction.
 **Videos over 100 MB cannot be uploaded from mobile.** That is Cloudflare's
 request-body cap. The fix is chunked upload in the app, which is not built.
 
-**HEIC has no thumbnail without a processor.** Workers cannot decode HEIC —
+**HEIC thumbnails are made in the browser.** Workers cannot decode HEIC —
 libheif needs far more CPU than an invocation gets — and Telegram will not
-thumbnail HEIC the way it does everything else. Every other format, video
-included, is unaffected.
+thumbnail HEIC the way it does everything else. Photos' Fix HEIC tool decodes
+them in the browser instead. Every other format, video included, is unaffected.
 
 ---
 
