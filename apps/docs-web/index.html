@@ -3,74 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>DaemonClient docs</title>
-<meta name="description" content="How DaemonClient works and how to run it yourself: storage, encryption, sign-in, the API and a self-hosting guide.">
-<link rel="canonical" href="https://docs.daemonclient.uz/">
-<meta property="og:title" content="DaemonClient docs">
-<meta property="og:description" content="How DaemonClient works and how to run it yourself: storage, encryption, sign-in, the API and a self-hosting guide.">
-<meta property="og:url" content="https://docs.daemonclient.uz/">
-<meta property="og:type" content="website">
-<link rel="icon" href="logo.png">
-<link rel="stylesheet" href="style.css">
-<script src="site.js"></script>
+<!--app-head-->
+<link rel="icon" href="/logo.png">
+<script src="/theme.js"></script>
 </head>
 <body>
-<header class="top">
-  <div class="top-inner">
-    <a class="brand" href="index.html"><img src="logo.png" alt="" width="30" height="25">DaemonClient <small>docs</small></a>
-    <button class="menu-btn" type="button" aria-label="Menu" aria-expanded="false">☰</button>
-    <nav class="nav" aria-label="Sections">
-        <a href="how-it-works.html">How it works</a>
-        <a href="self-host.html">Self-host</a>
-        <a href="api.html">API</a>
-        <a href="security.html">Security</a>
-        <a href="faq.html">FAQ</a>
-        <a href="changelog.html">Changelog</a>
-        <a href="https://github.com/myrosama/DaemonClient">GitHub ↗</a>
-        <button class="theme-btn" type="button" aria-label="Dark theme">☾</button>
-    </nav>
-  </div>
-</header>
-<main>
-  
-  
-  
-<h1>DaemonClient</h1>
-  
-    <p class="lede">A private, unlimited, encrypted photo and file cloud that runs entirely on free tiers you
-    control — <strong>$0/month</strong>, no server, no hardware. These docs cover how it works and how to run
-    it yourself.</p>
-
-    <p>Cloud storage is expensive and you don't own any of it. DaemonClient combines two services with
-    unusually generous free tiers — <strong>Telegram</strong> (unlimited file storage through bots and
-    channels) and <strong>Cloudflare Workers</strong> (serverless compute plus a D1 database) — so that
-    <strong>every user gets their own isolated stack</strong>: their own bot and private channel, their own
-    worker and database, their own encryption keys.</p>
-
-    <div class="callout tip"><p><span class="tag">The promise</span></p>
-    <p>A self-hosted install depends on <strong>nothing we run</strong> — not your files, not your
-    credentials, not a telemetry ping. A self-hosted build of every web app is verified at build time to
-    contain no operator address. If this project vanished tomorrow, your install keeps working: the files are
-    in your Telegram channel, the index is in your D1 database, and the code is in your clone under
-    AGPL-3.0.</p></div>
-
-    
-  <ul class="sections">
-    <li><a href="how-it-works.html">How it works</a><p>One path per user: your device, your worker, your Telegram channel. Storage, encryption, sign-in and the limits behind the design.</p></li>
-    <li><a href="self-host.html">Self-host</a><p>Run the whole thing on accounts you own: Telegram, Cloudflare and Firebase.</p></li>
-    <li><a href="api.html">API reference</a><p>The routes each user's worker answers, and what doesn't work.</p></li>
-    <li><a href="security.html">Security</a><p>What is encrypted where, who can read what, and the two things you must not lose.</p></li>
-    <li><a href="faq.html">FAQ</a><p>Short answers to the questions people ask first.</p></li>
-    <li><a href="changelog.html">Changelog</a><p>What changed, newest first, in plain words.</p></li>
-  </ul>
-
-</main>
-<footer>
-  <div class="foot-inner">
-    <div><strong>DaemonClient</strong>Your own private cloud on free tiers you control.</div>
-    <div><strong>Use it</strong><a href="https://daemonclient.uz">daemonclient.uz</a><a href="https://photos.daemonclient.uz">Photos</a><a href="https://drive.daemonclient.uz">Drive</a><a href="https://accounts.daemonclient.uz">Your account</a></div>
-    <div><strong>Build it</strong><a href="https://github.com/myrosama/DaemonClient">Source on GitHub</a><a href="changelog.html">Changelog</a><a href="https://github.com/myrosama/DaemonClient/blob/main/CONTRIBUTING.md">Contributing</a></div>
-  </div>
-</footer>
+<div id="root"><!--app-html--></div>
+<script type="module" src="/src/main.jsx"></script>
 </body>
 </html>

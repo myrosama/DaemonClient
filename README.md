@@ -117,7 +117,7 @@ The full explanation is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ```bash
 git clone https://github.com/myrosama/DaemonClient.git
-cd DaemonClient/immich-api-shim && npm install && cd ..
+cd DaemonClient/workers/user-worker && npm install && cd ../..
 node selfhost/bin/daemonclient.mjs setup
 ```
 

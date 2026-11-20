@@ -57,7 +57,7 @@ install keeps working if we disappear.
 | `src/commands/*.mjs` | one file per command above |
 | `src/api/cloudflare.mjs` | Workers + D1 over the Cloudflare REST API |
 | `src/api/telegram.mjs` | bot verification — it posts to the channel and deletes the message, because a bot can be a member and still unable to write |
-| `src/build.mjs` | builds the worker bundle from `../immich-api-shim` |
+| `src/build.mjs` | builds the worker bundle from `../workers/user-worker` |
 | `src/bindings.mjs` | the worker's bindings — one definition, used by both `setup` and `update` |
 | `src/version.mjs` | the release version stamped into `BUILD_VERSION`, read from the tracked root `VERSION` |
 | `src/subdomain.mjs` | claims the account's `workers.dev` subdomain — the address the whole install is reached at. Fails loudly rather than leaving it blank |
