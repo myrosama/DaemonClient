@@ -98,3 +98,47 @@ One request per album the core sends to Telegram (≤ 10 items):
 3. `thumb` / `preview` file ids in the row — any reason not to expose them to
    the owner's own client (they are useless without the bot token and key)?
 4. Does the website move to `/api/v2/changes` too, in the joint phase (D25)?
+
+### Linux answers (2026-11-20)
+
+1. **`rev` = `MAX(rev)+1` through `idx_photos_rev`, not a counter row.** A
+   counter row is one more write per change against the free plan's 100,000
+   row writes a day; the indexed MAX costs a read. Two consequences:
+   - A statement that updates many rows (the batched delete in R3, any
+     `UPDATE … WHERE id IN (…)`) evaluates the subquery once, so those rows
+     share one `rev`. Pages must never split a `rev`: make the cursor the pair
+     `(rev, id)` (`WHERE rev > ? OR (rev = ? AND id > ?) ORDER BY rev, id`), or
+     extend each page to the end of its last `rev`.
+   - **Don't number existing rows.** Leave them at `rev 0`: the first sync
+     (`since=0`) returns them anyway, and a 100k-photo library's numbering
+     migration alone would blow the day's write cap.
+   - Where to bump: `D1Adapter.savePhoto` / `updatePhoto` cover most writes.
+     Raw SQL that must bump too: the batched delete (`updateOwnRows`,
+     `forgetParts`), the EXIF backfill, live-photo link repair, and the sync
+     pre-pass that merges duplicate checksums. Bookkeeping columns
+     (`exifChecked`, `checksumChecked`, `heicThumbChecked`, `purgedAt`) must
+     NOT bump. D1 console edits can't bump; the operator knows.
+2. **Retention: the worker keeps tombstones 90 days today**
+   (`TOMBSTONE_TTL_DAYS` in `assets.ts`), so keep 90. For `reset`: when the
+   purge deletes tombstones, store the highest `rev` it removed
+   (`config.purgedThroughRev`); a `since` below it gets `reset: true`. The
+   purge itself runs only from `/api/sync/stream` today (Immich-only), so v2
+   needs another trigger. Mine: run it from the delete handler and the daily
+   fleet nudge, never from `/changes`.
+3. **Exposing thumb/preview file ids: fine.** `dc-manifest` already gives the
+   owner every part's `file_id`, and the owner's client holds the bot token
+   (`telegram-config`) and the key (`zke-config`). Columns: `telegramThumbId` +
+   `thumbEncrypted`, `telegramPreviewId` + `previewEncrypted` (R2).
+4. **Yes, the website moves to `/changes` in the joint phase.** Its timeline
+   (`/api/timeline/buckets`, `/bucket`) loads every row per call today too, the
+   same D1 read problem.
+
+Also for §4/§5:
+- **No `localDateTime` column exists** (only `fileCreatedAt`, UTC). Add one,
+  set from EXIF `dateTimeOriginal` without a zone; null = fall back to `takenAt`.
+- **`duration` is TEXT** (`"0:00:00.000"`); `durationMs` would be derived on
+  read (`parseDurationSeconds`) or a new integer column.
+- **Write budget:** `photos` has 7 indexes (2 partial), so one insert is about
+  6–8 row writes. 100k/day caps backups at roughly 13–16k photos a day, which
+  matches D24. A `rev` index adds one write to every change; keep bulk create
+  to one D1 batch per request as proposed.
