@@ -569,8 +569,7 @@ export async function handleAssets(request: Request, env: Env, path: string, url
         // Honest explainer: this app can't display HEIC/video directly; the web
         // viewer can. Tell the user exactly how to make them work — and that the
         // fixer runs from a phone browser too (iPhone Safari decodes HEIC/HEVC
-        // natively, so it works great on the phone). Mention the optional
-        // self-hosted backend for instant viewing with no fix step.
+        // natively, so it works great on the phone).
         notifications.push({
           id: 'heic-fix',
           type: 'system',
@@ -1012,8 +1011,8 @@ async function ensureDeduplicationSchema(db: any): Promise<void> {
   // set and it leaves the empty-checksum set; failed → flagged so we don't loop
   // forever on an unhealable file).
   await addColumn('ALTER TABLE photos ADD COLUMN checksumChecked INTEGER DEFAULT 0');
-  // 1 = the HEIC thumbnail backfill settled this row (thumb stored, or the file
-  // is undecodable/multi-chunk) — stops backfillHeicThumbBatch from looping.
+  // 1 = the old HEIC thumbnail backfill (removed 2026-11-20) settled this row.
+  // Nothing reads it now; the column stays so old rows keep their shape.
   await addColumn('ALTER TABLE photos ADD COLUMN heicThumbChecked INTEGER DEFAULT 0');
   // When the user emptied the trash. The row stays as a sync tombstone so every
   // device eventually learns the asset is gone; it is reclaimed only after
@@ -1687,15 +1686,9 @@ async function handleUploadImpl(request: Request, env: Env, uid: string, idToken
             // path; the web clientUpload path ships its own thumb and skips this.
             let thumbBytes: ArrayBuffer | null = null;
             let tmpMsgId: number | null = null;
-            if (isHeic) {
-              // Telegram can't thumbnail HEIC, and a Worker can't decode it:
-              // left thumb-less, the website's in-browser converter (Fix HEIC)
-              // makes the thumbnail.
-            } else {
-              const r = await fetchTelegramThumb(botToken, channelId, rawData, fileName, mimeType);
-              thumbBytes = r.thumbBytes;
-              tmpMsgId = r.tmpMsgId;
-            }
+            const r = await fetchTelegramThumb(botToken, channelId, rawData, fileName, mimeType);
+            thumbBytes = r.thumbBytes;
+            tmpMsgId = r.tmpMsgId;
 
             // Delete the temp plaintext NOW — the thumb bytes (if any) are
             // already downloaded, so the message is no longer needed. Doing it

@@ -118,7 +118,7 @@ jobs:
       - run: npm ci
       - run: npm test
 
-  # The provisioning broker: provisions workers and runs auto-updates. Typecheck first, then its unit + SSRF-pin tests.
+  # The provisioning broker: provisions workers and runs auto-updates. Typecheck first, then its unit tests.
   deployment-service:
     needs: changes
     if: needs.changes.outputs.deployment == 'true'

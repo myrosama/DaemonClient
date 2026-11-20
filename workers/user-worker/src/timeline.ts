@@ -57,8 +57,8 @@ export async function handleTimeline(request: Request, env: Env, path: string, u
   // ── Background heal jobs: ONE per request, round-robin ────────────────────
   // Browsing drives the heals too, not just mobile sync — the grid that shows
   // the gaps is what fixes them. But an invocation's ~50 subrequests are SHARED
-  // with everything waitUntil spawns, and these two budget 40 and 24 for
-  // themselves independently: 64 against a cap of 50, on what is otherwise a
+  // with everything waitUntil spawns, and two jobs that each budgeted for
+  // themselves (40 and 24 then) made 64 against a cap of 50, on what is otherwise a
   // trivial request. Cloudflare kills the whole invocation with error 1102, and
   // the user sees the timeline fail rather than the background work.
   //

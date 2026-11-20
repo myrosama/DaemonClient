@@ -65,3 +65,23 @@ describe('onboarding', () => {
     expect(res.status).toBe(200);
   });
 });
+
+// The HEIC processor was removed (2026-11-20): its route must answer 404 and
+// call nothing outside.
+describe('the removed processor route', () => {
+  it('/api/server/processor answers 404 without any outside call', async () => {
+    const { handleServer } = await import('./server');
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', async (u: any) => { calls.push(String(u)); return new Response('{}'); });
+    try {
+      for (const method of ['GET', 'POST', 'DELETE']) {
+        const req = new Request('https://worker.test/api/server/processor', { method, body: method === 'POST' ? '{"url":"https://x.example"}' : undefined });
+        const res = await handleServer(req, {} as any, '/api/server/processor');
+        expect([method, res.status]).toEqual([method, 404]);
+      }
+      expect(calls).toEqual([]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});

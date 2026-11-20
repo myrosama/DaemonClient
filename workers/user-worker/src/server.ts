@@ -2,7 +2,6 @@ import type { Env } from './index';
 import { isSelfHost } from './selfhost-auth';
 import { json, requireAuth } from './helpers';
 import { D1Adapter } from './d1-adapter';
-import { getCachedConfig } from './cached-config';
 
 export async function handleServer(request: Request, env: Env, path: string): Promise<Response> {
   if (path === '/api/server/config' || path === '/api/server-info/config') return json(serverConfig(request, env));

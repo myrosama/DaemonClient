@@ -40,7 +40,6 @@ export const KEYS = {
 
   SESSION_SECRET: { secret: true },
 
-  PROCESSOR_URL: {},
   DASHBOARD_URL: {},
   PHOTOS_URL: {},
   DRIVE_URL: {},
@@ -143,7 +142,7 @@ const SECTIONS = [
   ['Firebase — signs you in', ['FIREBASE_PROJECT_ID', 'FIREBASE_API_KEY', 'FIREBASE_AUTH_EMAIL', 'FIREBASE_USER_ID']],
   ['Cloudflare — runs the API', ['CLOUDFLARE_ACCOUNT_ID', 'DC_CF_TOKEN', 'WORKER_NAME', 'WORKER_URL', 'D1_DATABASE_ID', 'D1_DATABASE_NAME']],
   ['Keys', ['SESSION_SECRET']],
-  ['Your apps', ['PROCESSOR_URL', 'DASHBOARD_URL', 'PHOTOS_URL', 'DRIVE_URL', 'ALLOWED_ORIGINS', 'UPDATE_REPO']],
+  ['Your apps', ['DASHBOARD_URL', 'PHOTOS_URL', 'DRIVE_URL', 'ALLOWED_ORIGINS', 'UPDATE_REPO']],
 ];
 
 export function save(values) {

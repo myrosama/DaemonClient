@@ -285,3 +285,8 @@ wizard, its one real caller) can reach it. Fixed in commit `29d61e0`.
 5. **A route that nothing calls should be deleted, not maintained.**
 6. **Anything that can reach plaintext user bytes must be the user's own
    infrastructure.**
+
+Deliberate exceptions, written down: on 2026-11-20 the HEIC processor was
+removed, so `/api/server/processor` now answers 404 and `/api/selfhost/status`
+no longer has a `processor` field. Nothing current calls or reads either; a
+Photos page cached from before treats the 404 as "no processor".
