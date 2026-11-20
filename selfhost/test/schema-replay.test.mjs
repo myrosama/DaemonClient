@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 // node:sqlite exists from Node 22.5; the CI matrix also runs 20.12, the oldest
 // Node self-host supports, where this file has nothing to replay with.
 const { DatabaseSync } = (await import('node:sqlite').catch(() => null)) ?? {};
-import { MIGRATION_SQL, splitStatements } from '../../schema/schema.mjs';
+import { MIGRATION_SQL, splitStatements } from '../../packages/schema/schema.mjs';
 
 // Replaying the schema is a SUPPORTED operation, not an edge case:
 // `daemonclient update` replays it on every run (update.mjs), and setup

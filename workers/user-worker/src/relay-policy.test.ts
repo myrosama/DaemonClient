@@ -4,7 +4,7 @@ import { isAllowedOrigin, sameSecret, sessionTokenFrom, telegramBotToken } from 
 // The Photos service worker's real URL builders — another package, so the type
 // check (rootDir = this package) is told to skip this one import.
 // @ts-ignore TS6059: outside rootDir on purpose; vitest resolves it fine.
-import { buildDownloadUrl, buildGetFileUrl } from '../../immich/web/src/service-worker/telegram-media';
+import { buildDownloadUrl, buildGetFileUrl } from '../../../apps/photos-web/web/src/service-worker/telegram-media';
 
 const TOKEN = '123456789:AAH-real_Token-value';
 const OTHER = '987654321:BBH-someone_else';

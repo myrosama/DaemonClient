@@ -1,11 +1,11 @@
 // Decrypts parts that dc-core (Rust) encrypted, using the PRODUCTION
-// JavaScript (drive/src/crypto.js). Exits non-zero on any mismatch.
+// JavaScript (apps/drive-web/src/crypto.js). Exits non-zero on any mismatch.
 //   cargo run -q --example emit_vectors | node verify-rust-output.mjs
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import path from 'node:path';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repo = process.env.DC_REPO_ROOT ?? path.resolve(here, '../..');
-const js = await import(pathToFileURL(path.join(repo, 'drive/src/crypto.js')).href);
+const js = await import(pathToFileURL(path.join(repo, 'apps/drive-web/src/crypto.js')).href);
 let input = '';
 for await (const chunk of process.stdin) input += chunk;
 const v = JSON.parse(input);

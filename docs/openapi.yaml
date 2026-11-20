@@ -2,7 +2,7 @@ openapi: 3.1.0
 
 # The DaemonClient worker API.
 #
-# Written against immich-api-shim/src, route by route. It documents what the
+# Written against workers/user-worker/src, route by route. It documents what the
 # worker ACTUALLY serves, which is a subset of the Immich API surface plus a
 # handful of endpoints Immich does not have (dc-manifest, drive, selfhost).
 #

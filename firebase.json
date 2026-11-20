@@ -5,7 +5,7 @@
   "hosting": [
     {
       "target": "main",
-      "public": "daemonclient-site",
+      "public": "apps/site",
       "ignore": [
         "firebase.json",
         "**/.*",
@@ -69,7 +69,7 @@
     },
     {
       "target": "app",
-      "public": "hosting/app-redirect",
+      "public": "apps/app-redirect",
       "ignore": [
         "firebase.json",
         "**/.*",
@@ -116,7 +116,7 @@
     },
     {
       "target": "photos",
-      "public": "immich/web/build",
+      "public": "apps/photos-web/web/build",
       "ignore": [
         "firebase.json",
         "**/.*",
@@ -211,7 +211,7 @@
     },
     {
       "target": "drive",
-      "public": "drive/dist",
+      "public": "apps/drive-web/dist",
       "ignore": [
         "firebase.json",
         "**/.*",
@@ -310,7 +310,7 @@
     },
     {
       "target": "docs",
-      "public": "docs-site",
+      "public": "apps/docs-web",
       "ignore": [
         "firebase.json",
         "**/.*",
@@ -359,7 +359,7 @@
     },
     {
       "target": "accounts",
-      "public": "accounts-portal/dist",
+      "public": "apps/accounts-web/dist",
       "ignore": [
         "firebase.json",
         "**/.*",

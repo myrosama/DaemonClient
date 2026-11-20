@@ -1,7 +1,7 @@
 // Claiming the install for the person who set it up.
 //
 // THE BUG THIS FIXES. `owner_uid` is a row in the install's own D1 `config`
-// table, read by `immich-api-shim/src/owner-gate.ts`. Nothing ever wrote it —
+// table, read by `workers/user-worker/src/owner-gate.ts`. Nothing ever wrote it —
 // the string appeared exactly once in the whole repository, as a key constant.
 //
 // An unclaimed install can only be claimed by a credential carrying `mayClaim`,

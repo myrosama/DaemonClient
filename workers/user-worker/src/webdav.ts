@@ -6,7 +6,7 @@
 // fly with the user's own `drive_zke` key (on their own per-user worker), serves
 // plaintext over WebDAV, and never touches the working Photos/Drive code paths.
 //
-// Crypto matches drive/src/crypto.js exactly: AES-256-GCM, PBKDF2 SHA-256 100k,
+// Crypto matches apps/drive-web/src/crypto.js exactly: AES-256-GCM, PBKDF2 SHA-256 100k,
 // 16-byte salt, 12-byte IV PREPENDED to the ciphertext.
 
 import { D1Adapter, ensureDriveSchema } from './d1-adapter';

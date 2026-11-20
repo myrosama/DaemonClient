@@ -2,7 +2,7 @@
 //
 // This is the delivery channel, not a cosmetic field. A self-hosted worker
 // compares BUILD_VERSION against the newest GitHub release tag once a day
-// (immich-api-shim/src/update-check.ts) and shows an update banner when the tag
+// (workers/user-worker/src/update-check.ts) and shows an update banner when the tag
 // is newer. It is the ONLY way a self-hoster learns a fix exists — we can push
 // to managed installs because we hold their Cloudflare token, and we
 // deliberately cannot push to theirs.
@@ -34,7 +34,7 @@ import path from 'node:path';
 import { readVersion, buildVersion, REPO_ROOT } from '../src/version.mjs';
 import { workerBindings } from '../src/bindings.mjs';
 
-// Copied verbatim from immich-api-shim/src/update-check.ts:37. Duplicated on
+// Copied verbatim from workers/user-worker/src/update-check.ts:37. Duplicated on
 // purpose: this test has to fail if the WORKER's parser and the CLI's stamp
 // ever stop agreeing, and importing the TypeScript here is not possible
 // without a build step.

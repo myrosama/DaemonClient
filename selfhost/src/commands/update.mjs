@@ -18,7 +18,7 @@ import { buildWorkerBundle } from '../build.mjs';
 import { workerBindings } from '../bindings.mjs';
 import { buildVersion, versionWarning } from '../version.mjs';
 import { ensureEncryptionKeys } from '../zke.mjs';
-import { MIGRATION_SQL, splitStatements } from '../../../schema/schema.mjs';
+import { MIGRATION_SQL, splitStatements } from '../../../packages/schema/schema.mjs';
 
 const run = promisify(execFile);
 const HERE = path.dirname(fileURLToPath(import.meta.url));

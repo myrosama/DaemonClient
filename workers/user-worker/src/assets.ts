@@ -239,7 +239,7 @@ export class EncryptionUnavailableError extends Error {
  *  The broken state is not hypothetical: the migration seeds
  *  `zke_mode='server', zke_enabled='1', zke_password='', zke_salt=''` and
  *  relies on a *second* step to fill the last two. The hosted provisioner runs
- *  that step (`deployment-service/src/index.ts:334-338`); the self-host CLI
+ *  that step (`workers/deployment/src/index.ts:334-338`); the self-host CLI
  *  never did — that is finding §1, and Task 1.3 fixes the seeding side.
  *
  *  So the two cases are now distinguished:
@@ -1000,7 +1000,7 @@ async function convertHeicThumbViaBackend(heicBytes: ArrayBuffer, idToken: strin
 // Self-healing deduplication schema
 // Adding columns to the photos table for per-user workers deployed BEFORE this
 // code existed. Auto-update ships code only — it never re-runs the schema from
-// `schema/schema.mjs` — so we replicate the drive.ts pattern: a module-level
+// `packages/schema/schema.mjs` — so we replicate the drive.ts pattern: a module-level
 // bool guard ensures the ALTER runs at most once per isolate lifecycle.
 // SQLite has no "ALTER TABLE … ADD COLUMN IF NOT EXISTS", so we try/catch each
 // ALTER and swallow the "duplicate column name" error silently.

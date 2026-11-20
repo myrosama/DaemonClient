@@ -22,7 +22,7 @@ const read = (p: string) => fs.readFileSync(path.join(here, p), 'utf8');
 /** Column names for the photos table: the CREATE TABLE in the shared schema
  *  module, plus every self-healing ALTER in assets.ts. */
 function photoColumns(): Set<string> {
-  const deploy = read('../../schema/schema.mjs');
+  const deploy = read('../../../packages/schema/schema.mjs');
   const create = deploy.split('CREATE TABLE photos (')[1]?.split(');')[0];
   expect(create, 'found CREATE TABLE photos').toBeTruthy();
 
@@ -91,7 +91,7 @@ import { PHOTO_COLUMNS } from './d1-adapter';
 describe('PHOTO_COLUMNS matches the schema', () => {
   // The canonical schema lives in one module now (task 1.2b) — it used to be
   // inline in the deployment service with the CLI string-scraping it out.
-  const schemaSrc = read('../../schema/schema.mjs');
+  const schemaSrc = read('../../../packages/schema/schema.mjs');
 
   const realColumns = (() => {
     const create = schemaSrc.match(/CREATE TABLE photos \(([\s\S]*?)\);/);

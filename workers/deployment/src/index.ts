@@ -1,6 +1,6 @@
 import { CloudflareAPI } from './cloudflare-api';
 import { SHIM_BUNDLE, SHIM_VERSION } from './shim-bundle';
-import { MIGRATION_SQL } from '../../schema/schema.mjs';
+import { MIGRATION_SQL } from '../../../packages/schema/schema.mjs';
 
 // Inline encryption helpers
 const IV_LENGTH = 12;
@@ -38,7 +38,7 @@ export async function decryptToken(combinedB64: string, masterKeyString: string)
 // ── Worker session minting ───────────────────────────────────────────────────
 // A per-user worker authenticates every request with a session token of the
 // exact shape `base64(payloadJson).hmac`, signed with THAT worker's own
-// SESSION_SECRET (immich-api-shim/src/auth.ts createSignedSessionToken +
+// SESSION_SECRET (workers/user-worker/src/auth.ts createSignedSessionToken +
 // helpers.ts verifySignedSessionToken/sessionScope). The deployment-service is
 // the one component that already knows each user's SESSION_SECRET (it generated
 // it at provision time and stored it in config/cloudflare), so it — and only it
@@ -132,13 +132,13 @@ function buildShimBindings(env: Env, databaseId: string, sessionSecret?: string)
   return bindings;
 }
 
-// The schema itself lives in `schema/schema.mjs`, imported by this worker and
+// The schema itself lives in `packages/schema/schema.mjs`, imported by this worker and
 // by the self-host CLI alike. It used to be a template literal right here, and
 // the CLI recovered it by scraping this file — which is how the two
 // provisioners drifted apart over the one row that mattered (see that file).
 // DRIVE_MIGRATION_SQL is re-exported because callers of /admin/force-update
 // pass it as `migrationSql`.
-export { DRIVE_MIGRATION_SQL } from '../../schema/schema.mjs';
+export { DRIVE_MIGRATION_SQL } from '../../../packages/schema/schema.mjs';
 
 const CORS_HEADERS: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
@@ -1013,7 +1013,7 @@ async function handleClearAnnouncement(request: Request, env: Env): Promise<Resp
  *  call, billed to us, with no rate limit and no record of who asked.
  *
  *  Every legitimate caller already has a Firebase session: the only one is the
- *  setup wizard (`accounts-portal/src/components/TokenInput.jsx`), reached after
+ *  setup wizard (`apps/accounts-web/src/components/TokenInput.jsx`), reached after
  *  sign-in. So requiring the same ID token the rest of this worker requires
  *  costs a real user nothing.
  */

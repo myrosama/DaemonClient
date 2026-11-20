@@ -14,7 +14,7 @@ import { sqliteD1 } from './test-d1';
 import { testSessionToken, testAuthEnv } from './test-session';
 // Another package, so the type check (rootDir = this package) skips this import.
 // @ts-ignore TS6059: outside rootDir on purpose; vitest resolves it fine.
-import { MIGRATION_SQL } from '../../schema/schema.mjs';
+import { MIGRATION_SQL } from '../../../packages/schema/schema.mjs';
 
 const parts = (first: number, n: number) =>
   JSON.stringify(Array.from({ length: n }, (_, i) => ({ index: i, message_id: first + i, file_id: `f${first + i}` })));

@@ -17,7 +17,7 @@ import { portalSignOutUrl } from './sign-in.js';
 // The worker this app logs in through. Hosted builds use the shared central
 // worker; a self-hosted build points at the operator's OWN worker via
 // VITE_API_BASE (the setup script writes this at build time). Mirrors the
-// convention in accounts-portal/src/config/firebase.js so both apps configure
+// convention in apps/accounts-web/src/config/firebase.js so both apps configure
 // self-hosting the same way — set VITE_SELF_HOST=1 and VITE_API_BASE=<worker>.
 const IS_SELF_HOST = import.meta.env.VITE_SELF_HOST === '1';
 const CENTRAL_API = (

@@ -9,15 +9,15 @@ on:
     paths:
       - 'core/**'
       # The core's crypto is checked against these files; a change must re-run it.
-      - 'drive/src/crypto.js'
-      - 'drive/src/zke-unlock.js'
+      - 'apps/drive-web/src/crypto.js'
+      - 'apps/drive-web/src/zke-unlock.js'
       - '.github/workflows/mobile-core.yml'
   pull_request:
     paths:
       - 'core/**'
       # The core's crypto is checked against these files; a change must re-run it.
-      - 'drive/src/crypto.js'
-      - 'drive/src/zke-unlock.js'
+      - 'apps/drive-web/src/crypto.js'
+      - 'apps/drive-web/src/zke-unlock.js'
       - '.github/workflows/mobile-core.yml'
   # New advisories appear against crates already locked; check weekly too.
   schedule:

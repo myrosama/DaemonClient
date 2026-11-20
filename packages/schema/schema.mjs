@@ -2,8 +2,8 @@
 //
 // Why this file exists rather than a copy per provisioner:
 //
-//   The schema used to live inline in `deployment-service/src/index.ts`, with a
-//   second, never-executed copy in `immich-api-shim/src/migrations.ts`, and the
+//   The schema used to live inline in `workers/deployment/src/index.ts`, with a
+//   second, never-executed copy in `workers/user-worker/src/migrations.ts`, and the
 //   self-host CLI recovered it by string-scraping the deployment service's
 //   TypeScript. That is how a hosted install and a self-hosted install came to
 //   differ in the one place it mattered most: the seed below inserts
@@ -21,7 +21,7 @@
 //   Anything that creates or repairs a database imports from here. If you add a
 //   column, add it here and nowhere else (the one exception: a new `files`
 //   column also goes in the worker's self-healing list, ensureDriveSchema in
-//   immich-api-shim/src/d1-adapter.ts; a test keeps the two equal).
+//   workers/user-worker/src/d1-adapter.ts; a test keeps the two equal).
 
 /** The full schema a fresh database gets: photos, albums, config, upload
  *  sessions and Drive files.
@@ -43,7 +43,7 @@
  *  `zke_salt` values. Key material is generated per install and written
  *  afterwards — by the hosted provisioner in `deployment-service`, and by
  *  `selfhost/src/zke.mjs` for a self-hosted one. Uploads are refused while
- *  these rows are empty (`immich-api-shim/src/assets.ts`, `getEncryptionKey`),
+ *  these rows are empty (`workers/user-worker/src/assets.ts`, `getEncryptionKey`),
  *  so an install that skips that step fails closed rather than storing
  *  plaintext. */
 export const MIGRATION_SQL = `

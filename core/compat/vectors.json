@@ -1,5 +1,5 @@
 {
-  "source": "drive/src/crypto.js",
+  "source": "apps/drive-web/src/crypto.js",
   "sha256_of_source": "aa2a05f2916cb652d076c019181bd7ffd13952f5d5dbcffad88874d44345c993",
   "sha256_of_key_check_source": "d3ab4e5067c8bf5d48be1cee01e37a0b0ea531d52d64a07020acbf7d33abc9a8",
   "keys": [

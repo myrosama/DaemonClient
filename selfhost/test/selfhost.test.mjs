@@ -155,15 +155,15 @@ describe('a self-hosted install depends on nothing of ours', () => {
 
   test('the worker never hands a self-hosted client one of our addresses', () => {
     // Both call sites derive the address from config or the request origin.
-    const server = read('immich-api-shim/src/server.ts');
+    const server = read('workers/user-worker/src/server.ts');
     assert.match(server, /EXTERNAL_DOMAIN/);
     assert.match(server, /isSelfHost\(env\)\s*\?\s*new URL\(request\.url\)\.origin/);
-    const assets = read('immich-api-shim/src/assets.ts');
+    const assets = read('workers/user-worker/src/assets.ts');
     assert.match(assets, /webAppOrigin\(request, env\)/);
   });
 
   test('the only outbound call to a project resource is an anonymous release check', () => {
-    const updateCheck = read('immich-api-shim/src/update-check.ts');
+    const updateCheck = read('workers/user-worker/src/update-check.ts');
     assert.match(updateCheck, /api\.github\.com/);
     // No credentials, no identifiers, and it must be disableable.
     assert.ok(!/Authorization/.test(updateCheck), 'update check must stay anonymous');

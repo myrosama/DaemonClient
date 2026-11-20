@@ -33,8 +33,8 @@ export async function runDoctor({ showKeys = false } = {}) {
   if (major < 18) add('error', `Node ${process.versions.node} is too old (need 18+)`, 'Install a current Node from nodejs.org');
   else ok(`Node ${process.versions.node}`);
 
-  if (!fs.existsSync(path.join(REPO_ROOT, 'immich-api-shim', 'node_modules'))) {
-    add('error', 'immich-api-shim/node_modules is missing', 'cd immich-api-shim && npm install');
+  if (!fs.existsSync(path.join(REPO_ROOT, 'workers', 'user-worker', 'node_modules'))) {
+    add('error', 'workers/user-worker/node_modules is missing', 'cd workers/user-worker && npm install');
   } else ok('Dependencies installed');
 
   const perm = checkStatePermissions();
@@ -87,7 +87,7 @@ export async function runDoctor({ showKeys = false } = {}) {
   //
   // Doctor repairs this one rather than only reporting it, because the worker's
   // own error message sends people here by name: "Run `daemonclient doctor` to
-  // generate the missing keys" (immich-api-shim/src/assets.ts). An install set
+  // generate the missing keys" (workers/user-worker/src/assets.ts). An install set
   // up before the CLI seeded key material has encryption enabled with nothing to
   // encrypt with, and every upload is refused until these rows are filled.
   const s2b = spinner('Encryption');

@@ -7,7 +7,7 @@ import { D1Adapter } from './d1-adapter';
 import { handleDashboardSummary } from './assets';
 // Another package, so the type check (rootDir = this package) skips this import.
 // @ts-ignore TS6059: outside rootDir on purpose; vitest resolves it fine.
-import { DRIVE_MIGRATION_SQL } from '../../schema/schema.mjs';
+import { DRIVE_MIGRATION_SQL } from '../../../packages/schema/schema.mjs';
 import { hiddenIds, isTempFileName } from './drive-tree';
 import { sqliteD1, PRE_W1_FILES_SQL } from './test-d1';
 import { testSessionToken, testAuthEnv } from './test-session';

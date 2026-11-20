@@ -1,8 +1,8 @@
 // One schema, imported by both provisioners.
 //
 // The bug these tests exist to prevent has already happened once. The schema
-// lived inline in `deployment-service/src/index.ts`; a second copy sat unused in
-// `immich-api-shim/src/migrations.ts`; and the self-host CLI recovered the real
+// lived inline in `workers/deployment/src/index.ts`; a second copy sat unused in
+// `workers/user-worker/src/migrations.ts`; and the self-host CLI recovered the real
 // one by scraping the TypeScript with string indexes. The two provisioning paths
 // then diverged over the row that decides whether photos are encrypted, and
 // nothing failed loudly enough to notice.
@@ -15,7 +15,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { MIGRATION_SQL, DRIVE_MIGRATION_SQL, splitStatements } from '../../schema/schema.mjs';
+import { MIGRATION_SQL, DRIVE_MIGRATION_SQL, splitStatements } from '../../packages/schema/schema.mjs';
 
 const REPO = path.join(import.meta.dirname, '..', '..');
 const read = (p) => fs.readFileSync(path.join(REPO, p), 'utf8');
@@ -29,8 +29,8 @@ describe('the schema has exactly one definition', () => {
   });
 
   test('the deployment service imports it instead of declaring its own', () => {
-    const deploy = read('deployment-service/src/index.ts');
-    assert.match(deploy, /import \{ MIGRATION_SQL \} from '\.\.\/\.\.\/schema\/schema\.mjs'/);
+    const deploy = read('workers/deployment/src/index.ts');
+    assert.match(deploy, /import \{ MIGRATION_SQL \} from '\.\.\/\.\.\/\.\.\/packages\/schema\/schema\.mjs'/);
     // The literal it used to declare must be gone, or there are two again.
     assert.ok(!/const MIGRATION_SQL = `/.test(deploy), 'deployment service still declares a schema');
     assert.ok(!/const DRIVE_MIGRATION_SQL = `/.test(deploy), 'deployment service still declares the drive schema');
@@ -41,7 +41,7 @@ describe('the schema has exactly one definition', () => {
   test('the CLI imports it too, so both run byte-identical SQL', () => {
     for (const file of ['selfhost/src/commands/setup.mjs', 'selfhost/src/commands/update.mjs']) {
       const src = read(file);
-      assert.match(src, /import \{ MIGRATION_SQL, splitStatements \} from '\.\.\/\.\.\/\.\.\/schema\/schema\.mjs'/,
+      assert.match(src, /import \{ MIGRATION_SQL, splitStatements \} from '\.\.\/\.\.\/\.\.\/packages\/schema\/schema\.mjs'/,
         `${file} imports the shared schema`);
       assert.match(src, /splitStatements\(MIGRATION_SQL\)/, `${file} runs it`);
     }
@@ -65,8 +65,8 @@ describe('the schema has exactly one definition', () => {
   });
 
   test('the never-executed second copy is gone', () => {
-    assert.ok(!fs.existsSync(path.join(REPO, 'immich-api-shim/src/migrations.ts')),
-      'immich-api-shim/src/migrations.ts is a second schema copy and must not return');
+    assert.ok(!fs.existsSync(path.join(REPO, 'workers/user-worker/src/migrations.ts')),
+      'workers/user-worker/src/migrations.ts is a second schema copy and must not return');
   });
 
   test('the drive migration stays a suffix of the full schema', () => {

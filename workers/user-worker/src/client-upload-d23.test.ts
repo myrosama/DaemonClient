@@ -12,7 +12,7 @@ import { sqliteD1 } from './test-d1';
 import { testSessionToken, testAuthEnv } from './test-session';
 // Another package, so the type check (rootDir = this package) skips this import.
 // @ts-ignore TS6059: outside rootDir on purpose; vitest resolves it fine.
-import { MIGRATION_SQL } from '../../schema/schema.mjs';
+import { MIGRATION_SQL } from '../../../packages/schema/schema.mjs';
 
 async function freshDb() {
   const DB = sqliteD1(MIGRATION_SQL);

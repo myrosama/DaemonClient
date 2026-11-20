@@ -583,7 +583,7 @@ export class D1Adapter {
 // once per database binding; if that binding is new on every request it costs
 // one PRAGMA. A failed ALTER counts only if the column is really still missing
 // (another isolate may have added it), so this reads the schema, not an error
-// message. schema/schema.mjs holds the same columns for new installs; a test
+// message. packages/schema/schema.mjs holds the same columns for new installs; a test
 // keeps the two equal.
 const W1_FILE_COLUMNS = ['trashedAt', 'purgingAt', 'thumb'];
 const driveSchemaReady = new WeakSet<object>();

@@ -132,7 +132,7 @@ describe('managed installs are pushed to, not nagged', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     // No SELF_HOST binding: this is the managed shape, exactly as
-    // deployment-service/src/index.ts buildShimBindings produces it.
+    // workers/deployment/src/index.ts buildShimBindings produces it.
     const status = await getUpdateStatus(makeEnv({}, { SELF_HOST: undefined, BUILD_VERSION: undefined }));
 
     expect(status.updateAvailable).toBe(false);

@@ -22,7 +22,7 @@ export default defineConfig(({ mode }) => {
       const list = missing.map(([name, hint]) => `  ${name}  — ${hint}`).join('\n')
       throw new Error(
         `\nThis is a self-hosted build (VITE_SELF_HOST=1) but these are not set:\n\n${list}\n\n` +
-        `Put them in accounts-portal/.env, or let the setup CLI do it:\n` +
+        `Put them in apps/accounts-web/.env, or let the setup CLI do it:\n` +
         `  node selfhost/bin/daemonclient.mjs dashboard\n\n` +
         `Refusing to build, because the missing values would silently fall back\n` +
         `to the hosted service's Firebase project.\n`,

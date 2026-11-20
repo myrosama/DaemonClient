@@ -1,12 +1,12 @@
 // Encryption key material for a self-hosted install.
 //
-// The schema (`schema/schema.mjs`) seeds `zke_mode='server'`, `zke_enabled='1'`,
+// The schema (`packages/schema/schema.mjs`) seeds `zke_mode='server'`, `zke_enabled='1'`,
 // and then `zke_password=''`, `zke_salt=''` — encryption switched on with
 // nothing to encrypt with. Filling those last two rows is a separate step. The
-// hosted provisioner runs it (`deployment-service/src/index.ts`); the CLI never
+// hosted provisioner runs it (`workers/deployment/src/index.ts`); the CLI never
 // did, so every self-hosted install had empty key material. The worker now
 // refuses uploads in that state rather than writing plaintext to Telegram
-// (`immich-api-shim/src/assets.ts`, `getEncryptionKey`), which means an install
+// (`workers/user-worker/src/assets.ts`, `getEncryptionKey`), which means an install
 // with empty keys cannot upload at all until this runs. That is why `update`
 // and `doctor` call it too, not only `setup`: installs already in that state
 // need a repair path that is not "start over".
