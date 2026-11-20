@@ -1,11 +1,12 @@
-# Repo layout — proposal
+# Repo layout — APPROVED by the operator 2026-11-20 (§2, the full regroup)
 
 **Asked by the operator 2026-11-20:** *"keep the whole repo cleaned up and
 organized … plan an optimal folder architecture, then comes the iPhone
 development, then the Android."* Written on the MacBook; **the Linux machine
 reviews it** — most folders are live production and theirs. Nothing is moved
 until both agree. Builds on the cleanup in PR #6 (`immich/` down to the
-website).
+website). **The operator approved §2 on 2026-11-20** ("Approved"); the Linux
+machine's §6 answers still shape how its moves are made.
 
 ## 1. The problem
 
