@@ -220,7 +220,13 @@ grid, the scrubber, the viewer's gestures) — never Apple's branding.
    media server, already built — its 2.3 fixes come back here from
    `archive/p2-flutter-2.3`); C6 albums, favorites, archive, trash; C7 **the
    differential harnesses** (§10); C8 `dc-cli` exercising every function.
-5. **I — the iOS app**: sign-in and settings → timeline → viewer (photo, live
+5. **I — the iOS app, from HomeRoll's code (SPEC D27, operator 2026-11-20)**:
+   I0 build HomeRoll unchanged on the Simulator against the test account's
+   worker (it speaks Immich's API) — a baseline of how it feels and which
+   calls break; I0b a quality and security review of its code before any of
+   it enters the repo; then replace its server layer with the core and
+   remove what the worker does not serve. Screens as below:
+   sign-in and settings → timeline → viewer (photo, live
    photo, zoom, swipe) → video → backup (foreground, then background) →
    albums / favorites / archive / trash → save, share, delete → the exit run
    on the Simulator, then a release build on the operator's iPhone.
