@@ -71,7 +71,7 @@ describe('commands that ask questions refuse a terminal they cannot ask on', () 
   // `-t`, and the fallback command install.sh itself suggests all land here.
   // `interactiveProblem()` existed for this and was called from nowhere.
 
-  for (const command of ['setup', 'update', 'doctor', 'processor']) {
+  for (const command of ['setup', 'update', 'doctor']) {
     test(`\`daemonclient ${command}\` says so and exits`, { timeout: 30000 }, () => {
       const r = spawnSync(process.execPath, [BIN, command], {
         encoding: 'utf8', input: '', timeout: 20000,

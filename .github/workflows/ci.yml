@@ -37,7 +37,6 @@ jobs:
     outputs:
       shim: ${{ steps.filter.outputs.shim }}
       deployment: ${{ steps.filter.outputs.deployment }}
-      processor: ${{ steps.filter.outputs.processor }}
       accounts: ${{ steps.filter.outputs.accounts }}
       drive: ${{ steps.filter.outputs.drive }}
       selfhost: ${{ steps.filter.outputs.selfhost }}
@@ -63,9 +62,6 @@ jobs:
               # deleted VERSION ships green — past the very tests written to
               # catch it.
               - 'VERSION'
-              - '.github/workflows/ci.yml'
-            processor:
-              - 'processor/**'
               - '.github/workflows/ci.yml'
             accounts:
               - 'apps/accounts-web/**'
@@ -122,8 +118,7 @@ jobs:
       - run: npm ci
       - run: npm test
 
-  # The provisioning broker: mints scoped worker sessions, attaches processors,
-  # runs auto-updates. Typecheck first, then its unit + SSRF-pin tests.
+  # The provisioning broker: provisions workers and runs auto-updates. Typecheck first, then its unit tests.
   deployment-service:
     needs: changes
     if: needs.changes.outputs.deployment == 'true'
@@ -187,25 +182,6 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
           cache-dependency-path: selfhost/package-lock.json
-      - run: npm ci
-      - run: npm test
-
-  # The owner-pinned image thumbnailer that runs on each user's own Vercel.
-  processor:
-    needs: changes
-    if: needs.changes.outputs.processor == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    defaults:
-      run:
-        working-directory: processor
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: npm
-          cache-dependency-path: processor/package-lock.json
       - run: npm ci
       - run: npm test
 

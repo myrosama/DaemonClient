@@ -11,10 +11,9 @@ You need three things, all free:
 | **Cloudflare** | Workers + D1 on the free plan | runs the API |
 | **Node 22.13+** | on the machine you set up from (`install.sh` fetches a private copy if yours is older) | runs the setup |
 
-One more is optional: a small **media processor** (also free) that turns iPhone
-HEIC photos into grid thumbnails. Skip it and everything still works — HEIC
-photos just show no grid thumbnail. (Every other format is thumbnailed by
-Telegram automatically.)
+iPhone HEIC photos get their grid thumbnails from Photos' own **Fix HEIC** tool
+(Utilities), which runs in your browser. Every other format is thumbnailed by
+Telegram automatically.
 
 ---
 
@@ -131,7 +130,6 @@ or set the variable directly in the Cloudflare dashboard. For local dev,
 daemonclient status      # what is running, and is it healthy
 daemonclient update      # rebuild from the current source and redeploy
 daemonclient dashboard   # build the dashboard and deploy it to Cloudflare Pages
-daemonclient processor   # add or change the media processor
 daemonclient doctor      # diagnose a broken install
 ```
 
@@ -156,44 +154,6 @@ folder, and redeploys. Your files, database and sign-in are untouched, and it
 deliberately reuses your existing secrets: a new session secret would sign you
 out everywhere, and a new encryption key would make files already in Telegram
 unreadable.
-
----
-
-## The optional media processor
-
-Cloudflare Workers cannot decode HEIC — not a limitation of this project, just
-more CPU than a worker is allowed to use. The processor is a small service that
-does that one job, so iPhone photos get a grid thumbnail.
-
-**Deploy it free on Vercel:**
-
-```bash
-cd processor
-npx vercel deploy --prod
-```
-
-Then set two environment variables on the Vercel project (dashboard → Settings →
-Environment Variables) and redeploy:
-
-| Variable | Value |
-|---|---|
-| `FIREBASE_PROJECT_ID` | the Firebase project your install uses — **required**; the processor rejects every request while it is unset |
-| `OWNER_UID` | your user id (the setup summary and `daemonclient processor` both show it) so only your account can use that instance |
-
-Then connect it:
-
-```bash
-daemonclient processor
-```
-
-and paste the URL.
-
-The handler in `processor/api/convert.js` is a single stateless function, so it
-runs unchanged anywhere that speaks the standard `Request`/`Response` interface —
-Netlify Functions, Cloudflare Pages Functions, Firebase Functions. Free instances
-sleep when idle and take a moment to wake; that is fine, because a conversion that
-fails against a sleeping instance is retried a few minutes later, by which point
-the failed request has woken it.
 
 ---
 
@@ -301,7 +261,7 @@ in the Cloudflare dashboard under your worker.
 **Uploads fail with 413.** Cloudflare's free plan caps request bodies at 100 MB,
 so single files above that cannot be uploaded from mobile. Known limitation.
 
-**HEIC photos have blank thumbnails.** Expected without a processor — see above.
+**HEIC photos have blank thumbnails.** Open Photos, then Utilities, then **Fix HEIC**: it makes them in your browser.
 (Other formats, including videos, are thumbnailed by Telegram, so they are
 unaffected.)
 

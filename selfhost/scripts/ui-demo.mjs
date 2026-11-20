@@ -77,7 +77,7 @@ log.error('And this is an error that did not stop anything.');
 // because it is what people actually see when something goes wrong.
 try {
   await taskList([
-    { title: 'Attaching the image processor', task: async () => { await sleep(700); throw new Error('Vercel returned 403'); } },
+    { title: 'Uploading the worker', task: async () => { await sleep(700); throw new Error('Cloudflare returned 403'); } },
   ]);
 } catch (err) {
   log.error(err.message);

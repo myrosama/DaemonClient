@@ -15,6 +15,13 @@ Notable changes, newest first. Format loosely follows
 
 ## Unreleased
 
+### Removed
+- The optional HEIC processor (operator decision, 2026-11-20): `processor/`,
+  `daemonclient processor`, setup's processor step, `/api/server/processor`,
+  the deployment service's `POST /processor`, the portal's `/setup/processor`
+  step and Photos' Automate dialog. HEIC thumbnails come from Photos' in-browser
+  Fix HEIC tool.
+
 ### Changed
 - The repository was split: operator-only material for the managed service
   moved to a private repository, and everything unreachable was deleted.

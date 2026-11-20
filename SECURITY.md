@@ -23,12 +23,11 @@ prefer otherwise.
 ## What is in scope
 
 The API worker (`workers/user-worker`), the provisioning service
-(`deployment-service`), the accounts portal, the self-hosting CLI (`selfhost`),
-and the media processor (`processor`).
+(`deployment-service`), the accounts portal and the self-hosting CLI (`selfhost`).
 
 Particularly interesting: authentication and session handling, anything that
-crosses a user boundary, the Telegram relay endpoint, credential handling in the
-CLI, and token verification in the processor.
+crosses a user boundary, the Telegram relay endpoint, and credential handling in the
+CLI.
 
 Out of scope: findings against Immich upstream (report those to
 [Immich](https://github.com/immich-app/immich/security)), missing hardening
@@ -51,7 +50,7 @@ configured refuses to issue sessions rather than falling back to anything
 guessable.
 
 Self-hosted installs depend on nothing we run: their own Cloudflare, their own
-Firebase, their own Telegram, their own processor. The single outbound call to a
+Firebase, and their own Telegram. The single outbound call to a
 resource of ours is an anonymous check of the public GitHub releases feed, which
 sends nothing about the install and can be turned off.
 
@@ -71,7 +70,6 @@ Fixed, listed because they are the shape of thing worth looking for:
 
 - Keep `.daemonclient-selfhost.json` safe. It holds your tokens and your
   encryption key, it is created readable only by you, and it is gitignored.
-- Set `OWNER_UID` on your media processor so only your account can use it.
 - `daemonclient doctor` redacts every secret; use it when asking for help
   rather than pasting configuration.
 - Losing your encryption key means losing access to files already stored. There

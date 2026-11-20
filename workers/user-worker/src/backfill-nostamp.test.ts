@@ -1,17 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
-// heicConvertUrl is REQUIRED: without it backfillHeicThumbBatch returns at
-// assets.ts:2841 before ever fetching a key, and a test asserting "nothing was
-// stamped" would pass simply because the job never ran.
 vi.mock('./cached-config', () => ({
-  getCachedConfig: async () => ({
-    botToken: 'BACKFILLBOT',
-    channelId: '-100123',
-    heicConvertUrl: 'https://user-processor.example.com/convert',
-  }),
+  getCachedConfig: async () => ({ botToken: 'BACKFILLBOT', channelId: '-100123' }),
 }));
 
-import { backfillChecksumBatch, backfillHeicThumbBatch } from './assets';
+import { backfillChecksumBatch } from './assets';
 
 // Missing key material must not permanently retire healable rows.
 //
@@ -99,20 +92,11 @@ describe('backfills when the encryption keys are unavailable', () => {
     expect(stamped(db, 'checksumChecked')).toBe(false);
   });
 
-  it('the HEIC thumbnail backfill stamps nothing', async () => {
-    const db = trackingDb();
-    await backfillHeicThumbBatch({ DB: db } as any, 'u1', 'tok');
-    expect(stamped(db, 'heicThumbChecked')).toBe(false);
-  });
-
-  it('neither writes anything at all', async () => {
+  it('writes nothing at all', async () => {
     // Stronger than the above: a config fault is not this row's fault, so the
     // job's correct output is no database write of any kind.
     const a = trackingDb();
     await backfillChecksumBatch({ DB: a } as any, 'u1', 'tok');
-    const b = trackingDb();
-    await backfillHeicThumbBatch({ DB: b } as any, 'u1', 'tok');
     expect(a.updates).toEqual([]);
-    expect(b.updates).toEqual([]);
   });
 });

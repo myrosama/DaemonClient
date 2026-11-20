@@ -18,7 +18,6 @@ Start with the [README](README.md) for what the thing is, then:
 | The mobile apps (native, being built) | `apps/ios/`, `apps/android/`, on the Rust core in `core/` |
 | The Drive web app | `drive/` |
 | Self-hosting CLI | `selfhost/` |
-| HEIC conversion | `processor/` |
 
 `workers/user-worker` is where most of the interesting problems are.
 
@@ -64,8 +63,7 @@ unexpected value — an integer where a boolean belongs, a string outside an enu
 replays the same stream. Anything emitted by `sync.ts` needs a test.
 
 **The free tier is the product.** A change that only works on a paid plan is not
-a change we can take. If something needs real CPU it goes in `processor/`, which
-each user deploys themselves.
+a change we can take. Work that needs real CPU runs on the user's own device.
 
 ## House style
 

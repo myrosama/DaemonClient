@@ -17,7 +17,6 @@ Three jobs:
 |---|---|
 | `src/App.jsx` | the whole app — routing, auth, dashboard, setup. Large, and the place most changes land |
 | `src/pages/SetupWorker.jsx` | the Cloudflare provisioning step |
-| `src/pages/SetupProcessor.jsx` | the optional HEIC processor step |
 | `src/components/Turnstile.jsx` | explicit-render Turnstile widget; tokens are single-use, so it exposes a reset |
 | `src/components/TokenInput.jsx` | Cloudflare API token entry and validation |
 | `src/components/DeploymentProgress.jsx` | live provisioning progress |

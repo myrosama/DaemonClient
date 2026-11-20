@@ -71,9 +71,7 @@ export function SetupWorker() {
   const handleDeploy = async () => {
     try {
       await startDeployment()
-      // Straight to the dashboard. Automatic HEIC thumbnails are set up later from
-      // Photos → Utilities (works for new and existing users alike, and calls the
-      // worker directly), so signup is not interrupted by a processor step.
+      // Straight to the dashboard.
       setTimeout(() => navigate('/dashboard'), 2000)
     } catch (err) {
       console.error('Deployment error:', err)

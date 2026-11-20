@@ -22,7 +22,7 @@ import type { D1Database } from '@cloudflare/workers-types';
 
 // What the self-hosted dashboard renders: is each moving part configured and
 // reachable, and is there a newer release than the build that is running.
-// Authenticated — a server's Telegram/processor topology is not public.
+// Authenticated — a server's Telegram topology is not public.
 async function handleSelfHostStatus(request: Request, env: Env): Promise<Response> {
   let session;
   try {
@@ -34,7 +34,6 @@ async function handleSelfHostStatus(request: Request, env: Env): Promise<Respons
   const telegram = await getCachedConfig<any>(env, session.uid, session.idToken, 'telegram').catch(() => null);
   const botConfigured = !!(telegram?.botToken || telegram?.bot_token);
   const channelConfigured = !!(telegram?.channelId || telegram?.channel_id);
-  const processorUrl = telegram?.heicConvertUrl || null;
 
   // Only report reachability for the pieces that are configured, and never
   // include the bot token or any other secret in the response.
@@ -45,15 +44,6 @@ async function handleSelfHostStatus(request: Request, env: Env): Promise<Respons
       const res = await fetch(`https://api.telegram.org/bot${token}/getMe`);
       telegramOk = res.ok;
     } catch { telegramOk = false; }
-  }
-
-  let processorOk: boolean | null = null;
-  if (processorUrl) {
-    try {
-      const base = String(processorUrl).replace(/\/convertHeicThumbnail\/?$/, '');
-      const res = await fetch(`${base}/health`, { signal: AbortSignal.timeout(8000) });
-      processorOk = res.ok;
-    } catch { processorOk = false; }
   }
 
   let photoCount: number | null = null;
@@ -72,7 +62,6 @@ async function handleSelfHostStatus(request: Request, env: Env): Promise<Respons
     mode: isSelfHost(env) ? 'self-hosted' : 'managed',
     worker: { version: WORKER_VERSION, build: env.BUILD_VERSION || null, database: env.DB ? 'connected' : 'missing' },
     telegram: { botConfigured, channelConfigured, reachable: telegramOk },
-    processor: { configured: !!processorUrl, reachable: processorOk },
     library: { photos: photoCount },
     update,
     account: { email: session.email },

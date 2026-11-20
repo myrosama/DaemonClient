@@ -69,5 +69,5 @@ body:
       description: These are documented limitations, not bugs — please check before filing.
       options:
         - label: This is not a video over 100 MB failing to upload from the mobile app
-        - label: This is not a HEIC photo with a blank thumbnail and no processor deployed
+        - label: This is not a HEIC photo with a blank thumbnail (Photos → Utilities → Fix HEIC makes it)
         - label: This is not face recognition, smart search, or places, which are not implemented

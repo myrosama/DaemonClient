@@ -323,27 +323,6 @@ paths:
         '200': { description: OK }
         '401': { $ref: '#/components/responses/Unauthorized' }
 
-  /api/server/processor:
-    get:
-      tags: [server]
-      summary: The attached HEIC media processor
-      responses: { '200': { description: OK } }
-    post:
-      tags: [server]
-      summary: Attach a HEIC media processor
-      description: |
-        Refuses anything that is not https, is an internal address, is not a
-        DaemonClient processor, has no `OWNER_UID` — or, the check that matters,
-        does not accept **this user's** token. Plaintext must only ever reach
-        the user's own infrastructure.
-      responses:
-        '200': { description: Attached }
-        '400': { description: Rejected by one of the checks above }
-    delete:
-      tags: [server]
-      responses: { '200': { description: Detached } }
-
-  # ── assets ──────────────────────────────────────────────────────────────
   /api/assets:
     post:
       tags: [assets]
@@ -751,7 +730,7 @@ paths:
       summary: What the self-hosted dashboard renders
       description: |
         Whether each moving part is configured and reachable, and whether a
-        newer release exists. Authenticated — a server's Telegram and processor
+        newer release exists. Authenticated — a server's Telegram
         topology is not public — and never includes the bot token or any other
         secret.
       responses:

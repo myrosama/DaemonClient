@@ -10,7 +10,6 @@ import { WALLPAPER_URL } from './assets/wallpaper'
 import Turnstile from './components/Turnstile'
 import { toast } from './components/ui/Toast'
 import { SetupWorker } from './pages/SetupWorker'
-import { SetupProcessor } from './pages/SetupProcessor'
 import { consumeOAuthState, CF_OAUTH_REDIRECT_URI, DEPLOYMENT_WORKER, startCloudflareOAuth } from './config/cloudflareOauth'
 import { waitForWorker } from './utils/waitForWorker'
 import { safeReturnUrl, isAbsoluteUrl, appReturnUrl, cameFromOurApp } from './utils/safeReturnUrl'
@@ -3182,10 +3181,6 @@ function App() {
         {/* OAuth return URL — not AuthOnly (it would stage-bounce); guards itself */}
         <Route path="/setup/cloudflare/callback" element={<CloudflareCallback />} />
         <Route path="/logout" element={<LogoutRoute />} />
-        {/* Optional processor step, shown AFTER the worker exists (so setup is
-            already 'complete'); NOT AuthOnly, which would bounce it to the
-            dashboard. Self-guards for auth, and is skippable. */}
-        <Route path="/setup/processor" element={<SetupProcessor />} />
 
         {/* Protected routes (auth + setup required, with sidebar) */}
         <Route

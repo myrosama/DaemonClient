@@ -35,5 +35,5 @@ body:
       options:
         - label: It does not need storage outside the user's own Telegram channel
         - label: It does not need a container, a VPS, or any long-running process
-        - label: It works within the Cloudflare Workers free tier (10 ms CPU, 128 MB, 50 subrequests) — or the heavy part can run in `processor/`, which each user deploys themselves
+        - label: It works within the Cloudflare Workers free tier (10 ms CPU, 128 MB, 50 subrequests) — or the heavy part can run on the user's own device
         - label: It does not make a self-hosted install depend on infrastructure the operator runs

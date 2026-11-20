@@ -18,7 +18,6 @@ User-facing documentation lives in
 | `web` | builds all three web apps against *your* worker and deploys them to your Firebase Hosting |
 | `status` | what is running and whether it is healthy |
 | `update` | replays migrations, rebuilds from your checkout, redeploys |
-| `processor` | attach or change the optional HEIC media processor |
 | `dashboard` | open the local dashboard |
 | `doctor` | diagnose a broken install; every secret redacted, safe to paste into an issue |
 
