@@ -225,7 +225,19 @@ grid, the scrubber, the viewer's gestures) — never Apple's branding.
    worker (it speaks Immich's API) — a baseline of how it feels and which
    calls break; I0b a quality and security review of its code before any of
    it enters the repo; then replace its server layer with the core and
-   remove what the worker does not serve. Screens as below:
+   remove what the worker does not serve.
+   **I0 result (2026-11-21):** HomeRoll `bd90811`, unchanged, built with its
+   own `sim-run.sh` (XcodeGen via mise) on the iOS 27.2 Simulator and signed
+   in to the test account's worker by token (`/api/auth/login` → the token
+   and `workerUrl`; the worker takes `Authorization: Bearer`): **the library,
+   thumbnails and the viewer (filmstrip, glass toolbar) work as is**, through
+   the worker's old byte routes. Routes it calls that the worker stubs (200,
+   empty): people, faces, memories, tags, stacks, duplicates, shared links,
+   activities, folders, search suggestions; 404: `assets/statistics`,
+   `trash`, `search/random`; Immich v3 routes the worker never had: asset
+   edits, metadata, HLS streaming. **Worker bug (Linux):** `POST
+   /api/search/metadata` returns deleted (trashed) assets and labels them
+   `isTrashed: false`. Screens as below:
    sign-in and settings → timeline → viewer (photo, live
    photo, zoom, swipe) → video → backup (foreground, then background) →
    albums / favorites / archive / trash → save, share, delete → the exit run
