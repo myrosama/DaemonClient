@@ -1,7 +1,8 @@
 import { H3, H4, Note, Table, repo } from '../ui.jsx';
 
 const QUICK = `git clone https://github.com/myrosama/DaemonClient.git
-cd DaemonClient/workers/user-worker && npm install && cd ../..
+cd DaemonClient
+(cd workers/user-worker && npm install) && (cd selfhost && npm ci)
 node selfhost/bin/daemonclient.mjs setup`;
 
 const SITES = `https://<project>.web.app          ← dashboard (open this one)
@@ -73,7 +74,7 @@ export default function SelfHost() {
       <H4 id="cloudflare">2. Cloudflare: where the API runs</H4>
       <p>
         At <a href="https://dash.cloudflare.com/profile/api-tokens">dash.cloudflare.com/profile/api-tokens</a>,
-        create a Custom Token with exactly these permissions:
+        create a Custom Token with these permissions:
       </p>
       <Table
         head={['Type', 'Item', 'Permission']}
@@ -81,6 +82,7 @@ export default function SelfHost() {
           ['Account', 'Workers Scripts', 'Edit'],
           ['Account', 'D1', 'Edit'],
           ['Account', 'Account Settings', 'Read'],
+          ['Account', 'Cloudflare Pages', <>Edit, only if you'll use <code>daemonclient dashboard</code></>],
         ]}
       />
       <Note>
@@ -93,8 +95,9 @@ export default function SelfHost() {
 
       <H4 id="firebase">3. Firebase: your sign-in</H4>
       <p>
-        At <a href="https://console.firebase.google.com">console.firebase.google.com</a>, add a project. You
-        don't need Analytics. Then:
+        If the Firebase CLI is installed and signed in, setup creates the project, the web app and your
+        account for you. Otherwise, at <a href="https://console.firebase.google.com">console.firebase.google.com</a>,
+        add a project (you don't need Analytics), then:
       </p>
       <ul>
         <li>In <em>Build &gt; Authentication</em>, click <em>Get started</em> and enable <strong>Email/Password</strong>.</li>
@@ -125,8 +128,8 @@ export default function SelfHost() {
       </p>
       <Note>
         <p>
-          If encryption is on but the key is missing, the worker refuses the upload instead of storing it
-          unencrypted, so an install that skipped making keys fails loudly before anything leaks.
+          If your worker has to encrypt an upload and its key is missing, it refuses the upload instead of
+          storing it unencrypted, so an install that skipped making keys fails loudly.
         </p>
       </Note>
 
@@ -164,6 +167,7 @@ export default function SelfHost() {
         rows={[
           [<code>daemonclient setup</code>, 'Creates your cloud: Telegram, Cloudflare, your account and the first deploy.'],
           [<code>daemonclient web</code>, 'Builds the three web apps and deploys them to your Firebase project.'],
+          [<code>daemonclient dashboard</code>, 'Builds only the dashboard and publishes it to Cloudflare Pages.'],
           [<code>daemonclient status</code>, "Shows what's running and whether it's healthy."],
           [<code>daemonclient update</code>, 'Rebuilds from your current source and redeploys.'],
           [<code>daemonclient doctor</code>, 'Checks a broken install and prints a report with every secret removed.'],
@@ -172,8 +176,9 @@ export default function SelfHost() {
 
       <H3 id="updating">Updating</H3>
       <p>
-        Once a day your worker checks GitHub for a newer release and shows a note on the dashboard. It never
-        updates itself and never contacts us; when to update is up to you. To update:
+        When you open the dashboard, your worker checks GitHub for a newer release (at most every 12 hours)
+        and shows a note if there is one. No release has been published yet. The worker never updates itself
+        and never contacts us; when to update is up to you. To update:
       </p>
       <pre>{`git pull
 daemonclient update`}</pre>
@@ -184,7 +189,8 @@ daemonclient update`}</pre>
       <Note>
         <p>
           The hosted service and self-hosted installs run the same code. A fix is written once: we push it to
-          hosted installs, and self-hosted installs pull the release.
+          hosted installs, and self-hosted installs get it with <code>git pull</code> and{' '}
+          <code>daemonclient update</code>.
         </p>
       </Note>
 
@@ -197,7 +203,7 @@ daemonclient update`}</pre>
         head={['Problem', 'Cause and fix']}
         rows={[
           ['A web app says "Cannot reach the server"', <>The app's address isn't in <code>ALLOWED_ORIGINS</code>. Run <code>daemonclient web</code> again, or add the address to your worker's variables.</>],
-          ['HEIC photos have blank thumbnails', <>In Photos, open <em>Utilities</em>, then <em>Fix HEIC</em>. It makes the thumbnails in your browser. Telegram makes thumbnails for videos and every other format.</>],
+          ['Photos or videos have blank thumbnails', <>In Photos, open <em>Utilities</em> and run <em>Fix HEIC &amp; missing thumbnails</em>, then <em>Fix video thumbnails</em>. Both make the thumbnails in your browser.</>],
           ['Everything worked, then stopped', "Check Cloudflare's free-plan limits: 100,000 worker requests a day, and D1 has its own allowances. Browsing a big library hard can reach them."],
         ]}
       />

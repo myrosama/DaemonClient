@@ -28,7 +28,7 @@ export default function Changelog() {
         <li>A deleted photo leaves your library immediately and is never shown again. Its record stays until Telegram confirms the delete, so nothing is left behind if Telegram refuses the first time.</li>
         <li>Restore now says plainly that deleted photos can't be brought back.</li>
         <li>Old deletion records are cleaned up after 90 days again, and finished deletions no longer show in Trash.</li>
-        <li>The optional HEIC processor has been removed. iPhone photos get their thumbnails from the <em>Fix HEIC</em> tool in Photos, which runs in your browser. If you deployed a processor to your own Vercel account, keep it running for now, because clouds that haven't updated yet still call it. This page will say when it's safe to delete.</li>
+        <li>The optional HEIC processor has been removed. iPhone photos get their thumbnails from <em>Fix HEIC &amp; missing thumbnails</em> in Photos' Utilities, which runs in your browser. If you deployed a processor to your own Vercel account, keep it running for now, because clouds that haven't updated yet still call it. This page will say when it's safe to delete.</li>
         <li>Self-hosting needs Node.js 22.13 or newer. Node 20 reached end of life in April 2026 and broke the setup tool's prompts. <code>install.sh</code> fetches a private copy if yours is older.</li>
         <li>For contributors: the repository is grouped by role, with <code>apps/</code> for what people open, <code>workers/</code> for the Cloudflare Workers, <code>core/</code> for the shared engine and <code>packages/</code> for shared code. Outdated docs were removed.</li>
       </ul>
@@ -48,6 +48,10 @@ export default function Changelog() {
       <H4>November 14, 2026</H4>
       <ul>
         <li>New accounts no longer get stuck on "can't reach your cloud". The dashboard waits until a new cloud's address works everywhere before opening it.</li>
+      </ul>
+
+      <H4>November 10, 2026</H4>
+      <ul>
         <li>Drive signs you in through your account page, so Photos and Drive share one sign-in with the same human check.</li>
       </ul>
 

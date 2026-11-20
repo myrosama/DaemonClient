@@ -21,7 +21,8 @@ Telegram automatically.
 
 ```bash
 git clone https://github.com/myrosama/DaemonClient.git
-cd DaemonClient/workers/user-worker && npm install && cd ../..
+cd DaemonClient
+(cd workers/user-worker && npm install) && (cd selfhost && npm ci)
 node selfhost/bin/daemonclient.mjs setup
 ```
 

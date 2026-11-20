@@ -5,15 +5,16 @@ export default function Faq() {
     <>
       <H3>Can other people use my install?</H3>
       <p>
-        No. An install has one owner: the first account to sign in through the worker's own login. Other
-        accounts in your Firebase project can't read anything on it.
+        No. An install has one owner: the account setup records, or the first one to sign in through the
+        worker's own login. Other accounts in your Firebase project can't read anything on it.
       </p>
 
       <H3>Does it phone home?</H3>
       <p>
-        No. The daily version check is an anonymous request to GitHub's public releases list and sends
-        nothing about your install. There's no switch to turn it off yet: clearing <code>UPDATE_REPO</code>{' '}
-        makes it check the default repository instead.
+        No. Apart from Telegram and your own Firebase project, the only thing an install contacts is GitHub's
+        public releases list, to check for updates when you open the dashboard. That request is anonymous and
+        sends nothing about your install. There's no switch to turn it off yet: clearing{' '}
+        <code>UPDATE_REPO</code> makes it check the default repository instead.
       </p>
 
       <H3>Is it really free?</H3>
@@ -30,9 +31,8 @@ export default function Faq() {
 
       <H3>Is the hosted service different from self-hosting?</H3>
       <p>
-        It runs the same code. Five places in the worker behave differently, and all five are plumbing: which
-        Firebase project to call, which domain to put in a link, which label to report. Every feature works the
-        same. The one real difference is updates. We can push an update to a hosted install because we hold
+        It runs the same code. A few settings differ, such as which Firebase project it uses and which domain
+        goes in links, and the features are the same. The one real difference is updates. We can push an update to a hosted install because we hold
         its credentials, and we deliberately can't push one to yours.
       </p>
 

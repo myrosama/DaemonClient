@@ -34,8 +34,7 @@ Notable changes, newest first. Format loosely follows
 - `docs/ARCHITECTURE.md` — the complete explanation of how the system works.
 - `docs/openapi.yaml` — the worker API as an OpenAPI 3.1 document.
 - `docs/ROADMAP.md` — what is planned, and what deliberately is not.
-- CI coverage for `selfhost/`, including a guard asserting it stays
-  dependency-free.
+- CI coverage for `selfhost/`, including a guard on its dependency budget.
 - `CODE_OF_CONDUCT.md`, issue templates, and a pull request template.
 
 ### Fixed

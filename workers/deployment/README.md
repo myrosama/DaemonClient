@@ -7,7 +7,7 @@ Cloudflare Worker running the API, a D1 database with the schema applied, the
 bindings and secrets to connect the two, and the encryption keys the worker
 needs. It also ships them updates afterwards.
 
-**Not part of self-hosting.** A self-hoster runs [`selfhost/`](../selfhost)
+**Not part of self-hosting.** A self-hoster runs [`selfhost/`](../../selfhost)
 instead, which does the same job from their own machine. The two exist
 separately because of one asymmetry that cannot be removed: we hold a managed
 user's Cloudflare token and can push to them; we do not hold a self-hoster's,
@@ -53,7 +53,7 @@ If you change the worker and skip the embed step, you have shipped nothing.
 
 ## Schema
 
-Imported from [`../schema/schema.mjs`](../schema) — the same module the
+Imported from [`packages/schema/schema.mjs`](../../packages/schema) — the same module the
 self-host CLI uses. Do not add a second copy here. There used to be three
 definitions of the schema, and that is precisely how managed and self-hosted
 installs came to disagree about whether encryption keys had been seeded.

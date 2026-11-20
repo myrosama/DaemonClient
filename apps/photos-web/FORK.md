@@ -70,6 +70,6 @@ than passing the raw column through, and why anything it emits needs a test.
 There is no automated merge. The fork is pinned and updated deliberately, since
 each upstream release can touch the service worker and the API surface at once.
 Before pulling upstream changes, read
-[`../docs/API.md`](../docs/API.md) — it records which routes our worker actually
+[`../../docs/API.md`](../../docs/API.md) — it records which routes our worker actually
 implements, and an upstream change that starts calling a new one will get a
 shaped empty response rather than data.

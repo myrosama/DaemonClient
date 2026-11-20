@@ -93,5 +93,5 @@ your change actually reached the artefact users run. Wait ~30 seconds before
 checking anything live; deploys propagate, and a too-fast check has produced a
 false result more than once.
 
-See [../docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md) for how this fits
-together and [../docs/API.md](../docs/API.md) for the route-by-route contract.
+See [docs/ARCHITECTURE.md](../../docs/ARCHITECTURE.md) for how this fits
+together and [docs/API.md](../../docs/API.md) for the route-by-route contract.

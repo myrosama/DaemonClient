@@ -9,13 +9,13 @@ const PATH = `   your phone / browser / any file manager (WebDAV)
       your Telegram bot  ─────────► your private channel
                                     (AES-256-GCM encrypted 19 MB parts)`;
 
-const FLOW = `  UPLOAD                                    READ
-  browser                                   browser
-    │ slice at 19 MB                          │ GET /api/assets/{id}/dc-manifest
-    │ encrypt each part                       │   ← small JSON: the parts' file_ids
-    ├──── bytes ────► Telegram                ├──── fetch parts ────► Telegram
-    │        ← file_id                        │ decrypt locally
-    └── metadata + file_ids ──► worker        └── show`;
+const FLOW = `  UPLOAD                                  READ
+  browser                                 browser
+    │ slice at 19 MB                        │ GET /api/assets/{id}/dc-manifest
+    │ encrypt each part                     │   ← small JSON: the parts' file_ids
+    ├── part ──► relay ──► Telegram         ├── fetch part ──► relay ──► Telegram
+    │        ← file_id                      │ decrypt locally
+    └── metadata + file_ids ──► worker      └── show`;
 
 export default function HowItWorks() {
   return (
@@ -28,19 +28,17 @@ export default function HowItWorks() {
       <H3 id="one-path-per-user">One path per user</H3>
       <p>
         Every user has their own path: their device, then their worker, then their Telegram channel. There
-        is no shared file server, and no database of ours holds your data.
+        is no shared file server, and no database of ours holds your files or their index.
       </p>
       <pre>{PATH}</pre>
       <p>
-        On the web, file bytes don't go through the worker at all. The browser splits a file into parts,
-        encrypts each one and sends them straight to Telegram. A service worker reads them back the same way,
-        fetching only the parts a given byte range needs. The worker only stores the index.
+        On the web, your browser does the heavy work. It splits a file into parts, encrypts each one and
+        sends them to Telegram through your worker's relay, which streams the bytes along without storing or
+        decrypting them. A service worker reads files back the same way, fetching only the parts a given byte
+        range needs. The worker never assembles a whole file, so it stays inside the free plan's CPU and
+        memory limits.
       </p>
       <pre>{FLOW}</pre>
-      <p>
-        That's why a photo library fits in a free plan that allows 100,000 worker requests a day: showing a
-        thumbnail or downloading a file costs a Telegram request instead of a worker request.
-      </p>
 
       <H3>Storage</H3>
       <p>
@@ -60,12 +58,11 @@ export default function HowItWorks() {
       />
       <p>
         The thumbnail and preview exist because of CPU limits. A worker on the free plan can't make a
-        thumbnail from a 40 MB original, so your browser makes one before upload, or Telegram makes one when
-        it accepts the file.
+        thumbnail from a 40 MB original, so your browser makes them before upload.
       </p>
       <Note>
         <p>
-          Every file has a checksum, <code>base64(SHA-1(plaintext))</code>, which the worker works out itself
+          Every photo has a checksum, <code>base64(SHA-1(plaintext))</code>, which the worker works out itself
           when the app doesn't send one. Without it the "do you already have these?" check never matches, and
           an app would upload your whole library again every time it restarted.
         </p>
@@ -73,15 +70,15 @@ export default function HowItWorks() {
 
       <H3>Encryption</H3>
       <p>
-        Photos and Drive encrypt files in your browser before they go to Telegram. What differs is where the
-        key is kept, and so who else can use it.
+        Photos and Drive store files encrypted in your Telegram channel. What differs is where the key is
+        kept, and so who else can use it.
       </p>
       <Table
         head={['Key', 'Where it is kept', 'Who can decrypt', 'Used by']}
         rows={[
-          ['Stored key', 'Your own D1 database', 'Your signed-in browser, and your own worker', <>Photos, and Drive by default. Drive's mount needs it, because your worker decrypts files for your file manager.</>],
+          ['Stored key', 'Your own D1 database', 'Your signed-in browser, and your own worker', <>Photos, and Drive by default. Drive's mount needs it, because your worker encrypts and decrypts files for your file manager.</>],
           ['Your own password', 'Nowhere. You type it on each device', 'Only your browser', 'Drive, if you choose a custom password'],
-          ['No key', '', 'Anyone who can read your channel', 'Only if you turn encryption off'],
+          ['No key', '', 'Anyone who can read your channel', 'Drive, if you turn encryption off'],
         ]}
       />
       <p>
@@ -96,16 +93,17 @@ export default function HowItWorks() {
       </p>
       <Note>
         <p>
-          An install that is set to encrypt but has lost its key refuses uploads instead of storing them
-          unencrypted. Installs set up before July 27, 2026 didn't always do this. If yours is that old, read
+          If your worker has to encrypt an upload and its key is missing, it refuses the upload instead of
+          storing it unencrypted. Installs set up before July 27, 2026 didn't always do this. If yours is that old, read
           the <a href={repo('docs/SELF_HOSTING.md')}>migration note in the self-hosting guide</a>.
         </p>
       </Note>
 
       <H3>Sign-in</H3>
       <p>
-        An install has one owner. The first sign-in through the worker's own password login claims it, and
-        every signed-in route checks that owner, so another account in your Firebase project can't read your
+        An install has one owner. Self-host setup records your account as the owner, and an install without
+        one is claimed by the first sign-in through the worker's own password login. Every signed-in route
+        checks that owner, so another account in your Firebase project can't read your
         data. The check sits in the one place every request is authenticated, so routes added later are
         covered too.
       </p>
@@ -133,7 +131,7 @@ export default function HowItWorks() {
           ['CPU time', '10 ms per request', 'No image decoding, video conversion or large buffers. HEIC thumbnails are made in your browser.'],
           ['Memory', '128 MB', 'Responses stream, with no more than about two parts in memory at once.'],
           ['Subrequests', '50 outside requests per request', 'A file of 50 parts already reaches the limit, so background repair runs one job per request.'],
-          ['Requests', '100,000 a day', 'File bytes travel between your browser and Telegram directly.'],
+          ['Requests', '100,000 a day', 'Every part the relay carries counts, so browsing a big library hard can reach it.'],
           ['Request body', '100 MB', 'Files go to Telegram in parts from your device, never as one request through the worker.'],
           ['Telegram download', '20 MB', 'Where the 19 MB parts come from.'],
         ]}

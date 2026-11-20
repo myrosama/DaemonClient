@@ -6,16 +6,17 @@ A ~60-line Cloudflare Worker whose entire job is to add CORS headers to
 ## Why it has to exist
 
 The Telegram Bot API sends no `Access-Control-Allow-Origin` header, so a browser
-cannot call it directly. But the browser calling Telegram directly is the whole
-design — it is what keeps file bytes out of the worker and inside the free tier.
-So requests go through here instead:
+cannot call it directly. A relay that only streams bytes and adds CORS headers
+lets the browser do the chunking and encryption itself, without any worker
+assembling files. Requests went through here:
 
 ```
 browser ──▶ daemonclient-proxy?url=https://api.telegram.org/... ──▶ Telegram
 ```
 
-The per-user worker has an equivalent `/proxy` route; this is the standalone
-deployment used by clients that have no worker to route through yet.
+The websites now use each user's own worker's `/proxy` route instead. This
+standalone deployment is legacy: it only serves clients that have no worker to
+route through yet.
 
 ## The allowlist is exact, and that is deliberate
 

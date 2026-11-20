@@ -21,14 +21,14 @@ export default function Api() {
         head={['Area', 'Routes', 'Notes']}
         rows={[
           ['Auth', c('/api/auth/login', '/logout', '/status', '/exchange'), <><code>exchange</code> trades a Firebase ID token for a session, which is how one sign-in covers all three apps.</>],
-          ['Server', c('/api/server/config', '/features', '/telegram-config', '/zke-config'), 'The last two return your own secrets on purpose: the browser needs them to read from Telegram directly. Only the owner can call them.'],
+          ['Server', c('/api/server/config', '/features', '/telegram-config', '/zke-config'), 'The last two return your own secrets on purpose: your browser needs them to send and read your files. Only the owner can call them.'],
           ['Assets', <><code>/api/assets</code> and its media paths</>, 'Upload, originals, thumbnails, video playback, trash and photo details. Range requests work.'],
-          ['Manifest', c('/api/assets/{id}/dc-manifest'), "Not an Immich route. The list of parts the browser uses to read a file without going through the worker."],
+          ['Manifest', c('/api/assets/{id}/dc-manifest'), 'Not an Immich route. The list of parts the browser uses to read a file part by part, without the worker assembling it.'],
           ['Timeline', c('/api/timeline/buckets', '/bucket'), 'Month groups for the grid. Each request also starts one background repair job.'],
           ['Sync', c('/api/sync/stream'), 'For the phone apps. Newline-delimited JSON.'],
-          ['Albums, users, search', c('/api/albums', '/api/users', '/api/search'), <>Only <code>search/metadata</code> returns real data.</>],
+          ['Albums, users, search', c('/api/albums', '/api/users', '/api/search'), <>Albums and users work. Of search, only <code>search/metadata</code> returns results.</>],
           ['Drive', <><code>/api/drive/*</code>, and <code>/dav</code> for the mount</>, 'Uses different keys from Photos. The WebDAV mount uses HTTP Basic auth against a hashed token.'],
-          ['Infrastructure', c('/api/health', '/proxy', '/api/selfhost/status'), <><code>/proxy</code> relays to <code>api.telegram.org</code> and nothing else.</>],
+          ['Infrastructure', c('/api/health', '/proxy', '/api/selfhost/status'), <><code>/proxy</code> carries the website's file parts to and from <code>api.telegram.org</code>, and goes nowhere else.</>],
         ]}
       />
       <Note>
@@ -45,9 +45,9 @@ export default function Api() {
         head={['Feature', 'Why']}
         rows={[
           ['Phone apps', 'Native iPhone and Android apps are being built on one shared Rust core. They are not released yet.'],
-          ['HEIC thumbnails', <>Made in your browser: in Photos, open <em>Utilities</em>, then <em>Fix HEIC</em>. Workers can't decode HEIC, and Telegram doesn't make thumbnails for it. Every other format, video included, is fine.</>],
+          ['HEIC and some video thumbnails', <>Workers can't decode HEIC, and Telegram doesn't make thumbnails for it. In Photos, <em>Utilities &gt; Fix HEIC &amp; missing thumbnails</em> makes them in your browser, and <em>Fix video thumbnails</em> does the same for videos.</>],
           ['Face recognition, smart search, places', 'These need machine learning, and this design has nowhere to run it.'],
-          ['Sharing between users', "Built, and held back until a security review is done. For now an install has one owner."],
+          ['Sharing between users', 'Not available. An install has one owner.'],
           ['Several users on one install', 'Not planned. An install has one owner.'],
         ]}
       />

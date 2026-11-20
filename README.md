@@ -41,11 +41,11 @@ database. Every user gets their own copy of the whole setup:
 - their own Telegram bot and private channel, owned by them;
 - their own Cloudflare worker and D1 database, which serve their API and keep
   their file index;
-- their own encryption keys, so files are encrypted before they reach Telegram.
+- their own encryption keys, so files are stored encrypted in their channel.
 
 There's no shared file server and no database of ours holding everyone's
-photos. A photo you upload goes to your Telegram channel as encrypted parts,
-and your worker keeps the index that lets your stack read it back.
+photos. A photo you upload is stored in your Telegram channel as encrypted
+parts, and your worker keeps the index that lets your stack read it back.
 
 You can also run all of it yourself. One command sets up a complete install on
 your own Telegram, Cloudflare and Firebase accounts, and nothing in it points
@@ -84,19 +84,18 @@ flowchart LR
         CH[("Your private channel<br/><i>encrypted 19 MB parts</i>")]
     end
 
-    WEB -->|metadata| W
+    WEB -->|metadata, and encrypted parts through its relay| W
     DAV --> W
     W <--> D1
     W <--> BOT
-    WEB -.->|file bytes, direct| CH
     BOT <--> CH
 ```
 
-On the web, file bytes don't go through the worker (the dotted line). The
-browser splits and encrypts a file itself and sends it straight to Telegram,
-and a service worker reads it back the same way. The
-worker handles the index. That's how a photo library fits in a free plan that
-allows 100,000 worker requests a day.
+On the web, your browser does the heavy work: it splits and encrypts a file
+itself and sends the parts to Telegram through your worker's relay, which
+streams them along without storing or decrypting them. A service worker reads
+files back the same way. The worker never assembles a whole file, which keeps
+it inside the free plan's CPU and memory limits.
 
 The parts we run are the control plane: the accounts portal, the sign-in
 service and the service that sets up and updates each user's worker. None of
@@ -118,7 +117,8 @@ The full explanation is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ```bash
 git clone https://github.com/myrosama/DaemonClient.git
-cd DaemonClient/workers/user-worker && npm install && cd ../..
+cd DaemonClient
+(cd workers/user-worker && npm install) && (cd selfhost && npm ci)
 node selfhost/bin/daemonclient.mjs setup
 ```
 
@@ -127,9 +127,10 @@ After that, `daemonclient web` builds the three web apps and deploys them to
 your own Firebase Hosting. You need Node.js 22.13 or newer.
 
 A self-hosted install doesn't use anything we run. Your files and credentials
-stay on your own accounts, and nothing reports back to us. The only outside
-call it makes is a daily, anonymous check of the public GitHub releases list,
-which sends nothing about your install; there's no switch to turn it off yet.
+stay on your own accounts, and nothing reports back to us. Apart from Telegram
+and your own Firebase project, it contacts only GitHub's public releases list,
+to check for updates; that request is anonymous, and there's no switch to turn
+it off yet.
 If this project disappeared, your install would keep working: the files are in
 your Telegram channel, the index is in your D1 database, and the code is in
 your clone under AGPL-3.0.
@@ -146,8 +147,7 @@ Photos has a timeline grouped by month, with blurred placeholders while
 thumbnails load, albums, favourites, archive, trash, photo details (camera,
 lens, exposure), live photos, video that streams across parts, checksums so a
 reinstall finds your existing photos instead of uploading them again, and zip
-downloads. Background jobs fill in missing checksums, photo details and
-live-photo links while you use the app.
+downloads. A background job fills in missing checksums while you browse.
 
 Drive has folders, uploads of any size, previews, search, encryption in your
 browser, and a WebDAV mount, so your cloud shows up as a normal drive in
@@ -163,9 +163,9 @@ hosted service we update each user's worker on a schedule.
 | Feature | Status |
 |---|---|
 | Phone apps | Native iPhone and Android apps on the Rust core ([`core/`](core)) are being built in [`apps/ios/`](apps/ios) and [`apps/android/`](apps/android). Not released yet. See the [roadmap](docs/ROADMAP.md). |
-| HEIC thumbnails | Workers can't decode HEIC and Telegram doesn't make thumbnails for it. In Photos, *Utilities > Fix HEIC* makes them in your browser. Every other format, video included, is fine. |
+| HEIC and some video thumbnails | Workers can't decode HEIC, and Telegram doesn't make thumbnails for it. In Photos, *Utilities > Fix HEIC & missing thumbnails* makes them in your browser, and *Fix video thumbnails* does the same for videos. |
 | Face recognition, smart search, places | Not built. They need machine learning, and this design has nowhere to run it. Those routes return empty results of the right shape instead of errors. |
-| Sharing between users | Built, and held back until a security review is done. For now an install has one owner. |
+| Sharing between users | Not available. An install has one owner. |
 
 [Known sharp edges](docs/ARCHITECTURE.md#known-sharp-edges) has more detail.
 
@@ -174,10 +174,11 @@ hosted service we update each user's worker on a schedule.
 ## Security
 
 - Drive encrypts files in your browser before upload. By default the key is in
-  your own D1 database; with a custom password, only your browser can decrypt.
-- Photos also encrypts in your browser, with a key kept in your own D1
-  database. Your worker holds that key so it can work out checksums and read
-  photo details, and that worker serves only you.
+  your own D1 database, so your devices and the WebDAV mount can use it; with a
+  custom password, only your browser can decrypt.
+- Photos keeps its key in your own D1 database and stores your photos
+  encrypted in your channel. Your worker holds that key so it can work out
+  checksums and read photo details, and that worker serves only you.
 - Your files never pass through a server we share between users. Work that
   needs real CPU, such as decoding HEIC photos, runs in your browser.
 - An install has one owner. The check sits in the one place every request is
@@ -204,7 +205,7 @@ the kind of thing worth looking for.
 | [`apps/ios/`](apps/ios), [`apps/android/`](apps/android) | The native phone apps, being built |
 | [`core/`](core) | The Rust core under the phone apps: storage format, Telegram, sync and uploads |
 | [`packages/schema/`](packages/schema) | The D1 database schema, defined once |
-| [`selfhost/`](selfhost) | The self-hosting command-line tool. No dependencies, runs from a fresh clone |
+| [`selfhost/`](selfhost) | The self-hosting command-line tool |
 | [`docs/`](docs) | Architecture, the API reference and the self-hosting guide |
 
 Most folders have a README that explains what's in them and how to run it.
