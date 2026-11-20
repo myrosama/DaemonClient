@@ -2,12 +2,10 @@
   import AppDownloadModal from '$lib/modals/AppDownloadModal.svelte';
   import FixThumbnailsModal from '$lib/modals/FixThumbnailsModal.svelte';
   import FixVideoThumbnailsModal from '$lib/modals/FixVideoThumbnailsModal.svelte';
-  import SetupProcessorModal from '$lib/modals/SetupProcessorModal.svelte';
   import ObtainiumConfigModal from '$lib/modals/ObtainiumConfigModal.svelte';
   import { Route } from '$lib/route';
   import { Icon, modalManager, Text } from '@immich/ui';
   import {
-    mdiAutoFix,
     mdiCellphoneArrowDownVariant,
     mdiContentDuplicate,
     mdiCrosshairsGps,
@@ -36,16 +34,6 @@
     </a>
   {/each}
 
-  {#snippet automate()}
-    <button
-      type="button"
-      title="Set it up once and these get generated automatically — no more manual fixing"
-      onclick={() => modalManager.show(SetupProcessorModal, {})}
-      class="mr-4 shrink-0 flex items-center gap-1.5 rounded-full border border-primary/50 text-primary px-3 py-1.5 text-xs font-medium hover:bg-primary/10"
-    >
-      <Icon icon={mdiAutoFix} size="16" /> Automate
-    </button>
-  {/snippet}
 
   <div class="w-full flex items-center hover:bg-gray-100 dark:hover:bg-immich-dark-gray">
     <button
@@ -56,7 +44,6 @@
       <span><Icon icon={mdiImageBrokenVariant} class="text-primary" size="24" /></span>
       Fix HEIC &amp; missing thumbnails
     </button>
-    {@render automate()}
   </div>
 
   <div class="w-full flex items-center hover:bg-gray-100 dark:hover:bg-immich-dark-gray">
@@ -68,7 +55,6 @@
       <span><Icon icon={mdiVideoOutline} class="text-primary" size="24" /></span>
       Fix video thumbnails
     </button>
-    {@render automate()}
   </div>
 </div>
 <br />
