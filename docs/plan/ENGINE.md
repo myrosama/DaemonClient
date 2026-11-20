@@ -265,7 +265,12 @@ loaded, frames, every screen) rebuilt for the native apps.
 - a free personal Apple team cannot sign App Groups, Wi-Fi info or push —
   iOS v1 ships none (no widget, no share extension yet).
 
-## 11. Repo cleanup — on branch `cleanup/repo-trim` (`cdb8f9e`), Linux verifies and merges
+## 11. Repo cleanup — on branch `cleanup/repo-trim` (PR #6), Linux verifies and merges
+
+**Next (operator, 2026-11-20): the folder layout** — proposal in
+[`REPO_LAYOUT.md`](REPO_LAYOUT.md), for Linux to review; iPhone work starts
+after it.
+
 
 Agreed with the Linux machine 2026-11-19 (it confirmed the website's build and
 that all its own work was pushed). **Kept in `immich/`:** `web/`, `i18n/`,
