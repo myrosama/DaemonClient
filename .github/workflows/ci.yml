@@ -49,15 +49,15 @@ jobs:
         with:
           filters: |
             shim:
-              - 'immich-api-shim/**'
+              - 'workers/user-worker/**'
               - '.github/workflows/ci.yml'
             deployment:
-              - 'deployment-service/**'
-              - 'schema/**'
+              - 'workers/deployment/**'
+              - 'packages/schema/**'
               - '.github/workflows/ci.yml'
             selfhost:
               - 'selfhost/**'
-              - 'schema/**'
+              - 'packages/schema/**'
               # Cutting a release is a commit that touches ONLY this file. Without
               # it here that commit triggers no jobs at all, and a malformed or
               # deleted VERSION ships green — past the very tests written to
@@ -68,13 +68,13 @@ jobs:
               - 'processor/**'
               - '.github/workflows/ci.yml'
             accounts:
-              - 'accounts-portal/**'
+              - 'apps/accounts-web/**'
               - '.github/workflows/ci.yml'
             drive:
-              - 'drive/**'
+              - 'apps/drive-web/**'
               - '.github/workflows/ci.yml'
             photos:
-              - 'immich/**'
+              - 'apps/photos-web/**'
               - '.github/workflows/ci.yml'
 
   # The Photos website (the Immich web fork): from a FROZEN lockfile, so a
@@ -86,7 +86,7 @@ jobs:
     timeout-minutes: 20
     defaults:
       run:
-        working-directory: immich
+        working-directory: apps/photos-web
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -96,11 +96,11 @@ jobs:
         with:
           node-version: '24.15.0'
           cache: pnpm
-          cache-dependency-path: immich/pnpm-lock.yaml
+          cache-dependency-path: apps/photos-web/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @immich/sdk build
       - run: npm run build
-        working-directory: immich/web
+        working-directory: apps/photos-web/web
 
   # The security-critical core: the per-user worker (263 tests) validates auth,
   # ownership, media stitching, sync and Drive.
@@ -111,14 +111,14 @@ jobs:
     timeout-minutes: 15
     defaults:
       run:
-        working-directory: immich-api-shim
+        working-directory: workers/user-worker
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: npm
-          cache-dependency-path: immich-api-shim/package-lock.json
+          cache-dependency-path: workers/user-worker/package-lock.json
       - run: npm ci
       - run: npm test
 
@@ -131,14 +131,14 @@ jobs:
     timeout-minutes: 15
     defaults:
       run:
-        working-directory: deployment-service
+        working-directory: workers/deployment
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: npm
-          cache-dependency-path: deployment-service/package-lock.json
+          cache-dependency-path: workers/deployment/package-lock.json
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
@@ -177,9 +177,9 @@ jobs:
         # `MIN_NODE=18` in install.sh without anything going red: Ubuntu 22.04
         # and Debian 12 users would have installed cleanly and then hit
         # "does not provide an export named 'styleText'" on their first
-        # command. 20.12.0 is the oldest Node this package claims to run on, so
+        # command. 22.13.0 is the oldest Node this package claims to run on, so
         # it is the one worth proving.
-        node: ['20.12.0', '22']
+        node: ['22.13.0', '22']
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -218,14 +218,14 @@ jobs:
     timeout-minutes: 15
     defaults:
       run:
-        working-directory: accounts-portal
+        working-directory: apps/accounts-web
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: npm
-          cache-dependency-path: accounts-portal/package-lock.json
+          cache-dependency-path: apps/accounts-web/package-lock.json
       - run: npm ci
       - run: npm test
       - run: npm run build
@@ -239,14 +239,14 @@ jobs:
     timeout-minutes: 15
     defaults:
       run:
-        working-directory: drive
+        working-directory: apps/drive-web
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: npm
-          cache-dependency-path: drive/package-lock.json
+          cache-dependency-path: apps/drive-web/package-lock.json
       - run: npm ci
       - run: npm test
       - run: npm run build

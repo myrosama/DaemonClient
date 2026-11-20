@@ -34,7 +34,7 @@ import {
 } from '../api/firebase.mjs';
 import { ensureAccount, signIn } from '../api/identity.mjs';
 import { noLocalBrowser } from '../ui-kit.mjs';
-import { MIGRATION_SQL, splitStatements } from '../../../schema/schema.mjs';
+import { MIGRATION_SQL, splitStatements } from '../../../packages/schema/schema.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '../../..');
@@ -96,9 +96,9 @@ async function stepPreflight(state) {
   }
   ok(`Node ${process.versions.node}`);
 
-  const shimSrc = path.join(REPO_ROOT, 'immich-api-shim', 'src', 'index.ts');
+  const shimSrc = path.join(REPO_ROOT, 'workers', 'user-worker', 'src', 'index.ts');
   if (!fs.existsSync(shimSrc)) {
-    fail('Cannot find immich-api-shim/ — run this from inside a clone of the repository.');
+    fail('Cannot find workers/user-worker/ — run this from inside a clone of the repository.');
     process.exit(1);
   }
   ok('Repository looks complete');
@@ -567,7 +567,7 @@ async function stepDeployWorker(state) {
     s.succeed(`Built (${Math.round(bundle.length / 1024)} KB)`);
   } catch (e) {
     s.fail(`Build failed: ${e.message}`);
-    hint('Run "npm install" inside immich-api-shim/ and try again.');
+    hint('Run "npm install" inside workers/user-worker/ and try again.');
     process.exit(1);
   }
 

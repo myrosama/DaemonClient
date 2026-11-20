@@ -1,7 +1,7 @@
 // The P0 bootstrap bug: a fresh self-hosted install cannot be signed into.
 //
 // `owner_uid` is a row in the install's own D1 `config` table
-// (`immich-api-shim/src/owner-gate.ts`). Nothing ever wrote it — the string
+// (`workers/user-worker/src/owner-gate.ts`). Nothing ever wrote it — the string
 // appears once in the whole repository, as a key constant. An unclaimed install
 // can only be claimed by a credential carrying `mayClaim`, and `helpers.ts:119`
 // passes **false** for Firebase ID tokens, deliberately: one Firebase project

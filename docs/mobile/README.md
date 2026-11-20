@@ -46,7 +46,7 @@ spec cites it, not up front.
 - **The whole core is "full treatment"** under `GATES.md` — it is the chunk /
   encrypt / manifest path.
 - **Test on the test account, never the operator's library.**
-- **Message the Linux session before any change to `immich-api-shim`,
+- **Message the Linux session before any change to `workers/user-worker`,
   `deployment-service`, or anything per-user workers run.** Production deploys
   from Linux.
 - No push without the operator's review. No AI attribution in commits.

@@ -1,0 +1,621 @@
+import type { D1Database } from '@cloudflare/workers-types';
+
+export interface Photo {
+  id: string;
+  ownerId: string;
+  fileName: string;
+  fileSize: number;
+  mimeType: string;
+  width?: number;
+  height?: number;
+  duration?: string | null;
+  fileCreatedAt: string;
+  uploadedAt: string;
+  telegramOriginalId?: string | null;
+  telegramThumbId?: string | null;
+  telegramChunks?: string | null; // JSON string
+  telegramPlaybackChunks?: string | null; // JSON {size,chunks} — H.264 web-playable rendition
+  encryptionMode?: string;
+  thumbEncrypted?: number;
+  checksum?: string;
+  isHeic?: number;
+  livePhotoVideoId?: string;
+  isFavorite?: number;
+  isTrashed?: number;
+  visibility?: string;
+  description?: string;
+  city?: string;
+  country?: string;
+  latitude?: number | null;
+  longitude?: number | null;
+  // Dedup fields — populated by mobile uploads (Immich app sends these in multipart form).
+  // Added via self-healing ALTER in ensureDeduplicationSchema(); NULL for legacy rows.
+  deviceAssetId?: string | null;
+  deviceId?: string | null;
+  // EXIF camera metadata — extracted server-side at upload (exif.ts) and
+  // backfilled lazily for older rows. Added via self-healing ALTER.
+  // orientation is TEXT: the mobile sync contract types it as String.
+  make?: string | null;
+  model?: string | null;
+  lensModel?: string | null;
+  fNumber?: number | null;
+  focalLength?: number | null;
+  iso?: number | null;
+  exposureTime?: string | null;
+  orientation?: string | null;
+  dateTimeOriginal?: string | null;
+  // 1 = bytes already inspected for EXIF (at upload or by the lazy backfill).
+  exifChecked?: number;
+  // 1 = the checksum backfill already attempted this row (heals empty checksums).
+  checksumChecked?: number;
+  // 1 = the HEIC thumbnail backfill settled this row (thumb stored/undecodable).
+  heicThumbChecked?: number;
+}
+
+export interface Album {
+  id: string;
+  albumName: string;
+  description?: string;
+  createdAt: string;
+  updatedAt: string;
+  albumThumbnailAssetId?: string | null;
+}
+
+/** Every column that actually exists on `photos`.
+ *
+ *  `savePhoto` builds its statement from the KEYS of the object it is given —
+ *  values are bound and safe, identifiers are interpolated. A caller that
+ *  passed user-controlled keys therefore passed user-controlled SQL. One such
+ *  caller existed (`/api/assets/finalize-client-upload`, now deleted), and the
+ *  point of this list is that the NEXT one cannot do the same by accident.
+ *
+ *  Kept in step with the canonical schema by `schema-columns.test.ts`.
+ */
+export const PHOTO_COLUMNS: ReadonlySet<string> = new Set([
+  'id', 'ownerId', 'fileName', 'fileSize',
+  'mimeType', 'width', 'height', 'duration',
+  'fileCreatedAt', 'uploadedAt', 'telegramOriginalId', 'telegramThumbId',
+  'telegramChunks', 'encryptionMode', 'thumbEncrypted', 'checksum',
+  'isHeic', 'livePhotoVideoId', 'isFavorite', 'isTrashed',
+  'visibility', 'description', 'city', 'country',
+  'thumbhash', 'telegramPreviewId', 'previewEncrypted', 'latitude',
+  'longitude', 'deviceAssetId', 'deviceId', 'make',
+  'model', 'lensModel', 'fNumber', 'focalLength',
+  'iso', 'exposureTime', 'orientation', 'dateTimeOriginal',
+  'exifChecked', 'checksumChecked', 'heicThumbChecked',
+  // Added by self-healing ALTERs rather than CREATE TABLE — just as real, and
+  // omitting them here would silently drop video playback renditions.
+  'telegramPlaybackChunks', 'purgedAt',
+]);
+
+export class D1Adapter {
+  constructor(private db: D1Database) {}
+
+  // ────────────────────────────────────────────────────────────
+  // Photos
+  // ────────────────────────────────────────────────────────────
+
+  async getPhoto(id: string): Promise<Photo | null> {
+    const result = await this.db.prepare(
+      'SELECT * FROM photos WHERE id = ?'
+    ).bind(id).first<Photo>();
+
+    return result || null;
+  }
+
+  // Normalize a D1 photo row to the legacy Firestore-shaped object the rest
+  // of the codebase still consumes: `_id` alongside `id`, `originalFileName`
+  // alongside `fileName`, and `telegramChunks` parsed back into an array.
+  static normalizeRow(row: any): any {
+    if (!row) return row;
+    let chunks = row.telegramChunks;
+    if (typeof chunks === 'string') {
+      try { chunks = JSON.parse(chunks); } catch { chunks = []; }
+    }
+    return {
+      ...row,
+      _id: row.id,
+      originalFileName: row.fileName,
+      telegramChunks: chunks,
+    };
+  }
+
+  async savePhoto(photo: Partial<Photo> & { id: string }): Promise<void> {
+    // D1 .bind() rejects `undefined` ("D1_TYPE_ERROR: Type 'undefined' not
+    // supported"). Drop undefined fields entirely (the column will keep its
+    // default / NULL) and coerce any other non-bindable values (NaN) to null.
+    const entries = Object.entries(photo)
+      .filter(([, v]) => v !== undefined)
+      // Drop anything that is not a real column BEFORE it reaches the SQL
+      // string. Defence in depth: the route that made this reachable is gone,
+      // but the shape that made it dangerous — identifiers from an object's
+      // keys — is still here, and this is what makes it safe by construction.
+      .filter(([k]) => {
+        if (PHOTO_COLUMNS.has(k)) return true;
+        console.warn(`[savePhoto] ignoring unknown column: ${JSON.stringify(k).slice(0, 60)}`);
+        return false;
+      })
+      .map(([k, v]) => [k, typeof v === 'number' && Number.isNaN(v) ? null : v] as const);
+    if (entries.length === 0) return;
+    const keys = entries.map(([k]) => k);
+    const values = entries.map(([, v]) => v);
+    const placeholders = keys.map(() => '?').join(', ');
+
+    const updateSet = keys
+      .filter(k => k !== 'id')
+      .map(k => `${k} = excluded.${k}`)
+      .join(', ');
+
+    await this.db.prepare(
+      `INSERT INTO photos (${keys.join(', ')}) VALUES (${placeholders})
+       ON CONFLICT(id) DO UPDATE SET ${updateSet}`
+    ).bind(...values).run();
+  }
+
+  // Partial UPDATE of an existing photo — only the given columns, leaving every
+  // other column (ownerId, fileName, fileCreatedAt, all metadata/timestamps)
+  // untouched. Use this instead of savePhoto for "patch a few fields on a row
+  // that already exists": savePhoto's INSERT…ON CONFLICT upsert first attempts
+  // an INSERT, which fails the NOT NULL constraints (ownerId etc.) when the
+  // object is partial, before the conflict-update can run.
+  async updatePhoto(id: string, fields: Partial<Photo>): Promise<void> {
+    const entries = Object.entries(fields)
+      .filter(([k, v]) => k !== 'id' && v !== undefined)
+      // Same identifier-interpolation shape as savePhoto, same guard.
+      .filter(([k]) => PHOTO_COLUMNS.has(k))
+      .map(([k, v]) => [k, typeof v === 'number' && Number.isNaN(v) ? null : v] as const);
+    if (entries.length === 0) return;
+    const setClause = entries.map(([k]) => `${k} = ?`).join(', ');
+    const values = entries.map(([, v]) => v);
+    await this.db.prepare(`UPDATE photos SET ${setClause} WHERE id = ?`).bind(...values, id).run();
+  }
+
+  async deletePhoto(id: string): Promise<void> {
+    await this.db.prepare('DELETE FROM photos WHERE id = ?').bind(id).run();
+  }
+
+  async queryPhotos(
+    filters: {
+      ownerId?: string;
+      isTrashed?: number;
+      visibility?: string;
+      orderBy?: string;
+      limit?: number;
+      offset?: number;
+    }
+  ): Promise<Photo[]> {
+    let query = 'SELECT * FROM photos WHERE 1=1';
+    const bindings: any[] = [];
+
+    if (filters.ownerId !== undefined) {
+      query += ' AND ownerId = ?';
+      bindings.push(filters.ownerId);
+    }
+
+    if (filters.isTrashed !== undefined) {
+      // isTrashed=0 → exclude trashed (NULL counts as not-trashed); isTrashed=1 → only trashed
+      if (filters.isTrashed === 0) {
+        query += ' AND (isTrashed = 0 OR isTrashed IS NULL)';
+      } else {
+        query += ' AND isTrashed = ?';
+        bindings.push(filters.isTrashed);
+      }
+    }
+
+    if (filters.visibility !== undefined) {
+      query += ' AND visibility = ?';
+      bindings.push(filters.visibility);
+    }
+
+    if (filters.orderBy) {
+      const allowedColumns = ['uploadedAt', 'fileCreatedAt', 'fileName', 'fileSize', 'width', 'height'];
+      const [column, direction = 'DESC'] = filters.orderBy.split(' ');
+      const upperDirection = direction.toUpperCase();
+
+      if (!allowedColumns.includes(column) || !['ASC', 'DESC'].includes(upperDirection)) {
+        throw new Error(`Invalid orderBy parameter: ${filters.orderBy}`);
+      }
+      query += ` ORDER BY ${column} ${upperDirection}`;
+    }
+
+    if (filters.limit !== undefined) {
+      query += ' LIMIT ?';
+      bindings.push(filters.limit);
+    }
+
+    if (filters.offset !== undefined) {
+      query += ' OFFSET ?';
+      bindings.push(filters.offset);
+    }
+
+    const result = await this.db.prepare(query).bind(...bindings).all<Photo>();
+    return result.results || [];
+  }
+
+  // ────────────────────────────────────────────────────────────
+  // Albums
+  // ────────────────────────────────────────────────────────────
+
+  async getAlbum(id: string): Promise<Album | null> {
+    const result = await this.db.prepare(
+      'SELECT * FROM albums WHERE id = ?'
+    ).bind(id).first<Album>();
+
+    return result || null;
+  }
+
+  async saveAlbum(album: Partial<Album> & { id: string }): Promise<void> {
+    const keys = Object.keys(album);
+    const placeholders = keys.map(() => '?').join(', ');
+    const values = Object.values(album);
+
+    const updateSet = keys
+      .filter(k => k !== 'id')
+      .map(k => `${k} = excluded.${k}`)
+      .join(', ');
+
+    await this.db.prepare(
+      `INSERT INTO albums (${keys.join(', ')}) VALUES (${placeholders})
+       ON CONFLICT(id) DO UPDATE SET ${updateSet}`
+    ).bind(...values).run();
+  }
+
+  async deleteAlbum(id: string): Promise<void> {
+    await this.db.prepare('DELETE FROM albums WHERE id = ?').bind(id).run();
+  }
+
+  async getAlbumAssets(albumId: string): Promise<string[]> {
+    const result = await this.db.prepare(
+      'SELECT assetId FROM album_assets WHERE albumId = ? ORDER BY addedAt DESC'
+    ).bind(albumId).all<{ assetId: string }>();
+
+    return result.results?.map(r => r.assetId) || [];
+  }
+
+  async listAlbums(assetId?: string): Promise<Album[]> {
+    const statement = assetId
+      ? this.db.prepare(
+        `SELECT albums.* FROM albums
+         INNER JOIN album_assets ON album_assets.albumId = albums.id
+         WHERE album_assets.assetId = ?
+         ORDER BY albums.updatedAt DESC`
+      ).bind(assetId)
+      : this.db.prepare('SELECT * FROM albums ORDER BY updatedAt DESC');
+    const result = await statement.all<Album>();
+    return result.results || [];
+  }
+
+  async countAlbumAssets(albumId: string): Promise<number> {
+    const result = await this.db.prepare(
+      'SELECT COUNT(*) as c FROM album_assets WHERE albumId = ?'
+    ).bind(albumId).first<{ c: number }>();
+    return result?.c || 0;
+  }
+
+  async addAssetToAlbum(albumId: string, assetId: string): Promise<void> {
+    await this.db.prepare(
+      'INSERT OR IGNORE INTO album_assets (albumId, assetId, addedAt) VALUES (?, ?, ?)'
+    ).bind(albumId, assetId, new Date().toISOString()).run();
+  }
+
+  async removeAssetFromAlbum(albumId: string, assetId: string): Promise<void> {
+    await this.db.prepare(
+      'DELETE FROM album_assets WHERE albumId = ? AND assetId = ?'
+    ).bind(albumId, assetId).run();
+  }
+
+  // ────────────────────────────────────────────────────────────
+  // Config
+  // ────────────────────────────────────────────────────────────
+
+  async getConfig(key: string): Promise<string | null> {
+    const result = await this.db.prepare(
+      'SELECT value FROM config WHERE key = ?'
+    ).bind(key).first<{ value: string }>();
+
+    return result?.value || null;
+  }
+
+  async setConfig(key: string, value: string): Promise<void> {
+    await this.db.prepare(
+      'INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)'
+    ).bind(key, value).run();
+  }
+
+  // JSON-blob config helpers — these store a serialized object under a single
+  // key in the existing config table, so we can move per-user document configs
+  // (telegram/photosFlags/worker/immich_profile) off Firestore without adding
+  // new columns or migrations.
+  async getJsonConfig<T = any>(key: string): Promise<T | null> {
+    const raw = await this.getConfig(key);
+    if (!raw) return null;
+    try { return JSON.parse(raw) as T; } catch { return null; }
+  }
+
+  async setJsonConfig(key: string, value: any): Promise<void> {
+    await this.setConfig(key, JSON.stringify(value));
+  }
+
+  async getZkeConfig(): Promise<{
+    mode: string;
+    enabled: boolean;
+    password: string;
+    salt: string;
+  } | null> {
+    const result = await this.db.prepare(
+      `SELECT key, value FROM config
+       WHERE key IN ('zke_mode', 'zke_enabled', 'zke_password', 'zke_salt')`
+    ).all<{ key: string; value: string }>();
+
+    if (!result.results || result.results.length === 0) {
+      return null;
+    }
+
+    const config = Object.fromEntries(
+      result.results.map(r => [r.key, r.value])
+    );
+
+    // A missing `zke_mode` used to return null, which every caller reads as
+    // "encryption is off". That is a fail-open sitting inside a function whose
+    // job is now to fail closed: rows saying zke_enabled='1' with no mode would
+    // have uploaded plaintext with a 200. `enabled` is the flag that claims
+    // encryption, so it is the flag that decides.
+    if (!config.zke_mode && config.zke_enabled !== '1') return null;
+
+    return {
+      mode: config.zke_mode || 'server',
+      enabled: config.zke_enabled === '1',
+      password: config.zke_password || '',
+      salt: config.zke_salt || ''
+    };
+  }
+
+  async setZkeConfig(config: {
+    mode?: string;
+    enabled?: boolean;
+    password?: string;
+    salt?: string;
+  }): Promise<void> {
+    if (config.mode !== undefined) {
+      await this.setConfig('zke_mode', config.mode);
+    }
+    if (config.enabled !== undefined) {
+      await this.setConfig('zke_enabled', config.enabled ? '1' : '0');
+    }
+    if (config.password !== undefined) {
+      await this.setConfig('zke_password', config.password);
+    }
+    if (config.salt !== undefined) {
+      await this.setConfig('zke_salt', config.salt);
+    }
+  }
+
+  // ────────────────────────────────────────────────────────────
+  // Drive files (file/folder metadata — bytes live in Telegram, uploaded
+  // client-side; this table never holds plaintext or keys)
+  // ────────────────────────────────────────────────────────────
+
+  // Parse the stored `messages` JSON back to an array and coerce `encrypted`
+  // to a real boolean for the JSON client (mirrors normalizeRow for photos).
+  static normalizeFile(row: any): any {
+    if (!row) return row;
+    let messages = row.messages;
+    if (typeof messages === 'string') {
+      try { messages = JSON.parse(messages); } catch { messages = []; }
+    }
+    let thumb = row.thumb ?? null;
+    if (typeof thumb === 'string') {
+      try { thumb = JSON.parse(thumb); } catch { thumb = null; }
+    }
+    return { ...row, messages: messages ?? [], encrypted: !!row.encrypted, thumb };
+  }
+
+  async listFiles(ownerId: string, parentId?: string): Promise<any[]> {
+    let query = 'SELECT * FROM files WHERE ownerId = ?';
+    const bindings: any[] = [ownerId];
+    if (parentId !== undefined) {
+      query += ' AND parentId = ?';
+      bindings.push(parentId);
+    }
+    // Folders first, then files, alphabetical — matches the old Drive ordering.
+    query += " ORDER BY (type = 'folder') DESC, fileName COLLATE NOCASE ASC";
+    const result = await this.db.prepare(query).bind(...bindings).all<any>();
+    return (result.results || []).map(D1Adapter.normalizeFile);
+  }
+
+  async getFile(id: string): Promise<any | null> {
+    const result = await this.db.prepare('SELECT * FROM files WHERE id = ?').bind(id).first<any>();
+    return result || null;
+  }
+
+  // Both writes below refuse in the statement itself (false = nothing written)
+  // when the row, or the folder it would land in, is being deleted, so a mark
+  // landing between a route's check and its write can't be overwritten.
+  async saveFile(file: Record<string, any> & { id: string }): Promise<boolean> {
+    const entries = Object.entries(file).filter(([, v]) => v !== undefined);
+    const keys = entries.map(([k]) => k);
+    const values = entries.map(([, v]) => v);
+    const placeholders = keys.map(() => '?').join(', ');
+    const updateSet = keys.filter(k => k !== 'id').map(k => `${k} = excluded.${k}`).join(', ');
+    const result = await this.db.prepare(
+      `INSERT INTO files (${keys.join(', ')})
+       SELECT ${placeholders}
+       WHERE NOT EXISTS (SELECT 1 FROM files WHERE id = ? AND purgingAt IS NOT NULL)
+       ON CONFLICT(id) DO UPDATE SET ${updateSet} WHERE files.purgingAt IS NULL`
+    ).bind(...values, file.parentId ?? 'root').run();
+    return (result.meta?.changes ?? 0) > 0;
+  }
+
+  async updateFile(id: string, fields: Record<string, any>): Promise<boolean> {
+    const entries = Object.entries(fields).filter(([k, v]) => k !== 'id' && v !== undefined);
+    if (entries.length === 0) return true;
+    const setClause = entries.map(([k]) => `${k} = ?`).join(', ');
+    const bindings = [...entries.map(([, v]) => v), id];
+    let where = 'id = ? AND purgingAt IS NULL';
+    if (typeof fields.parentId === 'string') {
+      where += ' AND NOT EXISTS (SELECT 1 FROM files p WHERE p.id = ? AND p.purgingAt IS NOT NULL)';
+      bindings.push(fields.parentId);
+    }
+    const result = await this.db.prepare(`UPDATE files SET ${setClause} WHERE ${where}`).bind(...bindings).run();
+    return (result.meta?.changes ?? 0) > 0;
+  }
+
+  async deleteFile(id: string): Promise<void> {
+    await this.db.prepare('DELETE FROM files WHERE id = ?').bind(id).run();
+  }
+
+  /**
+   * Mark an item and everything inside it for deletion (Drive's "delete
+   * forever", W1). Owner-scoped at every level; UNION (not UNION ALL) stops on
+   * a cycle in old data; a row named 'root' (the top level's marker) is never marked. Keeps an existing mark, and returns every row of the
+   * subtree so a client can delete their Telegram messages and resume later.
+   */
+  async markPurging(ownerId: string, id: string, now: string): Promise<any[]> {
+    const result = await this.db.prepare(
+      `WITH RECURSIVE sub(id) AS (
+         SELECT id FROM files WHERE id = ? AND ownerId = ?
+         UNION
+         SELECT f.id FROM files f JOIN sub ON f.parentId = sub.id WHERE f.ownerId = ? AND f.id <> 'root'
+       )
+       UPDATE files SET purgingAt = COALESCE(purgingAt, ?)
+       WHERE ownerId = ? AND id IN (SELECT id FROM sub)
+       RETURNING *`
+    ).bind(id, ownerId, ownerId, now, ownerId).all<any>();
+    return (result.results || []).map(D1Adapter.normalizeFile);
+  }
+
+  async hasChildren(ownerId: string, id: string): Promise<boolean> {
+    const row = await this.db.prepare('SELECT 1 AS x FROM files WHERE ownerId = ? AND parentId = ? LIMIT 1').bind(ownerId, id).first<any>();
+    return !!row;
+  }
+
+  // ────────────────────────────────────────────────────────────
+  // Deduplication lookup
+  // ────────────────────────────────────────────────────────────
+
+  // Batch checksum lookup for bulk-upload-check. D1 bound-variable limit is 100,
+  // so we chunk to stay safely under it. Returns only non-trashed rows.
+  async getPhotosByChecksums(ownerId: string, checksums: string[]): Promise<Photo[]> {
+    if (checksums.length === 0) return [];
+    const BATCH = 90;
+    const results: Photo[] = [];
+    for (let i = 0; i < checksums.length; i += BATCH) {
+      const batch = checksums.slice(i, i + BATCH);
+      const placeholders = batch.map(() => '?').join(',');
+      const rows = await this.db
+        .prepare(`SELECT id, checksum FROM photos WHERE ownerId = ? AND checksum IN (${placeholders}) AND isTrashed = 0`)
+        .bind(ownerId, ...batch)
+        .all<Photo>();
+      results.push(...(rows.results || []));
+    }
+    return results;
+  }
+
+  // Look up an existing photo by the device-local identity pair that the Immich
+  // mobile app sends on every upload. `isVideo` discriminates live-photo stills
+  // (JPEG) from their companion MOV — both carry the SAME deviceAssetId — so we
+  // match on mimeType kind (video/* vs everything else) to avoid returning the
+  // wrong half of a live pair as a duplicate.
+  async getPhotoByDeviceAsset(
+    ownerId: string,
+    deviceAssetId: string,
+    deviceId: string,
+    isVideo: boolean,
+  ): Promise<Photo | null> {
+    const mimeClause = isVideo
+      ? "AND mimeType LIKE 'video/%'"
+      : "AND mimeType NOT LIKE 'video/%'";
+    // Trashed rows MUST be excluded. Deleting an asset removes its Telegram
+    // bytes immediately and keeps the row only as a sync tombstone, so matching
+    // one here made the worker answer "duplicate, already stored" to an upload
+    // whose bytes it then threw away: the photo existed nowhere, the app
+    // believed it was backed up, and because sync keeps tombstoning the id the
+    // phone re-offered the same file on every single backup run. Skipping
+    // tombstones lets the re-upload land as a fresh row — the photo comes back
+    // and the loop ends.
+    const result = await this.db
+      .prepare(
+        `SELECT * FROM photos WHERE ownerId = ? AND deviceAssetId = ? AND deviceId = ? ${mimeClause}
+           AND (isTrashed = 0 OR isTrashed IS NULL) LIMIT 1`,
+      )
+      .bind(ownerId, deviceAssetId, deviceId)
+      .first<Photo>();
+    return result || null;
+  }
+
+  // All rows for a (deviceAssetId, deviceId), regardless of media kind. Used by
+  // the upload early-dedup short-circuit: exactly one row means there's no
+  // live-photo companion, so a storm retry can return without buffering the
+  // file. Two rows = a live pair → routed to the precise upload path. Capped at
+  // 3: we only need to distinguish 0 / 1 / many.
+  async getPhotosByDeviceAsset(
+    ownerId: string,
+    deviceAssetId: string,
+    deviceId: string,
+  ): Promise<Photo[]> {
+    const result = await this.db
+      .prepare(
+        // Same tombstone exclusion as getPhotoByDeviceAsset — a trashed row has
+        // no bytes behind it and must never satisfy a dedup check.
+        `SELECT * FROM photos WHERE ownerId = ? AND deviceAssetId = ? AND deviceId = ?
+           AND (isTrashed = 0 OR isTrashed IS NULL) LIMIT 3`,
+      )
+      .bind(ownerId, deviceAssetId, deviceId)
+      .all<Photo>();
+    return result.results || [];
+  }
+
+  // Total bytes a user has stored in Drive (folders count as 0). Feeds the
+  // storage/usage display without scanning Telegram.
+  async sumFileSizes(ownerId: string): Promise<number> {
+    const result = await this.db.prepare(
+      "SELECT COALESCE(SUM(fileSize), 0) AS total FROM files WHERE ownerId = ? AND type = 'file'"
+    ).bind(ownerId).first<{ total: number }>();
+    return result?.total || 0;
+  }
+}
+
+// ────────────────────────────────────────────────────────────
+// Drive schema, self-healing
+// ────────────────────────────────────────────────────────────
+// Auto-update ships code only, never a migration, so the Drive handlers create
+// their own table, and release W1's columns on a table made before it. Done
+// once per database binding; if that binding is new on every request it costs
+// one PRAGMA. A failed ALTER counts only if the column is really still missing
+// (another isolate may have added it), so this reads the schema, not an error
+// message. packages/schema/schema.mjs holds the same columns for new installs; a test
+// keeps the two equal.
+const W1_FILE_COLUMNS = ['trashedAt', 'purgingAt', 'thumb'];
+const driveSchemaReady = new WeakSet<object>();
+
+async function fileColumns(db: D1Database): Promise<Set<string>> {
+  const result = await db.prepare('PRAGMA table_info(files)').all<{ name: string }>();
+  return new Set((result.results || []).map((c) => c.name));
+}
+
+export async function ensureDriveSchema(db: D1Database): Promise<void> {
+  if (driveSchemaReady.has(db)) return;
+  let columns = await fileColumns(db);
+  if (columns.size === 0) {
+    await db.batch([
+      db.prepare(`CREATE TABLE IF NOT EXISTS files (
+        id TEXT PRIMARY KEY, ownerId TEXT NOT NULL, parentId TEXT NOT NULL DEFAULT 'root',
+        type TEXT NOT NULL DEFAULT 'file', fileName TEXT NOT NULL, fileSize INTEGER DEFAULT 0,
+        fileType TEXT, messages TEXT, encrypted INTEGER DEFAULT 0,
+        encryptionMode TEXT DEFAULT 'off', uploadedAt TEXT NOT NULL, updatedAt TEXT,
+        trashedAt TEXT, purgingAt TEXT, thumb TEXT
+      )`),
+      db.prepare('CREATE INDEX IF NOT EXISTS idx_files_owner_parent ON files(ownerId, parentId)'),
+    ]);
+    columns = await fileColumns(db);
+  }
+  for (const column of W1_FILE_COLUMNS) {
+    if (columns.has(column)) continue;
+    try {
+      await db.prepare(`ALTER TABLE files ADD COLUMN ${column} TEXT`).run();
+    } catch (error) {
+      if (!(await fileColumns(db)).has(column)) throw error;
+    }
+  }
+  driveSchemaReady.add(db);
+}

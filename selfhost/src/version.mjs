@@ -3,7 +3,7 @@
 //
 // Why this exists: `BUILD_VERSION` is not decoration. A self-hosted worker
 // compares it against the newest GitHub release tag once a day
-// (`immich-api-shim/src/update-check.ts`) and shows an update banner when the
+// (`workers/user-worker/src/update-check.ts`) and shows an update banner when the
 // tag is newer. That check is the ONLY way a self-hoster learns a fix exists —
 // we can push to managed installs because we hold their Cloudflare token, and
 // we deliberately cannot push to theirs.

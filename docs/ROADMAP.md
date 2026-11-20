@@ -1,66 +1,42 @@
 # Roadmap
 
-What is being worked on, what is deliberately not, and in what order. Kept short
-and honest — if something here stops being true, it gets edited or deleted.
+What is being worked on, what comes next, and what is deliberately not
+happening. Kept short. If something here stops being true, edit it or delete it.
+No dates: this says what ships next, not when.
 
 ## Now
 
-**The web experience.** Photos and Drive are the product, and they come first.
-Everything below waits on the web being genuinely good.
+**The iPhone app.** A native SwiftUI app over one shared Rust core
+(`core/`), starting from HomeRoll's Swift code with its server layer replaced
+by the core. The plan, the order and how the core is proven are in
+[plan/ENGINE.md](plan/ENGINE.md) (SPEC D26, D27).
 
-**Consolidating the storage primitive.** Chunk, encrypt, upload, record a
-manifest — this is implemented independently in four places
-(`immich-api-shim/src/assets.ts`, `webdav.ts`, `drive/src/App.jsx`,
-`immich/web/.../daemonclient-drive.ts`), and `19 * 1024 * 1024` appears in five
-files. A chunking bug currently has to be fixed four times, correctly, every
-time. This is the single biggest obstacle to "fix it once and everyone gets the
-fix", and the most valuable work available.
+**The worker contract v2.** A change feed instead of sending the whole library
+on every sync, plus bulk create for uploads from the phone. Draft:
+[plan/CONTRACT_V2.md](plan/CONTRACT_V2.md).
+
+**Keeping what is live working.** Photos and Drive on the web, each user's
+worker and the accounts portal get bug fixes and security fixes as they come.
 
 ## Next
 
-**Sharing between users.** Cross-user shared albums are built and held pending a
-security review. The one-install-one-owner model is a real boundary and opening
-it needs care rather than speed.
+**The Android app.** Kotlin and Compose over the same core.
 
-**Chunked upload from mobile.** Videos over 100 MB cannot be uploaded from the
-app because Cloudflare caps request bodies at 100 MB. The web already avoids
-this by uploading straight to Telegram; the app needs the same path.
+**Both websites rebuilt on the engine.** Photos and Drive move onto the same
+Rust rules, compiled to WebAssembly, so one fix reaches every client (SPEC D25).
+Until then the websites change only for fixes.
 
-**A curl bootstrap for self-hosting.** `curl … | sh` rather than clone-then-run.
+## Paused
 
-## Later
+**The self-host installer**, since 2026-09-30. Where to pick it up is in
+[../EXECUTION_STATUS.md](../EXECUTION_STATUS.md) ("Paused 2026-09-30 — how to
+resume"); its plans are in [plan/](plan/).
 
-**Mobile apps.** Native iPhone (SwiftUI) and Android (Kotlin + Compose) apps
-on a shared Rust core (`core/`) are being built — the plan is
-[plan/ENGINE.md](plan/ENGINE.md) Part 2. Shipping to the App Store also needs a
-paid developer account and a release pipeline.
+## Not happening
 
-This is deliberately last. An app that talks to a server still being reshaped
-is an app that breaks weekly, and one build in the store has to talk to servers
-of many ages.
+**Paid storage.** Telegram is the storage, and unlimited storage is the
+product.
 
-## Not planned
-
-Saying no is part of the design.
-
-| | |
-|---|---|
-| **Object storage (R2, S3)** | Unlimited free storage in your own Telegram channel is the entire premise. Object storage would end the project. |
-| **Docker, a VPS, anything long-running** | Fully serverless is a hard constraint. Free tiers are the product, not a stopgap. |
-| **Multi-user installs** | One install, one owner. Add family accounts if you want them; tenancy is not being built. |
-| **Telemetry, analytics, crash reporting** | Nothing phones home. A self-hosted install must work if we disappear. |
-| **Face recognition, smart search** | They need ML this architecture has nowhere to run. The routes return correctly-shaped empty results rather than pretending. |
-| **A paid tier** | There is nothing to sell. The infrastructure is yours. |
-
-## Done
-
-- **Self-hosting.** `daemonclient setup` builds a complete install on your own
-  accounts; `daemonclient web` deploys all three apps to your own Firebase
-  Hosting. Nothing in a self-host build points at us, and a test enforces it.
-- **Client-direct media.** The browser reads and writes file bytes straight from
-  Telegram, so the worker handles metadata only.
-- **Single sign-on** across the accounts portal, Photos and Drive.
-- **Turnstile** on sign-up, sign-in and session creation.
-- **Firebase ID token auth** on the worker, with the owner gate hardened so a
-  stranger cannot claim an unowned install.
-- **CI** on every component that has tests.
+**Processing on servers.** Work that needs real CPU (HEIC decoding, video
+copies, thumbnails) runs on the user's own device: the browser today, the phone
+apps next. The optional HEIC processor was removed on 2026-11-20.

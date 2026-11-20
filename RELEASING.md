@@ -3,7 +3,7 @@
 Releases matter more here than in most projects. A self-hosted worker checks
 this repository's **GitHub releases feed** once a day and shows a banner when
 the newest tag is newer than the build it is running
-(`immich-api-shim/src/update-check.ts`). That feed is the **only** way a
+(`workers/user-worker/src/update-check.ts`). That feed is the **only** way a
 self-hoster learns a security fix exists — we can push to managed installs
 because we hold their Cloudflare token, and we deliberately cannot push to
 theirs.

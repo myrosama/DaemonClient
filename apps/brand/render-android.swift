@@ -1,6 +1,6 @@
 // Android launcher icons and splash images from the DaemonClient logo.
 // Usage: swift render-android.swift <logo.png> <outdir>
-// Source logo: drive/public/logo.png. Where each output goes: README.md here.
+// Source logo: apps/drive-web/public/logo.png. Where each output goes: README.md here.
 import AppKit
 import ImageIO
 import UniformTypeIdentifiers

@@ -14,7 +14,7 @@ const read = (p) => readFileSync(new URL(p, repo), 'utf8');
 
 describe('the key that protected nothing is gone', () => {
   test('the shim no longer declares ENCRYPTION_MASTER_KEY', () => {
-    assert.ok(!read('immich-api-shim/src/index.ts').includes('ENCRYPTION_MASTER_KEY'));
+    assert.ok(!read('workers/user-worker/src/index.ts').includes('ENCRYPTION_MASTER_KEY'));
   });
 
   test('no live CLI command still ships it as a binding', () => {
@@ -34,7 +34,7 @@ describe('the key that protected nothing is gone', () => {
   // encrypts every user's stored Cloudflare API token. A repo-wide
   // grep-and-delete would have locked the whole fleet out of auto-update.
   test('the deployment service keeps its real ENCRYPTION_MASTER_KEY', () => {
-    const src = read('deployment-service/src/index.ts');
+    const src = read('workers/deployment/src/index.ts');
     assert.ok(src.includes('ENCRYPTION_MASTER_KEY'), 'the REAL key was deleted by mistake');
     assert.match(src, /encryptToken\([^)]*ENCRYPTION_MASTER_KEY/);
   });

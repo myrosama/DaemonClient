@@ -273,7 +273,7 @@ export async function ensurePagesProject(ctx, name) {
 // and it reads `.env` from the working directory on every invocation — the
 // documented way a stray CLOUDFLARE_API_TOKEN silently overrides the browser
 // sign-in. The same PUT the hosted provisioner uses
-// (deployment-service/src/cloudflare-api.ts:23-59) has neither problem.
+// (workers/deployment/src/cloudflare-api.ts:23-59) has neither problem.
 
 /**
  * Upload a module worker with its bindings.

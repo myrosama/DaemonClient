@@ -79,7 +79,7 @@ The existing `selfhost/src` is not thrown away. The parts that matter are the
 - `api/cloudflare.mjs` — the permission probe, D1 creation, worker deploy
 - `zke.mjs` — key seeding that reads before writing
 - `state.mjs` — resumable state, mode 0600
-- `schema/schema.mjs` — one schema for both provisioners
+- `packages/schema/schema.mjs` — one schema for both provisioners
 
 Only `ui.mjs` is replaced, and the command files are rewritten to call Clack
 instead of it. This is a re-skin plus a distribution change, not a rewrite.
@@ -165,7 +165,7 @@ door. `daemonclient` on npm stays reserved for the Drive CLI.
 ### Cloudflare pre-scoped token link — mostly answered by existing code
 
 It turns out the hosted signup flow already does this, and the installer simply
-never got it. `accounts-portal/src/pages/SetupWorker.jsx:12` builds:
+never got it. `apps/accounts-web/src/pages/SetupWorker.jsx:12` builds:
 
 ```
 https://dash.cloudflare.com/profile/api-tokens

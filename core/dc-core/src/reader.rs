@@ -1,6 +1,6 @@
 //! Reading an asset (P1 design §5.6): which stored file answers which
 //! request — the web's `selectFileIds` and playback rule
-//! (immich/web/src/service-worker/telegram-media.ts and index.ts), ported
+//! (apps/photos-web/web/src/service-worker/telegram-media.ts and index.ts), ported
 //! exactly — and the checks that keep every byte at its offset.
 
 use std::collections::VecDeque;
@@ -146,7 +146,7 @@ pub(crate) enum Stored {
     Encrypted,
     /// An encrypted library's thumbnail or preview. Older uploads stored it
     /// plain, so when decryption fails the bytes are used if they are a JPEG
-    /// or PNG — the worker's own rule (immich-api-shim `assets.ts`).
+    /// or PNG — the worker's own rule (workers/user-worker `assets.ts`).
     Picture,
 }
 

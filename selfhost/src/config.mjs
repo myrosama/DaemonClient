@@ -207,7 +207,7 @@ function quote(v) {
  *  the user's Cloudflare sign-in. Find them so the CLI can refuse to continue. */
 export function findHostileDotEnvFiles(repoRoot) {
   const found = [];
-  for (const rel of ['.env', path.join('immich-api-shim', '.env')]) {
+  for (const rel of ['.env', path.join('workers', 'user-worker', '.env'), path.join('immich-api-shim', '.env')]) {
     const file = path.join(repoRoot, rel);
     if (!fs.existsSync(file)) continue;
     const { values } = parseEnv(fs.readFileSync(file, 'utf8'));

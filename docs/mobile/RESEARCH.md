@@ -65,8 +65,8 @@ Flutter) and its protocol (Filen's own servers). `filen-rs` is a reference for
 ## 2. One storage format for both apps        2026-10-04
 
 Read from the code, not from memory:
-`drive/src/crypto.js`, `drive/src/App.jsx:28-384`,
-`immich-api-shim/src/assets.ts:17-202`, `docs/ARCHITECTURE.md` §"The storage
+`apps/drive-web/src/crypto.js`, `apps/drive-web/src/App.jsx:28-384`,
+`workers/user-worker/src/assets.ts:17-202`, `docs/ARCHITECTURE.md` §"The storage
 primitive" and §"Encryption".
 
 Photos and Drive store bytes **the same way**:
@@ -83,7 +83,7 @@ Because each chunk carries its own IV and tag, any chunk can be fetched and
 decrypted alone.
 
 > **Corrections, 2026-10-05 (Gate 3 of P0 Task 0.3):**
-> - The Drive constant is now at `drive/src/App.jsx:81` (and `:296`), not `:28`
+> - The Drive constant is now at `apps/drive-web/src/App.jsx:81` (and `:296`), not `:28`
 >   — the 2026-10-04 bug-1 commits moved it.
 > - The worker stores **one** part for a 0-byte upload
 >   (`assets.ts:1788,1858`: `Math.max(1, Math.ceil(size / CHUNK_SIZE))`), where
@@ -91,7 +91,7 @@ decrypted alone.
 >   count computed from the size.
 > - Native players treat a short `206` as end-of-file, and iPhone video opens
 >   with a suffix range `bytes=-N` to find its index — both stated in the
->   comments of `immich/web/src/service-worker/telegram-media.ts`
+>   comments of `apps/photos-web/web/src/service-worker/telegram-media.ts`
 >   (`planVideoRange`). The phone's media server must serve the full range and
 >   handle suffix ranges. That is what makes video seeking and "open without
 downloading" possible: a byte range maps to the chunks that cover it.
@@ -238,9 +238,9 @@ feel, OneDrive's tab structure, Dropbox's upload sheet, Documents' viewers.
 
 ## 6. Photos — the client-side path the mobile app will use        2026-10-04
 
-Read from `immich/web/src/lib/utils/file-uploader.ts:300-448`,
-`immich/web/src/lib/utils/daemonclient-drive.ts:295-367`,
-`immich-api-shim/src/auth.ts:15,110-160`, `helpers.ts:65-150`.
+Read from `apps/photos-web/web/src/lib/utils/file-uploader.ts:300-448`,
+`apps/photos-web/web/src/lib/utils/daemonclient-drive.ts:295-367`,
+`workers/user-worker/src/auth.ts:15,110-160`, `helpers.ts:65-150`.
 
 ### Login and the per-user worker
 
@@ -248,7 +248,7 @@ Read from `immich/web/src/lib/utils/file-uploader.ts:300-448`,
   no D1) `{email, password}` → `{accessToken, userId, userEmail, name,
   workerUrl, …}`. Every later call goes **straight to `workerUrl`** with
   `Authorization: Bearer <accessToken>` — this is what the web Drive does
-  (`drive/src/api.js`).
+  (`apps/drive-web/src/api.js`).
 - Session tokens live **~10 years** (`SESSION_TTL_SECONDS`, `auth.ts:15`); the
   worker refreshes the Firebase token inside the session itself
   (`helpers.ts:139`). The app stores one token in the Keychain; no client-side
@@ -256,7 +256,7 @@ Read from `immich/web/src/lib/utils/file-uploader.ts:300-448`,
 - The current fork pre-fills `https://api.daemonclient.uz` as the server and
   does **not** read `workerUrl` anywhere in `lib/` (grep, 2026-10-04). The
   central worker does not forward API calls to per-user workers (no forwarding
-  code in `immich-api-shim/src/index.ts`). **Unverified:** what the fork
+  code in `workers/user-worker/src/index.ts`). **Unverified:** what the fork
   actually does after login today. Phase 0 runs it in the Simulator to find out
   before anything is designed around it.
 
@@ -313,14 +313,14 @@ the website open it?
 **No — not in Chrome or Firefox** (only Safari decodes HEIC). From the code:
 
 - The web viewer asks for `/thumbnail?size=preview`; the service worker's
-  `selectFileIds` (`immich/web/src/service-worker/telegram-media.ts`) answers
+  `selectFileIds` (`apps/photos-web/web/src/service-worker/telegram-media.ts`) answers
   with `previewId` if there is one, otherwise — for a single-part asset — the
   **original**, i.e. the HEIC bytes, which the browser cannot draw.
 - The service worker has no HEIC conversion (`grep -i heic` in
   `service-worker/index.ts`: nothing).
 
 **The route already exists, so no worker change is needed:**
-`POST /api/assets/:id/thumbnail` (`immich-api-shim/src/assets.ts:475`,
+`POST /api/assets/:id/thumbnail` (`workers/user-worker/src/assets.ts:475`,
 `handleThumbnailUpload` at `:1891`) takes a `thumbnail` and an optional
 `preview` JPEG, encrypts each with the Photos key for server-encrypted assets,
 sends them to Telegram, and sets `telegramThumbId` / `telegramPreviewId`. The
@@ -532,7 +532,7 @@ loading is untested until an account with photos is used.
 
 ## 11. The worker API the core calls — exact shapes        2026-10-12
 
-Read from `immich-api-shim/src` at `main` (`2aec669`). Every call goes to the
+Read from `workers/user-worker/src` at `main` (`2aec669`). Every call goes to the
 per-user `workerUrl` with `Authorization: Bearer <accessToken>` (R§6). The
 Linux machine's unreleased security work adds `check` to `/api/drive/zke`
 (R§2 note) — nothing else here changes.
@@ -564,7 +564,7 @@ Linux machine's unreleased security work adds `check` to `/api/drive/zke`
 
 ## 12. Telegram — limits the production worker learned        2026-10-12
 
-From `immich-api-shim/src/assets.ts:3260-3395` (`paceSend`, `isSendUrl`,
+From `workers/user-worker/src/assets.ts:3260-3395` (`paceSend`, `isSendUrl`,
 `tgFetchWithRetry`, `tgGetFileUrl`) — rules paid for in production incidents:
 
 | Rule | Value | Why (from the code's own comments) |
@@ -716,7 +716,7 @@ Bot API, `core.telegram.org/bots/api`):
   fully erased. The product should say so.
 
 **How the website reads what the phone uploads** (the website's service worker
-`immich/web/src/service-worker/` and `telegram-media.ts` `selectFileIds`; the
+`apps/photos-web/web/src/service-worker/` and `telegram-media.ts` `selectFileIds`; the
 worker's `assets.ts`, `asset-manifest.ts`):
 - **Grid:** the thumbnail by `thumbId`, decrypted in the browser — works
   (the phone sends it exactly as the website does).

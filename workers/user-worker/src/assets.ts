@@ -1,0 +1,3791 @@
+import type { Env } from './index';
+import { requireAuth, firestoreGet, firestoreSet, firestoreDelete, firestoreQuery, json } from './helpers';
+import sizeOf from 'image-size';
+import { normalizePhotoManifest } from './contracts';
+import { getFlagsForUser } from './feature-flags';
+import { D1Adapter, ensureDriveSchema } from './d1-adapter';
+import { hiddenIds } from './drive-tree';
+import { getCachedConfig } from './cached-config';
+import { computeThumbHashFromJpeg } from './thumbhash-util';
+import { sha1Base64OfFile, Sha1, bytesToBase64 } from './sha1';
+import { extractExif, clientExif, type PhotoExif } from './exif';
+import { StoreZipWriter } from './zip';
+import { toAssetManifest } from './asset-manifest';
+import { earlyDedupDecision, videoHintFromFields } from './upload-dedup';
+import { isSelfHost } from './selfhost-auth';
+import { parseUploadRequest, makeFormDataLike } from './upload-stream';
+
+// --- ZKE Crypto Implementation ---
+const SALT_LENGTH = 16;
+const IV_LENGTH = 12;
+const KEY_LENGTH = 256;
+const PBKDF2_ITERATIONS = 100000;
+const CHUNK_SIZE = 19 * 1024 * 1024; // 19 MB
+
+// Durations arrive from the app as "H:MM:SS.ffffff", occasionally as plain
+// seconds, and sometimes not at all. Returns seconds, or null when there is
+// nothing trustworthy to read — callers must treat null as "unknown" rather
+// than as zero, because guessing wrong here re-pairs unrelated media.
+export function parseDurationSeconds(value: any): number | null {
+  if (value === null || value === undefined || value === '') return null;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  const text = String(value).trim();
+  if (!text) return null;
+
+  const parts = text.split(':');
+  if (parts.length === 3) {
+    const [h, m, s] = parts.map(Number);
+    if ([h, m, s].some((n) => !Number.isFinite(n))) return null;
+    return h * 3600 + m * 60 + s;
+  }
+  if (parts.length === 2) {
+    const [m, s] = parts.map(Number);
+    if ([m, s].some((n) => !Number.isFinite(n))) return null;
+    return m * 60 + s;
+  }
+  const n = Number(text);
+  return Number.isFinite(n) ? n : null;
+}
+
+// Where to send a user who needs the web app. A self-hosted install has to
+// name the operator's own address — pointing their users at our site would be
+// both wrong and a link back to infrastructure they deliberately do not use.
+// EXTERNAL_DOMAIN is set by the setup CLI; the request origin is the fallback.
+function webAppOrigin(request: Request, env: Env): string {
+  const configured = (env as any).EXTERNAL_DOMAIN;
+  if (configured) return String(configured).replace(/\/+$/, '');
+  if (isSelfHost(env)) return new URL(request.url).origin;
+  return 'photos.daemonclient.uz';
+}
+
+// The only visibility values the mobile app's strict enum parse accepts.
+// Anything else aborts its entire sync, so writes are filtered against this
+// set (sync.ts clamps again on emit, for rows written before this guard).
+const VALID_VISIBILITY = new Set(['timeline', 'hidden', 'archive', 'locked']);
+// Bumped when the EXIF extraction logic improves so the lazy backfill re-checks
+// already-parsed photos. v2: re-check photos that got camera EXIF but no GPS
+// (the old backfill skipped any row with `make` set, so HEIC photos whose GPS
+// was missed never recovered a location).
+const EXIF_PARSE_VERSION = 2;
+
+// Module-level file_path cache. Telegram file paths are valid for ~1 hour;
+// caching them avoids the getFile round-trip on every thumbnail request.
+// Shared across all requests within the same CF isolate instance.
+export const filePathCache = new Map<string, { path: string; expiresAt: number }>();
+const FILE_PATH_TTL_MS = 55 * 60 * 1000; // 55 min — safely under Telegram's 1-hour validity
+
+// The map above had `get` and `set` and no `delete` anywhere: expired entries
+// were read, ignored, and left in place. Cloudflare reuses an isolate across
+// requests, so it grew for the isolate's whole life — one entry per distinct
+// chunk the user ever touched. An unbounded cache in a process with no defined
+// lifetime is a leak whatever else is going on, and this one shares the 128 MB
+// that a backup run is already straining.
+export const FILE_PATH_CACHE_MAX = 2000;
+
+/** Drop expired entries, then oldest-first until under the cap.
+ *  Exported for tests — this is isolate-lifetime state and the only way to
+ *  prove it stays bounded is to drive it directly. */
+export function pruneFilePathCache(now: number): void {
+  for (const [k, v] of filePathCache) {
+    if (v.expiresAt <= now) filePathCache.delete(k);
+  }
+  // Map iterates in insertion order, so the first keys are the oldest.
+  if (filePathCache.size > FILE_PATH_CACHE_MAX) {
+    const excess = filePathCache.size - FILE_PATH_CACHE_MAX;
+    let dropped = 0;
+    for (const k of filePathCache.keys()) {
+      filePathCache.delete(k);
+      if (++dropped >= excess) break;
+    }
+  }
+}
+
+// At most one chunk-cache write held open at a time — see the note at the
+// `cache.put` call site. Module scope, so it bounds the isolate, not a request.
+let chunkCacheWritesInFlight = 0;
+const MAX_CHUNK_CACHE_WRITES = 1;
+
+// Minimal JPEG EXIF GPS extractor — scans APP1 segment for GPS IFD tags.
+// Returns decimal lat/lon or null. Best-effort; silently ignores corrupt EXIF.
+function extractJpegGps(buf: Uint8Array): { latitude: number; longitude: number } | null {
+  try {
+    if (buf[0] !== 0xFF || buf[1] !== 0xD8) return null; // not JPEG
+    let i = 2;
+    while (i < buf.length - 4) {
+      if (buf[i] !== 0xFF) break;
+      const marker = (buf[i] << 8) | buf[i + 1];
+      const segLen = (buf[i + 2] << 8) | buf[i + 3];
+      if (marker === 0xFFE1) {
+        const exif = buf.slice(i + 4, i + 2 + segLen);
+        if (String.fromCharCode(exif[0], exif[1], exif[2], exif[3]) !== 'Exif') { i += 2 + segLen; continue; }
+        const tiff = exif.slice(6);
+        const le = tiff[0] === 0x49;
+        const r16 = (o: number) => le ? tiff[o] | (tiff[o+1] << 8) : (tiff[o] << 8) | tiff[o+1];
+        const r32 = (o: number) => le
+          ? tiff[o] | (tiff[o+1]<<8) | (tiff[o+2]<<16) | (tiff[o+3]<<24)
+          : (tiff[o]<<24)|(tiff[o+1]<<16)|(tiff[o+2]<<8)|tiff[o+3];
+        const ifd0Off = r32(4);
+        if (ifd0Off + 2 > tiff.length) break;
+        const numEntries = r16(ifd0Off);
+        let gpsIfdOff = 0;
+        for (let e = 0; e < numEntries; e++) {
+          const eOff = ifd0Off + 2 + e * 12;
+          if (eOff + 12 > tiff.length) break;
+          if (r16(eOff) === 0x8825) { gpsIfdOff = r32(eOff + 8); break; }
+        }
+        if (!gpsIfdOff || gpsIfdOff + 2 > tiff.length) break;
+        const gpsNum = r16(gpsIfdOff);
+        const gps: Record<number, any> = {};
+        for (let e = 0; e < gpsNum; e++) {
+          const eOff = gpsIfdOff + 2 + e * 12;
+          if (eOff + 12 > tiff.length) break;
+          const tag = r16(eOff);
+          const cnt = r32(eOff + 4);
+          const vOff = cnt <= 1 ? eOff + 8 : r32(eOff + 8);
+          if (tag === 0x0001 || tag === 0x0003) {
+            gps[tag] = String.fromCharCode(tiff[vOff]);
+          } else if ((tag === 0x0002 || tag === 0x0004) && vOff + 23 < tiff.length) {
+            const dms = [];
+            for (let j = 0; j < 3; j++) {
+              const num = r32(vOff + j * 8); const den = r32(vOff + j * 8 + 4);
+              dms.push(den ? num / den : 0);
+            }
+            gps[tag] = dms[0] + dms[1] / 60 + dms[2] / 3600;
+          }
+        }
+        if (gps[0x0002] !== undefined && gps[0x0004] !== undefined) {
+          return {
+            latitude: gps[0x0001] === 'S' ? -gps[0x0002] : gps[0x0002],
+            longitude: gps[0x0003] === 'W' ? -gps[0x0004] : gps[0x0004],
+          };
+        }
+        break;
+      }
+      if (marker === 0xFFD9) break; // EOI
+      i += 2 + segLen;
+    }
+  } catch { /* corrupt EXIF — ignore */ }
+  return null;
+}
+
+async function deriveKey(password: string, saltStr: string): Promise<CryptoKey> {
+  const salt = Uint8Array.from(atob(saltStr), c => c.charCodeAt(0));
+  const keyMaterial = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(password),
+    'PBKDF2',
+    false,
+    ['deriveBits', 'deriveKey']
+  );
+  return crypto.subtle.deriveKey(
+    { name: 'PBKDF2', salt: salt, iterations: PBKDF2_ITERATIONS, hash: 'SHA-256' },
+    keyMaterial,
+    { name: 'AES-GCM', length: KEY_LENGTH },
+    false,
+    ['encrypt', 'decrypt']
+  );
+}
+
+async function encryptChunk(data: ArrayBuffer, key: CryptoKey): Promise<ArrayBuffer> {
+  const iv = crypto.getRandomValues(new Uint8Array(IV_LENGTH));
+  const encrypted = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, data);
+  const combined = new Uint8Array(iv.length + encrypted.byteLength);
+  combined.set(iv, 0);
+  combined.set(new Uint8Array(encrypted), iv.length);
+  return combined.buffer;
+}
+
+async function decryptChunk(encryptedChunk: ArrayBuffer, key: CryptoKey): Promise<ArrayBuffer> {
+  const data = new Uint8Array(encryptedChunk);
+  const iv = data.slice(0, IV_LENGTH);
+  const encrypted = data.slice(IV_LENGTH);
+  return crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, encrypted.buffer);
+}
+
+/** Encryption is switched on, but the key material to do it is missing.
+ *
+ *  This is NOT the same as encryption being off, and conflating the two is what
+ *  caused the bug this class exists to stop. See `getEncryptionKey`.
+ */
+export class EncryptionUnavailableError extends Error {
+  constructor(where: string, selfHosted = false) {
+    // The remedy differs, so the message has to. A self-hoster has the CLI and
+    // can fix this themselves; a hosted user does not have a terminal, a CLI,
+    // or any idea what `daemonclient doctor` means — telling them to run it
+    // would be a self-host detail leaking into the hosted product, and a hosted
+    // user CAN reach this state (a provisioning step-2 failure, a D1 restore).
+    // Same code, same behaviour, one sentence chosen at the edge.
+    const remedy = selfHosted
+      ? 'Run `daemonclient doctor` to generate the missing keys.'
+      : 'This needs to be repaired on the server — please report it; nothing you can do in the app will fix it.';
+    super(
+      `Encryption is enabled for this install but its key material is missing (${where}). ` +
+      `Refusing rather than storing your file unencrypted. ${remedy}`,
+    );
+    this.name = 'EncryptionUnavailableError';
+  }
+}
+
+/** The AES key for server-side encryption, or `null` when there deliberately
+ *  is none.
+ *
+ *  This function used to return `null` for two completely different situations:
+ *  "encryption is off, store plaintext" and "encryption is on but we cannot
+ *  do it". Every caller treats a null key as the former, so the latter meant a
+ *  file was written to Telegram in the clear, under its real name, while
+ *  `/api/assets/zke-status` went on reporting the install as encrypted. Silent,
+ *  and not retroactively fixable once the file is in the channel.
+ *
+ *  The broken state is not hypothetical: the migration seeds
+ *  `zke_mode='server', zke_enabled='1', zke_password='', zke_salt=''` and
+ *  relies on a *second* step to fill the last two. The hosted provisioner runs
+ *  that step (`workers/deployment/src/index.ts:334-338`); the self-host CLI
+ *  never did — that is finding §1, and Task 1.3 fixes the seeding side.
+ *
+ *  So the two cases are now distinguished:
+ *    - `enabled` is false, or there is no config at all → `null`. Plaintext, on
+ *      purpose. Task 1.2 makes `zke-status` say so honestly.
+ *    - `enabled` is TRUE but password or salt is empty → throw. The config
+ *      claims encryption; we cannot deliver it; the only wrong answer is to
+ *      quietly store the file anyway.
+ */
+async function getEncryptionKey(env: Env, uid: string, idToken: string): Promise<CryptoKey | null> {
+  const zkeConfig = env.DB
+    ? await new D1Adapter(env.DB).getZkeConfig()
+    : await firestoreGet(env, uid, 'config/zke', idToken);
+
+  if (!zkeConfig) return null;
+
+  // `enabled` is a real boolean only on the D1 branch, which normalises
+  // `zke_enabled === '1'`. Firestore passes the wire type straight through
+  // (helpers.ts `fromFirestoreValue`), so it can arrive as a boolean, the
+  // string "true"/"false", or 0/1. A bare truthiness test gets it wrong in
+  // both directions: "false" is TRUTHY, and 0 or "" would land back in the
+  // silent-plaintext branch this function exists to delete.
+  //
+  // So: only these count as off. Anything else unrecognised is treated as ON,
+  // because a config we cannot read confidently must not become a licence to
+  // store someone's photos in the clear.
+  const off = zkeConfig.enabled === false || zkeConfig.enabled === 0 ||
+    zkeConfig.enabled === '' || zkeConfig.enabled === '0' ||
+    zkeConfig.enabled === 'false' || zkeConfig.enabled === undefined ||
+    zkeConfig.enabled === null;
+  if (off) return null;
+
+  if (!zkeConfig.password || !zkeConfig.salt) {
+    const missing = [
+      !zkeConfig.password && 'password',
+      !zkeConfig.salt && 'salt',
+    ].filter(Boolean).join(' and ');
+    throw new EncryptionUnavailableError(`no ${missing}`, isSelfHost(env));
+  }
+
+  return deriveKey(zkeConfig.password, zkeConfig.salt);
+}
+
+export async function handleAssets(request: Request, env: Env, path: string, url: URL): Promise<Response> {
+  const session = await requireAuth(request, env);
+  const uid = session.uid;
+  const idToken = session.idToken;
+
+  try {
+  // Asset IDs that still need the client-side Fix-HEIC tool: HEIC images with
+  // no JPEG preview yet, plus any image missing a thumbhash. Lets the tool
+  // target exactly what's left (incl. HEICs that already got a thumbnail but
+  // not yet a preview), instead of rescanning the whole timeline.
+  if (path === '/api/assets/pending-thumbnail-fix' && request.method === 'GET') {
+    if (!env.DB) return json({ ids: [] });
+    const qp = new URL(request.url).searchParams;
+    // ?type=video — returns video assets that have no thumbnail yet (used by the
+    // "Fix video thumbnails" utility). Kept separate from the default (images) so
+    // existing HEIC tooling is unaffected and the candidate lists never mix.
+    if (qp.get('type') === 'video') {
+      // Exclude live-photo partners — they're paired MOVs, not standalone videos
+      const rows = await env.DB.prepare(
+        `SELECT id FROM photos
+           WHERE ownerId = ? AND (isTrashed = 0 OR isTrashed IS NULL)
+             AND mimeType LIKE 'video/%'
+             AND (telegramThumbId IS NULL OR telegramThumbId = '')
+             AND id NOT IN (SELECT livePhotoVideoId FROM photos WHERE livePhotoVideoId IS NOT NULL AND ownerId = ?)
+           LIMIT 5000`
+      ).bind(uid, uid).all();
+      return json({ ids: (rows.results || []).map((r: any) => r.id) });
+    }
+    // ?all=1 re-processes EVERY HEIC (even ones already fixed) — used to upgrade
+    // older low-quality previews to the current quality. Default only returns
+    // what's actually missing (HEIC without preview, or image without thumbhash).
+    const all = qp.get('all') === '1';
+    // The third clause is the fix for "some photos won't open even though they
+    // have a thumbhash and aren't flagged": a non-HEIC image with a blur but NO
+    // real thumbnail (no telegramThumbId AND no telegramPreviewId). The grid then
+    // falls back to fetching the FULL original per tile, which storms Telegram
+    // into 429s and shows a broken tile. Flagging them lets the browser fixer
+    // generate a small real thumbnail so they load fast. (HEIC is handled by the
+    // first clause + the server-side processor, so it is excluded here.)
+    const noRealThumb = `((isHeic IS NULL OR isHeic = 0) AND mimeType NOT LIKE '%hei%'`
+      + ` AND (telegramThumbId IS NULL OR telegramThumbId = '')`
+      + ` AND (telegramPreviewId IS NULL OR telegramPreviewId = ''))`;
+    const where = all
+      ? `(isHeic = 1 OR mimeType LIKE '%hei%') OR thumbhash IS NULL OR thumbhash = '' OR ${noRealThumb}`
+      : `((isHeic = 1 OR mimeType LIKE '%hei%') AND (telegramPreviewId IS NULL OR telegramPreviewId = '')) OR thumbhash IS NULL OR thumbhash = '' OR ${noRealThumb}`;
+    const rows = await env.DB.prepare(
+      `SELECT id FROM photos
+         WHERE ownerId = ? AND (isTrashed = 0 OR isTrashed IS NULL) AND mimeType LIKE 'image/%'
+           AND ( ${where} )
+         LIMIT 5000`
+    ).bind(uid).all();
+    return json({ ids: (rows.results || []).map((r: any) => r.id) });
+  }
+
+  // This endpoint is what made the plaintext bug invisible: it reported
+  // `enabled` straight from the flag and never checked that the key material
+  // to honour it existed, so the UI showed a closed padlock over an install
+  // that was writing photos to Telegram in the clear.
+  //
+  // There are THREE states, not two, and the response now says which:
+  //   mode 'off'                          → deliberately unencrypted
+  //   mode 'server' + keys present        → genuinely encrypted
+  //   mode 'server' + keys missing        → BROKEN. Uploads are refused (1.1).
+  //
+  // `mode` keeps meaning "what this install is configured for" — `PARITY.md`
+  // forbids repurposing a field, and `daemonclient-drive.ts:34` branches on it
+  // to decide whether to fetch key config at all. The truth arrives as
+  // `enabled` (which no client read, so making it honest breaks nothing) plus
+  // an additive `keyMaterialMissing`, which is what a UI needs to tell "off"
+  // apart from "broken" — those want opposite messages.
+  if (path === '/api/assets/zke-status' && request.method === 'GET') {
+    const cfg: any = env.DB
+      ? await new D1Adapter(env.DB).getZkeConfig()
+      : (await firestoreGet(env, uid, 'config/zke', idToken)) || {};
+
+    const mode = cfg?.mode || 'off';
+    const claimsEncryption = mode !== 'off' && !!cfg?.enabled;
+    const hasKeyMaterial = !!(cfg?.password && cfg?.salt);
+
+    return json({
+      mode,
+      // Only true when encryption can actually happen.
+      enabled: claimsEncryption && hasKeyMaterial,
+      keyMaterialMissing: claimsEncryption && !hasKeyMaterial,
+    });
+  }
+
+  // `/api/assets/zke-toggle` is GONE. It let anyone switch encryption OFF for the
+  // whole install from a button in the navigation bar — there is no reason to
+  // offer "store my photos unencrypted" as a one-click option, and nobody
+  // remembered adding it.
+  //
+  // It was also destructive. Both branches read the existing config to decide
+  // whether to reuse the key material, and on the Firestore branch that read is
+  // `firestoreGet`, which returns null on ANY failure — a 401, a 429, a 500. So
+  // a transient blip while turning encryption on generated and wrote a FRESH
+  // password and salt, permanently orphaning every photo already encrypted with
+  // the old ones. A button that can silently destroy a library.
+  //
+  // Encryption is now simply on, decided at provisioning time. Nothing writes
+  // zke config at runtime.
+
+
+  let resourceId: string | null = null;
+  const assetsMatch = path.match(/^\/api\/assets\/([^/]+)/);
+  const assetMatch = path.match(/^\/api\/asset\/(?:file|thumbnail|video\/playback)\/([^/]+)/);
+  
+  if (assetsMatch) {
+    resourceId = assetsMatch[1];
+  } else if (assetMatch) {
+    resourceId = assetMatch[1];
+  }
+
+  // Native mobile video players (AVPlayer/ExoPlayer) send a HEAD probe before
+  // streaming to read Content-Length / Content-Type / Accept-Ranges. We only
+  // routed GET, so HEAD fell through to a 404 JSON — the player treated the
+  // video as missing and the app crashed (browsers skip HEAD, which is why web
+  // worked). Answer HEAD with the headers GET would send, no body.
+  if (resourceId && request.method === 'HEAD' &&
+      (path.endsWith('/video/playback') || path.endsWith('/original') || path.includes('/file/') || path.endsWith('/thumbnail'))) {
+    return handleMediaHead(env, uid, resourceId, idToken, path);
+  }
+  // Tiny metadata endpoint for the Photos web service worker. Returns the
+  // Telegram file ids + encryption mode so the browser can read bytes straight
+  // from Telegram (via the user's streaming /proxy) and decrypt them itself —
+  // keeping this worker off the byte path entirely. No bytes, no Telegram
+  // round-trip here, so it can't hit the CPU/memory/subrequest limits.
+  if (resourceId && path.endsWith('/dc-manifest') && request.method === 'GET') {
+    const photo = await loadPhotoById(env, uid, resourceId, idToken);
+    if (!photo || photo.isTrashed) return json({ message: 'Not found' }, 404);
+    return json(toAssetManifest(photo));
+  }
+  if (resourceId && path.endsWith('/thumbnail') && request.method === 'GET') {
+    return handleThumbnail(request, env, uid, resourceId, idToken);
+  }
+  if (resourceId && (path.endsWith('/original') || path.includes('/file/')) && request.method === 'GET') {
+    return handleOriginal(request, env, uid, resourceId, idToken);
+  }
+  if (resourceId && path.endsWith('/video/playback') && request.method === 'GET') {
+    return handleOriginal(request, env, uid, resourceId, idToken);
+  }
+  if (resourceId && path.match(/^\/api\/assets?\/([^/]+)$/) && request.method === 'GET') {
+    return handleAssetInfo(env, uid, resourceId, idToken);
+  }
+  if (resourceId && path.match(/^\/api\/assets?\/([^/]+)$/) && (request.method === 'PUT' || request.method === 'PATCH')) {
+    return handleUpdateAsset(request, env, uid, resourceId, idToken);
+  }
+  if (resourceId && path.endsWith('/view')) {
+    return json({ id: resourceId });
+  }
+  if (path === '/api/assets' && request.method === 'DELETE') {
+    return handleDeleteAssets(request, env, uid, idToken);
+  }
+  if (path === '/api/assets' && request.method === 'PUT') {
+    return handleBulkUpdate(request, env, uid, idToken);
+  }
+  if (path === '/api/assets/bulk-upload-check' && request.method === 'POST') {
+    const body = await request.json() as any;
+    const assets: Array<{ id: string; checksum: string }> = body.assets || [];
+    if (!env.DB || assets.length === 0) {
+      return json({ results: assets.map(a => ({ id: a.id, action: 'accept', assetId: null, isTrashed: false })) });
+    }
+    await ensureDeduplicationSchema(env.DB);
+    const checksums = assets.map(a => a.checksum).filter(Boolean);
+    const existing = await new D1Adapter(env.DB).getPhotosByChecksums(uid, checksums);
+    const checksumMap = new Map(existing.map(p => [p.checksum, p.id]));
+    return json({
+      results: assets.map(a => {
+        const serverId = a.checksum ? checksumMap.get(a.checksum) : undefined;
+        return serverId
+          ? { id: a.id, action: 'reject', assetId: serverId, isTrashed: false }
+          : { id: a.id, action: 'accept', assetId: null, isTrashed: false };
+      }),
+    });
+  }
+  if ((path === '/api/assets' || path === '/api/asset/upload') && request.method === 'POST') {
+    return handleUpload(request, env, uid, idToken);
+  }
+  if (path === '/api/assets/upload-plan' && request.method === 'POST') {
+    return handleUploadPlan(request, env, uid, idToken);
+  }
+  // `/api/assets/finalize-client-upload` is GONE. It spread the raw request
+  // body into savePhoto, whose column names were interpolated into SQL — so a
+  // crafted JSON KEY was arbitrary SQL for any authenticated user. It had no
+  // caller anywhere in the repo. Deleting beats hardening a dead route; the
+  // class is closed separately in d1-adapter.savePhoto.
+  const chunkManifestMatch = path.match(/^\/api\/assets\/([^/]+)\/chunk-manifest$/);
+  if (chunkManifestMatch && request.method === 'GET') {
+    return handleChunkManifest(env, uid, chunkManifestMatch[1], idToken);
+  }
+  const thumbUploadMatch = path.match(/^\/api\/assets\/([^/]+)\/thumbnail$/);
+  if (thumbUploadMatch && request.method === 'POST') {
+    return handleThumbnailUpload(request, env, uid, thumbUploadMatch[1], idToken);
+  }
+
+  // Replace an asset's stored video with a client-processed (faststart + AAC)
+  // version so iOS can stream it. Re-encrypts/chunks like the upload path and
+  // atomically swaps the telegram refs, leaving all metadata/timestamps intact.
+  const replaceVideoMatch = path.match(/^\/api\/assets\/([^/]+)\/replace-video$/);
+  if (replaceVideoMatch && request.method === 'POST') {
+    return handleReplaceVideo(request, env, uid, replaceVideoMatch[1], idToken);
+  }
+
+  // Fix-Videos uploads an H.264/web-playable rendition of an HEVC video here.
+  // Stored ALONGSIDE the original (which stays for download); served for
+  // /video/playback so the browser can play it.
+  const playbackMatch = path.match(/^\/api\/assets\/([^/]+)\/playback-rendition$/);
+  if (playbackMatch && request.method === 'POST') {
+    return handlePlaybackRendition(request, env, uid, playbackMatch[1], idToken);
+  }
+
+  if (path === '/api/assets/worker-config' && request.method === 'GET') {
+    const workerConfig = await getCachedConfig<{ url?: string }>(env, uid, idToken, 'worker');
+    return json({ url: workerConfig?.url || null });
+  }
+
+  if (path.match(/^\/api\/assets\/[^/]+\/ocr$/) && request.method === 'GET') {
+    return json({ ocr: null });
+  }
+
+  // Trash — restore. Nothing can be restored: on this worker every trash is a
+  // permanent delete, and a trashed row is a tombstone whose Telegram parts are
+  // gone or going. Setting isTrashed back to 0 put broken photos back in the
+  // library and on every device. An error, so the website's Undo and Restore
+  // say so instead of showing photos that are gone.
+  if ((path === '/api/trash/restore/assets' || path === '/api/trash/restore') && request.method === 'POST') {
+    return json({ message: "Deleted photos can't be restored" }, 400);
+  }
+  // Trash — empty (permanently delete all trashed photos). Immich app uses
+  // POST; accept DELETE too for robustness.
+  if (path === '/api/trash/empty' && (request.method === 'POST' || request.method === 'DELETE')) {
+    let count = 0;
+    if (env.DB) {
+      await ensureDeduplicationSchema(env.DB);
+      // Only deletions not finished yet. A finished tombstone has purgedAt;
+      // stamping it again would keep it from ever expiring.
+      // At most 1,000 per request (the free plan's per-request limits); the
+      // rest waits for the next Empty Trash.
+      const rows: any[] = (await env.DB.prepare(
+        'SELECT * FROM photos WHERE ownerId = ? AND isTrashed = 1 AND purgedAt IS NULL ORDER BY id LIMIT 1000',
+      ).bind(uid).all()).results || [];
+      if (rows.length > 0) {
+        const gone = await deleteFromTelegram(env, uid, idToken, rows);
+        // The row stays as a tombstone, so every device still learns the
+        // asset is gone (AssetDeleteV1); purgedAt lets purgeExpiredTombstones
+        // reclaim it once they all had time to.
+        await forgetParts(env.DB, uid, [...gone]);
+        count = gone.size;
+      }
+    }
+    return json({ count });
+  }
+
+  // Notifications — real count of assets needing the HEIC/thumbnail fix,
+  // plus any operator broadcast announcement stored in Firestore global/announcement.
+  if (path === '/api/notifications' && request.method === 'GET') {
+    const notifications: any[] = [];
+
+    // Per-user media-fix counts (requires D1).
+    if (env.DB) {
+      // Use exactly the same WHERE as pending-thumbnail-fix default so the count
+      // matches what the HEIC fixer and video fixer actually process.
+      const [heicRow, videoRow] = await Promise.all([
+        env.DB.prepare(
+          `SELECT COUNT(*) as c FROM photos WHERE ownerId = ? AND (isTrashed = 0 OR isTrashed IS NULL)
+           AND mimeType LIKE 'image/%'
+           AND ((isHeic = 1 OR mimeType LIKE '%hei%') AND (telegramPreviewId IS NULL OR telegramPreviewId = ''))`
+        ).bind(uid).first<{ c: number }>(),
+        // Exclude live-photo partner MOVs — those are paired stills, not standalone videos.
+        // A video is a live-photo partner when another photo's livePhotoVideoId points to it.
+        env.DB.prepare(
+          `SELECT COUNT(*) as c FROM photos WHERE ownerId = ? AND (isTrashed = 0 OR isTrashed IS NULL)
+           AND mimeType LIKE 'video/%' AND (telegramThumbId IS NULL OR telegramThumbId = '')
+           AND id NOT IN (SELECT livePhotoVideoId FROM photos WHERE livePhotoVideoId IS NOT NULL AND ownerId = ?)`
+        ).bind(uid, uid).first<{ c: number }>(),
+      ]);
+      const heicCount = heicRow?.c || 0;
+      const videoCount = videoRow?.c || 0;
+      const total = heicCount + videoCount;
+      if (total > 0) {
+        const parts: string[] = [];
+        if (heicCount > 0) parts.push(`${heicCount} HEIC photo${heicCount > 1 ? 's' : ''}`);
+        if (videoCount > 0) parts.push(`${videoCount} video${videoCount > 1 ? 's' : ''}`);
+        // Honest explainer: this app can't display HEIC/video directly; the web
+        // viewer can. Tell the user exactly how to make them work — and that the
+        // fixer runs from a phone browser too (iPhone Safari decodes HEIC/HEVC
+        // natively, so it works great on the phone). Mention the optional
+        // self-hosted backend for instant viewing with no fix step.
+        notifications.push({
+          id: 'heic-fix',
+          type: 'system',
+          level: 'warning',
+          title: `${parts.join(' and ')} can't be shown in the app`,
+          // No hard-coded address: a self-hosted install must point its own
+          // users at their own web app, never at ours.
+          message:
+            `HEIC photos and videos don't display directly in this app — but they're safe and they work on the web. ` +
+            `To fix them: open ${webAppOrigin(request, env)} in any browser (your phone works too) → Utilities → tap "Fix HEIC", then "Fix Videos". ` +
+            `After that they show everywhere. Advanced: connect your own media processor to convert them automatically, with no fixing step.`,
+          read: false,
+          createdAt: new Date().toISOString(),
+          readAt: null,
+        });
+      }
+    }
+
+    // Operator broadcast announcement — stored in Firestore global/announcement.
+    // Any authenticated user can read this document (Firestore rule: allow read if request.auth != null).
+    try {
+      const announcementRes = await fetch(
+        `https://firestore.googleapis.com/v1/projects/${env.FIREBASE_PROJECT_ID}/databases/(default)/documents/global/announcement`,
+        { headers: { 'Authorization': `Bearer ${idToken}` } }
+      );
+      if (announcementRes.ok) {
+        const doc = await announcementRes.json() as any;
+        const f = doc?.fields;
+        if (f?.active?.booleanValue === true) {
+          notifications.push({
+            id: 'global-announcement',
+            type: 'system',
+            level: 'info',
+            title: f.title?.stringValue || 'Announcement',
+            message: f.message?.stringValue || '',
+            read: false,
+            createdAt: f.createdAt?.stringValue || new Date().toISOString(),
+            readAt: null,
+          });
+        }
+      }
+    } catch {
+      // Firestore unreachable — skip silently so per-user notifications still show.
+    }
+
+    return json(notifications);
+  }
+
+  // Map markers — photos with GPS coordinates
+  if (path === '/api/map/markers' && request.method === 'GET') {
+    if (!env.DB) return json([]);
+    const rows = await env.DB.prepare(
+      `SELECT id, latitude, longitude, city, country, mimeType FROM photos
+       WHERE ownerId = ? AND latitude IS NOT NULL AND longitude IS NOT NULL
+       AND (isTrashed = 0 OR isTrashed IS NULL) LIMIT 5000`
+    ).bind(uid).all<{ id: string; latitude: number; longitude: number; city: string | null; country: string | null }>();
+    return json((rows.results || []).map(r => ({
+      id: r.id, lat: r.latitude, lon: r.longitude,
+      city: r.city || null, state: null, country: r.country || null,
+    })));
+  }
+
+  return json({ message: 'Asset endpoint not found' }, 404);
+} catch (err: any) {
+    console.error(`[handleAssets] Error at ${path}:`, err?.message, err?.stack);
+    if (err?.message?.includes('authenticated') || err?.message?.includes('expired')) {
+      return json({ message: err.message }, 401);
+    }
+    return json({ message: `Internal error: ${err?.message}` }, 500);
+}
+}
+
+// ── Handlers ────────────────────────────────────────────────────────
+
+async function handleAssetInfo(env: Env, uid: string, assetId: string, idToken: string): Promise<Response> {
+  try {
+    let photo;
+    if (env.DB) {
+      const adapter = new D1Adapter(env.DB);
+      photo = await adapter.getPhoto(assetId);
+    } else {
+      photo = await firestoreGet(env, uid, `photos/${assetId}`, idToken);
+    }
+
+    if (!photo) {
+      return json({ message: 'Asset not found' }, 404);
+    }
+    photo.id = assetId;
+    return json(toAssetResponseDto(photo, uid));
+  } catch (err: any) {
+    console.error(`[handleAssetInfo] Error for ${assetId}:`, err?.message);
+    return json({ message: `Error fetching asset: ${err?.message}` }, 500);
+  }
+}
+
+async function handleUpdateAsset(request: Request, env: Env, uid: string, assetId: string, idToken: string): Promise<Response> {
+  const body = await request.json() as any;
+  // Immich web wraps fields in updateAssetDto; native app sends them directly
+  const dto = body.updateAssetDto || body;
+
+  // isTrashed=true → delete from Telegram + soft-delete D1 row as sync tombstone
+  if (dto.isTrashed === true) {
+    const syntheticReq = new Request('http://x/api/assets', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: [assetId] }),
+    });
+    return handleDeleteAssets(syntheticReq, env, uid, idToken);
+  }
+
+  const updates: Record<string, any> = {};
+  if (dto.isFavorite !== undefined) updates.isFavorite = dto.isFavorite ? 1 : 0;
+  if (dto.isArchived !== undefined) updates.visibility = dto.isArchived ? 'archive' : 'timeline';
+  if (dto.isTrashed !== undefined) updates.isTrashed = dto.isTrashed ? 1 : 0;
+  if (dto.description !== undefined) updates.description = dto.description;
+  if (dto.latitude !== undefined) updates.latitude = dto.latitude;
+  if (dto.longitude !== undefined) updates.longitude = dto.longitude;
+
+  if (Object.keys(updates).length > 0) {
+    if (env.DB) {
+      await new D1Adapter(env.DB).updatePhoto(assetId, updates);
+    } else {
+      await firestoreSet(env, uid, `photos/${assetId}`, updates, idToken);
+    }
+  }
+
+  let photo;
+  if (env.DB) {
+    const adapter = new D1Adapter(env.DB);
+    photo = await adapter.getPhoto(assetId);
+  } else {
+    photo = await firestoreGet(env, uid, `photos/${assetId}`, idToken);
+  }
+
+  return json(toAssetResponseDto(photo, uid));
+}
+
+async function handleDeleteAssets(request: Request, env: Env, uid: string, idToken: string): Promise<Response> {
+  const body = await request.json() as any;
+  const ids: string[] = [...new Set<string>((Array.isArray(body?.ids) ? body.ids : []).filter((id: unknown) => typeof id === 'string' && id))];
+
+  // Always permanently delete — no trash needed.
+  if (!env.DB) {
+    // The central worker: the documents live under the caller's own path.
+    const photos: any[] = [];
+    for (const id of ids) {
+      const photo = await firestoreGet(env, uid, `photos/${id}`, idToken);
+      if (photo) photos.push({ ...photo, id });
+    }
+    const gone = await deleteFromTelegram(env, uid, idToken, photos);
+    for (const id of gone) await firestoreDelete(env, uid, `photos/${id}`, idToken);
+    return gone.size === photos.length
+      ? json({})
+      : json({ message: 'Some photos could not be deleted from Telegram. Try again.' }, 502);
+  }
+
+  await ensureDeduplicationSchema(env.DB);
+  // Only the caller's own rows (the owner gate is the boundary; this is the
+  // second check), and a finished deletion stays as it is.
+  const rows = (await loadOwnedPhotos(env, uid, ids)).filter((r) => !r.purgedAt);
+  // A live photo's still and motion video go together, or the orphaned video
+  // shows up as a standalone clip after the next sync. The pair must be a video.
+  const have = new Set(rows.map((r) => r.id));
+  const pairs = [...new Set(rows.map((r) => r.livePhotoVideoId).filter((id) => typeof id === 'string' && id && !have.has(id)))];
+  const pairRows = (await loadOwnedPhotos(env, uid, pairs))
+    .filter((r) => !r.purgedAt && String(r.mimeType || '').startsWith('video/'));
+  const all = [...rows, ...pairRows];
+
+  // Leave the library first: a photo whose messages are gone must never stay
+  // visible. Sync tells every device (AssetDeleteV1). Its parts are forgotten
+  // only once Telegram confirmed the delete; until then Empty Trash retries.
+  await updateOwnRows(env.DB, uid, all.map((r) => r.id), 'isTrashed = 1');
+  // Earlier deletions Telegram hasn't confirmed ride along, so they finish
+  // without anyone pressing Empty Trash (the phone has no such button).
+  const taken = new Set(all.map((r) => r.id));
+  const earlier = ((await env.DB.prepare(
+    'SELECT * FROM photos WHERE ownerId = ? AND isTrashed = 1 AND purgedAt IS NULL ORDER BY id LIMIT 100',
+  ).bind(uid).all()).results || []).filter((r: any) => !taken.has(r.id));
+  const todo = [...all, ...earlier];
+  const gone = await deleteFromTelegram(env, uid, idToken, todo);
+  await forgetParts(env.DB, uid, [...gone]);
+  if (gone.size < todo.length) console.log(`[delete] ${todo.length - gone.size} deletion(s) still pending`);
+  return json({});
+}
+
+// D1 takes up to 100 bound values per statement; leave room for the others.
+const ROWS_PER_STATEMENT = 90;
+
+// One batch (a single query against the per-request limit) that sets `set` on
+// the caller's rows among `ids`.
+async function updateOwnRows(db: any, uid: string, ids: string[], set: string, values: unknown[] = []): Promise<void> {
+  const stmts = [];
+  for (let i = 0; i < ids.length; i += ROWS_PER_STATEMENT) {
+    const part = ids.slice(i, i + ROWS_PER_STATEMENT);
+    stmts.push(db.prepare(`UPDATE photos SET ${set} WHERE ownerId = ? AND id IN (${part.map(() => '?').join(', ')})`)
+      .bind(...values, uid, ...part));
+  }
+  if (stmts.length > 0) await db.batch(stmts);
+}
+
+// A deletion Telegram confirmed: the tombstone forgets its parts, and purgedAt
+// lets purgeExpiredTombstones reclaim it once every device had time to sync.
+function forgetParts(db: any, uid: string, ids: string[]): Promise<void> {
+  return updateOwnRows(db, uid, ids,
+    "isTrashed = 1, telegramChunks = '[]', telegramPlaybackChunks = NULL, purgedAt = COALESCE(purgedAt, ?)", [new Date().toISOString()]);
+}
+
+// Telegram calls one request may spend on deleting: the free plan allows 50
+// outside calls per request, and the request makes a few of its own.
+const DELETE_CALLS_PER_REQUEST = 40;
+
+// The Telegram messages a photo row still holds: its parts and its playback copy.
+function photoMessageIds(photo: any): number[] {
+  let chunks: any = photo?.telegramChunks;
+  if (typeof chunks === 'string') { try { chunks = JSON.parse(chunks || '[]'); } catch { chunks = []; } }
+  const ids = (Array.isArray(chunks) ? chunks : []).map((c: any) => c?.message_id);
+  return [...ids, ...playbackMessageIds(photo?.telegramPlaybackChunks)]
+    .filter((id: unknown): id is number => Number.isInteger(id) && (id as number) > 0 && (id as number) <= 2147483647);
+}
+
+// Telegram's answers about the messages themselves. Gone: nothing left to
+// delete. Cannot: maybe the bot's rights or the message's age, which may change,
+// so the photo waits for a retry without holding back the others. Anything else
+// (wrong chat, rate limit, outage) would refuse every call: stop and retry later.
+const GONE = /message_id_invalid|message to delete not found/i;
+const CANNOT = /message can't be deleted/i;
+
+// Deletes the photos' Telegram messages, up to 100 per call (deleteMessages),
+// and returns the ids of the photos whose messages are all deleted or already
+// gone. A photo Telegram refused, or that this request's budget didn't reach,
+// is not returned, so its record is kept for a retry.
+async function deleteFromTelegram(env: Env, uid: string, idToken: string, photos: any[]): Promise<Set<string>> {
+  const gone = new Set<string>(photos.filter((p) => photoMessageIds(p).length === 0).map((p) => p.id));
+  if (gone.size === photos.length) return gone;
+  const config = await getCachedConfig<any>(env, uid, idToken, 'telegram');
+  const botToken = config?.botToken || config?.bot_token;
+  const channelId = config?.channelId || config?.channel_id;
+  if (!botToken || !channelId) return gone;
+
+  let calls = DELETE_CALLS_PER_REQUEST;
+  const send = async (ids: number[]): Promise<'done' | 'cannot' | 'retry'> => {
+    if (calls <= 0) return 'retry';
+    calls--;
+    try {
+      const res = await fetch(`https://api.telegram.org/bot${botToken}/deleteMessages`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: channelId, message_ids: ids }),
+      });
+      const data: any = await res.json().catch(() => null);
+      if (data?.ok) return 'done'; // messages already gone are skipped, not refused
+      const why = String(data?.description || res.status).slice(0, 120);
+      if (GONE.test(why)) return 'done';
+      if (CANNOT.test(why)) return 'cannot';
+      console.warn(`[delete] Telegram refused ${ids.length} message(s), will retry: ${why}`);
+    } catch {
+      console.warn('[delete] Telegram unreachable, will retry');
+    }
+    // A rate limit, missing rights or an outage would refuse every later call
+    // too: stop spending this request's budget.
+    calls = 0;
+    return 'retry';
+  };
+  // One photo on its own calls.
+  const deletePhoto = async (photo: any) => {
+    const ids = photoMessageIds(photo);
+    for (let i = 0; i < ids.length; i += 100) {
+      const r = await send(ids.slice(i, i + 100));
+      if (r === 'retry') return;
+      if (r === 'cannot') {
+        console.warn(`[delete] Telegram can't delete messages of asset ${photo.id} (rights or age?); will retry`);
+        return;
+      }
+    }
+    gone.add(photo.id);
+  };
+
+  // Small photos share a call. If Telegram refuses a shared call over the
+  // messages themselves, one of them is to blame: each then gets its own call.
+  let batch: any[] = [];
+  const flush = async () => {
+    const r = batch.length === 0 ? 'retry' : await send(batch.flatMap(photoMessageIds));
+    if (r === 'done') batch.forEach((p) => gone.add(p.id));
+    else if (r === 'cannot') for (const p of batch) await deletePhoto(p);
+    batch = [];
+  };
+  let size = 0;
+  for (const photo of photos) {
+    const n = photoMessageIds(photo).length;
+    if (n === 0) continue;
+    if (n > 100) { await deletePhoto(photo); continue; }
+    if (size + n > 100) { await flush(); size = 0; }
+    batch.push(photo);
+    size += n;
+  }
+  await flush();
+  return gone;
+}
+
+async function handleBulkUpdate(request: Request, env: Env, uid: string, idToken: string): Promise<Response> {
+  const body = await request.json() as any;
+  const ids: string[] = body.ids || [];
+
+  // isTrashed=true → permanent delete (no trash, same as DELETE /api/assets)
+  if (body.isTrashed === true) {
+    const syntheticReq = new Request('http://x/api/assets', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids }),
+    });
+    return handleDeleteAssets(syntheticReq, env, uid, idToken);
+  }
+
+  const updates: Record<string, any> = {};
+  if (body.isFavorite !== undefined) updates.isFavorite = body.isFavorite ? 1 : 0;
+  // Reject unknown visibility values at the door. The mobile app force-unwraps
+  // this enum while parsing the sync stream, so one bad row would abort every
+  // future sync for the whole library (sync.ts clamps on the way out too).
+  if (body.visibility !== undefined && VALID_VISIBILITY.has(body.visibility)) {
+    updates.visibility = body.visibility;
+  }
+
+  if (Object.keys(updates).length > 0) {
+    if (env.DB) {
+      const adapter = new D1Adapter(env.DB);
+      // updatePhoto (partial UPDATE), NOT savePhoto: these rows already exist and
+      // the patch omits NOT NULL columns (ownerId, fileName). savePhoto's
+      // INSERT…ON CONFLICT attempts the INSERT first and throws NOT NULL before
+      // the conflict-update runs → bulk favourite/archive 500s. See updatePhoto.
+      for (const id of ids) {
+        await adapter.updatePhoto(id, updates);
+      }
+    } else {
+      for (const id of ids) {
+        await firestoreSet(env, uid, `photos/${id}`, updates, idToken);
+      }
+    }
+  }
+  return json({});
+}
+
+// ── Upload ──────────────────────────────────────────────────────────
+
+// Briefly send the plaintext bytes to Telegram as a document so Telegram
+// auto-generates a small thumbnail, then return its bytes + the temp message id
+// (caller deletes it). This is the original approach; the only thing it lacked
+// was rate-limit resilience — a burst of uploads (each doing this extra send)
+// would 429 the last few. So every Telegram call here retries with exponential
+// backoff, honouring Telegram's `retry_after`, which is what was actually
+// dropping thumbnails for the tail of a batch.
+async function fetchTelegramThumb(
+  botToken: string,
+  channelId: string,
+  rawData: ArrayBuffer,
+  fileName: string,
+  mimeType: string,
+): Promise<{ thumbBytes: ArrayBuffer | null; tmpMsgId: number | null }> {
+  const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
+  let tmpMsgId: number | null = null;
+
+  for (let attempt = 0; attempt < 4; attempt++) {
+    if (attempt > 0) await sleep(Math.min(500 * Math.pow(2, attempt), 6000)); // 1s, 2s, 4s
+    try {
+      const form = new FormData();
+      form.append('chat_id', channelId);
+      form.append('document', new Blob([rawData], { type: mimeType || 'application/octet-stream' }), fileName);
+      await paceSend(botToken); // rate-limit sends per bot
+      const res = await fetch(`https://api.telegram.org/bot${botToken}/sendDocument`, { method: 'POST', body: form });
+      const j = await res.json() as any;
+
+      if (res.status === 429 || j?.error_code === 429) {
+        await sleep(Math.min(((j?.parameters?.retry_after || 1) * 1000), 8000));
+        continue; // rate-limited — back off and retry
+      }
+      if (!j?.ok) {
+        console.log(`[Thumb] sendDocument failed for ${fileName}: ${JSON.stringify(j).slice(0, 160)}`);
+        return { thumbBytes: null, tmpMsgId };
+      }
+
+      tmpMsgId = j.result?.message_id ?? null;
+      const thumbFileId = j.result?.document?.thumb?.file_id || j.result?.document?.thumbnail?.file_id || null;
+      if (!thumbFileId) {
+        console.log(`[Thumb] Telegram generated no thumb for ${fileName} (mime=${mimeType})`);
+        return { thumbBytes: null, tmpMsgId };
+      }
+
+      // Download the generated thumb, also retrying on 429.
+      for (let dlAttempt = 0; dlAttempt < 3; dlAttempt++) {
+        if (dlAttempt > 0) await sleep(800 * dlAttempt);
+        const dl = await tgDownloadFile(botToken, thumbFileId);
+        if (dl.ok && dl.data) return { thumbBytes: dl.data, tmpMsgId };
+      }
+      return { thumbBytes: null, tmpMsgId };
+    } catch (e: any) {
+      console.log(`[Thumb] attempt ${attempt} error for ${fileName}: ${e?.message}`);
+    }
+  }
+  return { thumbBytes: null, tmpMsgId };
+}
+
+// HEIC can't be thumbnailed by Telegram, nor decoded in-Worker (libheif is far
+// too heavy for the 10ms free CPU limit). A processor with real CPU decodes it
+// via pillow-heif. PRIVACY RULE (operator decision 2026-07-21): plaintext user
+// bytes must NEVER transit shared operator infrastructure — conversion runs
+// ONLY against a PER-USER processor URL from the user's own config
+// (config/telegram.heicConvertUrl). No configured URL → no conversion → the
+// manual fix flow remains the path. Returns null on any failure.
+async function convertHeicThumbViaBackend(heicBytes: ArrayBuffer, idToken: string, convertUrl: string): Promise<ArrayBuffer | null> {
+  try {
+    const res = await fetch(convertUrl, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${idToken}`, 'Content-Type': 'application/octet-stream' },
+      body: heicBytes,
+    });
+    if (!res.ok) {
+      console.log(`[HEIC] backend convert failed: ${res.status}`);
+      return null;
+    }
+    const buf = await res.arrayBuffer();
+    return buf.byteLength > 0 ? buf : null;
+  } catch (e: any) {
+    console.log(`[HEIC] backend convert error: ${e?.message}`);
+    return null;
+  }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Self-healing deduplication schema
+// Adding columns to the photos table for per-user workers deployed BEFORE this
+// code existed. Auto-update ships code only — it never re-runs the schema from
+// `packages/schema/schema.mjs` — so we replicate the drive.ts pattern: a module-level
+// bool guard ensures the ALTER runs at most once per isolate lifecycle.
+// SQLite has no "ALTER TABLE … ADD COLUMN IF NOT EXISTS", so we try/catch each
+// ALTER and swallow the "duplicate column name" error silently.
+// ────────────────────────────────────────────────────────────────────────────
+let dedupSchemaReady = false;
+async function ensureDeduplicationSchema(db: any): Promise<void> {
+  if (dedupSchemaReady) return;
+  const addColumn = async (sql: string) => {
+    try { await db.prepare(sql).run(); } catch { /* column already exists */ }
+  };
+  await addColumn('ALTER TABLE photos ADD COLUMN deviceAssetId TEXT');
+  await addColumn('ALTER TABLE photos ADD COLUMN deviceId TEXT');
+  // GPS columns: migration 1.1.0 added these, but the deployment-service's
+  // fresh-provision MIGRATION_SQL predates them — a worker provisioned from
+  // that schema would fail EVERY INSERT that carries latitude/longitude and
+  // 500 on /api/map/markers. Heal here so both old and new workers converge.
+  await addColumn('ALTER TABLE photos ADD COLUMN latitude REAL');
+  await addColumn('ALTER TABLE photos ADD COLUMN longitude REAL');
+  // EXIF metadata columns (camera, lens, exposure). orientation is TEXT because
+  // the Immich mobile contract (SyncAssetExifV1 / ExifResponseDto) types it as
+  // String — Dart's strict parse drops/throws on a number.
+  await addColumn('ALTER TABLE photos ADD COLUMN make TEXT');
+  await addColumn('ALTER TABLE photos ADD COLUMN model TEXT');
+  await addColumn('ALTER TABLE photos ADD COLUMN lensModel TEXT');
+  await addColumn('ALTER TABLE photos ADD COLUMN fNumber REAL');
+  await addColumn('ALTER TABLE photos ADD COLUMN focalLength REAL');
+  await addColumn('ALTER TABLE photos ADD COLUMN iso INTEGER');
+  await addColumn('ALTER TABLE photos ADD COLUMN exposureTime TEXT');
+  await addColumn('ALTER TABLE photos ADD COLUMN orientation TEXT');
+  await addColumn('ALTER TABLE photos ADD COLUMN dateTimeOriginal TEXT');
+  // 1 = this row's bytes were already inspected for EXIF (at upload or by the
+  // lazy backfill); stops backfillExifBatch re-downloading EXIF-less photos.
+  await addColumn('ALTER TABLE photos ADD COLUMN exifChecked INTEGER DEFAULT 0');
+  // 1 = the checksum backfill already attempted this row (succeeded → checksum
+  // set and it leaves the empty-checksum set; failed → flagged so we don't loop
+  // forever on an unhealable file).
+  await addColumn('ALTER TABLE photos ADD COLUMN checksumChecked INTEGER DEFAULT 0');
+  // 1 = the HEIC thumbnail backfill settled this row (thumb stored, or the file
+  // is undecodable/multi-chunk) — stops backfillHeicThumbBatch from looping.
+  await addColumn('ALTER TABLE photos ADD COLUMN heicThumbChecked INTEGER DEFAULT 0');
+  // When the user emptied the trash. The row stays as a sync tombstone so every
+  // device eventually learns the asset is gone; it is reclaimed only after
+  // TOMBSTONE_TTL_DAYS (see purgeExpiredTombstones).
+  await addColumn('ALTER TABLE photos ADD COLUMN purgedAt TEXT');
+  // JSON {size, chunks} of the H.264/web-playable rendition's Telegram parts
+  // (the phone's copy, or the Fix-Videos transcode of an HEVC/incompatible video). Served for
+  // /video/playback so the browser can play it; the ORIGINAL is untouched and
+  // still served for download. Mirrors the HEIC→JPEG preview idea, for video.
+  await addColumn('ALTER TABLE photos ADD COLUMN telegramPlaybackChunks TEXT');
+  try {
+    await db.prepare(
+      'CREATE INDEX IF NOT EXISTS idx_photos_dedup ON photos(ownerId, deviceAssetId, deviceId)'
+    ).run();
+  } catch { /* index already exists */ }
+  try {
+    await db.prepare(
+      'CREATE INDEX IF NOT EXISTS idx_photos_checksum ON photos(ownerId, checksum)'
+    ).run();
+  } catch { /* index already exists */ }
+  dedupSchemaReady = true;
+}
+
+// Upload concurrency control. `request.formData()` buffers the ENTIRE body into
+// memory before the handler can touch it, so several big bodies at once can
+// cross Cloudflare's 128 MB isolate cap and kill EVERY in-flight request. The
+// old design shed the excess with a 503 — but the mobile app backs up dozens of
+// photos at once and treats 503 as a hard failure, so the WHOLE backup failed.
+//
+// Instead we QUEUE by BYTES: gate on the total in-flight upload size (from
+// Content-Length) and WAIT for budget rather than rejecting. Small HEICs
+// (~3 MB) run ~13-at-a-time; big videos serialize; a file larger than the whole
+// budget runs alone when the worker is otherwise idle (so it's never stuck).
+// Nothing fails under normal load. Module-level state is per-isolate; the
+// budget check + increment have no await between them, so they're atomic; the
+// finally always releases (no leak). Shedding only happens after a long wait
+// under sustained overload — rare — and the app simply retries next cycle.
+// Budget is deliberately small: each active upload doesn't just hold its body —
+// request.formData() parses a second copy, then chunk slicing + (server-ZKE)
+// encryption + the Telegram Blob each add more, so peak memory is ~4-5x the
+// body. A 40 MB budget let that balloon past the 128 MB isolate cap during a
+// big backup → Cloudflare killed the worker → 502 Bad Gateway killed a whole
+// batch of in-flight uploads at once. 16 MB keeps peak well under 128 MB.
+let inFlightUploadBytes = 0;
+const UPLOAD_BYTE_BUDGET = 16 * 1024 * 1024; // ~16 MB of concurrent bodies
+const UPLOAD_MAX_WAIT_MS = 55_000;           // wait up to ~55s for a slot, then shed
+
+// ── Single-flight per asset ─────────────────────────────────────────────────
+// The dedup check and the row INSERT are separated by the whole multi-second
+// Telegram upload, and no UNIQUE constraint covers (ownerId, deviceAssetId,
+// deviceId, kind). Two overlapping uploads of the SAME asset — which the app
+// produces routinely, since it fires several uploads per second and retries
+// aggressively — therefore both missed dedup and both inserted: the user's
+// "every photo twice". Collapsing concurrent uploads of one asset onto the
+// first one's result closes that window; the loser waits and receives the
+// winner's response instead of creating a second row.
+type UploadFlight = { promise: Promise<Response | null>; resolve: (r: Response | null) => void };
+const inFlightAssetUploads = new Map<string, UploadFlight>();
+export type FlightHolder = { key: string };
+
+// A client upload's playback copy: a JSON list of parts plus its plaintext size,
+// as the stored JSON {size, chunks}, or null if either is missing or malformed
+// (the readers need the size for range requests). Never throws.
+export function clientPlayback(rawChunks: unknown, rawSize: unknown): string | null {
+  if (typeof rawChunks !== 'string' || typeof rawSize !== 'string' || rawChunks.length > 65536) return null;
+  const size = Number(rawSize);
+  if (!/^\d+$/.test(rawSize) || !Number.isSafeInteger(size) || size <= 0) return null;
+  let parts: any;
+  try { parts = JSON.parse(rawChunks); } catch { return null; }
+  if (!Array.isArray(parts) || parts.length === 0 || parts.length > 1000) return null;
+  const chunks = [];
+  for (const p of parts) {
+    if (!p || typeof p !== 'object' || !Number.isSafeInteger(p.index) || p.index < 0
+      || typeof p.file_id !== 'string' || !/^[A-Za-z0-9_-]{1,256}$/.test(p.file_id)
+      || (p.message_id !== undefined && !(Number.isSafeInteger(p.message_id) && p.message_id > 0))) return null;
+    chunks.push(p.message_id !== undefined ? { index: p.index, message_id: p.message_id, file_id: p.file_id } : { index: p.index, file_id: p.file_id });
+  }
+  // Parts 0..n-1 of CHUNK_SIZE plaintext bytes each, as every reader assumes
+  // (the phone's reader refuses anything else and wouldn't fall back).
+  chunks.sort((a, b) => a.index - b.index);
+  if (chunks.length !== Math.ceil(size / CHUNK_SIZE) || chunks.some((c, i) => c.index !== i)) return null;
+  return JSON.stringify({ size, chunks });
+}
+
+// The Telegram messages of a stored playback copy ({size, chunks}), so deleting
+// an asset for good deletes them too. Bad or missing data yields none.
+export function playbackMessageIds(raw: unknown): number[] {
+  let v: any = raw;
+  if (typeof raw === 'string') { try { v = JSON.parse(raw); } catch { return []; } }
+  const chunks = Array.isArray(v?.chunks) ? v.chunks : [];
+  return chunks.map((c: any) => c?.message_id).filter((id: unknown) => Number.isSafeInteger(id));
+}
+
+async function handleUpload(request: Request, env: Env, uid: string, idToken: string): Promise<Response> {
+  const size = parseInt(request.headers.get('Content-Length') || '0', 10) || 8 * 1024 * 1024;
+  const start = Date.now();
+  // Wait for budget. First clause lets an over-budget file through when nothing
+  // else is in flight, so huge files never wedge permanently.
+  while (inFlightUploadBytes > 0 && inFlightUploadBytes + size > UPLOAD_BYTE_BUDGET) {
+    if (Date.now() - start > UPLOAD_MAX_WAIT_MS) {
+      return new Response(
+        JSON.stringify({ message: 'Worker busy — retry shortly' }),
+        { status: 503, headers: { 'Content-Type': 'application/json', 'Retry-After': '5' } },
+      );
+    }
+    await new Promise((r) => setTimeout(r, 150));
+  }
+  inFlightUploadBytes += size;
+  const flight: FlightHolder = { key: '' };
+  let settled = false;
+  try {
+    const result = await handleUploadImpl(request, env, uid, idToken, flight);
+    // Hand waiters a clone while this response is still unread, then release.
+    if (flight.key) {
+      inFlightAssetUploads.get(flight.key)?.resolve(result.clone());
+      inFlightAssetUploads.delete(flight.key);
+      settled = true;
+    }
+    return result;
+  } finally {
+    inFlightUploadBytes -= size;
+    // On a throw, waiters must not hang: release them with null so each falls
+    // back to performing its own upload.
+    if (flight.key && !settled) {
+      inFlightAssetUploads.get(flight.key)?.resolve(null);
+      inFlightAssetUploads.delete(flight.key);
+    }
+  }
+}
+
+async function handleUploadImpl(request: Request, env: Env, uid: string, idToken: string, flight?: FlightHolder): Promise<Response> {
+  const flags = await getFlagsForUser(env, uid, idToken);
+  if (!flags.directBytePath) {
+    return json({ message: 'Direct upload path is disabled by feature flag' }, 503);
+  }
+  const config = await getCachedConfig<any>(env, uid, idToken, 'telegram');
+  if (!config) {
+    console.log('Upload failed: Telegram not configured for uid', uid);
+    return json({ message: 'Telegram not configured' }, 400);
+  }
+  const botToken = config.botToken || config.bot_token;
+  const channelId = config.channelId || config.channel_id;
+  if (!botToken || !channelId) {
+    console.log('Upload failed: Missing bot/channel config for uid', uid);
+    return json({ message: 'Missing bot/channel config' }, 400);
+  }
+
+    // Single-pass streaming parse (replaces request.formData()). The Immich
+    // uploader sends its metadata fields before the assetData file, so a
+    // storm-retry of an already-uploaded asset is recognised and returned here
+    // WITHOUT the worker ever buffering or hashing the file — which is what was
+    // pushing the free-tier worker over its memory/CPU limits in big backup
+    // sessions. New uploads fall through with a FileLike over the parsed chunks
+    // (no second full-size copy), and the rest of this handler is unchanged via
+    // the formData-shaped view. The precise dedup block further down still runs,
+    // so the early check is a pure fast-path, never the sole source of truth.
+    const parsed = await parseUploadRequest(request, async (deviceAssetId, deviceId, fields) => {
+      if (!env.DB) return null;
+
+      // Single-flight: this fires as soon as the asset's identity is known and
+      // before its bytes are read, so a concurrent upload of the same asset can
+      // be collapsed onto the in-progress one instead of racing it to INSERT.
+      if (flight && deviceAssetId && deviceId) {
+        const kind = videoHintFromFields(fields);
+        const key = `${uid}|${deviceAssetId}|${deviceId}|${kind === null ? '?' : kind ? 'v' : 'i'}`;
+        const running = inFlightAssetUploads.get(key);
+        if (running) {
+          const winner = await running.promise;
+          // null = the first attempt failed; fall through and try ourselves.
+          if (winner) {
+            console.log(`[Upload] Collapsed duplicate in-flight upload for ${deviceAssetId} uid=${uid}`);
+            return winner;
+          }
+        } else {
+          let resolve!: (r: Response | null) => void;
+          const promise = new Promise<Response | null>(res => { resolve = res; });
+          inFlightAssetUploads.set(key, { promise, resolve });
+          flight.key = key;
+        }
+      }
+
+      try {
+        const rows = await new D1Adapter(env.DB).getPhotosByDeviceAsset(uid, deviceAssetId, deviceId);
+        // Media-kind hint from the filename field (arrives before the file).
+        // Load-bearing for live photos: the MOV and its still share one
+        // deviceAssetId, so a kind-blind single-row match returned the video's
+        // DTO for the still's first upload and the still was never stored.
+        const decision = earlyDedupDecision(rows, videoHintFromFields(fields));
+        // A client upload has no file to skip, and its later fields may carry a
+        // video's playback copy, which the full check below attaches. Clients
+        // send `clientUpload` first, so it is known here.
+        if (decision.short && fields.get('clientUpload') !== 'true') {
+          console.log(`[Upload] Early dedup (deviceAsset) ${deviceAssetId} uid=${uid} — skipped file, returning ${decision.photo.id}`);
+          return json(toAssetResponseDto(D1Adapter.normalizeRow(decision.photo), uid));
+        }
+      } catch (e: any) {
+        console.warn(`[Upload] early dedup query failed (non-fatal): ${e?.message}`);
+      }
+      return null;
+    });
+    if (parsed.kind === 'dedup') return parsed.response;
+    const formData = makeFormDataLike(parsed.fields, parsed.file);
+    const uploadSessionId = (formData.get('uploadSessionId') as string) || '';
+    if (uploadSessionId) {
+      let sessionRecord: any = null;
+      if (env.DB) {
+        sessionRecord = await new D1Adapter(env.DB).getJsonConfig<any>(`session:${uploadSessionId}`);
+      }
+      if (!sessionRecord) {
+        sessionRecord = await firestoreGet(env, uid, `sessions/${uploadSessionId}`, idToken);
+      }
+      if (!sessionRecord || sessionRecord.status !== 'active') {
+        return json({ message: 'Invalid upload session' }, 400);
+      }
+      if (sessionRecord.expiresAt && Date.parse(sessionRecord.expiresAt) < Date.now()) {
+        return json({ message: 'Upload session expired' }, 401);
+      }
+    }
+  const clientUpload = formData.get('clientUpload') === 'true';
+  const formKeys = Array.from(formData.keys());
+  console.log(`[Upload] UID: ${uid}, ClientUpload: ${clientUpload}, Name: ${formData.get('fileName') || formData.get('filename')}, Keys: ${formKeys.join(',')}`);
+
+  // Device-local identity for deduplication (Immich mobile sends these fields).
+  const deviceAssetId = (formData.get('deviceAssetId') as string) || '';
+  const deviceId = (formData.get('deviceId') as string) || '';
+
+  const file = formData.get('assetData') as File | null;
+  
+  if (!file && !clientUpload) {
+    console.log('Upload failed: No file provided in formData keys:', Array.from(formData.keys()));
+    return json({ message: 'No file provided' }, 400);
+  }
+
+  try {
+    let zkeConfig: any = {};
+    if (env.DB) {
+      const adapter = new D1Adapter(env.DB);
+      zkeConfig = (await adapter.getZkeConfig()) || {};
+    } else {
+      zkeConfig = (await firestoreGet(env, uid, 'config/zke', idToken)) || {};
+    }
+    const isClientZke = zkeConfig.mode === 'client' || request.url.includes('client=true') || clientUpload;
+    const isServerZke = !isClientZke; // Default to server mode
+
+    const key = isServerZke ? await getEncryptionKey(env, uid, idToken) : null;
+    const isEncryptedByServer = key !== null;
+    
+    const checksumFromHeader = request.headers.get('x-immich-checksum');
+    let checksum = (formData.get('checksum') as string) || (formData.get('xImmichChecksum') as string) || checksumFromHeader || '';
+
+    // The Immich mobile app NEVER sends a checksum at upload time — its server is
+    // expected to compute base64(SHA-1(fileBytes)) itself. Without it: (a)
+    // /api/assets/bulk-upload-check can never match → the app re-uploads the
+    // whole library on every restart (the "upload storm"), and (b) sync emits a
+    // non-matching checksum → the app shows the phone-local copy AND the server
+    // copy side by side ("every photo twice"). Compute it from the plaintext we
+    // hold here. Streamed in slices so a large video never blows the memory cap.
+    if (!checksum && file) {
+      try {
+        checksum = await sha1Base64OfFile(file);
+      } catch (e: any) {
+        console.warn(`[Upload] checksum compute failed for ${file?.name}: ${e?.message}`);
+      }
+    }
+
+    // Parse dimensions
+    let width = parseInt(formData.get('width') as string) || 0;
+    let height = parseInt(formData.get('height') as string) || 0;
+    // GPS coordinates — client may supply these; server-side path also extracts from JPEG EXIF below
+    const parseCoord = (s: string | null) => { const n = parseFloat(s || ''); return isNaN(n) ? null : n; };
+    let gpsLat: number | null = parseCoord(formData.get('latitude') as string | null);
+    let gpsLon: number | null = parseCoord(formData.get('longitude') as string | null);
+    // Half a location, or one out of range, is no location.
+    if (gpsLat === null || gpsLon === null || Math.abs(gpsLat) > 90 || Math.abs(gpsLon) > 180) { gpsLat = null; gpsLon = null; }
+    // Camera/lens/exposure metadata parsed from the file's EXIF in chunk 0 below.
+    let exif: PhotoExif = {};
+    const fileCreatedAt = (formData.get('fileCreatedAt') as string) || new Date().toISOString();
+    const fileModifiedAt = (formData.get('fileModifiedAt') as string) || new Date().toISOString();
+    const durationRaw = formData.get('duration') ? (formData.get('duration') as string) : null;
+    const duration = (!durationRaw || durationRaw === '0' || durationRaw === '0.000' || durationRaw === '0:00:00.00000') ? null : durationRaw;
+    
+    const fileSize = file ? file.size : parseInt(formData.get('fileSize') as string) || 0;
+    const fileName = file ? file.name : (formData.get('fileName') as string) || 'unknown';
+    let mimeType = file ? file.type : (formData.get('mimeType') as string) || 'application/octet-stream';
+
+    // Fix MIME type detection based on file extension if missing or generic
+    if (!mimeType || mimeType === 'application/octet-stream' || mimeType === 'video/quicktime') {
+      const ext = fileName.toLowerCase().split('.').pop();
+      if (ext === 'mp4') mimeType = 'video/mp4';
+      else if (ext === 'mov' || ext === 'qt') mimeType = 'video/quicktime';
+      else if (ext === 'avi') mimeType = 'video/x-msvideo';
+      else if (ext === 'webm') mimeType = 'video/webm';
+      else if (ext === 'mkv') mimeType = 'video/x-matroska';
+      else if (ext === 'heic' || ext === 'heif') mimeType = 'image/heic';
+      else if (ext === 'jpg' || ext === 'jpeg') mimeType = 'image/jpeg';
+      else if (ext === 'png') mimeType = 'image/png';
+      else if (ext === 'webp') mimeType = 'image/webp';
+    }
+
+    const isHeic = /\.(heic|heif)$/i.test(fileName) || mimeType === 'image/heic' || mimeType === 'image/heif';
+
+    // Authoritative live-photo link from the (mobile) client: the app uploads
+    // the MOV first, then the still with livePhotoVideoId = the video's asset
+    // id. Read BEFORE the dedup check so a retried still can backfill the link
+    // onto its existing row (otherwise the link is lost and the motion video
+    // shows up as a separate timeline item).
+    const livePhotoVideoId = (formData.get('livePhotoVideoId') as string) || null;
+
+    // ── Deduplication check ──────────────────────────────────────────────────
+    // Run BEFORE any Telegram work. When the Immich mobile app reopens it
+    // retries every asset whose status it doesn't know — `deviceAssetId +
+    // deviceId` is the stable phone-local identity it sends on every upload.
+    // Live-photo pairs share the SAME deviceAssetId (both the MOV and the
+    // still use asset.localId); we discriminate by media kind (video vs not)
+    // so we never return the wrong half of a live pair as a duplicate.
+    if (env.DB) {
+      await ensureDeduplicationSchema(env.DB);
+      const adapter = new D1Adapter(env.DB);
+      const isVideoMime = mimeType.startsWith('video/');
+
+      // Primary: deviceAssetId+deviceId (set on every mobile upload)
+      if (deviceAssetId && deviceId) {
+        const existing = await adapter.getPhotoByDeviceAsset(uid, deviceAssetId, deviceId, isVideoMime);
+        if (existing) {
+          // Self-healing backfill: rows uploaded before checksum-on-upload existed
+          // have an empty checksum, which keeps the storm alive (bulk-upload-check
+          // can't match) and keeps the photo showing twice (sync can't merge). The
+          // storm re-sends the bytes here, so seize the moment to populate it.
+          if (!existing.checksum && checksum) {
+            try {
+              await adapter.updatePhoto(existing.id, { checksum });
+              existing.checksum = checksum;
+              console.log(`[Upload] Backfilled checksum for ${existing.id} uid=${uid}`);
+            } catch (e: any) {
+              console.warn(`[Upload] checksum backfill failed for ${existing.id}: ${e?.message}`);
+            }
+          }
+          // Link backfill: the app retries a still whose first upload happened
+          // before its motion video existed (or whose response was lost). The
+          // retry carries the authoritative livePhotoVideoId — store it, or the
+          // motion video stays unhidden as a duplicate timeline item.
+          if (livePhotoVideoId && !existing.livePhotoVideoId && !isVideoMime) {
+            try {
+              await adapter.updatePhoto(existing.id, { livePhotoVideoId });
+              existing.livePhotoVideoId = livePhotoVideoId;
+              console.log(`[Upload] Backfilled livePhotoVideoId for ${existing.id} uid=${uid}`);
+            } catch (e: any) {
+              console.warn(`[Upload] livePhotoVideoId backfill failed for ${existing.id}: ${e?.message}`);
+            }
+          }
+          // The phone uploads a video's playback copy after the original, which
+          // may be a later request: attach it if the asset has none yet.
+          if (clientUpload && isVideoMime && !existing.telegramPlaybackChunks) {
+            const copy = clientPlayback(formData.get('telegramPlaybackChunks'), formData.get('playbackSize'));
+            if (copy) {
+              try {
+                await adapter.updatePhoto(existing.id, { telegramPlaybackChunks: copy });
+                existing.telegramPlaybackChunks = copy;
+              } catch (e: any) {
+                console.warn(`[Upload] playback copy backfill failed for ${existing.id}: ${e?.message}`);
+              }
+            }
+          }
+          console.log(`[Upload] Dedup hit (deviceAsset) for ${deviceAssetId} uid=${uid} — returning ${existing.id}`);
+          return json(toAssetResponseDto(D1Adapter.normalizeRow(existing), uid));
+        }
+      }
+
+      // Fallback: checksum (catches legacy rows that predate the dedup schema
+      // and photos where deviceAssetId was not stored). Without this, bulk-upload-check
+      // returns 'accept' for those photos → the app re-sends the full file →
+      // the worker deduplicates at the upload level instead of wasting the
+      // round-trip bandwidth.
+      if (checksum) {
+        const [match] = await adapter.getPhotosByChecksums(uid, [checksum]);
+        if (match) {
+          // getPhotosByChecksums returns only id+checksum; load the full row so
+          // the response DTO is complete (web reads more than just the id).
+          const existing2 = (await adapter.getPhoto(match.id)) || match;
+          console.log(`[Upload] Dedup hit (checksum) for ${checksum} uid=${uid} — returning ${match.id}`);
+          return json(toAssetResponseDto(D1Adapter.normalizeRow(existing2), uid));
+        }
+      }
+    }
+    // ── End deduplication check ──────────────────────────────────────────────
+
+    const thumbBase64 = formData.get('thumbData_base64') as string | null;
+    // ThumbHash (base64) → instant blur placeholder in the grid. The web client
+    // sends one directly; for mobile/server uploads we derive it below from the
+    // Telegram-generated thumbnail. Serving + web-render paths already exist.
+    let thumbhash = (formData.get('thumbhash') as string) || null;
+
+    // CRITICAL DEBUG: Check if mobile sends thumbnail
+    if (thumbBase64) {
+      console.log(`✅ [Upload] thumbData_base64 PRESENT: ${thumbBase64.length} chars for ${fileName}`);
+    } else {
+      console.log(`❌ [Upload] thumbData_base64 MISSING for ${fileName}. Keys received: ${formKeys.join(', ')}`);
+    }
+
+    let telegramChunks: Array<{ index: number; message_id: number; file_id: string }> = [];
+    let telegramOriginalId = '';
+    let telegramThumbId: string | null = null;
+    let encryptionMode = isEncryptedByServer ? 'server' : 'off';
+    let thumbEncrypted = false;
+    let telegramPreviewId: string | null = null;
+    let telegramPlaybackChunks: string | null = null;
+    let clientSentExif = false;
+    let pendingThumbGen: any = null;
+
+    if (clientUpload) {
+        // Client already uploaded to Telegram
+        telegramChunks = JSON.parse((formData.get('telegramChunks') as string) || '[]');
+        telegramOriginalId = formData.get('telegramOriginalId') as string;
+        telegramThumbId = formData.get('telegramThumbId') as string || null;
+        encryptionMode = formData.get('encryptionMode') as string || 'off';
+        // Honour client-reported thumbEncrypted so the read path knows whether to decrypt
+        const teVal = formData.get('thumbEncrypted');
+        if (teVal === 'true' || teVal === '1') thumbEncrypted = true;
+        // SPEC D23: the phone makes the preview and reads EXIF itself; store
+        // both, so nothing downloads the original for them later. A bad value
+        // is dropped, never a failed upload.
+        const previewId = formData.get('telegramPreviewId');
+        if (typeof previewId === 'string' && /^[A-Za-z0-9_-]{1,256}$/.test(previewId)) telegramPreviewId = previewId;
+        // The phone's 720p H.264 copy of a video other players can't show
+        // (SPEC P2-9), stored as {size, chunks} like the server-made one.
+        if (mimeType.startsWith('video/')) telegramPlaybackChunks = clientPlayback(formData.get('telegramPlaybackChunks'), formData.get('playbackSize'));
+        const sent = clientExif(formData.get('exif'));
+        if (sent) {
+          exif = sent;
+          clientSentExif = true;
+          if (gpsLat === null && gpsLon === null && sent.latitude !== undefined && sent.longitude !== undefined) {
+            gpsLat = sent.latitude;
+            gpsLon = sent.longitude;
+          }
+        }
+    } else {
+        // --- Legacy Server-Side Upload Logic ---
+        // Define these before the loop so GPS extraction + Strategy 2 can reference them.
+        const isVideo = mimeType.startsWith('video/') && !isHeic;
+        const isImage = mimeType.startsWith('image/') || isHeic;
+        const totalChunks = Math.ceil(fileSize / CHUNK_SIZE);
+        const isSingleChunk = totalChunks === 1;
+    for (let i = 0; i < totalChunks; i++) {
+      const start = i * CHUNK_SIZE;
+      const end = Math.min(start + CHUNK_SIZE, fileSize);
+      
+      // CRITICAL: Slice the file instead of reading the whole thing into memory
+      const chunk = file!.slice(start, end);
+      let chunkData = await chunk.arrayBuffer();
+
+      if (i === 0) {
+        const buffer = new Uint8Array(chunkData);
+        if (width === 0 || height === 0) {
+          try {
+            const dimensions = sizeOf(buffer);
+            if (dimensions) {
+              width = dimensions.width || 0;
+              height = dimensions.height || 0;
+            }
+          } catch (e) {
+            console.log('Failed to extract dimensions:', e);
+          }
+        }
+        // Extract EXIF (camera, lens, exposure, GPS) — exifr reads only the
+        // metadata segments of JPEG AND HEIC, no pixel decode, so it stays
+        // within the Worker CPU budget. Best-effort: a parse failure must never
+        // break an upload. Client-supplied GPS coords always win.
+        if (!isVideo) {
+          try {
+            exif = await extractExif(buffer);
+          } catch (e: any) {
+            console.log(`[Upload] EXIF parse failed for ${fileName} (non-fatal): ${e?.message}`);
+          }
+          if (gpsLat === null && gpsLon === null) {
+            if (typeof exif.latitude === 'number' && typeof exif.longitude === 'number') {
+              gpsLat = exif.latitude;
+              gpsLon = exif.longitude;
+            } else if (!isHeic) {
+              // Legacy minimal scanner as fallback if exifr found nothing
+              const gps = extractJpegGps(buffer);
+              if (gps) { gpsLat = gps.latitude; gpsLon = gps.longitude; }
+            }
+          }
+        }
+      }
+
+      if (isEncryptedByServer) {
+        chunkData = await encryptChunk(chunkData, key);
+      }
+
+      let partName: string;
+      if (isEncryptedByServer || isClientZke) {
+        partName = totalChunks === 1 ? 'blob.bin' : `blob.bin.part${String(i + 1).padStart(3, '0')}`;
+      } else {
+        partName = totalChunks === 1 ? fileName : `${fileName}.part${String(i + 1).padStart(3, '0')}`;
+      }
+
+      const tgFormData = new FormData();
+      tgFormData.append('chat_id', channelId);
+      tgFormData.append('document', new Blob([chunkData], { type: 'application/octet-stream' }), partName);
+
+      const queue = getTgQueue(botToken);
+      await queue.acquire(undefined, 1); // Priority 1 for uploads (low)
+      let tgData: any;
+      let tgStatus = 200;
+      try {
+        // Retry on 429 with backoff (tgFetchWithRetry honours Telegram's
+        // retry_after). A big batch upload fires many sends per photo (blob +
+        // thumb), so without this the tail of a batch gets rate-limited and
+        // those photos fail. The backoff is the "delay" that kicks in exactly
+        // when Telegram throttles.
+        const tgRes = await tgFetchWithRetry(`https://api.telegram.org/bot${botToken}/sendDocument`, {
+          method: 'POST', body: tgFormData,
+        });
+        tgStatus = tgRes.status;
+        tgData = await tgRes.json() as any;
+      } catch (err: any) {
+        // NOTE: no queue.release() here — the `finally` below runs on the
+        // return path too, and releasing twice for one acquire corrupted the
+        // semaphore: RequestQueue.release() has no floor, so each flaky send
+        // permanently raised this isolate's effective Telegram concurrency
+        // limit, letting later bursts fan out far past the intended cap.
+        console.error(`[Upload] Telegram API error on chunk ${i}:`, err);
+
+        // Cleanup: delete already-uploaded chunks
+        for (const chunk of telegramChunks) {
+          try {
+            await fetch(`https://api.telegram.org/bot${botToken}/deleteMessage`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ chat_id: channelId, message_id: chunk.message_id }),
+            });
+          } catch { /* best effort cleanup */ }
+        }
+
+        return json({
+          message: 'Telegram upload failed',
+          error: err.message,
+          chunksUploaded: i,
+          totalChunks
+        }, 500);
+      } finally {
+        queue.release();
+      }
+
+      if (!tgData.ok) {
+        console.error('Telegram upload failed:', tgData);
+
+        // Cleanup: delete already-uploaded chunks
+        for (const chunk of telegramChunks) {
+          try {
+            await fetch(`https://api.telegram.org/bot${botToken}/deleteMessage`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ chat_id: channelId, message_id: chunk.message_id }),
+            });
+          } catch { /* best effort cleanup */ }
+        }
+
+        // Propagate rate limit so Immich app's own backoff coordinates cross-isolate retries
+        if (tgStatus === 429 || tgData.error_code === 429) {
+          const retryAfter = tgData.parameters?.retry_after || 5;
+          return new Response(JSON.stringify({ message: 'Rate limited by Telegram, retry later' }), {
+            status: 429,
+            headers: { 'Content-Type': 'application/json', 'Retry-After': String(retryAfter) },
+          });
+        }
+
+        return json({
+          message: 'Telegram upload failed',
+          details: tgData,
+          chunksUploaded: i,
+          totalChunks
+        }, 500);
+      }
+      
+      const msg = tgData.result;
+      const fileId = msg.document.file_id;
+      if (totalChunks === 1) {
+        telegramOriginalId = fileId;
+      } else {
+        telegramChunks.push({ index: i, message_id: msg.message_id, file_id: fileId });
+      }
+      // Grab document thumbnail if available (Telegram auto-generates for image/video docs)
+      if (!telegramThumbId && msg.document.thumb?.file_id) {
+        telegramThumbId = msg.document.thumb.file_id;
+        console.log(`[Upload] Got document thumbnail for ${fileName} from sendDocument`);
+      }
+      if (!telegramThumbId && msg.document.thumbnail?.file_id) {
+        telegramThumbId = msg.document.thumbnail.file_id;
+        console.log(`[Upload] Got document thumbnail (v2) for ${fileName} from sendDocument`);
+      }
+    }
+
+    // --- Thumbnail generation ---
+    // Thumbnail strategy:
+    //   - Encrypted upload: encrypt thumb bytes with the same AES key, push via
+    //     sendDocument as opaque .bin so Telegram never sees plaintext. Read
+    //     path detects `thumbEncrypted=1` and decrypts before serving.
+    //   - Unencrypted upload: send raw via sendPhoto/sendVideo so Telegram
+    //     generates a small thumb we can serve directly.
+    // Strategy 1: Mobile-provided JPEG thumbnail
+    if (!telegramThumbId && thumbBase64) {
+      try {
+        let thumbBytes: ArrayBuffer = Uint8Array.from(atob(thumbBase64), c => c.charCodeAt(0)).buffer;
+        const encryptThumb = isEncryptedByServer && !!key;
+        if (encryptThumb) {
+          thumbBytes = await encryptChunk(thumbBytes, key!);
+        }
+
+        const thumbForm = new FormData();
+        thumbForm.append('chat_id', channelId);
+
+        const queue = getTgQueue(botToken);
+        await queue.acquire(undefined, 5);
+        try {
+          if (encryptThumb) {
+            thumbForm.append('document', new Blob([thumbBytes], { type: 'application/octet-stream' }), 'thumb.bin');
+            const r = await fetch(`https://api.telegram.org/bot${botToken}/sendDocument`, { method: 'POST', body: thumbForm });
+            const j = await r.json() as any;
+            if (j.ok && j.result?.document?.file_id) {
+              telegramThumbId = j.result.document.file_id;
+              thumbEncrypted = true;
+              console.log(`[Upload] Stored encrypted mobile thumbnail for ${fileName}`);
+            } else {
+              console.log(`[Upload] encrypted sendDocument thumb failed:`, JSON.stringify(j).slice(0, 200));
+            }
+          } else {
+            thumbForm.append('photo', new Blob([thumbBytes], { type: 'image/jpeg' }), 'thumb.jpg');
+            const r = await fetch(`https://api.telegram.org/bot${botToken}/sendPhoto`, { method: 'POST', body: thumbForm });
+            const j = await r.json() as any;
+            if (j.ok && j.result.photo?.length > 0) {
+              telegramThumbId = j.result.photo[0].file_id;
+              console.log(`[Upload] Stored mobile thumbnail for ${fileName}`);
+            } else {
+              console.log(`[Upload] sendPhoto failed for mobile thumb:`, JSON.stringify(j).slice(0, 200));
+            }
+          }
+        } finally { queue.release(); }
+      } catch (e) {
+        console.log('[Upload] Mobile thumbnail upload failed:', e);
+      }
+    }
+
+    // Strategy 2: derive a thumb from the raw file — ONLY for non-HEIC images.
+    // HEIC and video are deliberately skipped here: Telegram can't thumbnail
+    // HEIC (the temp-send produces nothing — pure wasted Telegram ops + pacing
+    // delay), and at auto-backup scale that wasted work timed out the worker and
+    // triggered Cloudflare 5xx. The Utilities "Fix" tool handles HEIC + video
+    // thumbnails client-side instead, so these uploads just store the blob and
+    // return fast.
+    if (!telegramThumbId && isImage && !isHeic && !isVideo && isSingleChunk && file) {
+      try {
+        const rawSlice = file.slice(0, Math.min(file.size, CHUNK_SIZE));
+        const rawData = await rawSlice.arrayBuffer();
+
+        const thumbForm = new FormData();
+        thumbForm.append('chat_id', channelId);
+
+        const queue = getTgQueue(botToken);
+        await queue.acquire(undefined, 5);
+        try {
+          if (isEncryptedByServer && key) {
+            // Real downscaled thumbnail for ENCRYPTED (mobile) uploads.
+            // Sending the encrypted blob to Telegram yields no thumbnail (random
+            // bytes), so briefly send the *plaintext* original, let Telegram
+            // produce a small JPEG thumb (sendPhoto re-encode, retried on 429),
+            // re-encrypt that thumb as thumb.bin so it's stored zero-knowledge
+            // like every other thumb, then DELETE the temp plaintext message —
+            // only the encrypted original + encrypted thumb persist. Mobile-only
+            // path; the web clientUpload path ships its own thumb and skips this.
+            let thumbBytes: ArrayBuffer | null = null;
+            let tmpMsgId: number | null = null;
+            if (isHeic) {
+              // Telegram can't thumbnail HEIC. Convert ONLY when this user has
+              // their own processor configured — plaintext bytes never go to
+              // shared operator infrastructure. Otherwise leave thumb-less;
+              // /api/assets/pending-thumbnail-fix + the manual fix flow cover it.
+              const heicUrl = (config as any)?.heicConvertUrl;
+              if (heicUrl) {
+                thumbBytes = await convertHeicThumbViaBackend(rawData, idToken, heicUrl);
+                if (thumbBytes) console.log(`[Upload] HEIC converted to JPEG via per-user processor for ${fileName}`);
+              }
+            } else {
+              const r = await fetchTelegramThumb(botToken, channelId, rawData, fileName, mimeType);
+              thumbBytes = r.thumbBytes;
+              tmpMsgId = r.tmpMsgId;
+            }
+
+            // Delete the temp plaintext NOW — the thumb bytes (if any) are
+            // already downloaded, so the message is no longer needed. Doing it
+            // BEFORE the heavier encrypt + thumb.bin re-upload guarantees the
+            // raw photo can't be left on Telegram if the free-tier worker hits
+            // its CPU/memory limit during that step — which is exactly what was
+            // happening under big-backup load (the "PNG raw copy not deleting"
+            // regression). HEIC has no temp (tmpMsgId stays null) → no-op.
+            if (tmpMsgId) {
+              await fetch(`https://api.telegram.org/bot${botToken}/deleteMessage`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ chat_id: channelId, message_id: tmpMsgId }),
+              }).catch(() => { /* best-effort cleanup */ });
+              tmpMsgId = null;
+            }
+
+            if (thumbBytes) {
+              // Derive a ThumbHash from the small plaintext thumb (cheap JPEG
+              // decode) before encrypting — instant blur placeholder for mobile.
+              if (!thumbhash) {
+                thumbhash = computeThumbHashFromJpeg(new Uint8Array(thumbBytes));
+                if (thumbhash) console.log(`[Upload] Derived ThumbHash for ${fileName}`);
+              }
+              const encThumb = await encryptChunk(thumbBytes, key);
+              const encForm = new FormData();
+              encForm.append('chat_id', channelId);
+              encForm.append('document', new Blob([encThumb], { type: 'application/octet-stream' }), 'thumb.bin');
+              const r = await tgFetchWithRetry(`https://api.telegram.org/bot${botToken}/sendDocument`, { method: 'POST', body: encForm });
+              const j = await r.json() as any;
+              if (j.ok && j.result?.document?.file_id) {
+                telegramThumbId = j.result.document.file_id;
+                thumbEncrypted = true;
+                console.log(`[Upload] Generated + encrypted thumbnail for ${fileName}`);
+              } else {
+                console.log(`[Upload] thumb.bin sendDocument failed: ${JSON.stringify(j).slice(0, 160)}`);
+              }
+            } else {
+              console.log(`[Upload] No Telegram thumbnail obtained for ${fileName} (mime=${mimeType})`);
+            }
+            // (temp plaintext already deleted above, before the re-upload)
+          } else if (isVideo) {
+            thumbForm.append('video', new Blob([rawData], { type: mimeType }), fileName);
+            const res = await fetch(`https://api.telegram.org/bot${botToken}/sendVideo`, { method: 'POST', body: thumbForm });
+            const j = await res.json() as any;
+            telegramThumbId = j.result?.video?.thumb?.file_id || j.result?.video?.thumbnail?.file_id || null;
+            if (telegramThumbId) console.log(`[Upload] Generated video thumbnail for ${fileName}`);
+          } else {
+            thumbForm.append('photo', new Blob([rawData], { type: mimeType }), fileName);
+            const res = await fetch(`https://api.telegram.org/bot${botToken}/sendPhoto`, { method: 'POST', body: thumbForm });
+            const j = await res.json() as any;
+            if (j.ok && j.result.photo?.length > 0) {
+              telegramThumbId = j.result.photo[0].file_id;
+              console.log(`[Upload] Generated image thumbnail for ${fileName}`);
+            } else {
+              console.log(`[Upload] sendPhoto failed for ${fileName}:`, JSON.stringify(j).slice(0, 200));
+            }
+          }
+        } finally { queue.release(); }
+      } catch (e) {
+        console.log('[Upload] Thumbnail generation failed (non-fatal):', e);
+      }
+    }
+
+    if (!telegramThumbId) {
+      console.log(`[Upload] WARNING: No thumbnail generated for ${fileName} (isVideo=${isVideo}, isImage=${isImage}, chunks=${totalChunks}, encrypted=${isEncryptedByServer}, hasThumbBase64=${!!thumbBase64})`);
+    }
+    }
+
+    const assetId = crypto.randomUUID();
+    const photo = {
+      id: assetId,
+      ownerId: uid,
+      fileName,
+      fileSize,
+      mimeType,
+      width,
+      height,
+      fileCreatedAt,
+      uploadedAt: new Date().toISOString(),
+      telegramChunks: typeof telegramChunks === 'string' ? telegramChunks : JSON.stringify(telegramChunks),
+      telegramOriginalId,
+      telegramThumbId,
+      thumbEncrypted: thumbEncrypted ? 1 : 0,
+      // The preview is encrypted exactly when the upload is (the phone encrypts
+      // every rendition with the same key). Readers decide by encryptionMode;
+      // this column is a record.
+      telegramPreviewId: telegramPreviewId || undefined,
+      telegramPlaybackChunks: telegramPlaybackChunks || undefined,
+      previewEncrypted: telegramPreviewId ? (encryptionMode === 'server' || encryptionMode === 'client' ? 1 : 0) : undefined,
+      thumbhash: thumbhash || undefined,
+      livePhotoVideoId: livePhotoVideoId || undefined,
+      encryptionMode,
+      checksum,
+      isHeic: isHeic ? 1 : 0,
+      duration: duration || undefined,
+      latitude: gpsLat ?? undefined,
+      longitude: gpsLon ?? undefined,
+      // EXIF camera metadata (undefined fields are dropped by savePhoto).
+      // orientation is stored as TEXT — the Immich mobile contract types it as
+      // String and Dart's strict parse rejects a number.
+      make: exif.make,
+      model: exif.model,
+      lensModel: exif.lensModel,
+      fNumber: exif.fNumber,
+      focalLength: exif.focalLength,
+      iso: exif.iso,
+      exposureTime: exif.exposureTime,
+      orientation: exif.orientation !== undefined ? String(exif.orientation) : undefined,
+      dateTimeOriginal: exif.dateTimeOriginal,
+      // Legacy/server path parsed EXIF above → mark inspected at the current
+      // version. A client upload that sent its own EXIF (the phone) is done
+      // too; the website sends none, so leave 0 for the lazy backfill.
+      exifChecked: clientUpload && !clientSentExif ? undefined : EXIF_PARSE_VERSION,
+      // Dedup fields — stored so future uploads from the same device can be
+      // identified as duplicates without re-uploading to Telegram.
+      deviceAssetId: deviceAssetId || undefined,
+      deviceId: deviceId || undefined,
+      // Both mobile uploaders send this; it used to be dropped on the floor, so
+      // favourites marked on the phone before the first backup silently
+      // un-favourited themselves once the asset synced back.
+      isFavorite: (formData.get('isFavorite') as string) === 'true' ? 1 : 0,
+    };
+
+    if (env.DB) {
+      const adapter = new D1Adapter(env.DB);
+      await adapter.savePhoto(photo);
+    } else {
+      await firestoreSet(env, uid, `photos/${assetId}`, photo, idToken);
+    }
+
+    // Heuristic pairing is a FALLBACK only. When the app already sent the
+    // authoritative livePhotoVideoId (stored above), running the heuristic
+    // anyway let a neighbouring still taken within 2s get re-linked to this
+    // video, orphaning that still's own motion video — which then showed up
+    // in the timeline as a standalone extra video.
+    if ((mimeType.startsWith('video/') || isHeic) && !livePhotoVideoId) {
+      env.waitUntil?.(linkLivePhoto(env, uid, assetId, photo, idToken));
+    }
+
+    return json(toAssetResponseDto(photo, uid));
+  } catch (e: any) {
+    // Encryption was asked for and cannot be done. This is a configuration
+    // fault, not a transient one, so say exactly that instead of burying it in
+    // "Internal upload error" — and do NOT let the client's retry loop hammer
+    // it, because every retry fails identically until a human fixes the keys.
+    if (e instanceof EncryptionUnavailableError) {
+      console.error('[Upload] refused:', e.message);
+      // Retry-After is deliberately long. This does not clear on its own — it
+      // clears when a human fixes the keys — and the mobile app retries failed
+      // uploads on its own schedule. Without a hint, a backup of a few thousand
+      // photos becomes a few thousand identical failures against a worker that
+      // is already in a bad state.
+      return new Response(
+        JSON.stringify({ message: e.message, code: 'encryption_unavailable' }),
+        { status: 503, headers: { 'Content-Type': 'application/json', 'Retry-After': '3600' } },
+      );
+    }
+    console.error('Upload handler error:', e?.message, e?.stack);
+    return json({ message: 'Internal upload error', error: e?.message }, 500);
+  }
+}
+
+async function handleUploadPlan(request: Request, env: Env, uid: string, idToken: string): Promise<Response> {
+  // Simple pass-through for now
+  return json({
+    uploadSessionId: crypto.randomUUID(),
+    status: 'created'
+  });
+}
+
+async function handleChunkManifest(env: Env, uid: string, assetId: string, idToken: string): Promise<Response> {
+  const photo = await loadPhotoById(env, uid, assetId, idToken);
+  if (!photo || photo.isTrashed) return json({ message: 'Asset not found' }, 404);
+  return json({ chunks: photo.telegramChunks || [] });
+}
+
+// D1-aware single photo loader. Per-user workers (env.DB bound) read from D1;
+// the central worker still falls back to Firestore. The D1 row is normalized
+// (telegramChunks JSON parsed, _id/originalFileName aliases) so downstream
+// consumers don't need to know which source it came from.
+async function loadPhotoById(env: Env, uid: string, assetId: string, idToken: string): Promise<any | null> {
+  if (env.DB) {
+    const row = await new D1Adapter(env.DB).getPhoto(assetId);
+    return row ? D1Adapter.normalizeRow(row) : null;
+  }
+  return firestoreGet(env, uid, `photos/${assetId}`, idToken);
+}
+
+// Replace the stored video bytes for an asset with a client-processed version
+// (faststart + AAC audio, video stream copied losslessly). Chunks + encrypts
+// exactly like the upload path, then ATOMICALLY swaps telegramChunks /
+// telegramOriginalId / fileSize in a single partial UPDATE (metadata untouched),
+// and only then deletes the old chunks — so a mid-upload failure never leaves
+// the asset pointing at a mix of old and new chunks.
+async function handleReplaceVideo(request: Request, env: Env, uid: string, assetId: string, idToken: string): Promise<Response> {
+  const photo = await loadPhotoById(env, uid, assetId, idToken);
+  if (!photo) return json({ message: 'Asset not found' }, 404);
+  if (!env.DB) return json({ message: 'Not supported without D1' }, 400);
+
+  const config = await getCachedConfig<any>(env, uid, idToken, 'telegram');
+  if (!config) return json({ message: 'No config' }, 500);
+  const botToken = config.botToken || config.bot_token;
+  const channelId = config.channelId || config.channel_id;
+
+  const isServerZke = photo.encryptionMode === 'server' || (photo.encrypted === true && !photo.encryptionMode);
+  const isClientZke = photo.encryptionMode === 'client';
+  const key = isServerZke ? await getEncryptionKey(env, uid, idToken) : null;
+
+  const form = await request.formData();
+  const videoFile = form.get('video') as File | null;
+  if (!videoFile) return json({ message: 'No video provided' }, 400);
+  const size = videoFile.size;
+  const totalChunks = Math.max(1, Math.ceil(size / CHUNK_SIZE));
+
+  // Upload all new chunks first (nothing is swapped until they all succeed).
+  const newChunks: Array<{ index: number; message_id: number; file_id: string }> = [];
+  let newOriginalId = '';
+  for (let i = 0; i < totalChunks; i++) {
+    const slice = videoFile.slice(i * CHUNK_SIZE, Math.min((i + 1) * CHUNK_SIZE, size));
+    let data: ArrayBuffer = await slice.arrayBuffer();
+    if (isServerZke && key) data = await encryptChunk(data, key);
+    const partName = (isServerZke || isClientZke)
+      ? (totalChunks === 1 ? 'blob.bin' : `blob.bin.part${String(i + 1).padStart(3, '0')}`)
+      : (totalChunks === 1 ? videoFile.name : `${videoFile.name}.part${String(i + 1).padStart(3, '0')}`);
+    const f = new FormData();
+    f.append('chat_id', channelId);
+    f.append('document', new Blob([data], { type: 'application/octet-stream' }), partName);
+    const res = await tgFetchWithRetry(`https://api.telegram.org/bot${botToken}/sendDocument`, { method: 'POST', body: f });
+    const j = await res.json() as any;
+    if (!j.ok || !j.result?.document?.file_id) {
+      return json({ message: 'Telegram upload failed', chunk: i, details: j }, 502);
+    }
+    const fid = j.result.document.file_id;
+    if (totalChunks === 1) newOriginalId = fid;
+    newChunks.push({ index: i, message_id: j.result.message_id, file_id: fid });
+  }
+
+  const oldChunks: any[] = Array.isArray(photo.telegramChunks) ? photo.telegramChunks : [];
+  const oldOriginalId = photo.telegramOriginalId;
+
+  // Atomic swap: single UPDATE pointing the asset at the new bytes.
+  await new D1Adapter(env.DB).updatePhoto(assetId, totalChunks === 1
+    ? { telegramChunks: '[]', telegramOriginalId: newOriginalId, fileSize: size }
+    : { telegramChunks: JSON.stringify(newChunks), telegramOriginalId: '', fileSize: size });
+
+  // Best-effort cleanup of the old messages (after the swap, so a failure here
+  // is harmless — the asset already points at the new chunks).
+  const toDelete = [...oldChunks.map((c: any) => c.message_id).filter(Boolean)];
+  for (const messageId of toDelete) {
+    fetch(`https://api.telegram.org/bot${botToken}/deleteMessage`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: channelId, message_id: messageId }),
+    }).catch(() => {});
+  }
+
+  console.log(`[ReplaceVideo] ${assetId}: ${totalChunks} chunk(s), ${size} bytes (was originalId=${oldOriginalId})`);
+  return json({ success: true, chunks: totalChunks, fileSize: size });
+}
+
+// Store an H.264 playback rendition (from the client's ffmpeg.wasm transcode of
+// an HEVC video) WITHOUT touching the original. Encrypted exactly like the
+// original for server-ZKE so it's stored zero-knowledge. /video/playback then
+// serves it; /original (download) keeps serving the untouched original.
+async function handlePlaybackRendition(request: Request, env: Env, uid: string, assetId: string, idToken: string): Promise<Response> {
+  const photo = await loadPhotoById(env, uid, assetId, idToken);
+  if (!photo) return json({ message: 'Asset not found' }, 404);
+  if (!env.DB) return json({ message: 'Not supported without D1' }, 400);
+  await ensureDeduplicationSchema(env.DB); // guarantee telegramPlaybackChunks column exists
+
+  const config = await getCachedConfig<any>(env, uid, idToken, 'telegram');
+  if (!config) return json({ message: 'No config' }, 500);
+  const botToken = config.botToken || config.bot_token;
+  const channelId = config.channelId || config.channel_id;
+
+  const isServerZke = photo.encryptionMode === 'server' || (photo.encrypted === true && !photo.encryptionMode);
+  const isClientZke = photo.encryptionMode === 'client';
+  const key = isServerZke ? await getEncryptionKey(env, uid, idToken) : null;
+
+  const form = await request.formData();
+  const videoFile = form.get('video') as File | null;
+  if (!videoFile) return json({ message: 'No video provided' }, 400);
+  const size = videoFile.size;
+  const totalChunks = Math.max(1, Math.ceil(size / CHUNK_SIZE));
+
+  const newChunks: Array<{ index: number; message_id: number; file_id: string }> = [];
+  for (let i = 0; i < totalChunks; i++) {
+    const slice = videoFile.slice(i * CHUNK_SIZE, Math.min((i + 1) * CHUNK_SIZE, size));
+    let data: ArrayBuffer = await slice.arrayBuffer();
+    if (isServerZke && key) data = await encryptChunk(data, key);
+    const partName = (isServerZke || isClientZke)
+      ? (totalChunks === 1 ? 'play.bin' : `play.bin.part${String(i + 1).padStart(3, '0')}`)
+      : (totalChunks === 1 ? 'playback.mp4' : `playback.mp4.part${String(i + 1).padStart(3, '0')}`);
+    const f = new FormData();
+    f.append('chat_id', channelId);
+    f.append('document', new Blob([data], { type: 'application/octet-stream' }), partName);
+    const res = await tgFetchWithRetry(`https://api.telegram.org/bot${botToken}/sendDocument`, { method: 'POST', body: f });
+    const j = await res.json() as any;
+    if (!j.ok || !j.result?.document?.file_id) {
+      return json({ message: 'Telegram upload failed', chunk: i, details: j }, 502);
+    }
+    newChunks.push({ index: i, message_id: j.result.message_id, file_id: j.result.document.file_id });
+  }
+
+  // Store {size, chunks} as JSON. size is the PLAINTEXT rendition size, so the
+  // /video/playback range math is correct after decrypt. Replaces any prior
+  // rendition (we leak the old messages rather than risk deleting in-use ones;
+  // re-fixing a video is rare).
+  await new D1Adapter(env.DB).updatePhoto(assetId, {
+    telegramPlaybackChunks: JSON.stringify({ size, chunks: newChunks }),
+  });
+
+  console.log(`[PlaybackRendition] ${assetId}: ${totalChunks} chunk(s), ${size} bytes`);
+  return json({ success: true, chunks: totalChunks, fileSize: size });
+}
+
+async function handleThumbnailUpload(request: Request, env: Env, uid: string, assetId: string, idToken: string): Promise<Response> {
+  const photo = await loadPhotoById(env, uid, assetId, idToken);
+  if (!photo) return json({ message: 'Asset not found' }, 404);
+
+  const config = await getCachedConfig<any>(env, uid, idToken, 'telegram');
+  if (!config) return json({ message: 'No config' }, 500);
+  const botToken = config.botToken || config.bot_token;
+  const channelId = config.channelId || config.channel_id;
+
+  try {
+    const formData = await request.formData();
+    const thumbFile = formData.get('thumbnail') as File | null;
+    const thumbBase64 = formData.get('thumbData_base64') as string | null;
+    // Client-computed ThumbHash (base64) accompanying the thumbnail. Storing it
+    // also changes the timeline payload's thumbhash → the thumbnail URL's
+    // cacheKey changes → clients refetch the new thumb (built-in cache-bust).
+    const thumbhash = (formData.get('thumbhash') as string) || null;
+    const uploadedWidth = parseInt(formData.get('width') as string) || 0;
+    const uploadedHeight = parseInt(formData.get('height') as string) || 0;
+    // Optional full-size JPEG preview. Lets the web viewer load a JPEG instead
+    // of decoding the HEIC original (which is slow/fails in browsers). The
+    // original HEIC is left untouched for true-original download.
+    const previewFile = formData.get('preview') as File | null;
+    const previewBytes = previewFile ? await previewFile.arrayBuffer() : null;
+
+    if (!thumbFile && !thumbBase64) {
+      return json({ message: 'No thumbnail data provided' }, 400);
+    }
+
+    let thumbBytes: ArrayBuffer;
+    if (thumbBase64) {
+      thumbBytes = Uint8Array.from(atob(thumbBase64), c => c.charCodeAt(0)).buffer;
+    } else {
+      thumbBytes = await thumbFile!.arrayBuffer();
+    }
+
+    // Store the thumb the same way the upload path does: encrypted as thumb.bin
+    // for server-ZKE assets (so the client-generated HEIC/backfill thumbnail is
+    // zero-knowledge like every other thumb), else a plain Telegram photo.
+    const isServerZke = photo.encryptionMode === 'server' || (photo.encrypted === true && !photo.encryptionMode);
+    const key = isServerZke ? await getEncryptionKey(env, uid, idToken) : null;
+
+    // Store one image (thumb or preview) the same zero-knowledge way as every
+    // other thumb: encrypted as a .bin document for server-ZKE, else a plain
+    // Telegram photo. Returns { fileId, encrypted } or null on failure.
+    const storeOne = async (bytes: ArrayBuffer): Promise<{ fileId: string; encrypted: boolean } | null> => {
+      const queue = getTgQueue(botToken);
+      await queue.acquire(undefined, 5);
+      try {
+        if (isServerZke && key) {
+          const enc = await encryptChunk(bytes, key);
+          const form = new FormData();
+          form.append('chat_id', channelId);
+          form.append('document', new Blob([enc], { type: 'application/octet-stream' }), 'thumb.bin');
+          const res = await tgFetchWithRetry(`https://api.telegram.org/bot${botToken}/sendDocument`, { method: 'POST', body: form });
+          const data = await res.json() as any;
+          return data.ok && data.result?.document?.file_id ? { fileId: data.result.document.file_id, encrypted: true } : null;
+        }
+        const form = new FormData();
+        form.append('chat_id', channelId);
+        form.append('photo', new Blob([bytes], { type: 'image/jpeg' }), 'thumb.jpg');
+        const res = await tgFetchWithRetry(`https://api.telegram.org/bot${botToken}/sendPhoto`, { method: 'POST', body: form });
+        const data = await res.json() as any;
+        return data.ok && data.result.photo?.length > 0 ? { fileId: data.result.photo[0].file_id, encrypted: false } : null;
+      } finally {
+        queue.release();
+      }
+    };
+
+    const thumb = await storeOne(thumbBytes);
+    if (!thumb) return json({ message: 'Telegram thumbnail upload failed' }, 500);
+
+    // Partial UPDATE only — never re-INSERT. Patches just the thumbnail/preview
+    // columns; ownerId / fileName / fileCreatedAt / all metadata + timestamps
+    // stay untouched. (savePhoto's upsert would fail NOT NULL on a partial row.)
+    const update: any = { telegramThumbId: thumb.fileId, thumbEncrypted: thumb.encrypted ? 1 : 0 };
+    if (thumbhash) update.thumbhash = thumbhash;
+    if (uploadedWidth > 0) update.width = uploadedWidth;
+    if (uploadedHeight > 0) update.height = uploadedHeight;
+
+    // Optional full-size preview — best-effort; a failed preview must not fail
+    // the thumbnail. Served for preview/fullsize requests so web shows a JPEG.
+    if (previewBytes) {
+      const preview = await storeOne(previewBytes);
+      if (preview) {
+        update.telegramPreviewId = preview.fileId;
+        update.previewEncrypted = preview.encrypted ? 1 : 0;
+      }
+    }
+
+    if (env.DB) {
+      await new D1Adapter(env.DB).updatePhoto(assetId, update);
+    } else {
+      await firestoreSet(env, uid, `photos/${assetId}`, update, idToken);
+    }
+    console.log(`[ThumbnailUpload] Stored thumb${update.telegramPreviewId ? '+preview' : ''} for ${assetId}`);
+
+    return json({ success: true, telegramThumbId: thumb.fileId, preview: !!update.telegramPreviewId, thumbhash: thumbhash || null });
+  } catch (err: any) {
+    console.error(`[ThumbnailUpload] Error for ${assetId}:`, err);
+    return json({ message: err.message }, 500);
+  }
+}
+
+// ── Thumbnails & Originals ──────────────────────────────────────────
+
+async function handleThumbnail(request: Request, env: Env, uid: string, assetId: string, idToken: string): Promise<Response> {
+  const photo = await loadPhotoById(env, uid, assetId, idToken);
+  if (!photo) return json({ message: 'Not found' }, 404);
+
+  const url = new URL(request.url);
+  const sizeParam = (url.searchParams.get('size') || '').toLowerCase();
+  const wantsHighQuality = sizeParam === 'preview' || sizeParam === 'fullsize';
+
+  const isMultiChunk = photo.telegramChunks && photo.telegramChunks.length > 1;
+  let fileId: string;
+
+  if (wantsHighQuality && photo.telegramPreviewId) {
+    // A client-generated JPEG preview exists (e.g. from the HEIC fixer) — serve
+    // it for full-view requests so the browser never has to decode the HEIC.
+    fileId = photo.telegramPreviewId;
+  } else if (wantsHighQuality && !isMultiChunk) {
+    fileId = photo.telegramOriginalId || photo.telegramThumbId;
+  } else {
+    fileId = photo.telegramThumbId || photo.telegramPreviewId || photo.telegramOriginalId;
+  }
+
+  if (!fileId) {
+    return json({ message: 'No file data' }, 404);
+  }
+  if (isMultiChunk && !photo.telegramThumbId && !wantsHighQuality) {
+    return json({ message: 'Thumbnail not available for multi-chunk asset' }, 404);
+  }
+  // Grid thumbnail with NO real JPEG thumb/preview stored → fileId fell back to
+  // the ORIGINAL. If that original is HEIC or a video, the app's grid decoder
+  // can't read it and logs "Failed to decode image" for every tile — a flood
+  // that makes the app feel like it's crashing. Return 404 so the app keeps its
+  // thumbhash blur placeholder instead. (High-quality/full-view requests still
+  // fall through to the original, where the platform decoder handles HEIC.)
+  if (fileId === photo.telegramOriginalId && !photo.telegramThumbId && !photo.telegramPreviewId) {
+    const mt = (photo.mimeType || '').toLowerCase();
+    // A video has no still image to fall back to. Streaming the whole clip
+    // under a thumbnail URL sent megabytes of video into an image decoder AND
+    // cached it for a year as immutable, so the tile stayed broken until the
+    // cache expired. High-quality requests are included: `size=preview` on a
+    // video hit exactly this path.
+    if (mt.startsWith('video/')) {
+      return json({ message: 'No poster available for this video yet' }, 404);
+    }
+    // HEIC has no browser-decodable thumbnail either, but the platform decoder
+    // CAN handle the original on a full-view request — so only the grid path
+    // (which would log a decode error per tile) gets the 404.
+    if (!wantsHighQuality && (photo.isHeic || mt === 'image/heic' || mt === 'image/heif')) {
+      return json({ message: 'No decodable thumbnail yet' }, 404);
+    }
+  }
+
+  const config = await getCachedConfig<any>(env, uid, idToken, 'telegram');
+  if (!config) return json({ message: 'No config' }, 500);
+  const botToken = config.botToken || config.bot_token;
+
+  const cache = (caches as any).default;
+  const cacheKey = `${request.url}`;
+  const cachedRes = await cache.match(cacheKey);
+  if (cachedRes) return cachedRes;
+
+  const isServerZke = photo.encryptionMode === 'server' || (photo.encrypted === true && !photo.encryptionMode);
+  const isClientZke = photo.encryptionMode === 'client';
+
+  // `servingThumb` is true when we end up downloading the small thumb file_id
+  // (vs falling back to the original). Thumbs MAY be encrypted — newer
+  // encrypted uploads store an opaque .bin via sendDocument and set
+  // photo.thumbEncrypted=1. Older encrypted uploads (and all unencrypted
+  // uploads) stored a plain JPEG via sendPhoto. Decrypt only when both:
+  // server-zke is on AND the stored thumb is flagged encrypted.
+  const servingThumb = !!photo.telegramThumbId && fileId === photo.telegramThumbId;
+  const servingPreview = !!photo.telegramPreviewId && fileId === photo.telegramPreviewId;
+  // Always attempt decryption for server-ZKE photos. The encrypted flag may be 0
+  // for clientUpload paths that encrypted but didn't pass the flag through.
+  // We try-decrypt and fall back to raw bytes if AES-GCM auth fails (plain JPEG).
+  const decryptThis = isServerZke;
+  const key = isServerZke ? await getEncryptionKey(env, uid, idToken) : null;
+  // Thumb and preview are always JPEG; only the original keeps its real mime
+  // (e.g. image/heic). So a served thumb/preview must advertise image/jpeg.
+  let mimeType = photo.mimeType;
+  if (servingThumb || servingPreview) {
+    mimeType = 'image/jpeg';
+  } else if (photo.isHeic) {
+    mimeType = 'image/heic';
+  }
+
+  const queue = getTgQueue(botToken);
+  try {
+    await queue.acquire(request.signal, 10); // Priority 10 for thumbnail downloads (high)
+  } catch (e) {
+    return new Response('Aborted', { status: 499 });
+  }
+
+  try {
+    const result = await tgDownloadFile(botToken, fileId);
+    if (!result.ok) return json({ message: result.error }, 502);
+
+    let responseData = result.data!;
+    if (decryptThis && !key) {
+      // Server-encrypted bytes with no key available (zero-knowledge toggled
+      // off, or the key fetch failed). Serving them anyway meant handing the
+      // client AES ciphertext labelled image/jpeg — and the immutable cache
+      // header below then pinned that garbage for a year, so the tile stayed
+      // broken long after the key came back. Fail loudly and cache nothing.
+      console.error(`[Thumbnail] ${assetId}: server-encrypted but no key available`);
+      return json({ message: 'Encryption key unavailable' }, 503);
+    }
+    if (decryptThis && key) {
+      try {
+        responseData = await decryptChunk(responseData, key);
+      } catch (e: any) {
+        // AES-GCM auth failure → thumb was stored unencrypted (old sendPhoto path or plain thumb).
+        // Serve the raw bytes ONLY if they really are an image; otherwise this
+        // is undecryptable ciphertext and must not be cached as a picture.
+        if (servingThumb || servingPreview) {
+          const head = new Uint8Array(responseData.slice(0, 4));
+          const isJpeg = head[0] === 0xff && head[1] === 0xd8;
+          const isPng = head[0] === 0x89 && head[1] === 0x50 && head[2] === 0x4e && head[3] === 0x47;
+          if (!isJpeg && !isPng) {
+            console.error(`[Thumbnail] ${assetId}: decrypt failed and bytes are not an image — refusing to serve`);
+            return json({ message: 'Thumbnail unavailable' }, 502);
+          }
+        }
+        console.warn(`[Thumbnail] ${assetId}: decrypt attempted, thumb not encrypted — serving raw (${e?.message})`);
+      }
+    }
+
+    const finalResponse = new Response(responseData, {
+      headers: {
+        'Content-Type': mimeType || 'application/octet-stream',
+        'Cache-Control': 'public, max-age=31536000, immutable',
+        'CDN-Cache-Control': 'public, max-age=31536000',
+        'Cloudflare-CDN-Cache-Control': 'public, max-age=31536000'
+      }
+    });
+
+    if (finalResponse.status === 200) {
+      env.waitUntil?.(cache.put(cacheKey, finalResponse.clone()));
+    }
+    return finalResponse;
+  } finally {
+    queue.release();
+  }
+}
+
+// Answer a HEAD probe for a media endpoint with the headers a GET would send,
+// without fetching/decrypting any bytes. Lets native mobile players validate
+// the resource (size, type, range support) before they start streaming.
+async function handleMediaHead(env: Env, uid: string, assetId: string, idToken: string, path: string): Promise<Response> {
+  const photo = await loadPhotoById(env, uid, assetId, idToken);
+  if (!photo) return new Response(null, { status: 404 });
+
+  // A HEAD must agree with what a GET would do. This used to answer 200 for
+  // any row that merely existed, including deleted assets (whose row survives
+  // as a tombstone with its chunks emptied) and thumbnails that were never
+  // generated — so a player would begin a request the GET then failed, and the
+  // app reported a broken file rather than a missing one.
+  const isTrashed = photo.isTrashed === 1 || photo.isTrashed === true;
+  if (isTrashed) return new Response(null, { status: 404 });
+
+  const isThumb = path.endsWith('/thumbnail');
+  if (isThumb) {
+    if (!photo.telegramThumbId && !photo.telegramPreviewId) {
+      return new Response(null, { status: 404 });
+    }
+  } else {
+    const hasChunks = Array.isArray(photo.telegramChunks)
+      ? photo.telegramChunks.length > 0
+      : !!(photo.telegramChunks && photo.telegramChunks !== '[]');
+    if (!hasChunks && !photo.telegramOriginalId) {
+      return new Response(null, { status: 404 });
+    }
+  }
+
+  let mimeType = photo.mimeType || 'application/octet-stream';
+  if (isThumb) mimeType = (photo.isHeic || !mimeType.startsWith('image/')) ? 'image/jpeg' : mimeType;
+  // Match what handleOriginal will actually serve for /video/playback when an
+  // H.264 rendition exists (different mime + size than the original).
+  let fileSize = photo.fileSize;
+  if (path.endsWith('/video/playback') && photo.telegramPlaybackChunks) {
+    try {
+      const pb = typeof photo.telegramPlaybackChunks === 'string'
+        ? JSON.parse(photo.telegramPlaybackChunks) : photo.telegramPlaybackChunks;
+      if (pb?.chunks?.length) { mimeType = 'video/mp4'; fileSize = pb.size || fileSize; }
+    } catch { /* fall through to original */ }
+  }
+  const headers: Record<string, string> = {
+    'Content-Type': mimeType,
+    'Accept-Ranges': 'bytes',
+    'Cache-Control': 'public, max-age=86400',
+  };
+  // Original/video have a known size; thumbnails are generated so size is unknown.
+  if (!isThumb && fileSize) headers['Content-Length'] = String(fileSize);
+  return new Response(null, { status: 200, headers });
+}
+
+// Exported for range-stitching tests (multi-chunk video playback math).
+export async function handleOriginal(request: Request, env: Env, uid: string, assetId: string, idToken: string): Promise<Response> {
+  console.log(`[handleOriginal] AssetID: ${assetId}, Path: ${new URL(request.url).pathname}`);
+  const photo = await loadPhotoById(env, uid, assetId, idToken);
+  // A deleted photo is never served, even while its Telegram parts linger.
+  if (!photo || photo.isTrashed) return json({ message: 'Not found' }, 404);
+
+  // /video/playback: if an H.264 rendition exists (Fix Videos transcoded an
+  // HEVC original), serve THAT instead so the browser can play it. Point the
+  // existing serving logic at the rendition's chunks/size/mime; the original is
+  // untouched and still served for /original (download). encryptionMode is kept
+  // so the rendition (encrypted with the same key) decrypts correctly.
+  if (new URL(request.url).pathname.endsWith('/video/playback') && photo.telegramPlaybackChunks) {
+    try {
+      const pb = typeof photo.telegramPlaybackChunks === 'string'
+        ? JSON.parse(photo.telegramPlaybackChunks) : photo.telegramPlaybackChunks;
+      if (pb?.chunks?.length) {
+        photo.telegramChunks = pb.chunks;
+        photo.telegramOriginalId = pb.chunks.length === 1 ? pb.chunks[0].file_id : '';
+        photo.fileSize = pb.size || photo.fileSize;
+        photo.mimeType = 'video/mp4';
+      }
+    } catch { /* malformed rendition → fall through to the original */ }
+  }
+
+  const config = await getCachedConfig<any>(env, uid, idToken, 'telegram');
+  if (!config) return json({ message: 'No config' }, 500);
+  const botToken = config.botToken || config.bot_token;
+
+  const isServerZke = photo.encryptionMode === 'server' || (photo.encrypted === true && !photo.encryptionMode);
+  const isClientZke = photo.encryptionMode === 'client';
+  const key = isServerZke ? await getEncryptionKey(env, uid, idToken) : null;
+
+  const rangeHeader = request.headers.get('Range');
+  const totalSize = photo.fileSize || 0;
+  const url = new URL(request.url);
+  
+  if (photo.telegramChunks && photo.telegramChunks?.length > 0) {
+    const chunks = [...photo.telegramChunks].sort((a, b) => a.index - b.index);
+    // For range requests: calculate decrypted chunk sizes
+    // Each chunk is ~19MB raw. For encrypted files, the stored size differs but decrypted is consistent.
+    const chunkSize = CHUNK_SIZE;
+    const cache = (caches as any).default;
+
+    // Helper: download + decrypt + cache a single chunk
+    const getChunk = async (chunk: any): Promise<ArrayBuffer> => {
+      const ck = new Request(`${url.origin}/chunk-cache/${chunk.file_id}`, { method: 'GET' });
+      const cached = await cache.match(ck);
+      if (cached) return cached.arrayBuffer();
+
+      const queue = getTgQueue(botToken);
+      await queue.acquire(undefined, 10);
+      let result;
+      try { result = await tgDownloadFile(botToken, chunk.file_id); }
+      finally { queue.release(); }
+      if (!result.ok) throw new Error(result.error);
+
+      let data = result.data!;
+      if (isServerZke && key) data = await decryptChunk(data, key);
+
+      // Cache the decrypted chunk — but AT MOST ONE WRITE AT A TIME.
+      //
+      // `data.slice(0)` copies the whole chunk, up to 19 MB, and handing that
+      // copy to `waitUntil` keeps it alive after the response has been returned.
+      // A multi-chunk video fetched several chunks concurrently, so several
+      // 19 MB copies were retained at once, on top of the chunks themselves,
+      // against a 128 MB isolate cap. That is error 1102 — the invocation is
+      // killed, and the app reports it as sync or backup failure. It also
+      // explains the operator's "reopen the app and it's good for a while":
+      // a new connection lands on a fresh isolate.
+      //
+      // The cache is an optimisation, so dropping an entry is free. Skipping
+      // the write when one is already in flight bounds the retained bytes to a
+      // single chunk instead of one per concurrent fetch.
+      if (chunkCacheWritesInFlight < MAX_CHUNK_CACHE_WRITES) {
+        chunkCacheWritesInFlight++;
+        env.waitUntil?.(
+          cache
+            .put(ck, new Response(data.slice(0), {
+              headers: { 'Content-Type': 'application/octet-stream', 'Cache-Control': 'public, max-age=86400' },
+            }))
+            .catch(() => { /* best effort: a missed cache entry costs one refetch */ })
+            .finally(() => { chunkCacheWritesInFlight--; }),
+        );
+      }
+      return data;
+    };
+
+    const headers: Record<string, string> = {
+      'Content-Type': photo.mimeType || 'application/octet-stream',
+      'Accept-Ranges': 'bytes',
+      'Cache-Control': 'public, max-age=86400, immutable',
+    };
+
+    if (rangeHeader && totalSize > 0) {
+      const parts = rangeHeader.replace(/bytes=/, "").split("-");
+      // RFC 7233 §2.1 suffix-range: "bytes=-N" means last N bytes.
+      // The naive `parseInt("", 10) || 0` coerces the empty prefix to 0,
+      // serving the FIRST N bytes instead — the wrong data for moov-at-end probes.
+      let start: number, end: number;
+      if (parts[0] === '') {
+        const suffixLen = parseInt(parts[1], 10);
+        end = totalSize - 1;
+        start = Math.max(0, totalSize - suffixLen);
+      } else {
+        start = parseInt(parts[0], 10);
+        end = parts[1] !== '' ? parseInt(parts[1], 10) : totalSize - 1;
+      }
+
+      // RFC 7233: a last-byte-pos past EOF is CLAMPED, not rejected — players
+      // routinely ask for more than exists (e.g. `bytes=0-99999999`) and a 416
+      // here reads as a hard failure and stops playback. Only a start that is
+      // genuinely outside the file is unsatisfiable, and that answer must carry
+      // Content-Range: bytes */size.
+      if (isNaN(start) || start < 0 || start >= totalSize) {
+        return new Response(JSON.stringify({ message: 'Range not satisfiable', totalSize }), {
+          status: 416,
+          headers: { 'Content-Type': 'application/json', 'Content-Range': `bytes */${totalSize}` },
+        });
+      }
+      if (isNaN(end) || end >= totalSize) end = totalSize - 1;
+      if (end < start) end = start;
+
+      // Small explicit ranges (moov probes, header sniffs) stay buffered and
+      // byte-exact. Everything larger is served as a STREAMED 206 covering the
+      // FULL requested range. This distinction is load-bearing for the mobile
+      // app: native players (ExoPlayer/AVPlayer) open playback with
+      // `bytes=0-` and treat a truncated 206 as end-of-file — the old
+      // 8MB/chunk-end caps made multi-chunk videos play their first window
+      // then freeze in the app, while browsers (which politely re-request the
+      // remainder) kept working. Streaming holds at most ~2 chunks in memory,
+      // so the 128MB isolate cap that motivated the old truncation never binds.
+      const SMALL_RANGE = 2 * 1024 * 1024;
+      if (end - start + 1 <= SMALL_RANGE) {
+        const firstChunkIdx = Math.floor(start / chunkSize);
+        const lastChunkIdx = Math.min(Math.floor(end / chunkSize), chunks.length - 1);
+        const parts2: Uint8Array[] = [];
+        let bytesCollected = 0;
+        const neededBytes = end - start + 1;
+        for (let i = firstChunkIdx; i <= lastChunkIdx && bytesCollected < neededBytes; i++) {
+          const chunkData = await getChunk(chunks[i]);
+          const chunkStart = i * chunkSize;
+          const sliceStart = Math.max(start - chunkStart, 0);
+          const sliceEnd = Math.min(end - chunkStart + 1, chunkData.byteLength);
+          parts2.push(new Uint8Array(chunkData, sliceStart, sliceEnd - sliceStart));
+          bytesCollected += sliceEnd - sliceStart;
+        }
+        const body = new Uint8Array(neededBytes);
+        let offset = 0;
+        for (const part of parts2) {
+          body.set(part, offset);
+          offset += part.length;
+        }
+        headers['Content-Range'] = `bytes ${start}-${end}/${totalSize}`;
+        headers['Content-Length'] = neededBytes.toString();
+        return new Response(body, { status: 206, headers });
+      }
+
+      // Free-plan invocations get ~50 subrequests and each chunk costs 2
+      // (getFile + download). 20 chunks ≈ 380MB per response covers everything
+      // today's upload paths can produce; a larger web-chunked monster gets an
+      // honest shorter 206 at a chunk boundary (a seek reopens from there).
+      const MAX_CHUNKS_PER_RESPONSE = 20;
+      const firstChunkIdx = Math.floor(start / chunkSize);
+      const lastAllowedByte = Math.min(totalSize - 1, (firstChunkIdx + MAX_CHUNKS_PER_RESPONSE) * chunkSize - 1);
+      if (end > lastAllowedByte) end = lastAllowedByte;
+      const lastChunkIdx = Math.min(Math.floor(end / chunkSize), chunks.length - 1);
+      const neededBytes = end - start + 1;
+
+      const { readable, writable } = new TransformStream();
+      const pump = async () => {
+        const writer = writable.getWriter();
+        try {
+          // Pipeline: fetch chunk i+1 from Telegram while chunk i's bytes
+          // drain to the client at playback speed — the chunk-boundary stalls
+          // that tripped player watchdogs disappear. Awaiting writer.write
+          // gives real backpressure, so memory stays ~2 chunks.
+          let pending = getChunk(chunks[firstChunkIdx]);
+          for (let i = firstChunkIdx; i <= lastChunkIdx; i++) {
+            const chunkData = await pending;
+            if (i < lastChunkIdx) pending = getChunk(chunks[i + 1]);
+            const chunkStart = i * chunkSize;
+            const sliceStart = Math.max(start - chunkStart, 0);
+            const sliceEnd = Math.min(end - chunkStart + 1, chunkData.byteLength);
+            await writer.write(new Uint8Array(chunkData, sliceStart, sliceEnd - sliceStart));
+          }
+          await writer.close();
+        } catch (e) {
+          writer.abort(e).catch(() => { /* client gone */ });
+        }
+      };
+      const pumping = pump();
+      env.waitUntil?.(pumping);
+
+      headers['Content-Range'] = `bytes ${start}-${end}/${totalSize}`;
+      headers['Content-Length'] = neededBytes.toString();
+      return new Response(readable, { status: 206, headers });
+    } else {
+      // No range — stream all chunks
+      const stream = new ReadableStream({
+        async start(controller) {
+          for (const chunk of chunks) {
+            try {
+              const data = await getChunk(chunk);
+              controller.enqueue(new Uint8Array(data));
+            } catch (e) {
+              controller.error(e);
+              return;
+            }
+          }
+          controller.close();
+        }
+      });
+      headers['Content-Length'] = (totalSize || '').toString();
+      return new Response(stream, { status: 200, headers });
+    }
+  }
+
+  let fileId = photo.telegramOriginalId;
+  if (!fileId) return json({ message: 'No file data' }, 404);
+  
+  const cache = (caches as any).default;
+  const cacheKey = new Request(`${url.origin}/file-cache/${fileId}`, { method: 'GET' });
+  let cachedRes = await cache.match(cacheKey);
+
+  let data: ArrayBuffer | null = null;
+  if (cachedRes) {
+      data = await cachedRes.arrayBuffer();
+  } else {
+      const queue = getTgQueue(botToken);
+      await queue.acquire(undefined, 10); // Priority 10 for original downloads (high)
+      let result;
+      try {
+        result = await tgDownloadFile(botToken, fileId);
+      } finally {
+        queue.release();
+      }
+      if (!result.ok) return json({ message: result.error }, 502);
+      data = result.data!;
+
+      if (isServerZke && key) {
+          data = await decryptChunk(data, key);
+      }
+      
+      const cacheRes = new Response(data, { 
+          headers: { 'Content-Type': photo.mimeType || 'application/octet-stream', 'Cache-Control': 'public, max-age=86400' } 
+      });
+      await cache.put(cacheKey, cacheRes.clone());
+  }
+
+  const headers: Record<string, string> = {
+    'Content-Type': photo.mimeType || 'application/octet-stream',
+    'Accept-Ranges': 'bytes',
+    'Cache-Control': 'public, max-age=86400, immutable',
+  };
+
+  if (rangeHeader && totalSize > 0 && data) {
+      const parts = rangeHeader.replace(/bytes=/, "").split("-");
+      let start: number, end: number;
+      if (parts[0] === '') {
+        const suffixLen = parseInt(parts[1], 10);
+        end = totalSize - 1;
+        start = Math.max(0, totalSize - suffixLen);
+      } else {
+        start = parseInt(parts[0], 10);
+        end = parts[1] !== '' ? parseInt(parts[1], 10) : totalSize - 1;
+      }
+
+      // Same RFC 7233 clamping as the chunked path above.
+      if (isNaN(start) || start < 0 || start >= totalSize) {
+        return new Response(JSON.stringify({ message: 'Range not satisfiable', totalSize }), {
+          status: 416,
+          headers: { 'Content-Type': 'application/json', 'Content-Range': `bytes */${totalSize}` },
+        });
+      }
+      if (isNaN(end) || end >= totalSize) end = totalSize - 1;
+      if (end < start) end = start;
+
+      headers['Content-Range'] = `bytes ${start}-${end}/${totalSize}`;
+      headers['Content-Length'] = (end - start + 1).toString();
+      const sliced = data.slice(start, end + 1);
+      return new Response(sliced, { status: 206, headers });
+  } else if (data) {
+      headers['Content-Length'] = (totalSize || data.byteLength).toString();
+      return new Response(data, { headers });
+  }
+  
+  return json({ message: 'Error processing file' }, 500);
+}
+
+function toAssetResponseDto(photo: any, ownerId: string): any {
+  const id = photo.id;
+  const mimeType = photo.mimeType || 'image/jpeg';
+  const isHeic = photo.isHeic || mimeType === 'image/heic' || mimeType === 'image/heif';
+  // Report HEIC as HEIC so frontend can handle conversion
+  const reportedMime = mimeType;
+
+  // Detect video type — live photos (images with livePhotoVideoId) are always IMAGE
+  const isVideo = !photo.livePhotoVideoId && (
+    mimeType.startsWith('video/') ||
+    photo.type === 'VIDEO'
+  );
+
+  // Live photos should not expose duration (prevents GIF treatment in gallery)
+  const effectiveDuration = photo.livePhotoVideoId ? null :
+    (!photo.duration || photo.duration === '0' || photo.duration === '0.000' || photo.duration === '0:00:00.00000') ? null : photo.duration;
+
+  return {
+    id,
+    deviceAssetId: photo.deviceAssetId || photo.id || '',
+    deviceId: photo.deviceId || '',
+    type: isVideo ? 'VIDEO' : 'IMAGE',
+    originalFileName: photo.originalFileName || photo.fileName || 'unknown',
+    originalMimeType: reportedMime,
+    originalPath: `/upload/${id}`,
+    fileCreatedAt: photo.fileCreatedAt || photo.uploadedAt || new Date().toISOString(),
+    fileModifiedAt: photo.uploadedAt || new Date().toISOString(),
+    localDateTime: photo.fileCreatedAt || new Date().toISOString(),
+    updatedAt: photo.uploadedAt || new Date().toISOString(),
+    isFavorite: !!photo.isFavorite,
+    isArchived: photo.visibility === 'archive',
+    isTrashed: !!photo.isTrashed,
+    isOffline: false,
+    isEdited: false,
+    hasMetadata: true,
+    duration: effectiveDuration,
+    ownerId,
+    thumbhash: photo.thumbhash || null,
+    visibility: photo.visibility || 'timeline',
+    exifInfo: {
+      make: photo.make || null, model: photo.model || null,
+      exifImageWidth: photo.width || 0, exifImageHeight: photo.height || 0,
+      fileSizeInByte: photo.fileSize || 0,
+      // orientation MUST be a string (or null): the mobile ExifResponseDto types
+      // it String? and Dart's strict parse rejects a number.
+      orientation: photo.orientation != null ? String(photo.orientation) : null,
+      dateTimeOriginal: photo.dateTimeOriginal || photo.fileCreatedAt || null,
+      modifyDate: null, timeZone: null, lensModel: photo.lensModel || null,
+      fNumber: typeof photo.fNumber === 'number' ? photo.fNumber : null,
+      focalLength: typeof photo.focalLength === 'number' ? photo.focalLength : null,
+      iso: typeof photo.iso === 'number' ? photo.iso : null,
+      exposureTime: photo.exposureTime || null,
+      latitude: photo.latitude ?? null, longitude: photo.longitude ?? null, city: photo.city || null,
+      state: null, country: photo.country || null, description: photo.description || null,
+      projectionType: null, rating: null,
+    },
+    people: [], tags: [], stack: null, livePhotoVideoId: photo.livePhotoVideoId || null,
+    unassignedFaces: [], duplicateId: null, checksum: photo.checksum || '', libraryId: null, profileImagePath: '',
+    // --- DaemonClient Drive Metadata ---
+    telegramFileId: photo.telegramThumbId || photo.telegramOriginalId,
+    telegramOriginalId: photo.telegramOriginalId,
+    encryptionMode: photo.encryptionMode || 'off'
+  };
+}
+
+// ── Dashboard summary (/api/dashboard/summary) ──────────────────────────────
+// One cheap round-trip for the accounts-portal launcher: real counts + a few
+// recent items for both services. Photo previews ride on thumbhash (a tiny
+// base64 blur string already stored per photo) so the dashboard renders REAL
+// previews with no authenticated image fetch. All best-effort: a missing files
+// table (older worker) or any query error degrades to empty, never 500.
+export async function handleDashboardSummary(request: Request, env: Env): Promise<Response> {
+  const session = await requireAuth(request, env);
+  const uid = session.uid;
+  const out: any = { photos: { count: 0, recent: [] }, drive: { count: 0, recent: [] } };
+  if (!env.DB) return json(out);
+
+  // Photos — exclude trashed + live-photo companion videos (same rule as sync).
+  try {
+    const countRow = await env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM photos
+       WHERE ownerId = ? AND (isTrashed = 0 OR isTrashed IS NULL)
+         AND id NOT IN (SELECT livePhotoVideoId FROM photos WHERE livePhotoVideoId IS NOT NULL AND ownerId = ?)`
+    ).bind(uid, uid).first<{ n: number }>();
+    out.photos.count = countRow?.n || 0;
+
+    // Only assets that can actually be drawn. The newest upload is often the
+    // one whose thumbnail failed, and a preview strip of grey placeholders
+    // reads as "your library is empty" rather than "these four are broken".
+    // The count above still reports every asset, so nothing is hidden.
+    const recent = await env.DB.prepare(
+      `SELECT id, thumbhash, mimeType FROM photos
+       WHERE ownerId = ? AND (isTrashed = 0 OR isTrashed IS NULL)
+         AND id NOT IN (SELECT livePhotoVideoId FROM photos WHERE livePhotoVideoId IS NOT NULL AND ownerId = ?)
+         AND ((telegramThumbId IS NOT NULL AND telegramThumbId != '')
+           OR (telegramPreviewId IS NOT NULL AND telegramPreviewId != ''))
+       ORDER BY fileCreatedAt DESC LIMIT 4`
+    ).bind(uid, uid).all<{ id: string; thumbhash: string | null; mimeType: string | null }>();
+    out.photos.recent = (recent.results || []).map(r => ({
+      id: r.id, thumbhash: r.thumbhash || null, isVideo: !!r.mimeType && r.mimeType.startsWith('video/'),
+    }));
+  } catch (e: any) {
+    console.log('[Dashboard] photos summary failed:', e?.message);
+  }
+
+  // Drive — files only (folders excluded), leaving out Trash and its contents.
+  // The schema step also creates the table on workers made before Drive.
+  try {
+    await ensureDriveSchema(env.DB);
+    const rows = (await env.DB.prepare(
+      `SELECT id, parentId, type, fileName, uploadedAt, trashedAt, purgingAt FROM files WHERE ownerId = ?`
+    ).bind(uid).all<any>()).results || [];
+    const hidden = hiddenIds(rows);
+    const files = rows.filter((r) => r.type === 'file' && !hidden.has(r.id));
+    out.drive.count = files.length;
+    out.drive.recent = files
+      .sort((x, y) => String(y.uploadedAt).localeCompare(String(x.uploadedAt)))
+      .slice(0, 6)
+      .map((r) => ({
+        fileName: r.fileName,
+        ext: (r.fileName.split('.').pop() || '').toUpperCase().slice(0, 4),
+      }));
+  } catch (e: any) {
+    console.log('[Dashboard] drive summary failed (files table may not exist):', e?.message);
+  }
+
+  return json(out);
+}
+
+// ── Downloads (/api/download/*) ─────────────────────────────────────────────
+// Real implementation of the Immich download contract (was an empty stub, so
+// the web "Download" button silently did nothing: /info returned zero archives
+// and the loop had nothing to iterate). /info plans the archives; /archive
+// streams a STORE-mode ZIP straight from Telegram chunks with backpressure, so
+// memory stays one chunk regardless of archive size.
+const MAX_ARCHIVE_BYTES = 3.5 * 1024 * 1024 * 1024; // stay under ZIP32's 4 GiB
+
+async function loadOwnedPhotos(env: Env, uid: string, ids: string[]): Promise<any[]> {
+  const out: any[] = [];
+  // D1 caps bound parameters per statement — query in slices.
+  for (let i = 0; i < ids.length; i += 80) {
+    const slice = ids.slice(i, i + 80);
+    const placeholders = slice.map(() => '?').join(',');
+    const rows = await env.DB!.prepare(
+      `SELECT * FROM photos WHERE ownerId = ? AND id IN (${placeholders})`
+    ).bind(uid, ...slice).all();
+    out.push(...(rows.results || []));
+  }
+  // Preserve the requested order (zip entries should match the selection).
+  const byId = new Map(out.map(r => [r.id, r]));
+  return ids.map(id => byId.get(id)).filter(Boolean);
+}
+
+export async function handleDownload(request: Request, env: Env, path: string): Promise<Response> {
+  const session = await requireAuth(request, env);
+  const uid = session.uid;
+  const idToken = session.idToken;
+  if (!env.DB) return json({ message: 'Downloads need D1' }, 501);
+
+  if (path === '/api/download/info' && request.method === 'POST') {
+    const body = await request.json().catch(() => ({})) as any;
+    let ids: string[] = Array.isArray(body.assetIds) ? body.assetIds : [];
+    if (!ids.length && body.albumId) {
+      const rows = await env.DB.prepare(
+        'SELECT assetId FROM album_assets WHERE albumId = ?'
+      ).bind(body.albumId).all<{ assetId: string }>();
+      ids = (rows.results || []).map(r => r.assetId);
+    }
+    const photos = (await loadOwnedPhotos(env, uid, ids)).filter((p) => !p.isTrashed);
+    const target = Math.min(Number(body.archiveSize) || MAX_ARCHIVE_BYTES, MAX_ARCHIVE_BYTES);
+    const archives: Array<{ size: number; assetIds: string[] }> = [];
+    let cur = { size: 0, assetIds: [] as string[] };
+    let totalSize = 0;
+    for (const p of photos) {
+      const sz = p.fileSize || 0;
+      if (cur.assetIds.length > 0 && cur.size + sz > target) {
+        archives.push(cur);
+        cur = { size: 0, assetIds: [] };
+      }
+      cur.size += sz;
+      cur.assetIds.push(p.id);
+      totalSize += sz;
+    }
+    if (cur.assetIds.length > 0) archives.push(cur);
+    return json({ totalSize, archives });
+  }
+
+  if (path === '/api/download/archive' && request.method === 'POST') {
+    const body = await request.json().catch(() => ({})) as any;
+    const ids: string[] = Array.isArray(body.assetIds) ? body.assetIds : [];
+    const photos = (await loadOwnedPhotos(env, uid, ids)).filter((p) => !p.isTrashed);
+    if (!photos.length) return json({ message: 'No assets found' }, 404);
+
+    const config = await getCachedConfig<any>(env, uid, idToken, 'telegram');
+    const botToken = config?.botToken || config?.bot_token;
+    if (!botToken) return json({ message: 'No Telegram config' }, 500);
+    // One key fetch for the whole archive (covers server-ZKE photos).
+    const anyServerZke = photos.some(p => p.encryptionMode === 'server');
+    const key = anyServerZke ? await getEncryptionKey(env, uid, idToken) : null;
+
+    const { readable, writable } = new TransformStream();
+    const writer = writable.getWriter();
+    const pump = async () => {
+      const zip = new StoreZipWriter((b) => writer.write(b));
+      const usedNames = new Set<string>();
+      try {
+        for (const photo of photos) {
+          // Client-encrypted bytes would zip as unreadable blobs — skip them.
+          if (photo.encryptionMode === 'client') continue;
+          let chunks: any[] = [];
+          if (typeof photo.telegramChunks === 'string') {
+            try { chunks = JSON.parse(photo.telegramChunks); } catch { /* legacy */ }
+          } else if (Array.isArray(photo.telegramChunks)) {
+            chunks = photo.telegramChunks;
+          }
+          chunks.sort((a, b) => a.index - b.index);
+          const fileIds: string[] = chunks.length
+            ? chunks.map(c => c.file_id)
+            : (photo.telegramOriginalId ? [photo.telegramOriginalId] : []);
+          if (!fileIds.length) continue;
+
+          let name = photo.fileName || `${photo.id}.bin`;
+          if (usedNames.has(name)) {
+            const dot = name.lastIndexOf('.');
+            const stem = dot > 0 ? name.slice(0, dot) : name;
+            const ext = dot > 0 ? name.slice(dot) : '';
+            let n = 2;
+            while (usedNames.has(`${stem} (${n})${ext}`)) n++;
+            name = `${stem} (${n})${ext}`;
+          }
+          usedNames.add(name);
+
+          await zip.beginFile(name, new Date(photo.fileCreatedAt || Date.now()));
+          for (const fileId of fileIds) {
+            const queue = getTgQueue(botToken);
+            await queue.acquire(undefined, 10); // downloads: high priority, not paced
+            let result;
+            try { result = await tgDownloadFile(botToken, fileId); }
+            finally { queue.release(); }
+            if (!result.ok || !result.data) throw new Error(`chunk download failed: ${result.error}`);
+            let data = result.data;
+            if (photo.encryptionMode === 'server' && key) data = await decryptChunk(data, key);
+            await zip.writeData(new Uint8Array(data));
+          }
+          await zip.endFile();
+        }
+        await zip.finish();
+        await writer.close();
+      } catch (e: any) {
+        console.error('[Download] archive stream failed:', e?.message);
+        await writer.abort(e).catch(() => {});
+      }
+    };
+    if (env.waitUntil) env.waitUntil(pump()); else pump().catch(() => {});
+
+    return new Response(readable, {
+      headers: {
+        'Content-Type': 'application/zip',
+        'Content-Disposition': 'attachment; filename="daemonclient-photos.zip"',
+        'Cache-Control': 'no-store',
+      },
+    });
+  }
+
+  return json({ message: 'Download endpoint not found' }, 404);
+}
+
+// ── Lazy EXIF backfill ──────────────────────────────────────────────────────
+// Photos uploaded before server-side EXIF extraction existed have no camera
+// metadata and often no GPS. Instead of requiring a re-upload, sync.ts calls
+// this via waitUntil after each sync response: take a few unchecked rows,
+// download each photo's FIRST chunk from Telegram, decrypt it when the worker
+// holds the key (server-ZKE), parse EXIF and patch the row. Every attempted
+// row gets exifChecked=1 so EXIF-less photos (screenshots, client-encrypted
+// blobs we can't read) are never downloaded twice. Batches are small and
+// sequential so memory stays a single chunk at a time.
+let exifBackfillComplete = false;
+export async function backfillExifBatch(env: Env, uid: string, idToken: string, batchSize = 6): Promise<void> {
+  if (exifBackfillComplete || !env.DB) return;
+  try {
+    await ensureDeduplicationSchema(env.DB);
+    // Candidates: anything still missing a location that hasn't been checked at
+    // the current EXIF version. The `make IS NOT NULL OR exifChecked<1` clause
+    // targets real photos (camera EXIF present → likely geotagged, the user's
+    // "camera shows but location missing" case) plus never-parsed rows, while
+    // skipping already-parsed screenshots/downloads (no make, no GPS) so we don't
+    // re-download the whole library for nothing. After each, exifChecked is
+    // stamped to the current version so a genuinely GPS-less photo isn't retried.
+    const rows = (await env.DB.prepare(
+      `SELECT * FROM photos
+       WHERE ownerId = ? AND mimeType LIKE 'image/%'
+         AND latitude IS NULL
+         AND (exifChecked IS NULL OR exifChecked < ?)
+         AND (make IS NOT NULL OR exifChecked IS NULL OR exifChecked = 0)
+         AND (isTrashed = 0 OR isTrashed IS NULL)
+       LIMIT ?`
+    ).bind(uid, EXIF_PARSE_VERSION, batchSize).all()).results as any[];
+    if (!rows || rows.length === 0) {
+      exifBackfillComplete = true;
+      return;
+    }
+
+    const config = await getCachedConfig<any>(env, uid, idToken, 'telegram');
+    const botToken = config?.botToken || config?.bot_token;
+    if (!botToken) return;
+    const adapter = new D1Adapter(env.DB);
+
+    for (const photo of rows) {
+      const patch: Record<string, any> = { exifChecked: EXIF_PARSE_VERSION };
+      try {
+        let chunks: any[] = [];
+        if (typeof photo.telegramChunks === 'string') {
+          try { chunks = JSON.parse(photo.telegramChunks); } catch { /* legacy */ }
+        } else if (Array.isArray(photo.telegramChunks)) {
+          chunks = photo.telegramChunks;
+        }
+        const firstChunk = chunks.slice().sort((a, b) => a.index - b.index)[0];
+        const fileId = firstChunk?.file_id || photo.telegramOriginalId;
+        const isServerZke = photo.encryptionMode === 'server';
+        const isClientZke = photo.encryptionMode === 'client';
+        // Client-encrypted bytes are unreadable here — just mark checked.
+        if (fileId && !isClientZke) {
+          const key = isServerZke ? await getEncryptionKey(env, uid, idToken) : null;
+          if (!isServerZke || key) {
+            const queue = getTgQueue(botToken);
+            await queue.acquire(undefined, 1); // low priority — never starve user requests
+            let result;
+            try { result = await tgDownloadFile(botToken, fileId); }
+            finally { queue.release(); }
+            if (result.ok && result.data) {
+              let data = result.data;
+              if (isServerZke && key) data = await decryptChunk(data, key);
+              const ex = await extractExif(new Uint8Array(data));
+              if (ex.make) patch.make = ex.make;
+              if (ex.model) patch.model = ex.model;
+              if (ex.lensModel) patch.lensModel = ex.lensModel;
+              if (typeof ex.fNumber === 'number') patch.fNumber = ex.fNumber;
+              if (typeof ex.focalLength === 'number') patch.focalLength = ex.focalLength;
+              if (typeof ex.iso === 'number') patch.iso = ex.iso;
+              if (ex.exposureTime) patch.exposureTime = ex.exposureTime;
+              if (ex.orientation !== undefined) patch.orientation = String(ex.orientation);
+              if (ex.dateTimeOriginal) patch.dateTimeOriginal = ex.dateTimeOriginal;
+              if (photo.latitude == null && typeof ex.latitude === 'number' && typeof ex.longitude === 'number') {
+                patch.latitude = ex.latitude;
+                patch.longitude = ex.longitude;
+                console.log(`[ExifBackfill] recovered GPS for ${photo.id} (${photo.mimeType}): ${ex.latitude},${ex.longitude}`);
+              }
+            }
+          }
+        }
+      } catch (e: any) {
+        console.log(`[ExifBackfill] ${photo.id} parse failed (marking checked): ${e?.message}`);
+      }
+      try { await adapter.updatePhoto(photo.id, patch); } catch (e: any) {
+        console.log(`[ExifBackfill] ${photo.id} update failed: ${e?.message}`);
+      }
+    }
+    console.log(`[ExifBackfill] processed ${rows.length} photos for uid=${uid}`);
+  } catch (e: any) {
+    console.log('[ExifBackfill] batch failed (non-fatal):', e?.message);
+  }
+}
+
+// ── Tombstone reclamation ────────────────────────────────────────────────────
+// Emptied-trash rows are kept so every device learns the asset is gone (a hard
+// DELETE left un-synced devices holding ghosts forever). They can't be kept
+// indefinitely either — sync re-emits every tombstone on every run — so they
+// are reclaimed once they are far older than any plausible offline period.
+const TOMBSTONE_TTL_DAYS = 90;
+export async function purgeExpiredTombstones(env: Env, uid: string): Promise<void> {
+  if (!env.DB) return;
+  try {
+    await ensureDeduplicationSchema(env.DB);
+    const cutoff = new Date(Date.now() - TOMBSTONE_TTL_DAYS * 86400_000).toISOString();
+    const res: any = await env.DB.prepare(
+      `DELETE FROM photos
+        WHERE ownerId = ? AND isTrashed = 1 AND purgedAt IS NOT NULL AND purgedAt < ?`
+    ).bind(uid, cutoff).run();
+    const n = res?.meta?.changes || 0;
+    if (n > 0) console.log(`[Tombstones] reclaimed ${n} row(s) older than ${TOMBSTONE_TTL_DAYS}d for uid=${uid}`);
+  } catch (e: any) {
+    console.log('[Tombstones] purge failed (non-fatal):', e?.message);
+  }
+}
+
+// ── Lazy HEIC thumbnail backfill (per-user processor ONLY) ───────────────────
+// Heals thumb-less HEIC rows in the background — but ONLY for users who have
+// configured their OWN converter (config/telegram.heicConvertUrl). Without it
+// this is fully dormant: plaintext user bytes must never transit shared
+// operator infrastructure, so the manual fix flow remains the default path.
+// For users WITH a processor: free-tier hosts sleep, and a failed convert is
+// itself the wake-up call — the next cycle (sync/timeline fire every few
+// minutes during use) converts against a warm service. Undecodable files are
+// stamped heicThumbChecked=1 so nothing loops.
+let heicThumbBackfillComplete = false;
+let heicThumbBackfillRunning = false;
+let lastHeicThumbBackfill = 0;
+
+// Re-arm the HEIC backfill after a processor is (re)attached.
+//
+// The completion flag is module-scope, so it lives for the isolate's whole
+// life. The FIRST time this backfill runs on an isolate whose user has NO
+// processor configured, it sets `heicThumbBackfillComplete = true` (line ~2886)
+// and goes permanently dormant — correct, because without a per-user processor
+// the backfill must never run (plaintext bytes would have nowhere safe to go).
+//
+// But if that same user LATER attaches a processor (the whole point of the
+// onboarding step and the manual add), the flag is already stuck true, so
+// every existing thumb-less HEIC row would stay unhealed until a fresh isolate
+// happens to serve them — which, under active use, may not be for a long time.
+// `handleProcessor` calls this the instant a URL is saved, so the next sync or
+// timeline request re-runs the heal against the freshly-configured processor.
+// `lastHeicThumbBackfill` is cleared too so the 2-minute throttle does not add
+// a further delay to that first healing pass.
+export function resetHeicThumbBackfill(): void {
+  heicThumbBackfillComplete = false;
+  lastHeicThumbBackfill = 0;
+}
+
+export async function backfillHeicThumbBatch(env: Env, uid: string, idToken: string): Promise<void> {
+  if (heicThumbBackfillComplete || heicThumbBackfillRunning || !env.DB) return;
+  const nowTs = Date.now();
+  if (nowTs - lastHeicThumbBackfill < 2 * 60 * 1000) return;
+  lastHeicThumbBackfill = nowTs;
+  heicThumbBackfillRunning = true;
+
+  // Conversions are slow (network round-trip to Render), so the budget is
+  // deliberately small; the free-plan invocation cap is 50 subrequests shared
+  // with the dispatching request.
+  const SUBREQUEST_BUDGET = 24;
+  const TIME_BUDGET_MS = 20_000;
+  const MAX_PHOTOS = 8;
+  const started = Date.now();
+  let subrequests = 0;
+
+  try {
+    // PRIVACY GATE first: this backfill may run ONLY for users who configured
+    // their OWN processor (config/telegram.heicConvertUrl). Plaintext photo
+    // bytes must never transit shared operator infrastructure — without a
+    // per-user URL the backfill is fully dormant (no downloads, no queries).
+    const config = await getCachedConfig<any>(env, uid, idToken, 'telegram');
+    subrequests++;
+    const heicConvertUrl = config?.heicConvertUrl;
+    if (!heicConvertUrl) {
+      heicThumbBackfillComplete = true;
+      return;
+    }
+    const botToken = config?.botToken || config?.bot_token;
+    const channelId = config?.channelId || config?.channel_id;
+    if (!botToken || !channelId) return;
+
+    await ensureDeduplicationSchema(env.DB);
+    const rows = (await env.DB.prepare(
+      `SELECT * FROM photos
+       WHERE ownerId = ?
+         AND (mimeType = 'image/heic' OR mimeType = 'image/heif'
+              OR fileName LIKE '%.heic' OR fileName LIKE '%.heif')
+         AND (telegramThumbId IS NULL OR telegramThumbId = '')
+         AND (heicThumbChecked IS NULL OR heicThumbChecked = 0)
+         AND (encryptionMode IS NULL OR encryptionMode != 'client')
+         AND (isTrashed = 0 OR isTrashed IS NULL)
+       LIMIT ?`
+    ).bind(uid, MAX_PHOTOS).all()).results as any[];
+    if (!rows || rows.length === 0) {
+      heicThumbBackfillComplete = true;
+      return;
+    }
+    const adapter = new D1Adapter(env.DB);
+    let serverKey: CryptoKey | null | undefined; // fetched lazily, once
+
+    for (const photo of rows) {
+      if (subrequests >= SUBREQUEST_BUDGET || Date.now() - started > TIME_BUDGET_MS) break;
+      try {
+        let chunks: any[] = [];
+        if (typeof photo.telegramChunks === 'string') {
+          try { chunks = JSON.parse(photo.telegramChunks); } catch { /* legacy */ }
+        } else if (Array.isArray(photo.telegramChunks)) {
+          chunks = photo.telegramChunks;
+        }
+        const sorted = chunks.slice().sort((a: any, b: any) => a.index - b.index);
+        const fileId = sorted[0]?.file_id || photo.telegramOriginalId;
+        if (!fileId || sorted.length > 1) {
+          // No source bytes, or a >19MB multi-chunk HEIC we won't buffer here.
+          await adapter.updatePhoto(photo.id, { heicThumbChecked: 1 });
+          continue;
+        }
+
+        const isServerZke = photo.encryptionMode === 'server' || (photo.encrypted === true && !photo.encryptionMode);
+        if (isServerZke && serverKey === undefined) {
+          serverKey = await getEncryptionKey(env, uid, idToken);
+          subrequests++;
+        }
+        if (isServerZke && !serverKey) return; // can't decrypt without the key
+
+        const queue = getTgQueue(botToken);
+        await queue.acquire(undefined, 1); // low priority — never starve user requests
+        let dl;
+        try { dl = await tgDownloadFile(botToken, fileId); }
+        finally { queue.release(); }
+        subrequests += 2;
+        if (!dl.ok || !dl.data) continue; // transient Telegram failure → retry next cycle
+
+        let data = dl.data;
+        if (isServerZke && serverKey) data = await decryptChunk(data, serverKey);
+
+        subrequests++;
+        const jpeg = await convertHeicThumbViaBackend(data, idToken, heicConvertUrl);
+        if (!jpeg) {
+          // Cold/unreachable processor — that request just woke it. Leave the
+          // row unchecked and end this cycle; the next one converts warm.
+          console.log('[HeicThumbBackfill] processor unavailable — woke it, retrying next cycle');
+          break;
+        }
+
+        // Store exactly like handleThumbnailUpload: encrypted .bin document for
+        // server-ZKE assets, else a plain Telegram photo.
+        const patch: any = { heicThumbChecked: 1 };
+        subrequests++;
+        if (isServerZke && serverKey) {
+          const enc = await encryptChunk(jpeg, serverKey);
+          const form = new FormData();
+          form.append('chat_id', channelId);
+          form.append('document', new Blob([enc], { type: 'application/octet-stream' }), 'thumb.bin');
+          const res = await tgFetchWithRetry(`https://api.telegram.org/bot${botToken}/sendDocument`, { method: 'POST', body: form });
+          const sent = await res.json() as any;
+          if (sent.ok && sent.result?.document?.file_id) {
+            patch.telegramThumbId = sent.result.document.file_id;
+            patch.thumbEncrypted = 1;
+          }
+        } else {
+          const form = new FormData();
+          form.append('chat_id', channelId);
+          form.append('photo', new Blob([jpeg], { type: 'image/jpeg' }), 'thumb.jpg');
+          const res = await tgFetchWithRetry(`https://api.telegram.org/bot${botToken}/sendPhoto`, { method: 'POST', body: form });
+          const sent = await res.json() as any;
+          if (sent.ok && sent.result?.photo?.length > 0) {
+            patch.telegramThumbId = sent.result.photo[0].file_id;
+            patch.thumbEncrypted = 0;
+          }
+        }
+        if (!patch.telegramThumbId) continue; // Telegram store failed → retry next cycle
+
+        const th = computeThumbHashFromJpeg(new Uint8Array(jpeg));
+        if (th) patch.thumbhash = th;
+        await adapter.updatePhoto(photo.id, patch);
+        console.log(`[HeicThumbBackfill] healed thumbnail for ${photo.id}`);
+      } catch (e: any) {
+        // Missing key material is a CONFIGURATION fault, not corrupt bytes. It
+        // is install-wide, not per-row, and it is repaired by a human — so
+        // stamping here would permanently retire every server-encrypted photo
+        // the run touches, and fixing the keys afterwards would not bring their
+        // thumbnails back. Stop the run instead and leave the rows healable.
+        // (Before the fail-closed change this was the `!serverKey` early return
+        // just above, which correctly did nothing.)
+        if (e instanceof EncryptionUnavailableError) {
+          console.log(`[HeicThumbBackfill] encryption keys unavailable — stopping, nothing stamped`);
+          return;
+        }
+        // A throw here is a permanent per-row failure (corrupt/undecryptable
+        // bytes) — stamp it so the backfill can never loop on it.
+        console.log(`[HeicThumbBackfill] ${photo.id} failed permanently (stamping checked): ${e?.message}`);
+        try { await adapter.updatePhoto(photo.id, { heicThumbChecked: 1 }); } catch { /* next cycle */ }
+      }
+    }
+  } catch (e: any) {
+    console.log('[HeicThumbBackfill] batch failed (non-fatal):', e?.message);
+  } finally {
+    heicThumbBackfillRunning = false;
+  }
+}
+
+// ── Lazy checksum backfill ───────────────────────────────────────────────────
+// THE duplicate-photo fix. The mobile app merges a local photo with its cloud
+// copy by matching base64(SHA-1(bytes)). Photos whose stored checksum is empty
+// (e.g. uploaded while the worker was overloaded and couldn't hash) never match
+// → the app shows BOTH the local and the cloud copy ("every photo twice"), even
+// on a fresh reinstall. Heal it server-side: stream each such photo's bytes back
+// from Telegram, recompute the SHA-1 incrementally (one chunk in memory at a
+// time — safe), and store it. Next sync emits the real checksum → the app
+// merges → one photo. checksumChecked guards against looping on an unhealable
+// file. Client-encrypted photos are skipped (we can't read plaintext; their
+// checksum must come from the app). Runs from sync via waitUntil, paced.
+let checksumBackfillComplete = false;
+let checksumBackfillRunning = false;
+export async function backfillChecksumBatch(env: Env, uid: string, idToken: string): Promise<void> {
+  if (checksumBackfillComplete || checksumBackfillRunning || !env.DB) return;
+  checksumBackfillRunning = true;
+
+  // Throughput budget. Free-plan Workers cap each invocation at 50 subrequests
+  // (shared with the request that dispatched us), and waitUntil gets a generous
+  // wall-clock window after the response. Every chunk costs ~2 subrequests
+  // (Telegram getFile + the file download), so we cap subrequests well under 50
+  // and bound wall-clock so a run can never trip the limit or hang. Within that
+  // budget we loop as many photos as fit — so a library heals in a handful of
+  // sync cycles instead of crawling 10 photos at a time. A throw mid-run (e.g.
+  // budget exceeded) is caught: processed rows are already saved, the rest
+  // retry next cycle.
+  const startedAt = Date.now();
+  const SUBREQUEST_BUDGET = 40;
+  const TIME_BUDGET_MS = 20_000;
+  const MAX_PHOTOS = 120;
+  const PAGE = 25;
+
+  let subrequests = 0;
+  let healed = 0;
+  let attempted = 0;
+  let serverKey: CryptoKey | null | undefined; // undefined = not yet fetched this run
+
+  const overBudget = () =>
+    attempted >= MAX_PHOTOS ||
+    subrequests >= SUBREQUEST_BUDGET ||
+    Date.now() - startedAt >= TIME_BUDGET_MS;
+
+  try {
+    await ensureDeduplicationSchema(env.DB);
+
+    const config = await getCachedConfig<any>(env, uid, idToken, 'telegram');
+    subrequests++; // cached after the first call, but count conservatively
+    const botToken = config?.botToken || config?.bot_token;
+    if (!botToken) return;
+    const adapter = new D1Adapter(env.DB);
+
+    pages: while (!overBudget()) {
+      const rows = (await env.DB.prepare(
+        `SELECT * FROM photos
+         WHERE ownerId = ?
+           AND (checksum IS NULL OR checksum = '')
+           AND (checksumChecked IS NULL OR checksumChecked = 0)
+           AND (encryptionMode IS NULL OR encryptionMode != 'client')
+           AND (isTrashed = 0 OR isTrashed IS NULL)
+         LIMIT ?`
+      ).bind(uid, PAGE).all()).results as any[];
+
+      // Empty page = nothing left to heal for this user. Stop re-checking in
+      // this isolate; new isolates re-evaluate (cheap single query) and exit.
+      if (!rows || rows.length === 0) {
+        checksumBackfillComplete = true;
+        break;
+      }
+
+      for (const photo of rows) {
+        if (overBudget()) break pages;
+        attempted++;
+        try {
+          let chunks: any[] = [];
+          if (typeof photo.telegramChunks === 'string') {
+            try { chunks = JSON.parse(photo.telegramChunks); } catch { /* legacy */ }
+          } else if (Array.isArray(photo.telegramChunks)) {
+            chunks = photo.telegramChunks;
+          }
+          const fileIds: string[] = chunks.length
+            ? chunks.slice().sort((a, b) => a.index - b.index).map(c => c.file_id)
+            : (photo.telegramOriginalId ? [photo.telegramOriginalId] : []);
+          const serverZke = photo.encryptionMode === 'server';
+          // Fetch the user's server-ZKE key once per run, lazily (only if a
+          // server-encrypted photo actually needs it).
+          if (serverZke && serverKey === undefined) {
+            serverKey = await getEncryptionKey(env, uid, idToken);
+            subrequests++;
+          }
+          const key = serverZke ? serverKey : null;
+
+          let checksum: string | null = null;
+          if (fileIds.length && (!serverZke || key)) {
+            // Collect the plaintext chunks first, then hash. Single-chunk files
+            // (every photo and most short videos) go through WebCrypto's native
+            // SHA-1 — C++, effectively free — instead of the interpreted Sha1
+            // fallback, which costs real CPU on a budget whose overrun
+            // Cloudflare kills as error 1102. Multi-chunk files still stream
+            // through Sha1 incrementally so memory stays at one chunk.
+            const parts: Uint8Array[] = [];
+            let hasher: Sha1 | null = null;
+            const multi = fileIds.length > 1;
+            let ok = true;
+            for (const fileId of fileIds) {
+              const queue = getTgQueue(botToken);
+              await queue.acquire(undefined, 1); // low priority — never starve user requests
+              let result;
+              try { result = await tgDownloadFile(botToken, fileId); }
+              finally { queue.release(); }
+              subrequests += 2; // getFile + download
+              if (!result.ok || !result.data) { ok = false; break; }
+              let data = result.data;
+              if (serverZke && key) data = await decryptChunk(data, key);
+              if (multi) {
+                hasher = hasher || new Sha1();
+                hasher.update(new Uint8Array(data));
+              } else {
+                parts.push(new Uint8Array(data));
+              }
+            }
+            if (ok) {
+              if (multi && hasher) {
+                checksum = bytesToBase64(hasher.digest());
+              } else if (parts.length === 1) {
+                const digest = await crypto.subtle.digest('SHA-1', parts[0]);
+                checksum = bytesToBase64(new Uint8Array(digest));
+              }
+            }
+          }
+
+          // Store the real checksum on success. A TRANSIENT failure (Telegram
+          // 429/5xx, or this run simply running out of budget mid-file) must
+          // NOT be stamped: doing so retired healable rows permanently on the
+          // strength of a temporary blip, leaving photos duplicated on the
+          // phone with no path back. Stop the run instead and retry next cycle.
+          // Permanent failures are stamped by the catch below.
+          if (!checksum && fileIds.length) {
+            console.log(`[ChecksumBackfill] transient failure on ${photo.id} — leaving unstamped for retry`);
+            break pages;
+          }
+          const patch: Record<string, any> = { checksumChecked: 1 };
+          if (checksum) { patch.checksum = checksum; healed++; }
+          await adapter.updatePhoto(photo.id, patch);
+        } catch (e: any) {
+          // Missing key material is a configuration fault — install-wide and
+          // repaired by a human, not a property of this row. Stamping it would
+          // do exactly what the comment above forbids: retire healable rows
+          // permanently on the strength of a state that is meant to persist
+          // until someone fixes it, leaving photos duplicated on the phone with
+          // no path back. This ran on every timeline load and every sync, so
+          // the whole broken window would have been spent chewing through the
+          // library irreversibly.
+          if (e instanceof EncryptionUnavailableError) {
+            console.log(`[ChecksumBackfill] encryption keys unavailable — stopping, nothing stamped`);
+            break pages;
+          }
+          console.log(`[ChecksumBackfill] ${photo.id} failed: ${e?.message}`);
+          try { await adapter.updatePhoto(photo.id, { checksumChecked: 1 }); } catch { /* ignore */ }
+        }
+      }
+    }
+    console.log(`[ChecksumBackfill] uid=${uid}: healed ${healed}/${attempted} this run (subreq~${subrequests})`);
+  } catch (e: any) {
+    console.log('[ChecksumBackfill] batch failed (non-fatal):', e?.message);
+  } finally {
+    checksumBackfillRunning = false;
+  }
+}
+
+// --- Telegram Fetch with Retry ---
+// Per-bot send pacer. Telegram allows ~20 sendDocument / 30s to one chat (and
+// ~1 msg/s generally); exceeding it returns a 429 that blocks the WHOLE bot for
+// retry_after (up to ~35s). So we serialise sends to >=SEND_INTERVAL_MS apart
+// per bot — reserving a future slot so concurrent calls still space out. This
+// keeps big background batch uploads under the limit instead of slamming into
+// the 429 wall (which is what was failing the tail of a batch). Downloads are
+// NOT paced (they don't go through here) so thumbnails stay fast.
+// Token-bucket send pacer per bot. Telegram allows ~20 sendDocument / 30s to a
+// chat with short bursts tolerated. Strict 1.5s-per-send spacing made a single
+// video upload slow (each of its chunks waited 1.5s) and starved foreground
+// uploads while a backup ran. A bucket fixes that: SEND_BURST tokens let a
+// file's chunks (or a few quick ops) fire immediately, and tokens refill at the
+// sustained safe rate. Waits are capped so a send never hangs the worker into a
+// 503; overflow falls through to the 429-retry.
+/** A stable, NON-SECRET key for per-bot state.
+ *
+ *  A Telegram token is `<botId>:<secret>`, and the bot id is public — it is the
+ *  bot's own user id. Keying on the whole token meant every per-bot map held a
+ *  live credential as its key. That is fine on a per-user worker, which only
+ *  ever sees one. The SHARED worker sees one per user who uploads through it
+ *  (`handleUploadImpl` is not gated on `env.DB`), and neither map ever evicted,
+ *  so an isolate accumulated other people's bot tokens in memory for its whole
+ *  life. The id alone distinguishes bots just as well and is not a secret.
+ */
+function botKey(botToken: string): string {
+  const id = botToken.split(':')[0];
+  return id && /^\d+$/.test(id) ? id : `anon-${botToken.length}`;
+}
+
+/** Keep a per-bot map from growing without bound on a shared isolate.
+ *  These hold rate-limiter state, so dropping the least recently used entry
+ *  costs at most one unpaced send — far cheaper than an unbounded map. */
+function capPerBotMap(map: Record<string, { last?: number }>, max: number): void {
+  const keys = Object.keys(map);
+  if (keys.length <= max) return;
+  keys
+    .sort((a, b) => (map[a].last ?? 0) - (map[b].last ?? 0))
+    .slice(0, keys.length - max)
+    .forEach((k) => { delete map[k]; });
+}
+
+const MAX_TRACKED_BOTS = 64;
+
+const sendBuckets: Record<string, { tokens: number; last: number }> = {};
+const SEND_INTERVAL_MS = 1500; // sustained refill: 1 token / 1.5s (~20 per 30s)
+const SEND_BURST = 8;          // immediate burst capacity
+const MAX_PACE_WAIT_MS = 4000; // never hang a single send longer than this
+async function paceSend(botToken: string): Promise<void> {
+  const now = Date.now();
+  const key = botKey(botToken);
+  let b = sendBuckets[key];
+  if (!b) {
+    b = { tokens: SEND_BURST, last: now };
+    sendBuckets[key] = b;
+    capPerBotMap(sendBuckets, MAX_TRACKED_BOTS);
+  }
+  const refill = Math.floor((now - b.last) / SEND_INTERVAL_MS);
+  if (refill > 0) {
+    b.tokens = Math.min(SEND_BURST, b.tokens + refill);
+    b.last += refill * SEND_INTERVAL_MS;
+  }
+  if (b.tokens >= 1) { b.tokens -= 1; return; } // token available → send now
+  // Bucket empty: wait for the next token, but never longer than the cap.
+  const wait = Math.min(Math.max(b.last + SEND_INTERVAL_MS - now, 0), MAX_PACE_WAIT_MS);
+  if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+  b.last = Date.now(); // consumed the refilled token
+}
+
+// Only pace true Telegram send calls. Downloads (/file/bot, /getFile) must NOT
+// be paced — burning a send token for every thumbnail download was the root cause
+// of 503 storms: 20+ concurrent thumb fetches each waited up to 4s for a bucket
+// token → worker wall-clock exceeded → CF returned HTML 503 (no CORS) → cascade.
+function isSendUrl(url: string): boolean {
+  return /\/(send(Document|Photo|Video|Audio|Message)|copyMessage|forwardMessage)/i.test(url);
+}
+
+// A Telegram URL carries the bot token in its PATH — `/bot<TOKEN>/method` for
+// the API and `/file/bot<TOKEN>/<path>` for downloads. Anything that logs one
+// publishes the token to whoever can read the worker's logs, and the token is
+// full control of the user's channel: read every photo, delete the lot.
+//
+// Replace the token, keep everything else, so the line still says which call
+// was rate-limited.
+export { botKey as __botKeyForTests };
+
+export function redactTelegramUrl(url: string): string {
+  return url.replace(/\/bot[^/?#]+/g, '/bot<redacted>');
+}
+
+async function tgFetchWithRetry(url: string, options?: RequestInit, maxRetries = 3): Promise<Response> {
+  const botToken = url.match(/\/bot([^/]+)\//)?.[1] || '';
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    if (botToken && isSendUrl(url)) await paceSend(botToken); // SENDS only, not downloads
+    const res = await fetch(url, options);
+    if (res.status === 429 || res.status === 420) {
+      const body = await res.json().catch(() => ({})) as any;
+      // Cap the wait: Telegram flood-waits can be 30-60s, and hanging the worker
+      // request that long (×retries) overwhelms the isolate → 503. Wait a
+      // bounded amount; if it's still limited after retries, return the 429 and
+      // let the client re-queue (background backup retries failed photos later).
+      const retryAfter = Math.min(body?.parameters?.retry_after || 3, 6);
+      // NEVER log the raw URL: it is `https://api.telegram.org/bot<TOKEN>/method`,
+      // and the first 80 characters contain the whole token. It was being
+      // written to the log on every rate-limit, which is often.
+      console.warn(`[tgFetch] 429 on ${redactTelegramUrl(url)}, waiting ${retryAfter}s (attempt ${attempt + 1})`);
+      await new Promise(r => setTimeout(r, (retryAfter + 1) * 1000));
+      continue;
+    }
+    return res;
+  }
+  return new Response(JSON.stringify({ ok: false, description: 'Rate limit retries exhausted' }), {
+    status: 429, headers: { 'Content-Type': 'application/json' }
+  });
+}
+
+async function tgGetFileUrl(botToken: string, fileId: string, forceRefresh = false): Promise<{ ok: boolean; url?: string; error?: string }> {
+  const now = Date.now();
+  if (forceRefresh) await evictFilePath(fileId);
+
+  // L1: module-level in-memory cache (fastest, same isolate lifetime)
+  const mem = filePathCache.get(fileId);
+  if (mem && mem.expiresAt > now) {
+    return { ok: true, url: `https://api.telegram.org/file/bot${botToken}/${mem.path}` };
+  }
+  // A stale entry is dead weight, and this is the only place that can notice.
+  if (mem) filePathCache.delete(fileId);
+
+  // L2: CF edge cache (persists across worker restarts + shared within PoP)
+  const edgeCache = (caches as any).default as Cache;
+  const cfCacheKey = `https://dc-tg-path/${fileId}`;
+  try {
+    const cfHit = await edgeCache.match(cfCacheKey);
+    if (cfHit) {
+      // An L2 hit used to re-stamp L1 with a FULL 55 minutes regardless of how
+      // old the L2 entry already was, so a path could live ~110 minutes against
+      // Telegram's ~60 — after which every download 404s. The entry now carries
+      // the absolute expiry it was born with; a plain string is a pre-existing
+      // entry, and gets the conservative treatment of being treated as already
+      // half-spent rather than fresh.
+      const raw = await cfHit.text();
+      let path = raw;
+      let expiresAt = now + FILE_PATH_TTL_MS / 2;
+      try {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed.path === 'string' && typeof parsed.exp === 'number') {
+          path = parsed.path;
+          expiresAt = parsed.exp;
+        }
+      } catch { /* legacy plain-string entry */ }
+
+      if (expiresAt <= now) {
+        // Expired in L2 as well — fall through to Telegram rather than serving
+        // a path that is already dead.
+        throw new Error('stale');
+      }
+      filePathCache.set(fileId, { path, expiresAt });
+      pruneFilePathCache(now);
+      return { ok: true, url: `https://api.telegram.org/file/bot${botToken}/${path}` };
+    }
+  } catch { /* edge cache unavailable — fall through */ }
+
+  // L3: Telegram API
+  const res = await tgFetchWithRetry(`https://api.telegram.org/bot${botToken}/getFile?file_id=${fileId}`);
+  const data = await res.json() as any;
+  if (!data.ok) return { ok: false, error: data.description || 'getFile failed' };
+
+  const path = data.result.file_path;
+  filePathCache.set(fileId, { path, expiresAt: now + FILE_PATH_TTL_MS });
+  pruneFilePathCache(now);
+  try {
+    // Cache for 55 min at CF edge (well within Telegram's stated ~1 hr validity)
+    edgeCache.put(cfCacheKey, new Response(JSON.stringify({ path, exp: now + FILE_PATH_TTL_MS }), {
+      headers: { 'Cache-Control': 'public, max-age=3300' },
+    }));
+  } catch { /* best-effort */ }
+
+  return { ok: true, url: `https://api.telegram.org/file/bot${botToken}/${path}` };
+}
+
+async function tgDownloadFile(botToken: string, fileId: string): Promise<{ ok: boolean; data?: ArrayBuffer; error?: string }> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const fileResult = await tgGetFileUrl(botToken, fileId, attempt > 0);
+    if (!fileResult.ok) return { ok: false, error: fileResult.error };
+
+    const imgRes = await tgFetchWithRetry(fileResult.url!);
+    if (imgRes.ok) return { ok: true, data: await imgRes.arrayBuffer() };
+
+    // 404/410 means the cached path has expired on Telegram's side. Both cache
+    // layers are now serving a corpse, and every later request for this chunk
+    // would fail the same way until the TTL ran out. Evict and resolve it once
+    // more from Telegram.
+    if ((imgRes.status === 404 || imgRes.status === 410) && attempt === 0) {
+      await evictFilePath(fileId);
+      continue;
+    }
+    return { ok: false, error: `Download failed: ${imgRes.status}` };
+  }
+  return { ok: false, error: 'Download failed after refreshing the file path' };
+}
+
+/** Remove a Telegram file path from BOTH cache layers. */
+async function evictFilePath(fileId: string): Promise<void> {
+  filePathCache.delete(fileId);
+  try {
+    await ((caches as any).default as Cache).delete(`https://dc-tg-path/${fileId}`);
+  } catch { /* edge cache unavailable */ }
+}
+
+// --- Request Queue Helper with Priority ---
+type QueueItem = { resolve: () => void; reject: (err: Error) => void; priority: number; signal?: AbortSignal };
+
+class RequestQueue {
+  private queue: QueueItem[] = [];
+  private running = 0;
+  constructor(private limit: number) {}
+
+  async acquire(signal?: AbortSignal, priority: number = 0) {
+    if (this.running >= this.limit) {
+      await new Promise<void>((resolve, reject) => {
+        const onAbort = () => {
+          const idx = this.queue.findIndex(item => item.resolve === resolve);
+          if (idx > -1) this.queue.splice(idx, 1);
+          reject(new Error('Aborted'));
+        };
+        signal?.addEventListener('abort', onAbort, { once: true });
+
+        const item: QueueItem = {
+          resolve: () => {
+            signal?.removeEventListener('abort', onAbort);
+            resolve();
+          },
+          reject,
+          priority,
+          signal
+        };
+
+        // Insert based on priority (higher priority = front of queue)
+        const insertIdx = this.queue.findIndex(q => q.priority < priority);
+        if (insertIdx === -1) {
+          this.queue.push(item);
+        } else {
+          this.queue.splice(insertIdx, 0, item);
+        }
+      });
+    }
+    this.running++;
+  }
+
+  release() {
+    this.running--;
+    if (this.queue.length > 0) {
+      // Always take from front (highest priority)
+      const next = this.queue.shift()!;
+      next.resolve();
+    }
+  }
+}
+
+// Keyed by the PUBLIC bot id, not the token — see botKey(). `last` is tracked
+// only so the cap can evict the least recently used queue.
+const tgQueues: Record<string, RequestQueue & { last?: number }> = {};
+function getTgQueue(botToken: string): RequestQueue {
+  const key = botKey(botToken);
+  let q = tgQueues[key];
+  if (!q) {
+    q = new RequestQueue(10) as RequestQueue & { last?: number };
+    tgQueues[key] = q;
+    capPerBotMap(tgQueues as Record<string, { last?: number }>, MAX_TRACKED_BOTS);
+  }
+  q.last = Date.now();
+  return q;
+}
+
+// --- Live Photo Linking ---
+async function linkLivePhoto(env: Env, uid: string, assetId: string, photo: any, idToken: string) {
+  try {
+    const isVideo = photo.mimeType.startsWith('video/');
+    const isHeic = photo.isHeic || photo.mimeType === 'image/heic';
+
+    console.log(`[LivePhoto] Processing ${assetId}: isVideo=${isVideo}, isHeic=${isHeic}, mimeType=${photo.mimeType}, fileName=${photo.fileName}`);
+
+    // Query only the last few uploads (live-photo pairs land within 1-2s of each
+    // other). On per-user workers we read straight from D1; the central worker
+    // keeps the Firestore filter so the result set stays bounded.
+    const fiveSecondsAgo = new Date(Date.now() - 5000).toISOString();
+    let recentUploads: any[];
+    if (env.DB) {
+      const adapter = new D1Adapter(env.DB);
+      const rows = await adapter.queryPhotos({ ownerId: uid, orderBy: 'uploadedAt DESC', limit: 20 });
+      recentUploads = rows
+        .map(D1Adapter.normalizeRow)
+        .filter((p: any) => p.uploadedAt >= fiveSecondsAgo);
+    } else {
+      recentUploads = await firestoreQuery(
+        env, uid, 'photos', idToken,
+        'uploadedAt', 'DESCENDING', 20,
+        [{ field: 'uploadedAt', op: 'GREATER_THAN_OR_EQUAL', value: fiveSecondsAgo }]
+      );
+    }
+
+    console.log(`[LivePhoto] Found ${recentUploads.length} recent uploads in last 5 seconds`);
+
+    // Filter out current asset
+    const candidatesForLinking = recentUploads.filter((p: any) => p._id !== assetId);
+    console.log(`[LivePhoto] ${candidatesForLinking.length} candidates after filtering current asset`);
+
+    if (isVideo) {
+      // A live photo's motion clip is a second or two long. Without this gate
+      // the timestamp fallback below would let a real video uploaded near an
+      // unrelated HEIC claim it as a still, which silently converts a normal
+      // video into somebody's live photo and hides it from the timeline.
+      // (The still→video branch already checks this; the video side did not.)
+      const seconds = parseDurationSeconds(photo.duration);
+      if (seconds !== null && (seconds < 0.3 || seconds > 6)) {
+        console.log(`[LivePhoto] ${assetId} is ${seconds}s — too long to be a motion clip, not pairing`);
+        return;
+      }
+
+      // Look for matching HEIC image
+      console.log(`[LivePhoto] Looking for HEIC pair for video ${assetId}`);
+      const matchingImage = candidatesForLinking.find((p: any) => {
+        const isHeicCandidate = p.isHeic || p.mimeType === 'image/heic';
+        if (!isHeicCandidate) return false;
+        // NEVER overwrite an existing link — re-linking an already-paired
+        // still orphans its real motion video (shows as a duplicate video).
+        if (p.livePhotoVideoId) return false;
+        // Live-pair halves share the phone-local deviceAssetId — when both
+        // sides carry one, only an exact match qualifies (timestamps alone
+        // mis-pair bursts taken within the same 2 seconds).
+        if (p.deviceAssetId && photo.deviceAssetId) {
+          return p.deviceAssetId === photo.deviceAssetId && p.deviceId === photo.deviceId;
+        }
+        // Check if timestamps are within 2 seconds
+        const timeDiff = Math.abs(
+          new Date(p.fileCreatedAt).getTime() - new Date(photo.fileCreatedAt).getTime()
+        );
+        const withinTime = timeDiff < 2000;
+        console.log(`[LivePhoto] Checking ${p._id}: isHeic=${isHeicCandidate}, timeDiff=${timeDiff}ms, withinTime=${withinTime}`);
+        return withinTime;
+      });
+
+      if (matchingImage) {
+        // Update the image to point to this video. updatePhoto (partial UPDATE):
+        // savePhoto's upsert would throw NOT NULL (ownerId/fileName) on this
+        // partial object before the conflict-update runs, silently failing the link.
+        if (env.DB) {
+          await new D1Adapter(env.DB).updatePhoto(matchingImage._id, { livePhotoVideoId: assetId });
+        } else {
+          await firestoreSet(env, uid, `photos/${matchingImage._id}`, {
+            livePhotoVideoId: assetId
+          }, idToken);
+        }
+        console.log(`[LivePhoto] ✅ Linked image ${matchingImage._id} to video ${assetId}`);
+      } else {
+        console.log(`[LivePhoto] ❌ No matching HEIC found for video ${assetId}`);
+      }
+    } else if (isHeic) {
+      // This still already has its authoritative link — nothing to do.
+      if (photo.livePhotoVideoId) return;
+      // Look for matching MOV video
+      console.log(`[LivePhoto] Looking for MOV pair for HEIC ${assetId}`);
+      // Videos already claimed by another recent still are off-limits —
+      // stealing them orphans that still's motion (duplicate-video bug).
+      const claimedVideoIds = new Set(
+        recentUploads.map((p: any) => p.livePhotoVideoId).filter(Boolean)
+      );
+      const matchingVideo = candidatesForLinking.find((p: any) => {
+        const isVideoCandidate = p.mimeType?.startsWith('video/');
+        if (!isVideoCandidate) return false;
+        if (claimedVideoIds.has(p._id)) return false;
+        // deviceAssetId is the app's ground-truth pairing key (both halves
+        // share it) — when both sides carry one, require the exact match.
+        if (p.deviceAssetId && photo.deviceAssetId) {
+          return p.deviceAssetId === photo.deviceAssetId && p.deviceId === photo.deviceId;
+        }
+
+        // Live photos are typically 1-3 seconds, must have duration
+        const durationSecs = p.duration ? parseFloat(p.duration) : 0;
+        const isLivePhotoLength = durationSecs > 0.5 && durationSecs <= 4;
+        if (!isLivePhotoLength) {
+          console.log(`[LivePhoto] Skipping ${p._id}: duration out of range (${durationSecs}s, need 0.5-4s)`);
+          return false;
+        }
+
+        // Timestamps must be VERY close (within 2 seconds)
+        const timeDiff = Math.abs(
+          new Date(p.fileCreatedAt).getTime() - new Date(photo.fileCreatedAt).getTime()
+        );
+        const withinTime = timeDiff < 2000;
+        console.log(`[LivePhoto] Checking ${p._id}: isVideo=${isVideoCandidate}, duration=${durationSecs}s, timeDiff=${timeDiff}ms, withinTime=${withinTime}`);
+        return withinTime;
+      });
+
+      if (matchingVideo) {
+        // Update this image to point to the video. updatePhoto (partial UPDATE):
+        // savePhoto's upsert would throw NOT NULL (ownerId/fileName) on this
+        // partial object before the conflict-update runs, silently failing the link.
+        if (env.DB) {
+          await new D1Adapter(env.DB).updatePhoto(assetId, { livePhotoVideoId: matchingVideo._id });
+        } else {
+          await firestoreSet(env, uid, `photos/${assetId}`, {
+            livePhotoVideoId: matchingVideo._id
+          }, idToken);
+        }
+        console.log(`[LivePhoto] ✅ Linked image ${assetId} to video ${matchingVideo._id}`);
+      } else {
+        console.log(`[LivePhoto] ❌ No matching MOV found for HEIC ${assetId}`);
+      }
+    }
+  } catch (e) {
+    console.error('[LivePhoto] Link failed:', e);
+  }
+}

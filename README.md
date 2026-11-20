@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="daemonclient-site/uploads/logo.png" alt="DaemonClient logo" width="120">
+  <img src="apps/site/uploads/logo.png" alt="DaemonClient logo" width="120">
 </p>
 
 <h1 align="center">DaemonClient</h1>
@@ -25,7 +25,7 @@
 </p>
 
 <p align="center">
-  <img src="daemonclient-site/og-image.png" alt="Free. Unlimited. Encrypted." width="100%">
+  <img src="apps/site/og-image.png" alt="Free. Unlimited. Encrypted." width="100%">
 </p>
 
 ---
@@ -62,7 +62,7 @@ back at us — see [Self-hosting](#self-hosting).
 | 📖 **Docs** | [docs.daemonclient.uz](https://docs.daemonclient.uz) | Architecture, the storage model, encryption, API reference, self-hosting |
 
 <p align="center">
-  <img src="daemonclient-site/uploads/immich-screenshot.webp" alt="DaemonClient Photos" width="100%">
+  <img src="apps/site/uploads/immich-screenshot.webp" alt="DaemonClient Photos" width="100%">
 </p>
 
 ---
@@ -190,20 +190,20 @@ looking for.
 
 | Directory | What lives there |
 |---|---|
-| [`immich-api-shim/`](immich-api-shim) | ⭐ The per-user worker: the entire Photos + Drive API — encryption, Telegram chunk I/O, D1, background repair |
+| [`workers/user-worker/`](workers/user-worker) | ⭐ The per-user worker: the entire Photos + Drive API — encryption, Telegram chunk I/O, D1, background repair |
 | [`selfhost/`](selfhost) | The self-hosting CLI. Dependency-free, runs from a fresh clone |
-| [`deployment-service/`](deployment-service) | Provisions per-user workers for the managed service and ships them updates |
-| [`accounts-portal/`](accounts-portal) | Sign-up, the guided setup wizard, the dashboard |
-| [`auth-worker/`](auth-worker) | Cross-subdomain session broker (managed service only) |
+| [`workers/deployment/`](deployment-service) | Provisions per-user workers for the managed service and ships them updates |
+| [`apps/accounts-web/`](accounts-portal) | Sign-up, the guided setup wizard, the dashboard |
+| [`workers/auth/`](auth-worker) | Cross-subdomain session broker (managed service only) |
 | [`immich/`](immich/FORK.md) | The Immich fork: the Photos web app (`web/`) |
 | [`core/`](core) | The Rust core under the mobile apps: storage format, Telegram, sync, uploads |
 | [`apps/`](apps) | The native mobile apps (`ios/`, `android/`) |
 | [`drive/`](drive) | The Drive web app — not a fork |
 | [`processor/`](processor) | Optional HEIC thumbnailer, deployed to each user's own Vercel |
-| [`daemonclient-proxy/`](daemonclient-proxy) | CORS relay for the Telegram Bot API |
+| [`workers/telegram-proxy/`](daemonclient-proxy) | CORS relay for the Telegram Bot API |
 | [`schema/`](schema) | The D1 schema, defined once for both provisioners |
-| [`daemonclient-site/`](daemonclient-site) | The landing page |
-| [`docs-site/`](docs-site) | The documentation site |
+| [`apps/site/`](daemonclient-site) | The landing page |
+| [`apps/docs-web/`](docs-site) | The documentation site |
 | [`docs/`](docs) | Architecture, API reference, self-hosting guide |
 
 Every directory has its own README explaining what it is and how to run it.
@@ -217,7 +217,7 @@ four hard constraints that explain most of the odd-looking code, and the
 mistakes already made so you don't have to repeat them.
 
 ```bash
-cd immich-api-shim
+cd workers/user-worker
 npm install
 npm test          # 294 tests
 npx tsc --noEmit

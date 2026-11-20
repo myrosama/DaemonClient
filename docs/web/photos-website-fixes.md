@@ -1,6 +1,6 @@
 # Photos website: what to fix so the app and the website work together
 
-For the Linux machine (it owns `immich-api-shim/`, `immich/web/`, the
+For the Linux machine (it owns `workers/user-worker/`, `apps/photos-web/web/`, the
 service worker and every worker release) and for the operator. Written
 2026-11-17 from the phone core's Task 1.8–1.9 measurements on the test account
 (every number: `docs/mobile/RESEARCH.md` §14) and a read of the code. Background: `docs/mobile/RESEARCH.md` §14,
@@ -61,7 +61,7 @@ unset for client uploads (`assets.ts`, `exifChecked: clientUpload ? undefined
 : …`), `backfillExifBatch` downloads and decrypts the first part of every
 phone image to read its EXIF.
 
-**Change** (`immich-api-shim/src/assets.ts`, the `clientUpload` branch of
+**Change** (`workers/user-worker/src/assets.ts`, the `clientUpload` branch of
 `handleUpload`, plus D1 columns where missing):
 - store `telegramPreviewId` (encrypted like the thumbnail: `thumbEncrypted`
   covers both);
@@ -125,7 +125,7 @@ request, no `dc-manifest` per tile.
 
 **Symptom.** The website uploads again a photo the app already backed up.
 
-**Why.** The website stores **hex** SHA-1 (`immich/web/src/lib/workers/hash-file.ts`,
+**Why.** The website stores **hex** SHA-1 (`apps/photos-web/web/src/lib/workers/hash-file.ts`,
 `bytesToHex`); the Immich app, the worker's own backfill (`sha1.ts`) and the
 phone store **base64**. `bulk-upload-check` and `getPhotosByChecksums`
 (`d1-adapter.ts`) compare the text. (The phone now asks about both spellings,
@@ -175,7 +175,7 @@ not checked.
 **Symptom.** Videos "kinda lag" (the operator, on the P1 exit video): slow to
 start, and they pause every ~19 MB.
 
-**Why** (`immich/web/src/service-worker/index.ts`, `fetchVideoDirect` and
+**Why** (`apps/photos-web/web/src/service-worker/index.ts`, `fetchVideoDirect` and
 `downloadChunk`): every range request downloads and decrypts a whole 19 MiB
 chunk, with no chunk cache and no prefetch. Browsers make several range
 requests while opening a video (a probe, the index at the end of an iPhone
@@ -202,7 +202,7 @@ stopping on a normal connection.
 
 **Symptom.** Long website uploads stall ~40 s at a time.
 
-**Why.** The website's uploader (`immich/web/src/lib/utils/daemonclient-drive.ts`,
+**Why.** The website's uploader (`apps/photos-web/web/src/lib/utils/daemonclient-drive.ts`,
 the `sendDocument`/`sendPhoto` calls) does not pace at all — it only waits
 out each 429; the worker's `paceSend` (`assets.ts`, `SEND_INTERVAL_MS =
 1500`, `SEND_BURST = 8`) allows twice the group limit.
@@ -231,7 +231,7 @@ it takes minutes, not tens of minutes.
 **Symptom.** A HEIC uploaded from the website loses its original bytes and
 EXIF; the app then sees a JPEG that is not what the camera made.
 
-**Why.** `immich/web/src/lib/utils/file-uploader.ts` converts HEIC to JPEG
+**Why.** `apps/photos-web/web/src/lib/utils/file-uploader.ts` converts HEIC to JPEG
 with `heic2any` before uploading.
 
 **Change.** Upload the file as it is (byte for byte), and make a JPEG

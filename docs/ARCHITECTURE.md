@@ -25,24 +25,24 @@ directly.
 
 | Directory | Deployed as | What it is |
 |---|---|---|
-| `immich-api-shim/` | one Worker per user (`dc-<id>`), plus one shared `immich-api` | The entire API. Uploads, timeline, albums, sync, Drive, WebDAV, background repair. |
-| `deployment-service/` | `daemonclient-deployment` Worker | Managed-service only. Provisions a user's Worker + D1 on **their** Cloudflare account and ships them updates. |
+| `workers/user-worker/` | one Worker per user (`dc-<id>`), plus one shared `immich-api` | The entire API. Uploads, timeline, albums, sync, Drive, WebDAV, background repair. |
+| `workers/deployment/` | `daemonclient-deployment` Worker | Managed-service only. Provisions a user's Worker + D1 on **their** Cloudflare account and ships them updates. |
 | `selfhost/` | npm bin `daemonclient` | The self-hosting CLI. Does what the deployment service does, on your own machine, with no operator involvement. |
-| `accounts-portal/` | `accounts.daemonclient.uz` | Sign-up, the guided setup wizard, the dashboard. |
-| `auth-worker/` | `auth.daemonclient.uz` | Managed-service only. Issues the cross-subdomain cookie that makes one sign-in serve all three apps. |
-| `immich/web/` | `photos.daemonclient.uz` | The Photos app — a fork of [Immich](https://github.com/immich-app/immich)'s SvelteKit frontend. |
+| `apps/accounts-web/` | `accounts.daemonclient.uz` | Sign-up, the guided setup wizard, the dashboard. |
+| `workers/auth/` | `auth.daemonclient.uz` | Managed-service only. Issues the cross-subdomain cookie that makes one sign-in serve all three apps. |
+| `apps/photos-web/web/` | `photos.daemonclient.uz` | The Photos app — a fork of [Immich](https://github.com/immich-app/immich)'s SvelteKit frontend. |
 | `apps/ios/`, `apps/android/` + `core/` | not released | Native mobile apps (SwiftUI, Kotlin + Compose) on a shared Rust core — being built (`docs/plan/ENGINE.md` Part 2). |
 | `drive/` | `drive.daemonclient.uz` | The Drive app. Not a fork — a standalone React SPA. |
-| `daemonclient-proxy/` | `daemonclient-proxy` Worker | A CORS relay for `api.telegram.org`, which sends no CORS headers of its own. |
+| `workers/telegram-proxy/` | `daemonclient-proxy` Worker | A CORS relay for `api.telegram.org`, which sends no CORS headers of its own. |
 | `processor/` | the user's own Vercel | One stateless function that converts HEIC to a thumbnail. Optional. |
-| `daemonclient-site/` | `daemonclient.uz` | The marketing page. Static HTML. |
-| `docs-site/` | `docs.daemonclient.uz` | This documentation, as a site. |
+| `apps/site/` | `daemonclient.uz` | The marketing page. Static HTML. |
+| `apps/docs-web/` | `docs.daemonclient.uz` | This documentation, as a site. |
 | `schema/` | imported, not deployed | The D1 schema. One definition, shared by both provisioners. |
-| `hosting/app-redirect/` | `app.daemonclient.uz` | A retired address that 301s to Drive. |
+| `apps/app-redirect/` | `app.daemonclient.uz` | A retired address that 301s to Drive. |
 
 Two things are worth noticing in that table.
 
-**`immich-api-shim` is deployed twice from one source tree.** As `dc-<id>` it
+**`workers/user-worker` is deployed twice from one source tree.** As `dc-<id>` it
 has a `DB` binding and is a complete API for exactly one person. As the shared
 `immich-api` it has no `DB` binding at all, and its only jobs are to validate a
 login against Firebase and tell the client which per-user Worker to talk to.
@@ -66,7 +66,7 @@ Telegram's Bot API will not let a bot *download* a file larger than 20 MB.
 Uploads can be bigger, which is a trap: you can happily send a 60 MB document
 and then discover you can never fetch it back. So files are split at
 **19 MB of plaintext** before anything else happens, and chunks are never
-merged. The constant lives in `immich-api-shim/src/contracts.ts` as
+merged. The constant lives in `workers/user-worker/src/contracts.ts` as
 `DEFAULT_CHUNK_SIZE`.
 
 ### What one upload actually produces
@@ -176,7 +176,7 @@ Places where plaintext still reaches Telegram, stated plainly:
 
 ### Two credential shapes
 
-`requireAuth` (`immich-api-shim/src/helpers.ts`) accepts exactly two things,
+`requireAuth` (`workers/user-worker/src/helpers.ts`) accepts exactly two things,
 told apart by counting dots:
 
 - **Three parts** → a Firebase ID token. Verified RS256 against Google's public
@@ -233,7 +233,7 @@ auth-worker; it signs in against its own Firebase project directly.
 
 ## The database
 
-One D1 database per user. Five tables, defined once in `schema/schema.mjs` and
+One D1 database per user. Five tables, defined once in `packages/schema/schema.mjs` and
 imported by both provisioners — they used to be defined three times, which is
 exactly how managed and self-hosted installs came to disagree about whether
 encryption keys had been seeded.
@@ -328,7 +328,7 @@ cleared.
 Things a new contributor will otherwise discover the hard way.
 
 **The storage primitive is implemented four times.** `assets.ts`, `webdav.ts`,
-`drive/src/App.jsx`, and `immich/web/.../daemonclient-drive.ts` each chunk,
+`apps/drive-web/src/App.jsx`, and `apps/photos-web/web/.../daemonclient-drive.ts` each chunk,
 encrypt and upload independently, and `19 * 1024 * 1024` is written out in at
 least five files. A bug in chunking has to be fixed in four places, correctly,
 every time. This is the single biggest obstacle to "fix once, everyone gets it"

@@ -1,7 +1,7 @@
 // Renders DaemonClient brand assets for the Photos app from one logo PNG:
 // iOS app icons, the iOS launch image, and the in-app logo / wordmark images.
 // Usage: swift render-apple-and-app.swift <logo.png> <outdir>
-// Source logo: drive/public/logo.png (536x446, the only copy in the repo).
+// Source logo: apps/drive-web/public/logo.png (536x446, the only copy in the repo).
 // Where each output goes: see README.md in this folder.
 import AppKit
 import ImageIO

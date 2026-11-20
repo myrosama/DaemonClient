@@ -69,10 +69,7 @@ describe('cancellation — the symbol must never reach a caller', () => {
     ['confirm', (t) => confirm('Proceed?', t)],
     ['select', (t) => select('Pick one', [{ value: 'a', label: 'A' }, { value: 'b', label: 'B' }], t)],
   ]) {
-    // shortcut: on Node 20 the text and password prompts don't report Ctrl-C as
-    // 130 (CI, 2026-11-20); fix those prompts when self-host work resumes.
-    const node20Gap = Number(process.versions.node.split('.')[0]) < 22 && (name === 'text' || name === 'password');
-    test(`${name}: Ctrl-C exits rather than returning a value`, { skip: node20Gap && 'known gap on Node 20 (self-host paused)' }, async () => {
+    test(`${name}: Ctrl-C exits rather than returning a value`, async () => {
       const t = terminal();
       type(t.input, CTRL_C);
       const { codes, result } = await capturingExit(() => run(t));

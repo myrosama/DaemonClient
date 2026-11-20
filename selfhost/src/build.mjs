@@ -13,12 +13,12 @@ import { promisify } from 'node:util';
 const run = promisify(execFile);
 
 export async function buildWorkerBundle(repoRoot) {
-  const shimDir = path.join(repoRoot, 'immich-api-shim');
+  const shimDir = path.join(repoRoot, 'workers', 'user-worker');
   const outDir = path.join(shimDir, 'dist');
   const outFile = path.join(outDir, 'index.js');
 
   if (!fs.existsSync(path.join(shimDir, 'node_modules'))) {
-    throw new Error('immich-api-shim/node_modules is missing — run "npm install" in that folder first');
+    throw new Error('workers/user-worker/node_modules is missing — run "npm install" in that folder first');
   }
 
   await run('npx', ['wrangler', 'deploy', '--dry-run', '--outdir', 'dist'], {
@@ -33,8 +33,8 @@ export async function buildWorkerBundle(repoRoot) {
 }
 
 // The schema used to be recovered here, by scraping the template literal out of
-// `deployment-service/src/index.ts` with string indexes. It now lives in
-// `schema/schema.mjs`, which the deployment service imports too — so a
+// `workers/deployment/src/index.ts` with string indexes. It now lives in
+// `packages/schema/schema.mjs`, which the deployment service imports too — so a
 // self-hosted install and a hosted one create the same tables by construction
 // rather than by two definitions happening to agree. Import it directly; the
 // scraper is gone on purpose and should not come back.

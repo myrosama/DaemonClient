@@ -38,7 +38,7 @@ The same FAQ says accounts live *"only in your own database"* and that there is
 *"no signup page, no password-reset email"*.
 
 Sign-in actually goes through the user's **Firebase** project
-(`immich-api-shim/src/selfhost-auth.ts` header, and `handleLogin` in `auth.ts`
+(`workers/user-worker/src/selfhost-auth.ts` header, and `handleLogin` in `auth.ts`
 calling Firebase Identity Toolkit). Accounts live in Firebase Authentication and
 are added in the Firebase console. Password reset is a Firebase feature that
 may well be available.
@@ -56,7 +56,7 @@ Known candidates, to be verified one by one rather than assumed:
   that way if you want them". Confirmed out of scope by the operator (Q3):
   every user hosts an independent system. This paragraph is **removed**, not
   corrected — correcting it would still imply the model exists.
-- Any command in the docs-site (`docs-site/index.html`) command table.
+- Any command in the docs-site (`apps/docs-web/index.html`) command table.
 - `CONTRIBUTING.md` — references `daemonclient status` and `daemonclient doctor`
   for bug reports; both exist, so this is expected to pass.
 - `README.md` — the self-hosting quickstart.
@@ -105,7 +105,7 @@ Documentation-only, so:
 ## Done when
 
 A grep for every command name and behaviour promised in `README.md`,
-`docs/SELF_HOSTING.md`, `docs/ARCHITECTURE.md` and `docs-site/index.html`
+`docs/SELF_HOSTING.md`, `docs/ARCHITECTURE.md` and `apps/docs-web/index.html`
 returns a real implementation for each one — and the result of that grep is
 written into `DESIGN_NOTES.md`, so the next phase can trust the documents it is
 planned against.

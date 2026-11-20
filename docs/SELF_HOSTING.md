@@ -9,7 +9,7 @@ You need three things, all free:
 |---|---|---|
 | **Telegram** | a bot and a private channel | stores your files |
 | **Cloudflare** | Workers + D1 on the free plan | runs the API |
-| **Node 18+** | on the machine you set up from | runs the setup |
+| **Node 22.13+** | on the machine you set up from (`install.sh` fetches a private copy if yours is older) | runs the setup |
 
 One more is optional: a small **media processor** (also free) that turns iPhone
 HEIC photos into grid thumbnails. Skip it and everything still works — HEIC

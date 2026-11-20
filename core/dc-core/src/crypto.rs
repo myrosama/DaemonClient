@@ -1,5 +1,5 @@
 //! AES-256-GCM parts and PBKDF2 keys, byte-compatible with the production
-//! JavaScript (`drive/src/crypto.js`, the web service worker and the worker's
+//! JavaScript (`apps/drive-web/src/crypto.js`, the web service worker and the worker's
 //! `assets.ts`). Format (frozen, SPEC §4.2): a part is
 //! `[12-byte random IV][ciphertext][16-byte GCM tag]`; the key is
 //! PBKDF2-HMAC-SHA256(password UTF-8, base64 salt, 100,000 iterations), 32 bytes.
@@ -313,11 +313,11 @@ mod tests {
             serde_json::from_str(include_str!("../../compat/vectors.json")).unwrap();
         for (source, field) in [
             (
-                include_str!("../../../drive/src/crypto.js"),
+                include_str!("../../../apps/drive-web/src/crypto.js"),
                 "sha256_of_source",
             ),
             (
-                include_str!("../../../drive/src/zke-unlock.js"),
+                include_str!("../../../apps/drive-web/src/zke-unlock.js"),
                 "sha256_of_key_check_source",
             ),
         ] {

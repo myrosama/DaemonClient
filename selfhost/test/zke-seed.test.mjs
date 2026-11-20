@@ -18,7 +18,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { ensureEncryptionKeys } from '../src/zke.mjs';
-import { MIGRATION_SQL, splitStatements } from '../../schema/schema.mjs';
+import { MIGRATION_SQL, splitStatements } from '../../packages/schema/schema.mjs';
 
 // Self-describing rather than realistic. Fixtures shaped like credentials trip
 // secret scanners on every push, and a repo full of false positives is one
@@ -249,8 +249,8 @@ describe('the seeding runs on the paths people actually use', () => {
 
   test('update and doctor exist so an already-broken install can be repaired', () => {
     // The worker's own error message names `daemonclient doctor` as the fix
-    // (immich-api-shim/src/assets.ts). If doctor stops seeding, that message
+    // (workers/user-worker/src/assets.ts). If doctor stops seeding, that message
     // sends people somewhere that does not help them.
-    assert.match(read('immich-api-shim/src/assets.ts'), /daemonclient doctor/);
+    assert.match(read('workers/user-worker/src/assets.ts'), /daemonclient doctor/);
   });
 });

@@ -121,7 +121,7 @@ describe('P1 — platform and prerequisites', () => {
 
 describe('P2 — Node, without touching the system', () => {
   test('accepts a new-enough Node already on PATH', () => {
-    for (const v of ['v20.12.0', 'v20.19.0', 'v22.11.0', 'v24.1.0']) {
+    for (const v of ['v22.13.0', 'v22.20.0', 'v24.1.0']) {
       assert.match(inShell(`node_ok "${v}" && echo YES`).out, /YES/, `${v} must be accepted`);
     }
   });
@@ -138,20 +138,20 @@ describe('P2 — Node, without touching the system', () => {
     //
     // The suite ASSERTED v18.0.0 was fine, which is how a test stops being a
     // check and starts being a pin holding the bug in place.
-    for (const v of ['v16.20.0', 'v14.0.0', 'v18.0.0', 'v18.20.8', 'v19.9.0', '', 'not-a-version']) {
+    for (const v of ['v16.20.0', 'v14.0.0', 'v18.0.0', 'v18.20.8', 'v19.9.0', 'v20.12.0', 'v20.19.0', '', 'not-a-version']) {
       const r = inShell(`node_ok "${v}" && echo YES || echo NO`);
       assert.match(r.out, /NO/, `${JSON.stringify(v)} must be rejected`);
     }
   });
 
-  test('the minor version counts — 20.0 through 20.11 still lack styleText', () => {
-    // A major-only comparison passes Node 20.0, which is 20.x and broken in
-    // exactly the same way. This is the assertion that makes the floor 20.12
-    // rather than "20-ish".
-    for (const v of ['v20.0.0', 'v20.9.0', 'v20.11.1']) {
+  test('the minor version counts — 22.0 through 22.12 are too old', () => {
+    // A major-only comparison passes Node 22.0. 22.13 is the floor: @clack's
+    // prompts need styleText to take a list of formats, and node:sqlite works
+    // without a flag from 22.13 (CI, 2026-11-20).
+    for (const v of ['v22.0.0', 'v22.9.0', 'v22.12.0']) {
       assert.match(inShell(`node_ok "${v}" && echo YES || echo NO`).out, /NO/, `${v} must be rejected`);
     }
-    assert.match(inShell('node_ok "v20.12.0" && echo YES').out, /YES/);
+    assert.match(inShell('node_ok "v22.13.0" && echo YES').out, /YES/);
   });
 
   test('the floor it enforces is the floor the package declares', () => {
