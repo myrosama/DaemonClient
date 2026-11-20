@@ -313,11 +313,11 @@ mod tests {
             serde_json::from_str(include_str!("../../compat/vectors.json")).unwrap();
         for (source, field) in [
             (
-                include_str!("../../../../drive/src/crypto.js"),
+                include_str!("../../../drive/src/crypto.js"),
                 "sha256_of_source",
             ),
             (
-                include_str!("../../../../drive/src/zke-unlock.js"),
+                include_str!("../../../drive/src/zke-unlock.js"),
                 "sha256_of_key_check_source",
             ),
         ] {
