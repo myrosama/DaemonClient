@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How it works · DaemonClient docs</title>
+<meta name="description" content="How DaemonClient stores your photos and files in your own Telegram channel through your own worker: storage, encryption, sign-in and limits.">
+<link rel="canonical" href="https://docs.daemonclient.uz/how-it-works.html">
+<meta property="og:title" content="How it works · DaemonClient docs">
+<meta property="og:description" content="How DaemonClient stores your photos and files in your own Telegram channel through your own worker: storage, encryption, sign-in and limits.">
+<meta property="og:url" content="https://docs.daemonclient.uz/how-it-works.html">
+<meta property="og:type" content="website">
+<link rel="icon" href="logo.png">
+<link rel="stylesheet" href="style.css">
+<script src="site.js"></script>
+</head>
+<body>
+<header class="top">
+  <div class="top-inner">
+    <a class="brand" href="index.html"><img src="logo.png" alt="" width="30" height="25">DaemonClient <small>docs</small></a>
+    <button class="menu-btn" type="button" aria-label="Menu" aria-expanded="false">☰</button>
+    <nav class="nav" aria-label="Sections">
+        <a href="how-it-works.html" aria-current="page">How it works</a>
+        <a href="self-host.html">Self-host</a>
+        <a href="api.html">API</a>
+        <a href="security.html">Security</a>
+        <a href="faq.html">FAQ</a>
+        <a href="changelog.html">Changelog</a>
+        <a href="https://github.com/myrosama/DaemonClient">GitHub ↗</a>
+        <button class="theme-btn" type="button" aria-label="Dark theme">☾</button>
+    </nav>
+  </div>
+</header>
+<main>
+  <div class="crumbs"><a href="index.html">Docs</a><span>›</span>How it works</div>
+  <h1>How it works</h1>
+  <div class="contents"><strong>On this page</strong><ol></ol></div>
+<h2 id="architecture">One path per user</h2>
+    <p>One vertical data path per user: your device → your worker → your Telegram channel. There is no shared
+    file server and no operator database holding your data.</p>
+    <div class="diagram">   your phone / browser / any file manager (WebDAV)
+                    │
+                    ▼
+      your Cloudflare Worker  ──── your D1 database (file index, settings, keys)
+                    │                (metadata only — never plaintext, never keys)
+                    ▼
+      your Telegram bot  ─────────► your private channel
+                                    (AES-256-GCM encrypted 19 MB chunks)</div>
+
+    <p>That diagram is true, and it hides the most interesting part. <strong>On the web, file bytes never
+    touch the worker at all.</strong> The browser chunks and encrypts a file itself and sends it straight to
+    Telegram; a service worker reads it back the same way, fetching only the chunks a given byte range needs.
+    The worker sees the index and nothing else.</p>
+
+    <div class="diagram">  UPLOAD                                    READ
+  browser                                   browser
+    │ slice at 19 MB                          │ GET /api/assets/{id}/dc-manifest
+    │ encrypt each chunk                      │   ← tiny JSON: the chunk file_ids
+    ├──── bytes ────► Telegram                ├──── fetch chunks ────► Telegram
+    │        ← file_id                        │ decrypt locally
+    └── metadata + file_ids ──► worker        └── paint</div>
+
+    <p>This is why a photo library fits in a free tier that allows 100,000 worker requests a day: thumbnails
+    and downloads cost a <em>Telegram</em> request, not a worker one.</p>
+
+    <h2 id="storage">The storage model</h2>
+    <p>Telegram's Bot API will not let a bot <strong>download</strong> a file larger than 20 MB. Uploads can
+    be bigger, which is a trap — you can happily send a 60 MB document and then discover you can never fetch
+    it back. So everything is split at <strong>19 MB of plaintext</strong>, and chunks are never merged.</p>
+
+    <p>A single photo becomes up to four stored artefacts, which surprises people:</p>
+    <div class="table-wrap"><table><thead><tr><th>Artefact</th><th>Where</th><th>Why</th></tr></thead><tbody>
+      <tr><td><code>thumbhash</code></td><td>a column in D1</td><td>~25 bytes. The blurred placeholder the grid paints instantly, before any network request.</td></tr>
+      <tr><td>thumbnail</td><td>one Telegram message</td><td>The small thumbnail Telegram generates for you, free.</td></tr>
+      <tr><td>preview</td><td>one Telegram message</td><td>A larger preview for the detail view.</td></tr>
+      <tr><td>chunks</td><td>N Telegram messages</td><td>The actual file, recorded as a list of <code>file_id</code>s.</td></tr>
+    </tbody></table></div>
+    <p>The reason for the first three is CPU, not storage: generating a thumbnail from a 40 MB original inside
+    a worker is not possible on the free plan. So either the browser does it before upload, or Telegram does
+    it as a side effect of accepting the file.</p>
+
+    <div class="callout"><p><span class="tag">Deduplication</span> Every asset carries
+    <code>base64(SHA-1(plaintext))</code>, computed by the worker when the client sends none. Without it the
+    "do you already have these?" check never matches and an app re-uploads your entire library every time it
+    restarts.</p></div>
+
+    <h2 id="encryption">Encryption</h2>
+    <p>Three modes, protecting against different things. Being clear about which is which matters more than
+    the marketing line.</p>
+    <div class="table-wrap"><table><thead><tr><th>Mode</th><th>Where the key lives</th><th>Who can read plaintext</th><th>Used by</th></tr></thead><tbody>
+      <tr><td><strong>Client-side</strong></td><td>derived in your browser, never transmitted</td><td>only your browser</td><td>Drive, and web uploads to Photos</td></tr>
+      <tr><td><strong>Server-side</strong></td><td>in <em>your own</em> D1 database</td><td>your own worker, transiently</td><td>uploads the website sends with server-side encryption</td></tr>
+      <tr><td><strong>Off</strong></td><td>—</td><td>anyone with the channel</td><td>never, by default</td></tr>
+    </tbody></table></div>
+    <p>AES-256-GCM throughout, with keys derived by PBKDF2-SHA256 at 100,000 iterations and a fresh 12-byte
+    IV per chunk.</p>
+    <p><strong>Server-side mode is a deliberate trade.</strong> It is what lets the worker compute a checksum,
+    extract EXIF and generate a thumbnail — things a zero-knowledge server cannot do by definition. The
+    mitigation is that "the server" is a worker serving exactly one person, on that person's own Cloudflare
+    account. On a self-hosted install it is not our machine in any sense.</p>
+    <div class="callout warn"><p><span class="tag">Fails closed</span> An install configured to encrypt but
+    missing its key material <strong>refuses uploads</strong> rather than silently storing plaintext. This was
+    not always true — installs created before 27 July 2026 should read the migration note in the repository's
+    self-hosting guide.</p></div>
+
+    <h2 id="auth">Accounts &amp; sign-in</h2>
+    <p><strong>One install, one owner.</strong> The install is claimed by the first sign-in that goes
+    through the worker's own password login; every
+    authenticated route is gated on that owner, so a second account in your Firebase project cannot read your
+    data. The check lives at the single authentication chokepoint rather than being repeated per route, so a
+    route added later is covered by default.</p>
+    <p>Two credential shapes are accepted, told apart by counting dots: a <strong>Firebase ID token</strong>
+    (three parts, verified RS256 against Google's public certs with <code>aud</code>, <code>iss</code> and
+    <code>exp</code> pinned) or a <strong>session token</strong> (two parts,
+    <code>base64(payload).hmac</code>, signed with that install's own secret so a session minted for one
+    worker does not verify on another).</p>
+    <p>On the hosted service, one sign-in serves all three apps: a cookie on the parent domain lets Photos and
+    Drive ask for a fresh ID token and trade it for their own session. The refresh token stays in an HttpOnly
+    cookie and never crosses into JavaScript. A self-hosted install skips all of this and signs in against its
+    own Firebase project directly.</p>
+
+    <h2 id="limits">The limits behind the design</h2>
+    <p>Almost everything that looks over-engineered is one of these. Figures are the Cloudflare Workers
+    <strong>free</strong> plan.</p>
+    <div class="table-wrap"><table><thead><tr><th>Limit</th><th>Value</th><th>What it forces</th></tr></thead><tbody>
+      <tr><td>CPU time</td><td><strong>10 ms</strong> / request</td><td>No image decoding, no transcoding, no large buffers. HEIC goes to a separate function.</td></tr>
+      <tr><td>Memory</td><td>128 MB</td><td>Responses stream; never more than about two chunks held at once.</td></tr>
+      <tr><td>Subrequests</td><td><strong>50</strong> external / request</td><td>A 50-chunk file is already at the ceiling, so background repair jobs run one per request.</td></tr>
+      <tr><td>Requests</td><td>100,000 / day</td><td>Why bytes go browser↔Telegram directly.</td></tr>
+      <tr><td>Request body</td><td>100 MB</td><td>Why files go to Telegram in parts straight from your device, never as one request through the worker.</td></tr>
+      <tr><td>Telegram download</td><td>20 MB</td><td>Where 19 MB chunking comes from.</td></tr>
+    </tbody></table></div>
+    <div class="callout warn"><p><span class="tag">Error 1102</span> Exceeding CPU or memory doesn't degrade —
+    Cloudflare kills the invocation and returns an error page with <em>no CORS headers</em>, so the browser
+    reports a CORS failure. If you're staring at an inexplicable CORS error on a media request, check for 1102
+    first.</p></div>
+
+    <h2 id="components">What's in the repository</h2>
+    <div class="table-wrap"><table><thead><tr><th>Folder</th><th>What it is</th></tr></thead><tbody>
+      <tr><td><code>apps/photos-web/</code></td><td>The Photos website, a fork of Immich's web app. The Immich server is not used at all.</td></tr>
+      <tr><td><code>apps/drive-web/</code></td><td>The Drive website. Not a fork.</td></tr>
+      <tr><td><code>apps/accounts-web/</code></td><td>Sign-up, setup and the dashboard (accounts.daemonclient.uz).</td></tr>
+      <tr><td><code>apps/site/</code>, <code>apps/docs-web/</code></td><td>The landing page and these docs.</td></tr>
+      <tr><td><code>apps/ios/</code>, <code>apps/android/</code></td><td>The native phone apps, being built.</td></tr>
+      <tr><td><code>core/</code></td><td>The shared Rust engine every client will run: the phone apps first, the websites later.</td></tr>
+      <tr><td><code>workers/user-worker/</code></td><td>Each user's own worker: the whole Photos and Drive API. Deployed once per user.</td></tr>
+      <tr><td><code>workers/deployment/</code></td><td>Sets up and updates users' workers for the hosted service.</td></tr>
+      <tr><td><code>workers/auth/</code></td><td>The sign-in hub shared by the websites.</td></tr>
+      <tr><td><code>packages/schema/</code></td><td>The database schema, defined once.</td></tr>
+      <tr><td><code>selfhost/</code></td><td>The self-hosting command-line tool (paused).</td></tr>
+    </tbody></table></div>
+    <p>Every directory has its own README. The full technical write-up is
+    <a href="https://github.com/myrosama/DaemonClient/blob/main/docs/ARCHITECTURE.md">docs/ARCHITECTURE.md</a>.</p>
+
+    <hr>
+    
+</main>
+<footer>
+  <div class="foot-inner">
+    <div><strong>DaemonClient</strong>Your own private cloud on free tiers you control.</div>
+    <div><strong>Use it</strong><a href="https://daemonclient.uz">daemonclient.uz</a><a href="https://photos.daemonclient.uz">Photos</a><a href="https://drive.daemonclient.uz">Drive</a><a href="https://accounts.daemonclient.uz">Your account</a></div>
+    <div><strong>Build it</strong><a href="https://github.com/myrosama/DaemonClient">Source on GitHub</a><a href="changelog.html">Changelog</a><a href="https://github.com/myrosama/DaemonClient/blob/main/CONTRIBUTING.md">Contributing</a></div>
+  </div>
+</footer>
+</body>
+</html>

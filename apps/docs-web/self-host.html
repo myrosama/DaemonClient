@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Self-host · DaemonClient docs</title>
+<meta name="description" content="Run DaemonClient on your own Telegram, Cloudflare and Firebase accounts: what you need, the guided setup, commands, updates and troubleshooting.">
+<link rel="canonical" href="https://docs.daemonclient.uz/self-host.html">
+<meta property="og:title" content="Self-host · DaemonClient docs">
+<meta property="og:description" content="Run DaemonClient on your own Telegram, Cloudflare and Firebase accounts: what you need, the guided setup, commands, updates and troubleshooting.">
+<meta property="og:url" content="https://docs.daemonclient.uz/self-host.html">
+<meta property="og:type" content="website">
+<link rel="icon" href="logo.png">
+<link rel="stylesheet" href="style.css">
+<script src="site.js"></script>
+</head>
+<body>
+<header class="top">
+  <div class="top-inner">
+    <a class="brand" href="index.html"><img src="logo.png" alt="" width="30" height="25">DaemonClient <small>docs</small></a>
+    <button class="menu-btn" type="button" aria-label="Menu" aria-expanded="false">☰</button>
+    <nav class="nav" aria-label="Sections">
+        <a href="how-it-works.html">How it works</a>
+        <a href="self-host.html" aria-current="page">Self-host</a>
+        <a href="api.html">API</a>
+        <a href="security.html">Security</a>
+        <a href="faq.html">FAQ</a>
+        <a href="changelog.html">Changelog</a>
+        <a href="https://github.com/myrosama/DaemonClient">GitHub ↗</a>
+        <button class="theme-btn" type="button" aria-label="Dark theme">☾</button>
+    </nav>
+  </div>
+</header>
+<main>
+  <div class="crumbs"><a href="index.html">Docs</a><span>›</span>Self-host</div>
+  <h1>Self-host</h1>
+  <div class="contents"><strong>On this page</strong><ol></ol></div>
+
+    <p class="lede">Run the whole thing on accounts you own. About ten minutes, most of it clicking around in
+    Telegram and Cloudflare.</p>
+
+    <h2 id="prerequisites">What you need</h2>
+    <div class="grid3">
+      <div class="card"><h4>Telegram</h4><p>A bot and a private channel. Stores your files.</p></div>
+      <div class="card"><h4>Cloudflare</h4><p>Workers + D1 on the free plan. Runs the API.</p></div>
+      <div class="card"><h4>Firebase</h4><p>Your own project. Your sign-in and accounts.</p></div>
+      <div class="card"><h4>Node 22.13+</h4><p>On the machine you set up from. Runs the guided script; install.sh fetches a private copy if yours is older.</p></div>
+    </div>
+    <p>Optional, also free: Firebase Hosting to serve the web apps. It is covered below.</p>
+
+    <h2 id="quickstart">Quick start</h2>
+    <p>The whole thing is one guided command. It asks for each credential in turn, tells you exactly where to
+    get it, checks it against the real service before moving on, and saves after every step — stop any time
+    and re-run to resume.</p>
+<pre><code>git clone https://github.com/myrosama/DaemonClient.git
+cd DaemonClient/workers/user-worker &amp;&amp; npm install &amp;&amp; cd ..
+node selfhost/bin/daemonclient.mjs setup</code></pre>
+    <p>About ten minutes, most of which is you clicking around in Telegram and Cloudflare. When it finishes
+    you get your API address, e.g. <code>https://daemonclient-a1b2c3.yourname.workers.dev</code> — that
+    address is your server.</p>
+    <div class="callout"><p><span class="tag">Tip</span> Run commands as
+    <code>node selfhost/bin/daemonclient.mjs &lt;command&gt;</code>, or <code>npm link</code> once inside
+    <code>selfhost/</code> to get the shorter <code>daemonclient</code> command used throughout these docs.</p></div>
+
+    <hr>
+    <h2 id="steps">Setup, step by step</h2>
+    <p>Everything below is what <code>daemonclient setup</code> walks you through. Read it if you want to
+    understand each credential — or just run the command and follow along.</p>
+
+    <ol class="steps">
+      <li id="telegram"><h3 id="telegram-where-your-files-live-stores-files">Telegram — where your files live <span class="pill">stores files</span></h3>
+        <p><strong>Create the bot.</strong> Message <a href="https://t.me/botfather">@BotFather</a>, send
+        <code>/newbot</code>, answer two questions, copy the token (looks like <code>12345:AAH…</code>).</p>
+        <p><strong>Create the channel.</strong> Make a new <em>private</em> channel, add your bot as an
+        <strong>administrator</strong> with permission to post, edit and delete messages. Forward any message
+        from it to <a href="https://t.me/userinfobot">@userinfobot</a> to get the channel id
+        (<code>-1001234567890</code>).</p>
+        <div class="callout"><p><span class="tag">Note</span> Setup posts a message to the channel and
+        deletes it, because a bot can be a member of a channel and still be unable to write to it — better to
+        find out now than on your first upload.</p></div>
+      </li>
+
+      <li id="cloudflare"><h3 id="cloudflare-where-the-api-runs-runs-the-api">Cloudflare — where the API runs <span class="pill">runs the API</span></h3>
+        <p>At <a href="https://dash.cloudflare.com/profile/api-tokens">dash.cloudflare.com/profile/api-tokens</a>,
+        create a <strong>Custom Token</strong> with exactly these permissions:</p>
+        <div class="table-wrap"><table><thead><tr><th>Scope</th><th>Permission</th></tr></thead><tbody>
+          <tr><td>Account · Workers Scripts</td><td>Edit</td></tr>
+          <tr><td>Account · D1</td><td>Edit</td></tr>
+          <tr><td>Account · Account Settings</td><td>Read</td></tr>
+        </tbody></table></div>
+        <div class="callout warn"><p><span class="tag">Do not use a Global API Key.</span> The custom token
+        can create your worker and database and nothing else. The setup stores it locally (mode 0600), never
+        sends it anywhere but Cloudflare, and it never leaves your machine.</p></div>
+      </li>
+
+      <li id="firebase"><h3 id="firebase-your-sign-in">Firebase — your sign-in</h3>
+        <p>At <a href="https://console.firebase.google.com">console.firebase.google.com</a>, add a project
+        (Analytics not needed). Then:</p>
+        <ul>
+          <li>Build → Authentication → Get started → enable <strong>Email/Password</strong>.</li>
+          <li>Authentication → Users → Add user — this is your login.</li>
+          <li>Project settings → General → Your apps → register a <strong>Web app</strong>, copy the
+          <code>apiKey</code> and <code>projectId</code>.</li>
+        </ul>
+        <p>Setup signs in for real to check the details, so a typo or a still-disabled Email/Password provider
+        fails here rather than on your phone later.</p>
+        <div class="callout warn"><p><span class="tag">There is no signup page.</span> Accounts exist only in
+        your own Firebase project. Firebase self-registration is open by default and your apps ship a
+        Firebase Web API key in the browser like every Firebase app, so a stranger <em>can</em> register —
+        what stops them reaching your files is the worker's <strong>owner gate</strong>: one install belongs
+        to one account, and every authenticated route is checked against it. Turn off self-registration in
+        the Firebase console (Authentication → Settings) if you would rather they could not.</p></div>
+      </li>
+
+      <li id="deploy"><h3 id="deploy-the-worker-encryption-keys">Deploy the worker &amp; encryption keys</h3>
+        <p>Setup builds the worker from your checkout, deploys it to your Cloudflare account bound to your D1,
+        seeds your Telegram settings, and generates your encryption keys. The keys are generated
+        <strong>once</strong> and reused on every later deploy — a new key would make files already in Telegram
+        unreadable, and a new session secret would sign you out.</p>
+        <div class="callout warn"><p><span class="tag">Fail-closed</span> If encryption is enabled but the key
+        material is missing, the worker <strong>refuses the upload</strong> rather than silently storing
+        plaintext. An install that skips key generation fails loudly instead of leaking.</p></div>
+      </li>
+
+      <li id="web"><h3 id="the-web-apps-one-command">The web apps — one command</h3>
+        <p>The web side is three apps: the <strong>dashboard</strong> (your main page — sign in, then open
+        Photos or Drive), <strong>Photos</strong>, and <strong>Drive</strong>. One command builds all three
+        from your checkout, each pointed at your worker and your Firebase, and deploys them to Firebase
+        Hosting on your own project (free, serverless):</p>
+<pre><code>daemonclient web</code></pre>
+        <p>It builds, creates three Firebase Hosting sites, deploys, and adds their addresses to your worker's
+        <code>ALLOWED_ORIGINS</code>. Firebase Hosting signs in with your own Google account
+        (<code>firebase login</code> opens a browser — nothing reaches us). You end up with:</p>
+<pre><code>https://&lt;project&gt;.web.app          ← dashboard (open this one)
+https://&lt;project&gt;-photos.web.app   ← Photos
+https://&lt;project&gt;-drive.web.app    ← Drive</code></pre>
+        <p>Prefer to build them yourself? Each app takes its worker URL from a build-time variable and
+        defaults to the operator host <em>only</em> when not building for self-host, so a self-host build never
+        points at us:</p>
+        <div class="table-wrap"><table><thead><tr><th>App</th><th>Build with</th></tr></thead><tbody>
+          <tr><td>Photos</td><td><code>PUBLIC_SELF_HOST=1 PUBLIC_DAEMONCLIENT_WORKER_URL=&lt;worker&gt; npm run build</code></td></tr>
+          <tr><td>Drive</td><td><code>VITE_SELF_HOST=1 VITE_API_BASE=&lt;worker&gt; npm run build</code></td></tr>
+          <tr><td>Dashboard</td><td><code>VITE_SELF_HOST=1 VITE_API_BASE=&lt;worker&gt; VITE_FIREBASE_*=… npx vite build --mode selfhost</code></td></tr>
+        </tbody></table></div>
+        <p>Phone apps for iPhone and Android are being built on the same core. Until they ship, use the web apps.</p>
+      </li>
+    </ol>
+
+    <hr>
+    <h2 id="commands">Day-to-day commands</h2>
+    <div class="table-wrap"><table><thead><tr><th>Command</th><th>What it does</th></tr></thead><tbody>
+      <tr><td><code>daemonclient setup</code></td><td>Create your cloud: Telegram, Cloudflare, account, deploy.</td></tr>
+      <tr><td><code>daemonclient web</code></td><td>Build &amp; deploy the three web apps to your Firebase.</td></tr>
+      <tr><td><code>daemonclient status</code></td><td>What is running, and is it healthy.</td></tr>
+      <tr><td><code>daemonclient update</code></td><td>Rebuild from the current source and redeploy.</td></tr>
+      <tr><td><code>daemonclient doctor</code></td><td>Diagnose a broken install and print a redacted report.</td></tr>
+    </tbody></table></div>
+
+    <h2 id="updating">Updating</h2>
+    <p>Your worker checks GitHub once a day for a newer release and shows a note on the dashboard. It never
+    updates itself — that stays your decision, and your server never phones home to us. To take an update:</p>
+<pre><code>git pull
+daemonclient update</code></pre>
+    <p><code>update</code> re-applies any new database changes, rebuilds from the source in your folder, and
+    redeploys. Your files, database and sign-in are untouched — it deliberately reuses your existing secrets.</p>
+    <div class="callout tip"><p><span class="tag">Same code, both flavours</span> The hosted service and your
+    self-hosted install run the <em>same</em> codebase. A fix lands once; hosted installs are pushed to,
+    self-hosted installs pull the release. You are never on a second-class fork.</p></div>
+
+    <h2 id="troubleshooting">Troubleshooting</h2>
+    <p><strong>Start here:</strong> <code>daemonclient doctor</code> — it checks every part and prints what to
+    run for each problem, with every secret removed so it is safe to paste into an issue.</p>
+    <div class="table-wrap"><table><thead><tr><th>Symptom</th><th>Cause &amp; fix</th></tr></thead><tbody>
+      <tr><td>"Cannot reach the server" in a web app</td><td>The app's address isn't in <code>ALLOWED_ORIGINS</code>. Re-run <code>daemonclient web</code>, or add it under your worker's variables.</td></tr>
+      <tr><td>Uploads fail with 413</td><td>Cloudflare's free plan caps request bodies at 100 MB, so single files above that can't upload from mobile. Known limitation.</td></tr>
+      <tr><td>HEIC photos have blank thumbnails</td><td>Open Photos, then Utilities, then <em>Fix HEIC</em>: it makes the thumbnails in your browser. Videos and every other format are thumbnailed by Telegram.</td></tr>
+      <tr><td>Everything worked, then stopped</td><td>Check Cloudflare's free-tier limits (100k worker requests/day; D1 has its own allowances). A big library browsed hard can reach them.</td></tr>
+    </tbody></table></div>
+
+    <hr>
+    
+</main>
+<footer>
+  <div class="foot-inner">
+    <div><strong>DaemonClient</strong>Your own private cloud on free tiers you control.</div>
+    <div><strong>Use it</strong><a href="https://daemonclient.uz">daemonclient.uz</a><a href="https://photos.daemonclient.uz">Photos</a><a href="https://drive.daemonclient.uz">Drive</a><a href="https://accounts.daemonclient.uz">Your account</a></div>
+    <div><strong>Build it</strong><a href="https://github.com/myrosama/DaemonClient">Source on GitHub</a><a href="changelog.html">Changelog</a><a href="https://github.com/myrosama/DaemonClient/blob/main/CONTRIBUTING.md">Contributing</a></div>
+  </div>
+</footer>
+</body>
+</html>

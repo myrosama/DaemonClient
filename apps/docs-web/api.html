@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>API reference · DaemonClient docs</title>
+<meta name="description" content="The routes each user&#x27;s DaemonClient worker answers, how they are authenticated, and what doesn&#x27;t work.">
+<link rel="canonical" href="https://docs.daemonclient.uz/api.html">
+<meta property="og:title" content="API reference · DaemonClient docs">
+<meta property="og:description" content="The routes each user&#x27;s DaemonClient worker answers, how they are authenticated, and what doesn&#x27;t work.">
+<meta property="og:url" content="https://docs.daemonclient.uz/api.html">
+<meta property="og:type" content="website">
+<link rel="icon" href="logo.png">
+<link rel="stylesheet" href="style.css">
+<script src="site.js"></script>
+</head>
+<body>
+<header class="top">
+  <div class="top-inner">
+    <a class="brand" href="index.html"><img src="logo.png" alt="" width="30" height="25">DaemonClient <small>docs</small></a>
+    <button class="menu-btn" type="button" aria-label="Menu" aria-expanded="false">☰</button>
+    <nav class="nav" aria-label="Sections">
+        <a href="how-it-works.html">How it works</a>
+        <a href="self-host.html">Self-host</a>
+        <a href="api.html" aria-current="page">API</a>
+        <a href="security.html">Security</a>
+        <a href="faq.html">FAQ</a>
+        <a href="changelog.html">Changelog</a>
+        <a href="https://github.com/myrosama/DaemonClient">GitHub ↗</a>
+        <button class="theme-btn" type="button" aria-label="Dark theme">☾</button>
+    </nav>
+  </div>
+</header>
+<main>
+  <div class="crumbs"><a href="index.html">Docs</a><span>›</span>API reference</div>
+  <h1>API reference</h1>
+  <div class="contents"><strong>On this page</strong><ol></ol></div>
+
+
+    <h2 id="api">Your worker is the API</h2>
+    <p>Each user's own worker answers everything: the part of Immich's API the Photos website (a fork of Immich's web app) needs, Drive's own routes and a WebDAV mount, while storing everything in your own Telegram channel.</p>
+    <p>The full contract is published two ways:
+    <a href="https://github.com/myrosama/DaemonClient/blob/main/docs/API.md">docs/API.md</a> in prose, with
+    the callers of each route recorded, and
+    <a href="https://github.com/myrosama/DaemonClient/blob/main/docs/openapi.yaml">docs/openapi.yaml</a> as an
+    OpenAPI 3.1 document you can load into any tool. What follows is the shape of it.</p>
+
+    <div class="table-wrap"><table><thead><tr><th>Area</th><th>Routes</th><th>Notes</th></tr></thead><tbody>
+      <tr><td>Auth</td><td><code>/api/auth/login</code>, <code>/logout</code>, <code>/status</code>, <code>/exchange</code></td><td><code>exchange</code> trades a Firebase ID token for a session — this is what makes one sign-in serve all three apps.</td></tr>
+      <tr><td>Server</td><td><code>/api/server/config</code>, <code>/features</code>, <code>/telegram-config</code>, <code>/zke-config</code></td><td>The last two return <em>your own</em> secrets, deliberately: the browser needs them to read bytes from Telegram directly. Owner-gated.</td></tr>
+      <tr><td>Assets</td><td><code>/api/assets</code> and its media paths</td><td>Upload, originals, thumbnails, video playback, trash, EXIF, the map. Range requests supported.</td></tr>
+      <tr><td>Manifest</td><td><code>/api/assets/{id}/dc-manifest</code></td><td>Not an Immich route. The chunk list the browser uses to bypass the worker entirely.</td></tr>
+      <tr><td>Timeline</td><td><code>/api/timeline/buckets</code>, <code>/bucket</code></td><td>Month buckets for the grid. Each request also dispatches exactly one background repair job.</td></tr>
+      <tr><td>Sync</td><td><code>/api/sync/stream</code></td><td>Mobile only. Newline-delimited JSON.</td></tr>
+      <tr><td>Albums, users, search</td><td><code>/api/albums</code>, <code>/api/users</code>, <code>/api/search</code></td><td>Only <code>search/metadata</code> is backed by real data.</td></tr>
+      <tr><td>Drive</td><td><code>/api/drive/*</code>, and <code>/dav</code> for the mount</td><td>Separate key material from Photos. WebDAV uses HTTP Basic against a hashed token.</td></tr>
+      <tr><td>Infrastructure</td><td><code>/api/health</code>, <code>/proxy</code>, <code>/api/selfhost/status</code></td><td><code>/proxy</code> relays to <code>api.telegram.org</code> and nothing else.</td></tr>
+    </tbody></table></div>
+
+    <div class="callout"><p><span class="tag">Empty, not missing</span> Immich features this architecture
+    doesn't implement — people, tags, partners, shared links, jobs, memories, stacks — return a correctly
+    <em>shaped</em> empty response rather than a 404. A client handed an error body where it expects an array
+    crashes on <code>.length</code>. So "returns 200 with nothing in it" means unimplemented, not
+    broken.</p></div>
+
+    <h2 id="limitations">What doesn't work</h2>
+    <p>Honesty is more useful than a feature list.</p>
+    <div class="table-wrap"><table><thead><tr><th>Thing</th><th>Why</th></tr></thead><tbody>
+      <tr><td><strong>Phone apps</strong></td><td>Native iPhone and Android apps are being built on one shared Rust core. Not released yet.</td></tr>
+      <tr><td><strong>Videos over 100 MB from mobile</strong></td><td>Cloudflare's request-body cap. Needs chunked upload in the app. Web uploads are unaffected, since they bypass the worker.</td></tr>
+      <tr><td><strong>HEIC thumbnails</strong></td><td>Made in your browser: Photos, then Utilities, then <em>Fix HEIC</em>. Workers can't decode HEIC and Telegram won't thumbnail it. Every other format, video included, is fine.</td></tr>
+      <tr><td><strong>Face recognition, smart search, places</strong></td><td>They need ML this architecture has nowhere to run.</td></tr>
+      <tr><td><strong>Sharing between users</strong></td><td>Built and held pending a security review. One install, one owner, for now.</td></tr>
+      <tr><td><strong>Multi-user installs</strong></td><td>Not being built. Add family accounts to your own Firebase project if you want them.</td></tr>
+    </tbody></table></div>
+
+    
+</main>
+<footer>
+  <div class="foot-inner">
+    <div><strong>DaemonClient</strong>Your own private cloud on free tiers you control.</div>
+    <div><strong>Use it</strong><a href="https://daemonclient.uz">daemonclient.uz</a><a href="https://photos.daemonclient.uz">Photos</a><a href="https://drive.daemonclient.uz">Drive</a><a href="https://accounts.daemonclient.uz">Your account</a></div>
+    <div><strong>Build it</strong><a href="https://github.com/myrosama/DaemonClient">Source on GitHub</a><a href="changelog.html">Changelog</a><a href="https://github.com/myrosama/DaemonClient/blob/main/CONTRIBUTING.md">Contributing</a></div>
+  </div>
+</footer>
+</body>
+</html>

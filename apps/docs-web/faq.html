@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FAQ · DaemonClient docs</title>
+<meta name="description" content="Short answers about DaemonClient: privacy, cost, Telegram, self-hosting and contributing.">
+<link rel="canonical" href="https://docs.daemonclient.uz/faq.html">
+<meta property="og:title" content="FAQ · DaemonClient docs">
+<meta property="og:description" content="Short answers about DaemonClient: privacy, cost, Telegram, self-hosting and contributing.">
+<meta property="og:url" content="https://docs.daemonclient.uz/faq.html">
+<meta property="og:type" content="website">
+<link rel="icon" href="logo.png">
+<link rel="stylesheet" href="style.css">
+<script src="site.js"></script>
+</head>
+<body>
+<header class="top">
+  <div class="top-inner">
+    <a class="brand" href="index.html"><img src="logo.png" alt="" width="30" height="25">DaemonClient <small>docs</small></a>
+    <button class="menu-btn" type="button" aria-label="Menu" aria-expanded="false">☰</button>
+    <nav class="nav" aria-label="Sections">
+        <a href="how-it-works.html">How it works</a>
+        <a href="self-host.html">Self-host</a>
+        <a href="api.html">API</a>
+        <a href="security.html">Security</a>
+        <a href="faq.html" aria-current="page">FAQ</a>
+        <a href="changelog.html">Changelog</a>
+        <a href="https://github.com/myrosama/DaemonClient">GitHub ↗</a>
+        <button class="theme-btn" type="button" aria-label="Dark theme">☾</button>
+    </nav>
+  </div>
+</header>
+<main>
+  <div class="crumbs"><a href="index.html">Docs</a><span>›</span>FAQ</div>
+  <h1>FAQ</h1>
+  <div class="contents"><strong>On this page</strong><ol></ol></div>
+
+    <h2 id="can-other-people-use-my-server">Can other people use my server?</h2>
+    <p>Only accounts in your Firebase project can sign in, and the only way to create one is you. Add family
+    accounts that way if you want them.</p>
+    <h2 id="does-it-phone-home">Does it phone home?</h2>
+    <p>No. The daily version check is an anonymous GET to GitHub's public releases endpoint, sends nothing
+    about your install. There is currently no switch to disable it — clearing <code>UPDATE_REPO</code> falls
+    back to a default rather than turning the check off.</p>
+    <h2 id="is-this-really-free">Is this really free?</h2>
+    <p>Yes, within the free tiers of Telegram, Cloudflare, Firebase and (if you use it) Vercel. There is no
+    paid version of self-hosting and no key to buy.</p>
+    <h2 id="what-if-this-project-disappears">What if this project disappears?</h2>
+    <p>You keep everything. Your files are in your Telegram channel, your index in your D1 database, and the
+    code is in your clone under an open licence. Nothing here can be switched off remotely.</p>
+    <h2 id="is-the-hosted-service-different-from-self-hosting">Is the hosted service different from self-hosting?</h2>
+    <p>Same code. Five places in the whole worker behave differently and all five are plumbing — whose
+    Firebase to call, whose domain to put in a link, which label to report. Every feature is identical. The
+    one real asymmetry is delivery: we can push an update to a hosted install because we hold its credentials,
+    and we deliberately cannot push to yours.</p>
+    <h2 id="why-telegram-isn-t-that-fragile">Why Telegram? Isn't that fragile?</h2>
+    <p>It is the only free unlimited store of its kind, and it is the entire premise — object storage was
+    considered and rejected, because paying for storage would end the project. The honest trade-off: your
+    files live in a private channel you control, subject to Telegram's terms. Keep the bot in the channel and
+    don't delete its messages — they <em>are</em> your data.</p>
+    <h2 id="can-i-contribute">Can I contribute?</h2>
+    <p>Yes. Start with
+    <a href="https://github.com/myrosama/DaemonClient/blob/main/CONTRIBUTING.md">CONTRIBUTING.md</a> — it
+    covers where things live and the four hard constraints that explain most of the odd-looking code. Please
+    don't test against anyone else's deployment, including ours; self-hosting builds you a full stack in ten
+    minutes.</p>
+
+    <hr>
+    <p style="color:var(--muted);font-size:14px">Your files. Your cloud. Your control. ·
+    <a href="https://github.com/myrosama/DaemonClient">github.com/myrosama/DaemonClient</a></p>
+   
+</main>
+<footer>
+  <div class="foot-inner">
+    <div><strong>DaemonClient</strong>Your own private cloud on free tiers you control.</div>
+    <div><strong>Use it</strong><a href="https://daemonclient.uz">daemonclient.uz</a><a href="https://photos.daemonclient.uz">Photos</a><a href="https://drive.daemonclient.uz">Drive</a><a href="https://accounts.daemonclient.uz">Your account</a></div>
+    <div><strong>Build it</strong><a href="https://github.com/myrosama/DaemonClient">Source on GitHub</a><a href="changelog.html">Changelog</a><a href="https://github.com/myrosama/DaemonClient/blob/main/CONTRIBUTING.md">Contributing</a></div>
+  </div>
+</footer>
+</body>
+</html>
