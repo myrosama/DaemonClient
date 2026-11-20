@@ -33,7 +33,7 @@ REPO="${DC_REPO:-myrosama/DaemonClient}"
 HOME_DIR="${DC_HOME:-$HOME/.daemonclient}"
 SRC_DIR="$HOME_DIR/src"
 NODE_DIR="$HOME_DIR/node"
-# 20.12 exactly, not 18 and not "the current LTS".
+# 22.13 exactly, not 20 and not "the current LTS".
 #
 # `@clack/prompts` — which every prompt in the installer goes through — opens
 # with `import { styleText } from 'node:util'`, and `styleText` landed in Node
@@ -42,8 +42,14 @@ NODE_DIR="$HOME_DIR/node"
 # Ubuntu 22.04 LTS and Debian 12 both ship Node 18, so that was not a corner.
 #
 # The minor matters: Node 20.0 through 20.11 are 20.x and still lack it.
-MIN_NODE_MAJOR=20
-MIN_NODE_MINOR=12
+#
+# And 20.12 is not enough either (CI, 2026-11-20): @clack draws several prompt
+# states with styleText(['strikethrough', 'dim'], …), a list of formats Node 20
+# rejects, so a validation error or a Ctrl-C crashed the prompt. 22.13 takes the
+# list and has node:sqlite without a flag. Node 20 reached end of life in
+# April 2026.
+MIN_NODE_MAJOR=22
+MIN_NODE_MINOR=13
 MIN_NODE="$MIN_NODE_MAJOR.$MIN_NODE_MINOR"
 
 # ── output ───────────────────────────────────────────────────────────────────
