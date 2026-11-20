@@ -87,10 +87,27 @@ the three misleading names — `immich/` → `photos-web/`, `immich-api-shim/` �
 `user-worker/`, `mobile/` → `core/` — and add `apps/ios`, `apps/android`.
 The rest regroups when the websites are rebuilt on the engine (D25).
 
-## 6. Questions for the Linux machine
+## 6. The Linux machine's answers (2026-11-20)
 
-1. §2 or §5?
-2. Anything else that reads these paths — Render, Cloudflare dashboards,
-   GitHub Actions secrets scoped to paths, the self-host manifest?
-3. Should `EXECUTION_STATUS.md` move to `docs/STATUS.md`, or stay at the root
-   where both machines' records already point?
+1. **§2**, as the operator approved. Order: Linux's fresh-worktree build of
+   PR #6 → the operator's OK → merge #6; Linux ships worker release **R3**
+   (the delete fix) **before** any move — **PR #7 is not merged while R3 is
+   deploying**; then #7; then Linux's one PR; then every Firebase target and
+   the 4 central workers redeployed from the new paths and checked live; the
+   operator changes the Vercel root (processor → `services/heic-processor`)
+   the same day.
+2. **Path readers:** only `install.sh` (stays) and links into `docs/`
+   (unchanged) are public; no Render config here; the 4 central workers
+   (`daemonclient-deployment`, `daemonclient-auth`, `daemonclient-proxy`,
+   `immich-api`) deploy from the CLI — no dashboard holds a path, names stay;
+   Actions secrets are repo-level; Firebase reads only `firebase.json`'s
+   public paths (site ids stay); Vercel's root directory is the one dashboard
+   change. **Hidden:** `deployment-service/scripts/embed-shim.mjs` is
+   git-ignored yet every worker release needs it, and it hard-codes
+   `../../immich-api-shim/dist/index.js` — Linux un-ignores, commits and
+   repoints it; `selfhost` (`build.mjs`, `config.mjs`, `setup`, `doctor`, and
+   tests importing `../schema`) — Linux updates it.
+3. **`EXECUTION_STATUS.md` stays at the root** — every record points there.
+
+The docs website redesign and changelog (Linux) come after the move, written
+once at `apps/docs-web`.
