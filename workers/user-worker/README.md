@@ -83,9 +83,9 @@ Four steps, and missing one ships nothing:
 
 ```bash
 npx wrangler deploy --dry-run --outdir dist        # build the bundle
-node ../deployment-service/scripts/embed-shim.mjs  # embed it for the fleet
-cd ../deployment-service && npx wrangler deploy    # ship the provisioner
-cd ../immich-api-shim && npx wrangler deploy       # ship the shared worker
+node ../deployment/scripts/embed-shim.mjs          # embed it for the fleet
+cd ../deployment && npx wrangler deploy            # ship the provisioner
+cd ../user-worker && npx wrangler deploy           # ship the shared worker
 ```
 
 Then grep the regenerated `workers/deployment/src/shim-bundle.ts` to confirm
