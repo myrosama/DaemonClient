@@ -1,3 +1,8 @@
+> **2026-11-19 — superseded in part (SPEC D26).** The Immich Flutter fork is
+> dropped; the mobile apps become native (SwiftUI, Kotlin + Compose) on the Rust
+> core. The plan is `docs/plan/ENGINE.md` Part 2. The Flutter work is on branch
+> `archive/p2-flutter-2.3`; P0/P1 below (the core) still hold.
+
 # Mobile apps — start here
 
 Two apps on one Rust core, built on the MacBook since 2026-10-04:

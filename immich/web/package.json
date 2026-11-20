@@ -66,7 +66,7 @@
     "thumbhash": "^0.1.1",
     "transformation-matrix": "^3.1.0",
     "uplot": "^1.6.32",
-    "libheif-js": "^1.19.8"
+    "libheif-js": "1.19.8"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.0",

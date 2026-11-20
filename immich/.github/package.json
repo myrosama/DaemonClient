@@ -1,9 +1,0 @@
-{
-  "scripts": {
-    "format": "prettier --cache --check .",
-    "format:fix": "prettier --cache --write --list-different ."
-  },
-  "devDependencies": {
-    "prettier": "^3.7.4"
-  }
-}

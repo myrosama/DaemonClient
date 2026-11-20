@@ -41,6 +41,7 @@ jobs:
       accounts: ${{ steps.filter.outputs.accounts }}
       drive: ${{ steps.filter.outputs.drive }}
       selfhost: ${{ steps.filter.outputs.selfhost }}
+      photos: ${{ steps.filter.outputs.photos }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -72,6 +73,34 @@ jobs:
             drive:
               - 'drive/**'
               - '.github/workflows/ci.yml'
+            photos:
+              - 'immich/**'
+              - '.github/workflows/ci.yml'
+
+  # The Photos website (the Immich web fork): from a FROZEN lockfile, so a
+  # package added to web/package.json without its lockfile entry fails here.
+  photos-web:
+    needs: changes
+    if: needs.changes.outputs.photos == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: immich
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.15.0'
+          cache: pnpm
+          cache-dependency-path: immich/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @immich/sdk build
+      - run: npm run build
+        working-directory: immich/web
 
   # The security-critical core: the per-user worker (263 tests) validates auth,
   # ownership, media stitching, sync and Drive.
