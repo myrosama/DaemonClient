@@ -117,7 +117,6 @@ describe('it terminates, whatever shape the install is in', () => {
       steps: { deploy: { done: true } },
       workerUrl: 'https://dc-test.workers.dev',
       telegramBotToken: '123:fake',
-      processorUrl: 'https://processor.example',
     });
     globalThis.fetch = async () => { throw new Error('network is down'); };
 
@@ -128,7 +127,6 @@ describe('it terminates, whatever shape the install is in', () => {
 
     assert.equal(process.listenerCount('SIGINT'), before, 'no interrupt handler leaked');
     assert.match(seen(), /Telegram bot/);
-    assert.match(seen(), /Processor/);
   });
 
   test('a healthy install', { timeout: 20000 }, async () => {

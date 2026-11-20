@@ -134,7 +134,7 @@ describe('setup actually claims it', () => {
     // calls stepDeployWorker before stepFinish, so a claim inside the former
     // is guaranteed to precede the summary.
     const start = setup.indexOf('async function stepDeployWorker');
-    const end = setup.indexOf('async function stepProcessor');
+    const end = setup.indexOf('async function stepFinish');
     assert.ok(start > 0 && end > start, 'located the deploy step');
     const body = setup.slice(start, end);
     assert.match(body, /claimInstallOwner\(/, 'the claim is inside stepDeployWorker');

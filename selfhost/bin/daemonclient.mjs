@@ -32,11 +32,6 @@ const COMMANDS = {
     asks: true,
     run: async () => (await import('../src/commands/dashboard.mjs')).runDashboard(),
   },
-  processor: {
-    summary: 'Add or change the media processor (HEIC thumbnails)',
-    asks: true,
-    run: async () => (await import('../src/commands/processor.mjs')).runProcessor(),
-  },
   doctor: {
     summary: 'Diagnose a broken install and print a redacted report',
     asks: true,

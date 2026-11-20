@@ -38,7 +38,7 @@ import { MIGRATION_SQL, splitStatements } from '../../../packages/schema/schema.
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '../../..');
-const TOTAL_STEPS = 7;
+const TOTAL_STEPS = 6;
 // Stable on purpose: ensureWebApp finds the app a previous run created by this
 // exact name, and a rename would make every resumed setup register another one.
 const FIREBASE_APP_NAME = 'DaemonClient';
@@ -64,7 +64,6 @@ export async function runSetup(opts = {}) {
   await stepCloudflare(state);
   await stepAccount(state);
   await stepDeployWorker(state);
-  await stepProcessor(state);
   await stepFinish(state);
 }
 
@@ -712,104 +711,10 @@ async function stepDeployWorker(state) {
 // in ../version.mjs, reading the tracked VERSION file, shared with `update` so
 // the two can no longer disagree about what version an install is running.
 
-// ── 6. Media processor (optional) ───────────────────────────────────────────
-
-async function stepProcessor(state) {
-  step(6, TOTAL_STEPS, 'Photo processing (optional)');
-
-  line();
-  hint('iPhone photos (HEIC) need real CPU to turn into a grid thumbnail — more than a Cloudflare Worker is allowed to use. A small companion service does it. Skip this and everything still works; HEIC photos just show no grid thumbnail until you add one. (Other formats are thumbnailed by Telegram automatically.)');
-  blank();
-
-  if (isDone(state, 'processor') && state.processorUrl) {
-    ok(`Already configured: ${state.processorUrl}`);
-    if (!(await confirm('Change it?', false))) return;
-  }
-
-  const choice = await select('How do you want to handle it?', [
-    { label: 'Skip for now', value: 'skip', hint: 'add it later with: daemonclient processor' },
-    { label: 'I have already deployed one', value: 'url', hint: 'paste its URL' },
-    { label: 'Show me how to deploy one free', value: 'guide', hint: 'Vercel, one command' },
-  ]);
-
-  if (choice === 'skip') {
-    markDone(state, 'processor', { skipped: true });
-    saveState(state);
-    return;
-  }
-
-  if (choice === 'guide') {
-    blank();
-    line(`  ${c.bold('Deploy on Vercel (free)')}`);
-    line(`    1. Install the Vercel CLI if you need it: ${accent('npm i -g vercel')}`);
-    line(`    2. From this repository, in another terminal:`);
-    line(`         ${accent('cd processor && npx vercel deploy --prod')}`);
-    line(`       ${c.gray('Follow the prompts to sign in and create the project.')}`);
-    line('    3. Set two environment variables on the Vercel project, then redeploy');
-    line(`       ${c.gray('(Vercel dashboard → Settings → Environment Variables):')}`);
-    line(`         FIREBASE_PROJECT_ID = ${accent(state.firebaseProjectId || '(your Firebase project id)')}`);
-    line(`         OWNER_UID           = ${accent(state.adminUserId || '(your user id)')}`);
-    line('    4. Copy the deployment URL Vercel prints');
-    blank();
-    hint('OWNER_UID pins the instance to your account, so its URL is safe to store in config. FIREBASE_PROJECT_ID must match your project — the processor rejects every request while it is unset.');
-    blank();
-  }
-
-  let url = '';
-  while (true) {
-    url = await ask('Processor URL (or type skip)', { defaultValue: state.processorUrl || '' });
-    if (!url || /^skip$/i.test(url)) {
-      markDone(state, 'processor', { skipped: true });
-      saveState(state);
-      return;
-    }
-    const base = url.replace(/\/+$/, '');
-    const s = spinner('Checking the processor');
-    try {
-      const res = await fetch(`${base}/health`, { signal: AbortSignal.timeout(60000) });
-      const body = await res.json().catch(() => ({}));
-      if (!body?.service?.includes('daemonclient')) throw new Error('That URL did not answer like a DaemonClient processor.');
-      if (body.problems?.length) {
-        s.fail('The processor is up but reports problems:');
-        for (const p of body.problems) warn(p);
-        if (!(await confirm('Use it anyway?', false))) continue;
-      } else {
-        s.succeed(`Processor healthy (HEIC thumbnails: ${body.capabilities?.heicThumbnail ? 'yes' : 'no'})`);
-      }
-      url = base;
-      break;
-    } catch (e) {
-      s.fail(e.message.includes('aborted') ? 'No answer — a sleeping free instance can take a minute to wake. Try again.' : e.message);
-      if (!(await confirm('Try a different URL?', true))) {
-        markDone(state, 'processor', { skipped: true });
-        saveState(state);
-        return;
-      }
-    }
-  }
-
-  const s = spinner('Saving');
-  try {
-    const existing = { botToken: state.telegramBotToken, botUsername: state.telegramBotUsername, channelId: state.telegramChannelId };
-    await cf.queryD1(
-      state.cloudflareToken, state.cloudflareAccountId, state.databaseId,
-      'INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)',
-      ['telegram', JSON.stringify({ ...existing, heicConvertUrl: `${url}/convertHeicThumbnail` })],
-    );
-    s.succeed('Processor connected');
-  } catch (e) {
-    s.fail(e.message);
-  }
-
-  state.processorUrl = url;
-  markDone(state, 'processor');
-  saveState(state);
-}
-
-// ── 7. Done ─────────────────────────────────────────────────────────────────
+// ── 6. Done ─────────────────────────────────────────────────────────────────
 
 async function stepFinish(state) {
-  step(7, TOTAL_STEPS, 'Done');
+  step(6, TOTAL_STEPS, 'Done');
   blank();
 
   const lines = [
@@ -822,9 +727,6 @@ async function stepFinish(state) {
     `${c.bold('Storage')}`,
     `  @${state.telegramBotUsername} → ${state.telegramChannelTitle}`,
   ];
-  if (state.processorUrl) {
-    lines.push('', `${c.bold('Processor')}`, `  ${state.processorUrl}`);
-  }
   lines.push(
     '',
     c.gray('Point the mobile app at the API URL above, or run the web apps'),
@@ -833,7 +735,6 @@ async function stepFinish(state) {
     `${c.bold('Useful commands')}`,
     `  ${accent('daemonclient status')}    ${c.gray('what is running, and is it healthy')}`,
     `  ${accent('daemonclient update')}    ${c.gray('pull the latest release and redeploy')}`,
-    `  ${accent('daemonclient processor')} ${c.gray('add or change the media processor')}`,
   );
   panel('Your cloud is live', lines);
 

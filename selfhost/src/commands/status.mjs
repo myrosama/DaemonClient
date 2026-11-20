@@ -73,25 +73,6 @@ export async function runStatus() {
   }
   mark(!!state.telegramChannelId, 'Channel', state.telegramChannelTitle || state.telegramChannelId);
 
-  // ── the processor ──
-  if (state.processorUrl) {
-    const s3 = spinner('Checking the processor');
-    try {
-      // 60s because a free instance cold-starts, and reporting a sleeping
-      // processor as broken sends people to debug something that is fine.
-      const res = await fetch(`${state.processorUrl}/health`, { signal: AbortSignal.timeout(60000) });
-      const body = await res.json().catch(() => ({}));
-      if (res.ok) s3.succeed('Processor answered');
-      else s3.fail('Processor reported a problem');
-      mark(res.ok, 'Processor', res.ok ? state.processorUrl : (body.problems || []).join('; '));
-    } catch {
-      s3.fail('Processor did not answer');
-      mark(false, 'Processor', 'not answering (a free instance may be asleep)');
-    }
-  } else {
-    rows.push(`${NONE} Processor  not configured — HEIC photos will have no grid thumbnail`);
-  }
-
   note(rows, 'Status');
 
   // ── updates ──

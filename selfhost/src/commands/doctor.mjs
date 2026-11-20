@@ -165,27 +165,6 @@ export async function runDoctor({ showKeys = false } = {}) {
     add('error', `Telegram bot token rejected: ${e.message}`, 'Get a fresh token from @BotFather, then re-run setup');
   }
 
-  // ── Processor
-  if (state.processorUrl) {
-    const s5 = spinner('Processor');
-    try {
-      const res = await fetch(`${state.processorUrl}/health`, { signal: AbortSignal.timeout(90000) });
-      const body = await res.json().catch(() => ({}));
-      if (res.ok) s5.succeed('Processor healthy');
-      else {
-        s5.fail('Processor');
-        add('warn', `Processor unhealthy: ${(body.problems || []).join('; ') || res.status}`,
-          'Check its logs on Vercel, or run: daemonclient processor');
-      }
-    } catch {
-      s5.fail('Processor');
-      add('warn', 'Processor did not answer (a free instance may be asleep — this is usually fine)',
-        'It wakes on the next conversion attempt');
-    }
-  } else {
-    info('No processor configured — HEIC photos will have no grid thumbnail');
-  }
-
   report(findings, state);
 }
 
@@ -224,7 +203,6 @@ function report(findings, state) {
     account: state.cloudflareAccountId ? `${String(state.cloudflareAccountId).slice(0, 8)}…` : null,
     database: state.databaseName,
     telegramBot: state.telegramBotUsername ? `@${state.telegramBotUsername}` : null,
-    processor: state.processorUrl || null,
     steps: Object.keys(state.steps || {}),
     lastUpdate: state.lastUpdate || null,
     node: process.versions.node,
