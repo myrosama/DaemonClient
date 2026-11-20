@@ -37,8 +37,6 @@ workers/                  Cloudflare Workers
   deployment/             ← deployment-service/
   auth/                   ← auth-worker/
   telegram-proxy/         ← daemonclient-proxy/
-services/
-  heic-processor/         ← processor/              the Vercel HEIC → JPEG function
 packages/
   schema/                 ← schema/                 the shared D1 schema
 selfhost/                 unchanged (paused 2026-09-30)
@@ -63,7 +61,7 @@ files, `.github/`.
 | `daemonclient-site/`, `docs-site/`, `hosting/app-redirect/` → `apps/` | Linux | `firebase.json` (`main`, `docs`, `app`) |
 | `immich-api-shim/` → `workers/user-worker/` | Linux | `deployment-service`'s embed script (`../immich-api-shim`), `selfhost` (`setup`, `update`, tests), `ci.yml`, `.gitignore` (`wrangler-*.toml`), docs |
 | `deployment-service/`, `auth-worker/`, `daemonclient-proxy/` → `workers/` | Linux | `ci.yml`; each `wrangler` config moves with its folder — worker names do not change |
-| `processor/` → `services/heic-processor/` | Linux + operator | `ci.yml`; **the Vercel project's root directory** (dashboard setting) |
+| `processor/` — **deprecated, removed** (operator 2026-11-20: "we dont need it anymore") | Linux | the portal's setup step (`SetupProcessor.jsx`, `config/processor.js`, the `/setup/processor` route, whose Vercel deploy button points at `processor/`), deployment-service's `/processor` attach broker + tests, the worker's `POST /api/server/processor` and the HEIC thumbnail backfill that calls a processor (`assets.ts`) + tests, the `processor` CI job, issue templates, docs-site, `.gitignore`. Processors users already attached keep running in their own Vercel accounts — the worker must stop calling them cleanly. HEIC thumbnails are made by the browser (the website's libheif-js) and by the phone (D23) instead. |
 | `schema/` → `packages/schema/` | Linux | every `../schema` import (shim tests, deployment-service, selfhost) |
 
 **Progress:** the MacBook's part is PR #7 (`mobile/` → `core/`, flattened;
@@ -93,16 +91,16 @@ The rest regroups when the websites are rebuilt on the engine (D25).
    PR #6 → the operator's OK → merge #6; Linux ships worker release **R3**
    (the delete fix) **before** any move — **PR #7 is not merged while R3 is
    deploying**; then #7; then Linux's one PR; then every Firebase target and
-   the 4 central workers redeployed from the new paths and checked live; the
-   operator changes the Vercel root (processor → `services/heic-processor`)
-   the same day.
+   the 4 central workers redeployed from the new paths and checked live.
+   *(The Vercel root change is no longer needed: `processor/` is deprecated,
+   operator 2026-11-20.)*
 2. **Path readers:** only `install.sh` (stays) and links into `docs/`
    (unchanged) are public; no Render config here; the 4 central workers
    (`daemonclient-deployment`, `daemonclient-auth`, `daemonclient-proxy`,
    `immich-api`) deploy from the CLI — no dashboard holds a path, names stay;
    Actions secrets are repo-level; Firebase reads only `firebase.json`'s
    public paths (site ids stay); Vercel's root directory is the one dashboard
-   change. **Hidden:** `deployment-service/scripts/embed-shim.mjs` is
+   change — moot now that `processor/` is deprecated. **Hidden:** `deployment-service/scripts/embed-shim.mjs` is
    git-ignored yet every worker release needs it, and it hard-codes
    `../../immich-api-shim/dist/index.js` — Linux un-ignores, commits and
    repoints it; `selfhost` (`build.mjs`, `config.mjs`, `setup`, `doctor`, and
