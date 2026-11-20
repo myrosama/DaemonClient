@@ -20,7 +20,7 @@ function Heading({ as: Tag, id, children }) {
   const hid = id || slug(typeof children === 'string' ? children : '');
   return (
     <Tag id={hid}>
-      <a className="anchor" href={`#${hid}`} aria-label="Link to this section">
+      <a className="anchor" href={`#${hid}`} aria-hidden="true" tabIndex={-1}>
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7" />
           <path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7" />
@@ -30,8 +30,9 @@ function Heading({ as: Tag, id, children }) {
     </Tag>
   );
 }
-export const H3 = (p) => <Heading as="h3" {...p} />;
-export const H4 = (p) => <Heading as="h4" {...p} />;
+// Named after Telegram's h3/h4 look; they render as h2/h3 under the page's h1.
+export const H3 = (p) => <Heading as="h2" {...p} />;
+export const H4 = (p) => <Heading as="h3" {...p} />;
 
 export const Note = ({ children }) => <blockquote>{children}</blockquote>;
 
@@ -89,11 +90,11 @@ function SideNav() {
   const [items, setItems] = useState([]);
   const [cur, setCur] = useState(0);
   useEffect(() => {
-    const hs = [...document.querySelectorAll('.content h3[id], .content h4[id]')];
+    const hs = [...document.querySelectorAll('.content h2[id], .content h3[id]')];
     let seenH3 = false;
     setItems(hs.map((h) => {
-      if (h.tagName === 'H3') seenH3 = true;
-      return { id: h.id, text: h.textContent, sub: h.tagName === 'H4' && seenH3 };
+      if (h.tagName === 'H2') seenH3 = true;
+      return { id: h.id, text: h.textContent, sub: h.tagName === 'H3' && seenH3 };
     }));
     const onScroll = () => {
       let i = 0;
@@ -133,11 +134,11 @@ function Footer() {
     <footer className="foot">
       <div className="foot-cols foot-desktop">
         <div className="foot-col foot-brand">
-          <h5>DaemonClient</h5>
+          <div className="foot-h">DaemonClient</div>
           A private photo and file cloud that runs on free plans you control.
         </div>
         <div className="foot-col">
-          <h5><a href="https://daemonclient.uz">Apps</a></h5>
+          <div className="foot-h"><a href="https://daemonclient.uz">Apps</a></div>
           <ul>
             <li><a href="https://photos.daemonclient.uz">Photos</a></li>
             <li><a href="https://drive.daemonclient.uz">Drive</a></li>
@@ -145,7 +146,7 @@ function Footer() {
           </ul>
         </div>
         <div className="foot-col">
-          <h5><a href="/">Docs</a></h5>
+          <div className="foot-h"><a href="/">Docs</a></div>
           <ul>
             <li><a href="/how-it-works">How it works</a></li>
             <li><a href="/self-host">Self-hosting</a></li>
@@ -153,7 +154,7 @@ function Footer() {
           </ul>
         </div>
         <div className="foot-col">
-          <h5><a href="/faq">About</a></h5>
+          <div className="foot-h"><a href="/faq">About</a></div>
           <ul>
             <li><a href="/faq">FAQ</a></li>
             <li><a href="/security">Security</a></li>
@@ -161,7 +162,7 @@ function Footer() {
           </ul>
         </div>
         <div className="foot-col">
-          <h5><a href={GITHUB}>Code</a></h5>
+          <div className="foot-h"><a href={GITHUB}>Code</a></div>
           <ul>
             <li><a href={GITHUB}>GitHub</a></li>
             <li><a href={repo('CONTRIBUTING.md')}>Contributing</a></li>
@@ -170,10 +171,10 @@ function Footer() {
         </div>
       </div>
       <div className="foot-cols foot-mobile">
-        <h5><a href="https://photos.daemonclient.uz">Photos</a></h5>
-        <h5><a href="https://drive.daemonclient.uz">Drive</a></h5>
-        <h5><a href="/changelog">Changelog</a></h5>
-        <h5><a href={GITHUB}>GitHub</a></h5>
+        <div className="foot-h"><a href="https://photos.daemonclient.uz">Photos</a></div>
+        <div className="foot-h"><a href="https://drive.daemonclient.uz">Drive</a></div>
+        <div className="foot-h"><a href="/changelog">Changelog</a></div>
+        <div className="foot-h"><a href={GITHUB}>GitHub</a></div>
       </div>
     </footer>
   );
@@ -184,13 +185,13 @@ export function Layout({ route, children }) {
     <>
       <header className="head">
         <div className="head-inner">
-          <ul className="head-nav">
+          <nav aria-label="Main"><ul className="head-nav">
             {NAV.map((n) => (
               <li key={n.key} className={[n.key === route.nav && 'active', n.xs === false && 'hidden-xs'].filter(Boolean).join(' ') || undefined}>
                 <a href={n.href}>{n.label}</a>
               </li>
             ))}
-          </ul>
+          </ul></nav>
           <a className="head-github hidden-xs" href={GITHUB}>
             <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z" /></svg>
             GitHub

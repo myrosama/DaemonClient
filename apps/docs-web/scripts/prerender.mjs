@@ -21,7 +21,11 @@ for (const r of ROUTES) {
     `<meta property="og:description" content="${esc(r.desc)}">`,
     `<meta property="og:type" content="website">`,
   ].join('\n');
-  const html = template.replace('<!--app-head-->', head).replace('<!--app-html-->', render(r.path));
+  // Functions, not strings: a `$` in page text must not be read as a replace pattern.
+  const html = template
+    .replace('<!--app-head-->', () => head)
+    .replace('<div id="root"><!--app-html--></div>', () => `<div id="root" data-route="${r.path}">${render(r.path)}</div>`);
+  if (!html.includes(`data-route="${r.path}"`)) throw new Error(`template has no root for ${r.file}`);
   fs.writeFileSync(path.join(dist, r.file), html);
 }
 fs.rmSync(ssrDir, { recursive: true, force: true });
