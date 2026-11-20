@@ -35,34 +35,6 @@ export async function decryptToken(combinedB64: string, masterKeyString: string)
   return new TextDecoder().decode(plain);
 }
 
-// ── Worker session minting ───────────────────────────────────────────────────
-// A per-user worker authenticates every request with a session token of the
-// exact shape `base64(payloadJson).hmac`, signed with THAT worker's own
-// SESSION_SECRET (workers/user-worker/src/auth.ts createSignedSessionToken +
-// helpers.ts verifySignedSessionToken/sessionScope). The deployment-service is
-// the one component that already knows each user's SESSION_SECRET (it generated
-// it at provision time and stored it in config/cloudflare), so it — and only it
-// — can mint a token the user's worker will verify. This is not a second auth
-// system: it is the same token format and the same secret the worker already
-// uses, produced so the service can make ONE authenticated call to the user's
-// own worker on their behalf. The minted token never leaves the function.
-async function hmacSignSessionPayload(payloadB64: string, secret: string): Promise<string> {
-  const key = await crypto.subtle.importKey(
-    'raw',
-    new TextEncoder().encode(`session:${secret}`),
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign']
-  );
-  const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(payloadB64));
-  return btoa(String.fromCharCode(...new Uint8Array(sig)));
-}
-
-export async function mintWorkerSession(payload: Record<string, unknown>, sessionSecret: string): Promise<string> {
-  const payloadB64 = btoa(JSON.stringify(payload));
-  const sig = await hmacSignSessionPayload(payloadB64, sessionSecret);
-  return `${payloadB64}.${sig}`;
-}
 
 export interface Env {
   FIREBASE_API_KEY: string;
@@ -270,7 +242,6 @@ export default {
     const url = new URL(request.url);
     if (url.pathname === '/deploy-worker' && request.method === 'POST') return handleDeployWorker(request, env);
     if (url.pathname === '/oauth/cloudflare/exchange' && request.method === 'POST') return handleOAuthExchange(request, env);
-    if (url.pathname === '/processor' && request.method === 'POST') return handleAttachProcessor(request, env);
     if (url.pathname === '/validate-cf-token' && request.method === 'POST') return handleValidateToken(request, env);
     if (url.pathname === '/auto-update' && request.method === 'POST') return handleAutoUpdate(request, env);
     if (url.pathname === '/admin/force-update' && request.method === 'POST') return handleForceUpdate(request, env);
@@ -483,89 +454,6 @@ async function handleOAuthExchange(request: Request, env: Env): Promise<Response
   } catch (error: any) {
     console.error('OAuth exchange error:', error);
     return corsResponse(JSON.stringify({ error: error.message }), { status: 500 });
-  }
-}
-
-// ── Attach a HEIC processor to the user's own worker ─────────────────────────
-// Pin a stored workerUrl to the exact shape the provisioner produces
-// (`https://<name>.<subdomain>.workers.dev`, see provisionWorker). config/cloudflare
-// is USER-WRITABLE (firestore.rules grant the owner write on their own docs), and
-// handleAttachProcessor fetches this URL server-side — so without this a user could
-// point it at an arbitrary host and use this service as a confused-deputy fetcher.
-// new URL() normalises the hostname (a homograph becomes xn--…, which won't end in
-// .workers.dev), and we require https on the default port.
-function isProvisionedWorkerUrl(u: string): boolean {
-  try {
-    const url = new URL(u);
-    return url.protocol === 'https:' && url.port === '' && url.hostname.endsWith('.workers.dev');
-  } catch { return false; }
-}
-
-// The hosted onboarding cannot call the worker's POST /api/server/processor
-// directly: the browser only ever holds a Firebase ID token, and the worker
-// authenticates with its own signed session (minted from email+password at
-// /api/auth/login). This service already authenticates the user by Firebase ID
-// token and already knows their worker's URL + SESSION_SECRET, so it mints a
-// short-lived session and forwards the request. The worker's endpoint remains
-// the single validator — it, not this service, checks the URL is https, public,
-// a real DaemonClient processor, owner-pinned, and answers to THIS user's token.
-// The user's PLAINTEXT photo bytes never flow through here: only the processor
-// URL and the verdict do. The conversion path stays worker → the user's own
-// processor.
-export async function handleAttachProcessor(request: Request, env: Env): Promise<Response> {
-  try {
-    const auth = await validateFirebaseToken(request, env);
-    if (!auth) return corsResponse(JSON.stringify({ message: 'Unauthorized' }), { status: 401 });
-    const { uid, idToken, email } = auth;
-
-    const body = await request.json().catch(() => ({})) as any;
-    const processorUrl = String(body?.url || '').trim();
-    if (!processorUrl) {
-      return corsResponse(JSON.stringify({ message: 'A processor URL is required.' }), { status: 400 });
-    }
-
-    // The user can only ever reach THEIR OWN config here — fetchWorkerConfig
-    // reads config/cloudflare for the uid the verified ID token names.
-    const cfg = await fetchWorkerConfig(uid, idToken, env).catch(() => null);
-    const workerUrl = cfg?.workerUrl;
-    const sessionSecret = cfg?.sessionSecret;
-    if (!workerUrl) {
-      return corsResponse(JSON.stringify({ message: 'No worker is set up for your account yet. Finish the Cloudflare step first.' }), { status: 400 });
-    }
-    // Refuse to server-side-fetch anything but a real provisioned worker URL.
-    if (!isProvisionedWorkerUrl(workerUrl)) {
-      return corsResponse(JSON.stringify({ message: 'Your worker address looks wrong. Open your dashboard to re-provision, then try again.' }), { status: 400 });
-    }
-    if (!sessionSecret || sessionSecret.length < 32) {
-      // No per-worker secret → we cannot mint a token this worker will verify.
-      // Signing with the public APP_IDENTIFIER fallback would produce a
-      // forgeable token (FINDINGS §4), so refuse rather than weaken auth.
-      return corsResponse(JSON.stringify({ message: 'Your worker needs a quick update before it can connect a processor. Open your dashboard once to trigger it, then try again.' }), { status: 409 });
-    }
-
-    // Carry the user's REAL Firebase ID token in the session so the worker's
-    // processor probe authenticates to the user's own processor exactly as an
-    // interactive request would. Short-lived; used only for this one call.
-    const session = await mintWorkerSession(
-      { uid, email: email || '', idToken, refreshToken: '', workerUrl, exp: Date.now() + 5 * 60 * 1000 },
-      sessionSecret,
-    );
-
-    const base = workerUrl.replace(/\/+$/, '');
-    const res = await fetch(`${base}/api/server/processor`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${session}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url: processorUrl }),
-      // The worker probes the processor twice (health + an authenticated convert),
-      // each with a 10s timeout, so allow generous headroom before giving up.
-      signal: AbortSignal.timeout(30000),
-    });
-    // The worker's JSON verdict is the source of truth — pass it straight back.
-    const text = await res.text();
-    return corsResponse(text || '{}', { status: res.status });
-  } catch (error: any) {
-    console.error('Attach processor error:', error?.message);
-    return corsResponse(JSON.stringify({ message: 'Could not connect the processor. Please try again.' }), { status: 500 });
   }
 }
 
