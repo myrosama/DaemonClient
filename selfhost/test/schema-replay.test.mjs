@@ -1,6 +1,8 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { DatabaseSync } from 'node:sqlite';
+// node:sqlite exists from Node 22.5; the CI matrix also runs 20.12, the oldest
+// Node self-host supports, where this file has nothing to replay with.
+const { DatabaseSync } = (await import('node:sqlite').catch(() => null)) ?? {};
 import { MIGRATION_SQL, splitStatements } from '../../schema/schema.mjs';
 
 // Replaying the schema is a SUPPORTED operation, not an edge case:
@@ -26,7 +28,7 @@ function replay(db) {
   return rethrown;
 }
 
-describe('the schema can be replayed, the way update and setup replay it', () => {
+describe('the schema can be replayed, the way update and setup replay it', { skip: !DatabaseSync && 'node:sqlite needs Node 22.5+' }, () => {
   test('a first run against an empty database succeeds outright', () => {
     const db = new DatabaseSync(':memory:');
     for (const stmt of splitStatements(MIGRATION_SQL)) db.exec(stmt);
