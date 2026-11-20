@@ -1,7 +1,7 @@
 # Brand images for the phone apps
 
 **App icons** come from the set the operator approved on 2026-10-29,
-`docs/mobile/icons/` (Photos: "fanned gallery"; Drive: "cloud folder"). For
+[`icons/`](icons) (Photos: "fanned gallery"; Drive: "cloud folder"). For
 the native apps, they are resized into every iOS and Android slot when
 `apps/ios` and `apps/android` are set up (the Flutter-era installer script was
 removed with the fork, 2026-11-20).
