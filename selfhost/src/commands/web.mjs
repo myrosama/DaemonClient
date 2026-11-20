@@ -35,10 +35,10 @@ const run = promisify(execFile);
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '../../..');
 
-const APPS = {
-  dashboard: { dir: 'accounts-portal', dist: 'dist', label: 'Dashboard (main page)' },
-  photos: { dir: 'immich/web', dist: 'build', label: 'Photos' },
-  drive: { dir: 'drive', dist: 'dist', label: 'Drive' },
+export const APPS = {
+  dashboard: { dir: 'apps/accounts-web', dist: 'dist', label: 'Dashboard (main page)' },
+  photos: { dir: 'apps/photos-web/web', dist: 'build', label: 'Photos' },
+  drive: { dir: 'apps/drive-web', dist: 'dist', label: 'Drive' },
 };
 
 const bigBuffer = { maxBuffer: 64 * 1024 * 1024 };
@@ -112,7 +112,7 @@ export async function runWeb() {
     VITE_API_BASE: worker,
   });
 
-  // The dashboard (accounts-portal) reads .env.selfhost via `vite build --mode
+  // The dashboard (apps/accounts-web) reads .env.selfhost via `vite build --mode
   // selfhost`, matching `daemonclient dashboard`. It needs the Firebase web
   // config (apiKey/authDomain/projectId are enough for Auth) and the two service
   // URLs so its cards link to the Photos/Drive we just built.

@@ -2,7 +2,7 @@
 //
 // The repo ships TypeScript, and Cloudflare's upload API wants one JavaScript
 // module. wrangler already knows how to produce exactly that, and it is a
-// dependency of immich-api-shim, so we drive it rather than shipping a second
+// dependency of workers/user-worker, so we drive it rather than shipping a second
 // bundler that could disagree with what the maintainers build and test.
 
 import { execFile } from 'node:child_process';
