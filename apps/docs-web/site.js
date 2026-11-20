@@ -19,6 +19,11 @@
     if (btn) {
       var label = function () { btn.textContent = isDark() ? '☀' : '☾'; btn.setAttribute('aria-label', isDark() ? 'Light theme' : 'Dark theme'); };
       label();
+      // Follow the system setting live while no choice is saved.
+      if (window.matchMedia) {
+        var mq = window.matchMedia('(prefers-color-scheme: dark)');
+        if (mq.addEventListener) mq.addEventListener('change', label);
+      }
       btn.addEventListener('click', function () {
         var next = isDark() ? 'light' : 'dark';
         root.setAttribute('data-theme', next);

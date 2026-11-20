@@ -36,14 +36,25 @@
   
   
 <h1>DaemonClient</h1>
-  <p class="lede">A private, unlimited, encrypted photo and file cloud that runs entirely on free tiers you
-    control — <strong>$0/month</strong>, no server, no hardware. This page covers how it works and how to run
+  
+    <p class="lede">A private, unlimited, encrypted photo and file cloud that runs entirely on free tiers you
+    control — <strong>$0/month</strong>, no server, no hardware. These docs cover how it works and how to run
     it yourself.</p>
-  <p>Cloud storage is expensive and you don't own any of it. DaemonClient combines two services with
+
+    <p>Cloud storage is expensive and you don't own any of it. DaemonClient combines two services with
     unusually generous free tiers — <strong>Telegram</strong> (unlimited file storage through bots and
     channels) and <strong>Cloudflare Workers</strong> (serverless compute plus a D1 database) — so that
     <strong>every user gets their own isolated stack</strong>: their own bot and private channel, their own
-    worker and database, their own encryption keys.</p><p><span class="tag">The promise</span></p>
+    worker and database, their own encryption keys.</p>
+
+    <div class="callout tip"><p><span class="tag">The promise</span></p>
+    <p>A self-hosted install depends on <strong>nothing we run</strong> — not your files, not your
+    credentials, not a telemetry ping. A self-hosted build of every web app is verified at build time to
+    contain no operator address. If this project vanished tomorrow, your install keeps working: the files are
+    in your Telegram channel, the index is in your D1 database, and the code is in your clone under
+    AGPL-3.0.</p></div>
+
+    
   <ul class="sections">
     <li><a href="how-it-works.html">How it works</a><p>One path per user: your device, your worker, your Telegram channel. Storage, encryption, sign-in and the limits behind the design.</p></li>
     <li><a href="self-host.html">Self-host</a><p>Run the whole thing on accounts you own: Telegram, Cloudflare and Firebase.</p></li>
