@@ -161,7 +161,7 @@ per-user workers that auto-update on your next login.
 
 | | |
 |---|---|
-| **Mobile apps** | A fork of the Immich app exists in `immich/mobile/` and is **not released**. It is not currently being worked on — the web comes first. See [Roadmap](docs/ROADMAP.md). |
+| **Mobile apps** | Native iPhone and Android apps on the Rust core ([`core/`](core)) are being built (`apps/ios`, `apps/android`); **not released yet**. See [Roadmap](docs/ROADMAP.md). |
 | **Videos over 100 MB from mobile** | Cloudflare's request-body cap. Needs chunked upload in the app. Web uploads are unaffected — they bypass the worker entirely. |
 | **HEIC thumbnails** | Blank unless you deploy the optional [`processor/`](processor). Workers cannot decode HEIC and Telegram won't thumbnail it. Every other format, video included, is fine. |
 | **Face recognition, smart search, places** | Not implemented. They need ML this architecture has nowhere to run. The routes return correctly-shaped empty results rather than errors. |
@@ -195,7 +195,9 @@ looking for.
 | [`deployment-service/`](deployment-service) | Provisions per-user workers for the managed service and ships them updates |
 | [`accounts-portal/`](accounts-portal) | Sign-up, the guided setup wizard, the dashboard |
 | [`auth-worker/`](auth-worker) | Cross-subdomain session broker (managed service only) |
-| [`immich/`](immich/FORK.md) | The Immich fork: Photos web app (`web/`) and the unreleased mobile app (`mobile/`) |
+| [`immich/`](immich/FORK.md) | The Immich fork: the Photos web app (`web/`) |
+| [`core/`](core) | The Rust core under the mobile apps: storage format, Telegram, sync, uploads |
+| [`apps/`](apps) | The native mobile apps (`ios/`, `android/`) |
 | [`drive/`](drive) | The Drive web app — not a fork |
 | [`processor/`](processor) | Optional HEIC thumbnailer, deployed to each user's own Vercel |
 | [`daemonclient-proxy/`](daemonclient-proxy) | CORS relay for the Telegram Bot API |

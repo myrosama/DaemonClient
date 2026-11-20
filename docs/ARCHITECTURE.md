@@ -31,7 +31,7 @@ directly.
 | `accounts-portal/` | `accounts.daemonclient.uz` | Sign-up, the guided setup wizard, the dashboard. |
 | `auth-worker/` | `auth.daemonclient.uz` | Managed-service only. Issues the cross-subdomain cookie that makes one sign-in serve all three apps. |
 | `immich/web/` | `photos.daemonclient.uz` | The Photos app — a fork of [Immich](https://github.com/immich-app/immich)'s SvelteKit frontend. |
-| `immich/mobile/` | not released | The mobile fork. Eight changed files over stock Immich. Not currently being worked on. |
+| `apps/ios/`, `apps/android/` + `core/` | not released | Native mobile apps (SwiftUI, Kotlin + Compose) on a shared Rust core — being built (`docs/plan/ENGINE.md` Part 2). |
 | `drive/` | `drive.daemonclient.uz` | The Drive app. Not a fork — a standalone React SPA. |
 | `daemonclient-proxy/` | `daemonclient-proxy` Worker | A CORS relay for `api.telegram.org`, which sends no CORS headers of its own. |
 | `processor/` | the user's own Vercel | One stateless function that converts HEIC to a thumbnail. Optional. |

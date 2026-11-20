@@ -1,5 +1,5 @@
 # The Rust core shared by the Photos and Drive apps (docs/mobile/SPEC.md §3):
-# format, lints, tests and a dependency audit on every change under mobile/.
+# format, lints, tests and a dependency audit on every change under core/.
 name: mobile-core
 
 on:
@@ -7,14 +7,14 @@ on:
   push:
     branches: [main]
     paths:
-      - 'mobile/**'
+      - 'core/**'
       # The core's crypto is checked against these files; a change must re-run it.
       - 'drive/src/crypto.js'
       - 'drive/src/zke-unlock.js'
       - '.github/workflows/mobile-core.yml'
   pull_request:
     paths:
-      - 'mobile/**'
+      - 'core/**'
       # The core's crypto is checked against these files; a change must re-run it.
       - 'drive/src/crypto.js'
       - 'drive/src/zke-unlock.js'
@@ -29,7 +29,7 @@ permissions:
 
 defaults:
   run:
-    working-directory: mobile
+    working-directory: core
 
 jobs:
   core:
@@ -40,7 +40,7 @@ jobs:
         with:
           persist-credentials: false
       # rustup is preinstalled; this installs the toolchain, components and
-      # targets that mobile/rust-toolchain.toml pins.
+      # targets that core/rust-toolchain.toml pins.
       - run: rustup show
       - run: cargo fmt --all --check
       # --workspace: since P0 task 0.4 the plugin's binding crate is a member too.
@@ -51,7 +51,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - run: cargo run -q --locked -p dc-core --example emit_vectors | node core/compat/verify-rust-output.mjs
+      - run: cargo run -q --locked -p dc-core --example emit_vectors | node compat/verify-rust-output.mjs
 
   audit:
     runs-on: ubuntu-latest
@@ -64,5 +64,5 @@ jobs:
       # Pinned to a commit: a moved tag must not change what runs.
       - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2
         with:
-          manifest-path: mobile/Cargo.toml
+          manifest-path: core/Cargo.toml
           command: check advisories

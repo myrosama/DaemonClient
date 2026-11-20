@@ -30,10 +30,9 @@ this by uploading straight to Telegram; the app needs the same path.
 
 ## Later
 
-**Mobile apps.** A fork of the Immich app exists in `immich/mobile/` and is not
-released. It is eight changed files over stock Immich, so most of the work is
-in the worker's API rather than the app — see
-[../immich/FORK.md](../immich/FORK.md). Shipping to the App Store also needs a
+**Mobile apps.** Native iPhone (SwiftUI) and Android (Kotlin + Compose) apps
+on a shared Rust core (`core/`) are being built — the plan is
+[plan/ENGINE.md](plan/ENGINE.md) Part 2. Shipping to the App Store also needs a
 paid developer account and a release pipeline.
 
 This is deliberately last. An app that talks to a server still being reshaped

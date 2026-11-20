@@ -8,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const repo = process.env.DC_REPO_ROOT ?? path.resolve(here, '../../..');
+const repo = process.env.DC_REPO_ROOT ?? path.resolve(here, '../..');
 const js = await import(pathToFileURL(path.join(repo, 'drive/src/crypto.js')).href);
 const zke = await import(pathToFileURL(path.join(repo, 'drive/src/zke-unlock.js')).href);
 const subtle = webcrypto.subtle;

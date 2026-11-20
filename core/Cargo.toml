@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["core/dc-cli", "core/dc-core"]
+members = ["dc-cli", "dc-core"]
 
 [workspace.package]
 version = "0.1.0"

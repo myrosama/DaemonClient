@@ -13,7 +13,7 @@ copyright the Immich contributors, also licensed under AGPL-3.0. The forked
 code lives in immich/ — the web client (immich/web), with its translations and
 TypeScript SDK — and has been modified to talk to a Cloudflare Worker backed by
 Telegram storage instead of the upstream Immich server. The mobile apps are
-DaemonClient's own (native, on the Rust core in mobile/), not Immich's.
+DaemonClient's own (native, in apps/, on the Rust core in core/), not Immich's.
 
 If you want a conventional self-hosted photo server on your own hardware, use
 Immich itself. It is excellent, and this project would not exist without it.
@@ -22,7 +22,7 @@ Immich itself. It is excellent, and this project would not exist without it.
 
 The Photos service worker's media scheduler
 (immich/web/src/service-worker/media-scheduler.ts) and the mobile core's
-scheduler (mobile/core/dc-core/src/sched/) port the design of the
+scheduler (core/dc-core/src/sched/) port the design of the
 priority task queue and token-bucket rate limiter of Nuke
 (https://github.com/kean/Nuke), used under the MIT License:
 

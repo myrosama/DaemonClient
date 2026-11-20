@@ -290,7 +290,7 @@ until the website reads everything directly.
 
 ## How to check from the Mac
 
-`dc-cli` (in `mobile/core/dc-cli`, built with `cargo build --release -p
+`dc-cli` (in `core/dc-cli`, built with `cargo build --release -p
 dc-cli`) signs in to the test account from the Keychain and runs the phone
 core's real code: `upload`, `download` (checks the stored checksum, either
 spelling), `delete`, `list`, `serve` (plays a video through the phone's local

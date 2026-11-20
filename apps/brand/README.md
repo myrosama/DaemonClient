@@ -2,8 +2,9 @@
 
 **App icons** come from the set the operator approved on 2026-10-29,
 `docs/mobile/icons/` (Photos: "fanned gallery"; Drive: "cloud folder"). For
-the Photos app, `sh install-photos-icon.sh` resizes them into every iOS and
-Android slot, including the Android 13 themed (monochrome) icon.
+the native apps, they are resized into every iOS and Android slot when
+`apps/ios` and `apps/android` are set up (the Flutter-era installer script was
+removed with the fork, 2026-11-20).
 
 **Launch screens and in-app logos** are rendered from the one DaemonClient
 logo in the repository, `drive/public/logo.png` (536 × 446). There is no
@@ -11,13 +12,14 @@ vector version, so they are drawn from that PNG on macOS:
 
 ```sh
 mkdir -p /tmp/brand
-swift render-apple-and-app.swift ../../../drive/public/logo.png /tmp/brand
-swift render-android.swift       ../../../drive/public/logo.png /tmp/brand
+swift render-apple-and-app.swift ../../drive/public/logo.png /tmp/brand
+swift render-android.swift       ../../drive/public/logo.png /tmp/brand
 ```
 
 Re-running both on the same logo reproduced the committed images byte for
 byte (checked 2026-10-27, 58 files, before the app icon changed). Copy the
-outputs as follows; paths are under `immich/mobile/`. The rows marked
+outputs as follows; the destinations below are the old Flutter app's (paths
+under `immich/mobile/`, removed) — map them onto `apps/ios` / `apps/android`. The rows marked
 *superseded* were the app icon until 2026-10-29 — do not copy them any more.
 
 | Output | Destination |
