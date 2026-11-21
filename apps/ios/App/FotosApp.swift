@@ -67,8 +67,8 @@ enum LibraryFilter: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .all: String(localized: "Alle Objekte"); case .favorites: String(localized: "Favoriten"); case .edited: String(localized: "Bearbeitet"); case .photos: String(localized: "Fotos")
-        case .videos: "Videos"; case .livePhotos: "Live Photos"; case .portrait: "Porträt"
-        case .screenshots: "Bildschirmfotos"; case .shared: "Geteilt mit dir"; case .notInAlbum: "In keinem Album"
+        case .videos: String(localized: "Videos"); case .livePhotos: String(localized: "Live Photos"); case .portrait: String(localized: "Porträt")
+        case .screenshots: String(localized: "Bildschirmfotos"); case .shared: String(localized: "Geteilt mit dir"); case .notInAlbum: String(localized: "In keinem Album")
         }
     }
     var icon: String {

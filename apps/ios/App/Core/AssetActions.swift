@@ -168,7 +168,7 @@ enum AssetActions {
         let pc = UIPrintInteractionController.shared
         let info = UIPrintInfo.printInfo()
         info.outputType = .photo
-        info.jobName = images.count == 1 ? "Foto" : "\(images.count) Fotos"
+        info.jobName = images.count == 1 ? String(localized: "Foto") : String(localized: "\(images.count) Fotos")
         pc.printInfo = info
         pc.printingItems = images
         pc.present(animated: true)

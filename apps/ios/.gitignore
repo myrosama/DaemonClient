@@ -1,18 +1,9 @@
 build/
-build-ipa/
-build-ipa.log
 DerivedData/
-Payload/
 *.xcodeproj/
 *.ipa
 .DS_Store
-# Geheimes / Eigenes
-server/.env
-server/keys.json
-server/data/
+# Private: a home-network CA the app may trust (ImmichClient), signing files
 Resources/HeimnetzCA.der
 *.p12
 *.mobileprovision
-server/db_url.txt
-server/data/
-server/bereinigen/.env

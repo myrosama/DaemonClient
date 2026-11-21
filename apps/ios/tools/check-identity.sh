@@ -12,7 +12,7 @@ bad() { printf '✗ %b\n' "$*"; fail=1; }
 # never leave the app's own Keychain), and HomeRoll's ids in any case.
 hits=$(grep -rniE 'homeroll|application-groups|AppGroup|WidgetFeeder|CFBundleURLSchemes|"group\.|suiteName:|forSecurityApplicationGroupIdentifier|sharedContainerIdentifier|kSecAttrAccessGroup|keychain-access-groups|associated-domains' "$ios" \
   --include='*.swift' --include='*.yml' --include='*.plist' --include='*.entitlements' --include='*.xcconfig' 2>/dev/null \
-  | grep -vE '^[^:]+:[0-9]+:\s*(//|#)' | grep -vE '^[^:]+:[0-9]+:.*HomeRoll(AppDelegate)?\b' )
+  | grep -vE '^[^:]+:[0-9]+:\s*(//|#)')
 [ -z "$hits" ] || bad "HomeRoll's identity or a shared container is left:\n$hits"
 ents=$(find "$ios" -name '*.entitlements' -not -path '*/build/*' -not -path '*.xcodeproj/*' 2>/dev/null)
 [ -z "$ents" ] || bad "entitlements files (the app has none):\n$ents"
@@ -40,8 +40,11 @@ for f in sorted(pathlib.Path(sys.argv[1]).rglob('*.xcstrings')):
         locs = v.get('localizations') or {}
         if 'de' in locs: print(f'{f.name}: German left for {k[:50]!r}'); continue
         if k and not ({'en', 'ru'} <= set(locs)): print(f'{f.name}: {k[:50]!r} lacks {sorted({"en","ru"} - set(locs))}')
-        for l in locs.values():
+        for lang, l in locs.items():
             if 'HomeRoll' in json.dumps(l): print(f'{f.name}: "HomeRoll" shown for {k[:50]!r}')
+            # The home-screen name, which these override per language.
+            if k in ('CFBundleDisplayName', 'CFBundleName') and l.get('stringUnit', {}).get('value') != 'Phosphor Photos':
+                print(f'{f.name}: {k} in {lang} is not "Phosphor Photos"')
 PY
 ) || bad "the string catalog check crashed (a malformed .xcstrings?)"
 [ -z "$out" ] || bad "string catalogs:\n$(printf '%s' "$out" | head -20)"
