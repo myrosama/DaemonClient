@@ -2,7 +2,7 @@
 
 **Task I1 of `docs/plan/ENGINE.md` §9.** Written before the code (GATES.md,
 Gate 1). Decisions it follows: D27 (start from HomeRoll), D28 (distinct from
-Apple's Photos: "DC Photos"), D30 (English + Russian), the I0b requirements
+Apple's Photos; named "Phosphor Photos" with D31), D30 (English + Russian), the I0b requirements
 (no credential in a shared container — no App Group, no extensions).
 
 **Not in I1:** removing features the worker does not serve (I2, I3), Free Up
@@ -26,11 +26,11 @@ HomeRoll's own server layer stays, so Gate 2 compares with the I0 baseline.
    entitlements file); `Shared/FileChunks.swift` moves to `App/Core/` (backup
    uses it).
 4. **Identity:** project `DCPhotos`, bundle id `uz.daemonclient.photos`,
-   display name **"DC Photos"**; the Keychain service, BGTask ids and the
+   display name **"Phosphor Photos"**; the Keychain service, BGTask ids and the
    background session id renamed to `uz.daemonclient.photos.*`; the
    `homeroll` URL scheme no longer registered (external links could open
    hidden photos — I0b); "HomeRoll" in the UI (login title, version lines,
-   diagnostics) becomes "DC Photos"; the app icon is ours
+   diagnostics) becomes "Phosphor Photos"; the app icon is ours
    (`apps/brand/icons/photos-ios-1024.png`).
 5. **Languages (D30):** the string catalogs switch their source language to
    English, keep English and Russian, drop German. HomeRoll's German keys stay
@@ -47,7 +47,7 @@ imported code and passes after I1:
 - no `org.homeroll`, `group.`, `AppGroup`, `WidgetFeeder` or URL-scheme
   registration anywhere in `apps/ios`;
 - `project.yml`: bundle id `uz.daemonclient.photos`, display name
-  `DC Photos`, exactly one target, no App Group;
+  `Phosphor Photos`, exactly one target, no App Group;
 - every string catalog: source language `en`, no `de`, every key has an
   English value (or is the empty key);
 - no user-visible "HomeRoll" outside comments and NOTICE / README / LICENSE.
@@ -55,7 +55,7 @@ imported code and passes after I1:
 ## Gate 2 (Simulator, test account, compared with I0)
 
 Built with XcodeGen and `sim-run.sh`; signed in by token; the home screen
-shows **"DC Photos"** with our icon; the library, thumbnails and the viewer
+shows **"Phosphor Photos"** with our icon; the library, thumbnails and the viewer
 work as in I0; English and Russian (launched with `-AppleLanguages (ru)`)
 both show translated screens; no German anywhere. Screenshots of the test
 account are not committed or shared (D30).
