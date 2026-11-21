@@ -283,6 +283,24 @@ grid, the scrubber, the viewer's gestures) — never Apple's branding.
      without tags or edited versions; Free Up hidden.
    - **I4** the core linked as an XCFramework [S1]; sign-in, restore,
      sign-out through it.
+   - **I4b** an invisible Cloudflare Turnstile on the hosted sign-in (the
+     operator, 2026-11-22), the apps and the website alike:
+     - the phone runs Turnstile in a hidden web view on the sign-in screen
+       (an **Invisible**-mode widget: no puzzle can appear where nobody sees
+       it) and passes the token to the core's `sign_in`, which sends it as
+       `cf-turnstile-response` — only to the hosted address, never to a
+       self-hosted server;
+     - Linux: `/api/auth/login` then **requires** a valid token from the
+       hosted apps (today it checks one only when `TURNSTILE_SECRET` is bound,
+       because the mobile app sent none — `docs/openapi.yaml`); a failed check
+       says so in words the app can show;
+     - the operator: an Invisible-mode site key in the Cloudflare dashboard,
+       its hostnames, the secret on the worker. Tests use Cloudflare's test
+       keys (always pass / always fail).
+   - **I4c** the sign-in screen redesigned (the operator, 2026-11-22: "need
+     more work on the login page design later"): our brand, the hosted
+     service by default with "your own server" as the second choice (D8),
+     English and Russian — designed before it is built.
    - **I5** photos and video from the core's local server: no auth header, no
      URL cache, ≥ 24 connections on the grid, the original first, the secret
      kept out of logs [C5: `no-store` and the `next` class from
