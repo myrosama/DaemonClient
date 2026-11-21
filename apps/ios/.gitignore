@@ -1,0 +1,9 @@
+build/
+DerivedData/
+*.xcodeproj/
+*.ipa
+.DS_Store
+# Private: a home-network CA the app may trust (ImmichClient), signing files
+Resources/HeimnetzCA.der
+*.p12
+*.mobileprovision
