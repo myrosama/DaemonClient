@@ -12,15 +12,21 @@ ships in English and Russian.
 
 ## Build and run on the Simulator
 
-Needs Xcode 26+ and [XcodeGen](https://github.com/yonaskolb/XcodeGen)
-(`mise use xcodegen`). The project file is generated, not committed:
+Needs Xcode 26+, [XcodeGen](https://github.com/yonaskolb/XcodeGen)
+(`mise use xcodegen`) and the Rust toolchain (`rustup`; `core/rust-toolchain.toml`
+adds the iOS targets). The core is built first — `DCCore.xcframework` and its
+Swift bindings land in `core/dc-ffi/build/` (git-ignored); the project file is
+generated, not committed:
 
 ```sh
+../../core/dc-ffi/build-ios.sh
 xcodegen generate
 FOTOS_SERVER=<worker URL> FOTOS_TOKEN_FILE=<file holding a session token> ./sim-run.sh
 ```
 
-`sim-run.sh` signs in by token on Debug builds only, so no password is typed.
+`sim-run.sh` signs in by token on Debug builds only, so no password is typed —
+that path skips the core. Sign-in through the core, on the real form, is the UI
+test `UITests/SignInTests.swift` (how to run it is at its top).
 
 ## Checks
 

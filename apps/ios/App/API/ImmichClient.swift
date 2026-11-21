@@ -46,13 +46,8 @@ final class ImmichClient: NSObject, URLSessionDelegate, @unchecked Sendable {
         cfg.httpMaximumConnectionsPerHost = 8
         cfg.timeoutIntervalForRequest = 30
         session = URLSession(configuration: cfg, delegate: self, delegateQueue: nil)
-        // Der Schlüsselbund überlebt das Löschen der App, die Einstellungen nicht: Token ohne gültigen gespeicherten
-        // Server stammen aus einer früheren Installation (oder 1.0.1 hat Eingaben zu früh gespeichert) → nicht nutzen,
-        // sonst startet die App angemeldet mit kaputter Adresse und kommt nie zum Login (Issue #1). Die nächste
-        // Anmeldung überschreibt das Token.
-        if let s = UserDefaults.standard.string(forKey: "serverURL"), let u = Self.validBase(s) { baseURL = u }
-        else { UserDefaults.standard.removeObject(forKey: "serverURL") }
-        token = baseURL != nil ? Keychain.get("accessToken") : nil
+        // The session now lives in the core and its Keychain item (CoreBridge, I4); a token an earlier build kept goes.
+        Keychain.set(nil, for: "accessToken")
         #if DEBUG
         // Simulator-Tests: Token/Server per Startumgebung (SIMCTL_CHILD_FOTOS_*), kein Passwort-Tippen.
         let env = ProcessInfo.processInfo.environment

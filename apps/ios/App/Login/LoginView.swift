@@ -121,8 +121,9 @@ struct LoginView: View {
     private func login() async {
         busy = true; error = nil; defer { busy = false }
         do {
-            let r = try await ImmichClient.shared.login(server: server, email: email, password: password)
-            app.userName = r.name
+            let s = try await CoreBridge.signIn(server: server, email: email, password: password)
+            UserDefaults.standard.set(server, forKey: "serverURL")   // only to prefill the form next time
+            app.userName = s.name
             app.loggedIn = true
         } catch {
             self.error = error.localizedDescription

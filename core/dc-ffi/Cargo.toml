@@ -1,0 +1,25 @@
+[package]
+name = "dc-ffi"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "The bridge from the native apps (Swift, Kotlin) to dc-core, made with UniFFI."
+
+[lib]
+name = "dc_ffi"
+crate-type = ["staticlib", "lib"]
+
+[dependencies]
+dc-core = { path = "../dc-core" }
+uniffi = "=0.32.2"
+
+[dev-dependencies]
+tempfile = "=3.27.0"
+
+# Not `lints.workspace = true`: UniFFI's generated scaffolding needs `unsafe`
+# (the C ABI). The code written here has none and keeps the strict clippy set.
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+indexing_slicing = "deny"

@@ -11,7 +11,8 @@ bad() { printf '✗ %b\n' "$*"; fail=1; }
 # Every way back to a shared container or shared Keychain (I0b: the token must
 # never leave the app's own Keychain), and HomeRoll's ids in any case.
 hits=$(grep -rniE 'homeroll|application-groups|AppGroup|WidgetFeeder|CFBundleURLSchemes|"group\.|suiteName:|forSecurityApplicationGroupIdentifier|sharedContainerIdentifier|kSecAttrAccessGroup|keychain-access-groups|associated-domains' "$ios" \
-  --include='*.swift' --include='*.yml' --include='*.plist' --include='*.entitlements' --include='*.xcconfig' 2>/dev/null \
+  --include='*.swift' --include='*.yml' --include='*.plist' --include='*.entitlements' --include='*.xcconfig' \
+  --exclude-dir=build --exclude-dir=DerivedData --exclude-dir='*.xcodeproj' 2>/dev/null \
   | grep -vE '^[^:]+:[0-9]+:\s*(//|#)')
 [ -z "$hits" ] || bad "HomeRoll's identity or a shared container is left:\n$hits"
 ents=$(find "$ios" -name '*.entitlements' -not -path '*/build/*' -not -path '*.xcodeproj/*' 2>/dev/null)

@@ -87,10 +87,10 @@ struct ViewerRequest: Identifiable {
 
 @MainActor @Observable
 final class AppModel {
-    var loggedIn = ImmichClient.shared.isLoggedIn
+    var loggedIn = CoreBridge.restore() || ImmichClient.shared.isLoggedIn
     /// Abmelden (Konto-Menü, oder „Server nicht erreichbar“ in der Mediathek → anderen Server wählen)
     func signOut(_ timeline: TimelineStore) {
-        ImmichClient.shared.logout(); timeline.clearCache(); MemoryCenter.shared.reset(); SpotlightIndex.clear(); LocalCopy.reset()
+        CoreBridge.signOut(); ImmichClient.shared.logout(); timeline.clearCache(); MemoryCenter.shared.reset(); SpotlightIndex.clear(); LocalCopy.reset()
         // alles vom Konto vom Gerät löschen: Offline-Vorschauen, Bild-Speicher (GitHub-Issue #8)
         OfflineSync.shared.stop(); OfflineStore.shared.clear(); ImageCache.shared.purge()
         // Liste heikler Fotos (IDs) des Kontos

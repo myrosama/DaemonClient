@@ -103,6 +103,7 @@ struct LibraryHeader: View {
                     } else {
                         Menu { libraryMenu } label: {
                             Image(systemName: "line.3.horizontal.decrease")
+                                .accessibilityLabel(String(localized: "Mehr"))
                                 .font(.system(size: 18, weight: .semibold))
                                 .foregroundStyle(app.libraryCustomized ? Color.black : Color.primary)
                                 .frame(width: 46, height: 46)
