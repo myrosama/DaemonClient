@@ -283,33 +283,35 @@ grid, the scrubber, the viewer's gestures) — never Apple's branding.
      without tags or edited versions; Free Up hidden.
    - **I4** the core linked as an XCFramework [S1]; sign-in, restore,
      sign-out through it.
-   - **I4b** an invisible Cloudflare Turnstile on the hosted sign-in (the
-     operator, 2026-11-22), the apps and the website alike:
-     - the phone runs Turnstile in a hidden web view on the sign-in screen
-       (an **Invisible**-mode widget: no puzzle can appear where nobody sees
-       it) and passes the token to the core's `sign_in`, which sends it as
-       `cf-turnstile-response` — only to the hosted address, never to a
-       self-hosted server;
-     - Linux: `/api/auth/login` then **requires** a valid token from the
-       hosted apps (today it checks one only when `TURNSTILE_SECRET` is bound,
-       because the mobile app sent none — `docs/openapi.yaml`); a failed check
-       says so in words the app can show;
-     - the operator: an Invisible-mode site key in the Cloudflare dashboard,
-       its hostnames, the secret on the worker. Tests use Cloudflare's test
-       keys (always pass / always fail).
-     - **What it does and does not stop** (2026-11-22): Turnstile makes
-       scripted sign-in attempts (password guessing, credential stuffing) on
-       the one shared login costly; it is not flood protection, and anything
-       the app can do a script can do. Floods are about quota: the free
-       Workers plan has 100,000 requests a day per account. So also: a WAF
-       **rate-limiting rule** on the login path (the free plan has one, per
-       IP, 10 s) — requests the WAF blocks never reach a Worker and do not
-       count; and each user's worker keeps rejecting requests without a valid
-       session before any database work (`requireAuth`, true today), with its
-       address kept out of anything public (share links, logs). A flood on one
-       user's worker can still use up that user's day (workers.dev has no
-       WAF) — the blast radius is one user, one day. Later: App Attest (iOS)
-       and Play Integrity (Android) to prove a request comes from our app.
+   - **I4b** the apps sign in **without our central login** (the operator,
+     2026-11-22: "why even make a central api.daemonclient.uz … what if it
+     directly contacts the user's worker instead?"). The hosted sign-in in
+     the core becomes:
+     1. the password goes to **Google's Firebase Auth** only
+        (`accounts:signInWithPassword`) → an ID token and a refresh token;
+     2. the phone reads its own `config/cloudflare` from Firestore with that
+        token (the owner may read it — `firestore.rules`) → the worker's
+        address;
+     3. it hands the ID token to **its own worker**, `POST /api/auth/exchange`
+        (on every worker since 2026-08-03) → the session; a worker without it
+        gets the password at its own `/api/auth/login` (the same code runs
+        on every worker).
+
+     So `api.daemonclient.uz` is out of the apps' sign-in: no shared login to
+     flood or guess passwords against (Google throttles its own), our code
+     never sees a hosted user's password, and the central service no longer
+     reads every user's signing secret. Costs: the Firebase web key and
+     project id ship in the app (public by design, as on the websites); the
+     update nudge on sign-in goes (the fleet run still updates every worker).
+     Self-hosted servers are unchanged (their address, their own check).
+     **Turnstile** stays only where our central login still serves (the
+     websites, until the joint phase), with the WAF **rate-limiting rule** on
+     its path (the free plan has one; requests it blocks never reach a Worker
+     or count against its 100,000 a day). Each user's worker keeps rejecting
+     requests without a valid session before any database work
+     (`requireAuth`); a flood on one user's `workers.dev` address can still
+     use up that user's day (no WAF there) — one user, one day. Later: App
+     Check with App Attest (iOS) and Play Integrity (Android) on Firebase.
    - **I4c** the sign-in screen redesigned (the operator, 2026-11-22: "need
      more work on the login page design later"): our brand, the hosted
      service by default with "your own server" as the second choice (D8),
