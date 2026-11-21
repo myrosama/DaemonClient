@@ -4,8 +4,8 @@ Notable changes, newest first. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 > **Releases matter more here than in most projects.** A self-hosted install
-> checks this repository's **GitHub releases** feed once a day and shows a note
-> in the dashboard when a newer tag exists (`workers/user-worker/src/update-check.ts`).
+> checks this repository's **GitHub releases** feed (at most every 12 hours) and
+> `daemonclient status` reports a newer tag (`workers/user-worker/src/update-check.ts`).
 > That feed is the only way a self-hoster learns a fix exists. A change that
 > ships to the hosted service without a tagged release reaches nobody who runs
 > this themselves.

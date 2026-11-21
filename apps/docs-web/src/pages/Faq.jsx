@@ -12,7 +12,7 @@ export default function Faq() {
       <H3>Does it phone home?</H3>
       <p>
         No. Apart from Telegram and your own Firebase project, the only thing an install contacts is GitHub's
-        public releases list, to check for updates when you open the dashboard. That request is anonymous and
+        public releases list, to check for updates when you run <code>daemonclient status</code>. That request is anonymous and
         sends nothing about your install. There's no switch to turn it off yet: clearing{' '}
         <code>UPDATE_REPO</code> makes it check the default repository instead.
       </p>

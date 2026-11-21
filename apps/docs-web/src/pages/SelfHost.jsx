@@ -126,13 +126,6 @@ export default function SelfHost() {
         once and reused on every later deploy. A new key would make the files already in Telegram
         unreadable, and a new session secret would sign you out.
       </p>
-      <Note>
-        <p>
-          If your worker has to encrypt an upload and its key is missing, it refuses the upload instead of
-          storing it unencrypted, so an install that skipped making keys fails loudly.
-        </p>
-      </Note>
-
       <H4 id="web">5. The web apps</H4>
       <p>
         There are three web apps: the <strong>dashboard</strong>, where you sign in and then open Photos or
@@ -176,8 +169,8 @@ export default function SelfHost() {
 
       <H3 id="updating">Updating</H3>
       <p>
-        When you open the dashboard, your worker checks GitHub for a newer release (at most every 12 hours)
-        and shows a note if there is one. No release has been published yet. The worker never updates itself
+        When you run <code>daemonclient status</code>, your worker checks GitHub for a newer release (at most
+        every 12 hours), and the command tells you if there is one. No release has been published yet. The worker never updates itself
         and never contacts us; when to update is up to you. To update:
       </p>
       <pre>{`git pull

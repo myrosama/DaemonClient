@@ -91,14 +91,6 @@ export default function HowItWorks() {
         the key couldn't do. The worker that holds the key serves only you and runs on your own Cloudflare
         account. On a self-hosted install it isn't our machine in any sense.
       </p>
-      <Note>
-        <p>
-          If your worker has to encrypt an upload and its key is missing, it refuses the upload instead of
-          storing it unencrypted. Installs set up before July 27, 2026 didn't always do this. If yours is that old, read
-          the <a href={repo('docs/SELF_HOSTING.md')}>migration note in the self-hosting guide</a>.
-        </p>
-      </Note>
-
       <H3>Sign-in</H3>
       <p>
         An install has one owner. Self-host setup records your account as the owner, and an install without
