@@ -1,0 +1,41 @@
+{
+  "sourceLanguage" : "de",
+  "strings" : {
+    "Suche in ${applicationName}" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringSet" : {
+            "state" : "new",
+            "values" : [
+              "Suche in ${applicationName}",
+              "${applicationName} durchsuchen",
+              "Fotos suchen in ${applicationName}"
+            ]
+          }
+        },
+        "en" : {
+          "stringSet" : {
+            "state" : "translated",
+            "values" : [
+              "Search in ${applicationName}",
+              "Search ${applicationName}",
+              "Search photos in ${applicationName}"
+            ]
+          }
+        },
+        "ru" : {
+          "stringSet" : {
+            "state" : "translated",
+            "values" : [
+              "Поиск в ${applicationName}",
+              "Найти в ${applicationName}",
+              "Найти фото в ${applicationName}"
+            ]
+          }
+        }
+      }
+    }
+  },
+  "version" : "1.1"
+}

@@ -1,0 +1,4 @@
+psycopg[binary]==3.2.13
+requests==2.32.5
+numpy==2.5.4
+opencv-python-headless==4.10.0.84
