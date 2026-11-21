@@ -315,7 +315,12 @@ grid, the scrubber, the viewer's gestures) — never Apple's branding.
    - **I4c** the sign-in screen redesigned (the operator, 2026-11-22: "need
      more work on the login page design later"): our brand, the hosted
      service by default with "your own server" as the second choice (D8),
-     English and Russian — designed before it is built.
+     English and Russian — designed before it is built. A **Create account**
+     button opens the accounts site's sign-up in an in-app browser
+     (`SFSafariViewController`; storage setup happens there), and the app
+     returns to sign-in when it closes. Offering sign-up means the app must
+     also offer **Delete account** (App Store 5.1.1(v), `APP_STORE.md` A4) —
+     in Settings, opening the deletion flow on the accounts site (Linux).
    - **I5** photos and video from the core's local server: no auth header, no
      URL cache, ≥ 24 connections on the grid, the original first, the secret
      kept out of logs [C5: `no-store` and the `next` class from
