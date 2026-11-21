@@ -1,0 +1,150 @@
+{
+  "sourceLanguage" : "de",
+  "strings" : {
+    "Automatisch" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Automatic"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Автоматически"
+          }
+        }
+      }
+    },
+    "Dunkel" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dark"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Тёмное"
+          }
+        }
+      }
+    },
+    "Einstellungen" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Settings"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Настройки"
+          }
+        }
+      }
+    },
+    "Erscheinungsbild" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Appearance"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Оформление"
+          }
+        }
+      }
+    },
+    "Fertig" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Done"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Готово"
+          }
+        }
+      }
+    },
+    "Gerade: Dunkel" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Currently: Dark"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сейчас: тёмное"
+          }
+        }
+      }
+    },
+    "Gerade: Hell" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Currently: Light"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сейчас: светлое"
+          }
+        }
+      }
+    },
+    "Hell" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Light"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Светлое"
+          }
+        }
+      }
+    },
+    "„Automatisch“ folgt der Einstellung deines iPhones und wechselt mit ihr zwischen Hell und Dunkel. Hell und Dunkel gelten dauerhaft, egal was das iPhone vorgibt." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“Automatic” follows your iPhone’s setting and switches between Light and Dark with it. Light and Dark always apply, whatever your iPhone is set to."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "«Автоматически» следует настройке iPhone и переключается вместе с ней между светлым и тёмным. «Светлое» и «Тёмное» действуют всегда, независимо от настройки iPhone."
+          }
+        }
+      }
+    }
+  },
+  "version" : "1.0"
+}
