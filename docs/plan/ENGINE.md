@@ -297,6 +297,19 @@ grid, the scrubber, the viewer's gestures) — never Apple's branding.
      - the operator: an Invisible-mode site key in the Cloudflare dashboard,
        its hostnames, the secret on the worker. Tests use Cloudflare's test
        keys (always pass / always fail).
+     - **What it does and does not stop** (2026-11-22): Turnstile makes
+       scripted sign-in attempts (password guessing, credential stuffing) on
+       the one shared login costly; it is not flood protection, and anything
+       the app can do a script can do. Floods are about quota: the free
+       Workers plan has 100,000 requests a day per account. So also: a WAF
+       **rate-limiting rule** on the login path (the free plan has one, per
+       IP, 10 s) — requests the WAF blocks never reach a Worker and do not
+       count; and each user's worker keeps rejecting requests without a valid
+       session before any database work (`requireAuth`, true today), with its
+       address kept out of anything public (share links, logs). A flood on one
+       user's worker can still use up that user's day (workers.dev has no
+       WAF) — the blast radius is one user, one day. Later: App Attest (iOS)
+       and Play Integrity (Android) to prove a request comes from our app.
    - **I4c** the sign-in screen redesigned (the operator, 2026-11-22: "need
      more work on the login page design later"): our brand, the hosted
      service by default with "your own server" as the second choice (D8),
@@ -311,6 +324,15 @@ grid, the scrubber, the viewer's gestures) — never Apple's branding.
    - **I9** foreground backup through the core, the phone making thumbnails,
      previews, EXIF, dimensions, duration [C4, S6].
    - **I10** background backup (D22's hand-off).
+   - **Automatic, smart backup** (the operator, 2026-11-22) — what I9/I10 must
+     add up to: new photos go up on their own (foreground, and in the
+     background when iOS allows); nothing is sent twice (checksum checked
+     before the bytes); an interrupted upload resumes (the core's journal);
+     newest first; Wi-Fi-only, charging-only and Low Power rules; photos kept
+     only in iCloud are fetched when their turn comes; progress and errors in
+     plain words. The gallery side (I5/I6) keeps what the core already has:
+     thumbnails first, the Nuke-style scheduler (`core/dc-core/src/sched/`:
+     priorities, cancel on scroll-away, a rate limit), and the disk cache.
    - **I11** HomeRoll's server layer deleted; trash as decided; comments in
      English.
    **Later list** — features taken out in I2/I3, to bring back from HomeRoll's
