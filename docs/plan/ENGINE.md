@@ -254,6 +254,44 @@ grid, the scrubber, the viewer's gestures) — never Apple's branding.
    (6) the local server's secret never in a URL path that diagnostics copy,
    and no on-disk URL cache for loopback; (7) for encrypted libraries,
    decide what may leave the app (Spotlight, notifications, map search).
+   **I0b, integration map (2026-11-22, a separate agent):** HomeRoll is
+   19,475 Swift lines with no package dependencies; ~9,500 go (search,
+   memories, people, folders, partners, shared links, tags, smart albums,
+   duplicates, the editor, stacks, Spotlight, SSO, the widget and share
+   extension, the `server/` add-ons). Its timeline store (a JSON cache of the
+   worker's per-month buckets, refreshed daily — each bucket call reads every
+   row) is replaced by the core's index; its view model stays. Its PhotoKit
+   backup half (scan, queue, consent, BGTasks, resource export, time zones,
+   live-photo order) stays; the upload half goes to the core. The bridge API
+   it needs: session (sign in / restore / out), index (sync, months, month,
+   assets, asset, count, map markers; filters timeline / favorites / archive /
+   videos / album), media server addresses, actions (favorite, visibility,
+   delete), albums, upload (enqueue → parts → sent/failed, progress, cancel,
+   thumbhash), a listener (progress, library changed, log lines).
+   **The iPhone tasks, in order** (each one gated change; the core tasks they
+   need in brackets):
+   - **I1** our identity: `uz.daemonclient.photos`, "DC Photos" (D28), no
+     extensions, no App Group, ids and URL scheme renamed, NOTICE — still on
+     HomeRoll's own server layer, so Gate 2 compares with the I0 baseline.
+   - **I2** remove what the worker does not serve (search, memories, people,
+     folders, partners, shared links, tags, smart albums, duplicates, SSO,
+     add-ons).
+   - **I3** remove the editor, stacks, date/location edits, Spotlight; backup
+     without tags or edited versions; Free Up hidden.
+   - **I4** the core linked as an XCFramework [S1]; sign-in, restore,
+     sign-out through it.
+   - **I5** photos and video from the core's local server: no auth header, no
+     URL cache, ≥ 24 connections on the grid, the original first, the secret
+     kept out of logs [C5: `no-store` and the `next` class from
+     `archive/p2-flutter-2.3` come back].
+   - **I6** the timeline from the core's index [C3]; the offline store off.
+   - **I7** details, favorite, archive, delete, map markers through the core [C6].
+   - **I8** albums through the core [C6].
+   - **I9** foreground backup through the core, the phone making thumbnails,
+     previews, EXIF, dimensions, duration [C4, S6].
+   - **I10** background backup (D22's hand-off).
+   - **I11** HomeRoll's server layer deleted; trash as decided; comments in
+     English.
    Screens as below:
    sign-in and settings → timeline → viewer (photo, live
    photo, zoom, swipe) → video → backup (foreground, then background) →
