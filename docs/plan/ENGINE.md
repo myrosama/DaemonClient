@@ -304,6 +304,14 @@ grid, the scrubber, the viewer's gestures) — never Apple's branding.
      the index; our own wording (D28: not "Memories").
    - **People and pets** — on-device face grouping (Vision), names kept by
      the worker.
+   - **How memories and faces are made (the operator, 2026-11-22):** a small
+     on-device model runs **at night while the phone charges** (iOS
+     `BGProcessingTask` with external power; Android WorkManager with
+     charging + idle constraints), and its results — face groups, memory
+     picks — go through the worker into D1, so the website and the other
+     app show the same people and memories with no server-side AI. Face data
+     is sensitive: for encrypted libraries it is stored encrypted with the
+     user's key, like the photos. Needs a contract addition (Linux).
    - **Smart albums** (selfies, screenshots, panoramas, …) — from metadata
      the phone records at upload.
    - **Shared albums and shared links, partner sharing** — need worker
