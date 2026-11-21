@@ -273,9 +273,12 @@ grid, the scrubber, the viewer's gestures) — never Apple's branding.
    - **I1** our identity: `uz.daemonclient.photos`, "DC Photos" (D28), no
      extensions, no App Group, ids and URL scheme renamed, NOTICE — still on
      HomeRoll's own server layer, so Gate 2 compares with the I0 baseline.
-   - **I2** remove what the worker does not serve (search, memories, people,
-     folders, partners, shared links, tags, smart albums, duplicates, SSO,
-     add-ons).
+   - **I2** take out of v1 what the worker does not serve (search, memories,
+     people, folders, partners, shared links, tags, smart albums, duplicates,
+     SSO, add-ons). **Removed from v1, not dropped** (the operator,
+     2026-11-22: "search, memories and other stuff might come later"): their
+     code stays in git (HomeRoll `bd90811`, our history), and each returns
+     when the core can serve it — the **Later list** below.
    - **I3** remove the editor, stacks, date/location edits, Spotlight; backup
      without tags or edited versions; Free Up hidden.
    - **I4** the core linked as an XCFramework [S1]; sign-in, restore,
@@ -292,6 +295,23 @@ grid, the scrubber, the viewer's gestures) — never Apple's branding.
    - **I10** background backup (D22's hand-off).
    - **I11** HomeRoll's server layer deleted; trash as decided; comments in
      English.
+   **Later list** — features taken out in I2/I3, to bring back from HomeRoll's
+   code once the core serves them (each its own planned task):
+   - **Search** — on the core's index: date, place (GPS → place names on the
+     phone), file name, media type; Apple's on-device text recognition for
+     "text in photos".
+   - **Memories** ("on this day", trips, the year) — built on the phone from
+     the index; our own wording (D28: not "Memories").
+   - **People and pets** — on-device face grouping (Vision), names kept by
+     the worker.
+   - **Smart albums** (selfies, screenshots, panoramas, …) — from metadata
+     the phone records at upload.
+   - **Shared albums and shared links, partner sharing** — need worker
+     support first (Linux).
+   - **The photo editor** — edits saved as a new version (worker support for
+     versions first).
+   - **The widget and the share extension** — once a paid team can sign an
+     App Group, and without any credential in it (I0b).
    Screens as below:
    sign-in and settings → timeline → viewer (photo, live
    photo, zoom, swipe) → video → backup (foreground, then background) →
