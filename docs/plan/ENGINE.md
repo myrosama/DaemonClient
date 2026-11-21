@@ -297,7 +297,9 @@ grid, the scrubber, the viewer's gestures) — never Apple's branding.
    photo, zoom, swipe) → video → backup (foreground, then background) →
    albums / favorites / archive / trash → save, share, delete → the exit run
    on the Simulator, then a release build on the operator's iPhone.
-6. **A — the Android app**, the same list.
+6. **A — the Android app, from ReFra's code (SPEC D29)**: A0 ReFra unchanged
+   on the emulator against the test worker (its Immich provider); A0b a
+   security review and an integration map; then the same steps as I1–I11.
 7. **W — the websites on the engine** (Part 1 E2, WE, DE), with Linux.
 8. **P3 — the Drive apps**, native, on the same core.
 
@@ -366,7 +368,7 @@ package version changed.
 | Q10 | The look and behaviour: Apple Photos' grid (zoom levels, Years / Months / All), scrubber, selection, viewer gestures; iOS 26 Liquid Glass APIs; Material 3 | **Found 2026-11-19:** `NavigationStack`, `TabView` and toolbars take Liquid Glass by recompiling with the iOS 26 SDK; `.glassEffect()` for custom floating controls, grouped in a `GlassEffectContainer`; `tabBarMinimizeBehavior(.onScrollDown)` hides the tab bar while scrolling. **Glass only on a few fixed floating surfaces (toolbar, tab bar, a control group), never on grid cells** — per-cell glass costs heavy compositing while scrolling. Apple Photos' behaviour list (zoom levels, Years / Months / All, scrubber, selection, gestures) — to write down. |
 | Q11 | Distribution: the free team's limits (no App Group in v1), the paid account for TestFlight / App Store, Android signing | |
 | Q12 | The differential harnesses: what each compares, fixtures, where they run | **Proposed 2026-11-20** — each a `dc-cli` command, run against the test account (and the pure parts in CI): **H1 reads** — for N assets, the core's bytes (thumbnail, preview, original, every video part) equal what the website's service worker decrypts from the same manifest; **H2 uploads** — a fixture file uploaded by the core and by the website: the same stored fields (dimensions, duration, checksum, EXIF, thumbhash) and both open on the website; **H3 the index** — after a sync the core's index equals the worker's rows (v1: the timeline routes; v2: `/api/v2/changes` from 0), after every change (favorite, archive, delete, album add/remove); **H4 crypto** — the existing byte-for-byte vectors against Drive's JavaScript (CI); **H5 pacing** — the P1 1.9 benches against Telegram (sends, albums, reads). Fixtures (Q13): synthetic — the clock video, an iPhone Dolby Vision clip, HEIC with GPS, a live-photo pair, PNG, a >100 MB video. |
-| Q13 | Test data: a fresh test account with synthetic fixtures — **the operator decides** (the current one holds real ID documents) | |
+| Q13 | Test data: a fresh test account with synthetic fixtures — **the operator decides** (the current one holds real ID documents) | **Decided 2026-11-22 (D30): keep the current test account**; screenshots showing its documents are never committed or shared; synthetic fixtures are uploaded beside it when a harness needs them. |
 
 **Open for the operator (from the research):**
 - **Minimum versions.** iOS 26 gives the real Liquid Glass and

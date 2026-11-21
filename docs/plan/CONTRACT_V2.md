@@ -90,6 +90,16 @@ One request per album the core sends to Telegram (≤ 10 items):
 - Width, height, duration, thumbhash, `exif` (always, `{}` when empty — R2)
   and the thumbnail/preview ids are sent by the phone.
 
+## 5b. A real Trash (operator, 2026-11-22, SPEC D30)
+
+The apps and the website get a 30-day **Recently Deleted**: a delete moves an
+asset to the trash (`deletedAt`, a `rev` bump, still listed in `/changes`
+with its `deletedAt`); `POST /api/v2/assets/restore` brings it back; a purge
+after 30 days (or "Delete now" / "Empty") does today's permanent delete
+(Telegram parts, then the tombstone). `/changes` then carries `trashed`
+(with `deletedAt`) separately from `deleted` (gone for good). Until this
+exists the apps delete permanently behind a clear warning.
+
 ## 6. Questions for Linux
 
 1. `rev` by `MAX(rev)+1` in each write, or a counter row? Any write path
