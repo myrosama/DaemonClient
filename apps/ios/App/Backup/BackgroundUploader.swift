@@ -9,7 +9,7 @@ import UIKit
 ///   `BackupEngine.adopt(…)` (die Angaben dazu stehen in `taskDescription`).
 final class BackgroundUploader: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     static let shared = BackgroundUploader()
-    static let sessionID = "org.homeroll.app.backup-upload"
+    static let sessionID = "uz.daemonclient.photos.backup-upload"
 
     /// Was zu einem Upload gehört, falls die App das Ende nicht mehr selbst erlebt.
     struct Meta: Codable {
@@ -161,7 +161,7 @@ final class BackgroundUploader: NSObject, URLSessionDataDelegate, @unchecked Sen
 }
 
 /// Nimmt iOS’ Weckruf für die Hintergrund-Übertragung entgegen.
-final class HomeRollAppDelegate: NSObject, UIApplicationDelegate {
+final class AppDelegate: NSObject, UIApplicationDelegate {
     /// Hochformat überall, nur die Einzelansicht darf sich drehen (wie Fotos), siehe `Orientation`
     func application(_ application: UIApplication, supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {
         MainActor.assumeIsolated { Orientation.allowed }

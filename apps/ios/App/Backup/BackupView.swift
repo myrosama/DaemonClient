@@ -72,7 +72,7 @@ struct BackupView: View {
                     }
                 }
                 // installierte Version, zum Vergleich mit dem neuesten Release (GitHub-Issue #12)
-                Section {} footer: { Text(verbatim: "HomeRoll \(AppInfo.version)").frame(maxWidth: .infinity) }
+                Section {} footer: { Text(verbatim: "Phosphor Photos \(AppInfo.version)").frame(maxWidth: .infinity) }
             }
             .navigationTitle(String(localized: "Backup & Offline"))
             .navigationBarTitleDisplayMode(.inline)

@@ -222,7 +222,7 @@ struct CollectionsView: View {
                     // leere Abschnitte zeigt das Menü nicht an → als Textzeilen (nicht antippbar)
                     Section {
                         Text(String(localized: "\(timeline.totalCount.formatted()) Objekte auf deinem Server"))
-                        Text(verbatim: "HomeRoll \(AppInfo.version)")   // installierte Version (GitHub-Issue #12)
+                        Text(verbatim: "Phosphor Photos \(AppInfo.version)")   // installierte Version (GitHub-Issue #12)
                     }
                 } label: {
                     Circle().fill(LinearGradient(colors: [.blue, .purple], startPoint: .topLeading, endPoint: .bottomTrailing))

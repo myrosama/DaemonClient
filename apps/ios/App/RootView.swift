@@ -47,10 +47,7 @@ struct RootView: View {
             LibraryWatcher.shared.start()
             LocalPending.shared.refresh()
             BackupEngine.shared.runIfDue()
-            WidgetFeeder.syncAccess()
             OfflineSync.shared.timeline = timeline
-            // Widgets füllen, wenn die Zeitleiste steht (leise im Hintergrund)
-            Task { try? await Task.sleep(for: .seconds(12)); await WidgetFeeder.update(timeline: timeline) }
             OfflineSync.shared.kick()
             #if DEBUG
             if ProcessInfo.processInfo.environment["FOTOS_BACKUP_NOW"] != nil { BackupEngine.shared.start() }
@@ -69,7 +66,7 @@ struct RootView: View {
             guard p == .background else { return }
             BackupEngine.shared.schedule()
             OfflineSync.shared.stop()
-            Task { await MemoryNotifications.schedule(timeline: timeline); await WidgetFeeder.update(timeline: timeline) }
+            Task { await MemoryNotifications.schedule(timeline: timeline) }
             app.privateUnlocked = false
             if app.viewer?.assets.contains(where: { $0.isHidden || $0.trashedAt != nil }) == true { app.viewer = nil }
         }

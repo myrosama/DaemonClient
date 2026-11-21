@@ -41,6 +41,7 @@ jobs:
       drive: ${{ steps.filter.outputs.drive }}
       selfhost: ${{ steps.filter.outputs.selfhost }}
       photos: ${{ steps.filter.outputs.photos }}
+      ios: ${{ steps.filter.outputs.ios }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -72,6 +73,21 @@ jobs:
             photos:
               - 'apps/photos-web/**'
               - '.github/workflows/ci.yml'
+            ios:
+              - 'apps/ios/**'
+              - '.github/workflows/ci.yml'
+
+  # The iPhone app's identity (docs/mobile/plans/I1-identity.md): our bundle id
+  # and name, no App Group or extensions, English + Russian only.
+  ios-identity:
+    needs: changes
+    if: needs.changes.outputs.ios == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash apps/ios/tools/test-check-identity.sh
+      - run: bash apps/ios/tools/check-identity.sh
 
   # The Photos website (the Immich web fork): from a FROZEN lockfile, so a
   # package added to web/package.json without its lockfile entry fails here.

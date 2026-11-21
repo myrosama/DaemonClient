@@ -3,7 +3,7 @@ import Security
 
 /// Minimaler Keychain-Speicher für Server-Token (nie in UserDefaults).
 enum Keychain {
-    private static let service = "org.homeroll.app"
+    private static let service = "uz.daemonclient.photos"
 
     static func set(_ value: String?, for key: String) {
         let base: [String: Any] = [kSecClass as String: kSecClassGenericPassword,

@@ -238,7 +238,7 @@ final class VideoState {
         let info = Bundle.main.infoDictionary
         var u = utsname(); uname(&u)
         let model = withUnsafeBytes(of: &u.machine) { String(decoding: $0.prefix { $0 != 0 }, as: UTF8.self) }
-        var out = ["HomeRoll \(info?["CFBundleShortVersionString"] ?? "?") (\(info?["CFBundleVersion"] ?? "?")), iOS \(UIDevice.current.systemVersion), \(model)"]
+        var out = ["Phosphor Photos \(info?["CFBundleShortVersionString"] ?? "?") (\(info?["CFBundleVersion"] ?? "?")), iOS \(UIDevice.current.systemVersion), \(model)"]
         struct Version: Decodable { let major: Int; let minor: Int; let patch: Int }
         if let v: Version = try? await api.request("server/version") { out.append("server: immich \(v.major).\(v.minor).\(v.patch)") }
         out.append("realtime transcoding: \(await api.serverRealtime() ? "on" : "off")")

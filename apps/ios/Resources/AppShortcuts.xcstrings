@@ -1,19 +1,9 @@
 {
-  "sourceLanguage" : "de",
+  "sourceLanguage" : "en",
   "strings" : {
     "Suche in ${applicationName}" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
-        "de" : {
-          "stringSet" : {
-            "state" : "new",
-            "values" : [
-              "Suche in ${applicationName}",
-              "${applicationName} durchsuchen",
-              "Fotos suchen in ${applicationName}"
-            ]
-          }
-        },
         "en" : {
           "stringSet" : {
             "state" : "translated",

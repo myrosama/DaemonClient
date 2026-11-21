@@ -31,7 +31,7 @@ struct LoginView: View {
                 Spacer()
                 Image(systemName: "photo.on.rectangle.angled")
                     .font(.system(size: 64)).symbolRenderingMode(.multicolor)
-                Text(String(localized: "HomeRoll")).font(.system(size: 40, weight: .bold))
+                Text(verbatim: "Phosphor Photos").font(.system(size: 40, weight: .bold))
                 Text(String(localized: "Deine Mediathek auf deinem eigenen Server")).foregroundStyle(.secondary)
                 VStack(spacing: 12) {
                     field(String(localized: "Server, z. B. https://fotos.example.com"), text: $server, icon: "server.rack")

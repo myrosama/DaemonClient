@@ -4,13 +4,12 @@ import SwiftUI
 
 @main
 struct FotosApp: App {
-    @UIApplicationDelegateAdaptor(HomeRollAppDelegate.self) private var delegate
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @State private var app = AppModel()
     @State private var timeline = TimelineStore()
 
     init() {
         BackupEngine.registerBackgroundTask()
-        AppGroup.saveTheme(AppTheme.saved.rawValue)   // Teilen-Erweiterung zeigt dasselbe Erscheinungsbild wie die App
         BackgroundUploader.shared.reconnect()   // Ergebnisse von Übertragungen aus früheren Sitzungen abholen
         PerfLog.start()
         Diagnostics.shared.start()   // Hänger-/Absturzberichte von iOS (MetricKit)
@@ -92,9 +91,8 @@ final class AppModel {
     /// Abmelden (Konto-Menü, oder „Server nicht erreichbar“ in der Mediathek → anderen Server wählen)
     func signOut(_ timeline: TimelineStore) {
         ImmichClient.shared.logout(); timeline.clearCache(); MemoryCenter.shared.reset(); SpotlightIndex.clear(); LocalCopy.reset()
-        // alles vom Konto vom Gerät löschen: Offline-Vorschauen, Bild-Speicher, Widget-Bilder (GitHub-Issue #8)
+        // alles vom Konto vom Gerät löschen: Offline-Vorschauen, Bild-Speicher (GitHub-Issue #8)
         OfflineSync.shared.stop(); OfflineStore.shared.clear(); ImageCache.shared.purge()
-        if let w = WidgetSnapshot.folder { try? FileManager.default.removeItem(at: w) }
         // Liste heikler Fotos (IDs) des Kontos
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         for f in (try? FileManager.default.contentsOfDirectory(atPath: support.path)) ?? [] where f.hasPrefix("heikel-") {
@@ -106,7 +104,6 @@ final class AppModel {
     /// Erscheinungsbild: Automatisch (wie das iPhone), Hell oder Dunkel – bleibt gespeichert (Einstellungen)
     var theme = AppTheme.saved { didSet {
         UserDefaults.standard.set(theme.rawValue, forKey: AppTheme.key)
-        AppGroup.saveTheme(theme.rawValue)
     } }
     /// Einstellungen-Bogen (aus dem Mediathek-Menü und dem Konto-Menü der Sammlungen)
     var showSettings = false

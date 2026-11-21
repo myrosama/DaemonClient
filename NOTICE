@@ -20,6 +20,15 @@ Immich itself. It is excellent, and this project would not exist without it.
 
 ────────────────────────────────────────────────────────────────────────────
 
+The iPhone app (apps/ios) is built from HomeRoll
+(https://github.com/silentprovider423/HomeRoll), a native iOS client for
+Immich, copyright its authors, licensed under the GNU General Public License
+version 3 (apps/ios/LICENSE). It was imported at upstream commit bd90811 and
+modified; the combined work is distributed under the GNU Affero General
+Public License version 3, as section 13 of both licences permits.
+
+────────────────────────────────────────────────────────────────────────────
+
 The Photos service worker's media scheduler
 (apps/photos-web/web/src/service-worker/media-scheduler.ts) and the mobile core's
 scheduler (core/dc-core/src/sched/) port the design of the

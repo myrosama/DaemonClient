@@ -211,7 +211,6 @@ final class ImmichClient: NSObject, URLSessionDelegate, @unchecked Sendable {
         token = nil
         Keychain.set(nil, for: "accessToken")
         videoLock.withLock { videoFallback = [:]; realtimeHLS = nil }
-        AppGroup.saveAccess(nil)
         // Bilder/Antworten des Kontos nicht auf dem Gerät lassen (bis 1 GB, GitHub-Issue #8)
         session.configuration.urlCache?.removeAllCachedResponses()
         URLCache.shared.removeAllCachedResponses()

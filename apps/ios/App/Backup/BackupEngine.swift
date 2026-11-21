@@ -14,9 +14,9 @@ import BackgroundTasks
 @MainActor @Observable
 final class BackupEngine {
     static let shared = BackupEngine()
-    nonisolated static let taskID = "org.homeroll.app.backup"
+    nonisolated static let taskID = "uz.daemonclient.photos.backup"
     /// Kurzer Hintergrund-Auftrag (wie die Immich-App): neue Fotos einreihen, auch ohne Ladekabel
-    nonisolated static let refreshID = "org.homeroll.app.refresh"
+    nonisolated static let refreshID = "uz.daemonclient.photos.refresh"
 
     enum Phase: Equatable { case idle, scanning, uploading, done, failed(String) }
 

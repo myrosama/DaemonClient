@@ -1,10 +1,10 @@
-name: HomeRoll
+name: DCPhotos
 options:
-  bundleIdPrefix: org.homeroll
+  bundleIdPrefix: uz.daemonclient
   deploymentTarget:
     iOS: "26.0"
   createIntermediateGroups: true
-  developmentLanguage: de
+  developmentLanguage: en
 settings:
   base:
     SWIFT_VERSION: "6.0"
@@ -16,105 +16,37 @@ settings:
     SWIFT_EMIT_LOC_STRINGS: YES
     LOCALIZATION_PREFERS_STRING_CATALOGS: YES
 targets:
-  HomeRoll:
+  DCPhotos:
     type: application
     platform: iOS
     sources:
       - path: App
-      - path: Shared
       - path: Resources
         buildPhase: resources
-    dependencies:
-      - target: FotosShare
-      - target: FotosWidget
-    entitlements:
-      path: App/HomeRoll.entitlements
-      properties:
-        com.apple.security.application-groups: [group.org.homeroll.app]
     info:
       path: App/Info.plist
       properties:
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
-        CFBundleDisplayName: HomeRoll
+        CFBundleDisplayName: Phosphor Photos
         CFBundleDevelopmentRegion: en
-        CFBundleLocalizations: [en, de, ru]
+        CFBundleLocalizations: [en, ru]
         UILaunchScreen: {}
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
-        # iPad: alle vier Richtungen (Voraussetzung für Split View/Stage Manager, GitHub #47)
+        # iPad: all four orientations (Split View / Stage Manager need it)
         UISupportedInterfaceOrientations~ipad: [UIInterfaceOrientationPortrait, UIInterfaceOrientationPortraitUpsideDown, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
         UIBackgroundModes: [fetch, processing]
-        BGTaskSchedulerPermittedIdentifiers: [org.homeroll.app.backup, org.homeroll.app.refresh]
-        NSPhotoLibraryUsageDescription: "Damit deine Fotos auf deinem eigenen Server gesichert werden."
-        NSPhotoLibraryAddUsageDescription: "Damit Fotos vom Server auf dem iPhone gespeichert werden können."
-        NSFaceIDUsageDescription: "Damit „Ausgeblendet“ und „Zuletzt gelöscht“ nur du öffnen kannst."
-        NSLocalNetworkUsageDescription: "Verbindung zu deinem Fotoserver im Heimnetz."
-        CFBundleURLTypes:
-          - CFBundleURLName: org.homeroll.app
-            CFBundleURLSchemes: [homeroll]
+        BGTaskSchedulerPermittedIdentifiers: [uz.daemonclient.photos.backup, uz.daemonclient.photos.refresh]
+        NSPhotoLibraryUsageDescription: "To back up your photos and videos to your Phosphor storage."
+        NSPhotoLibraryAddUsageDescription: "To save photos and videos from your Phosphor storage to this iPhone."
+        NSFaceIDUsageDescription: "So that only you can open Hidden and Recently Deleted."
+        NSLocalNetworkUsageDescription: "To reach a Phosphor server on your local network."
+        # Loopback (the core's local media server) and self-hosted servers at home.
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: org.homeroll.app
+        PRODUCT_BUNDLE_IDENTIFIER: uz.daemonclient.photos
         TARGETED_DEVICE_FAMILY: "1,2"
         GENERATE_INFOPLIST_FILE: NO
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-
-  FotosShare:
-    type: app-extension
-    platform: iOS
-    sources:
-      - path: Share
-      - path: Shared
-    entitlements:
-      path: Share/FotosShare.entitlements
-      properties:
-        com.apple.security.application-groups: [group.org.homeroll.app]
-    info:
-      path: Share/Info.plist
-      properties:
-        CFBundleShortVersionString: $(MARKETING_VERSION)
-        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
-        CFBundleDisplayName: HomeRoll
-        CFBundleDevelopmentRegion: en
-        CFBundleLocalizations: [en, de, ru]
-        NSExtension:
-          NSExtensionPointIdentifier: com.apple.share-services
-          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).ShareViewController
-          NSExtensionAttributes:
-            NSExtensionActivationRule:
-              NSExtensionActivationSupportsImageWithMaxCount: 50
-              NSExtensionActivationSupportsMovieWithMaxCount: 20
-        NSAppTransportSecurity:
-          NSAllowsLocalNetworking: true
-    settings:
-      base:
-        PRODUCT_BUNDLE_IDENTIFIER: org.homeroll.app.share
-        TARGETED_DEVICE_FAMILY: "1,2"
-        GENERATE_INFOPLIST_FILE: NO
-  FotosWidget:
-    type: app-extension
-    platform: iOS
-    sources:
-      - path: Widget
-      - path: Shared
-    entitlements:
-      path: Widget/FotosWidget.entitlements
-      properties:
-        com.apple.security.application-groups: [group.org.homeroll.app]
-    info:
-      path: Widget/Info.plist
-      properties:
-        CFBundleShortVersionString: $(MARKETING_VERSION)
-        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
-        CFBundleDisplayName: HomeRoll
-        CFBundleDevelopmentRegion: en
-        CFBundleLocalizations: [en, de, ru]
-        NSExtension:
-          NSExtensionPointIdentifier: com.apple.widgetkit-extension
-    settings:
-      base:
-        PRODUCT_BUNDLE_IDENTIFIER: org.homeroll.app.widget
-        TARGETED_DEVICE_FAMILY: "1,2"
-        GENERATE_INFOPLIST_FILE: NO
