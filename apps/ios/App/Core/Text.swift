@@ -1,7 +1,7 @@
 import Foundation
 
-// From HomeRoll's Shared/AppGroup.swift, which otherwise held the App Group
-// and widget storage removed in I1 (docs/mobile/plans/I1-identity.md).
+// From HomeRoll's shared helpers file, whose other contents (the shared
+// container and the widget's storage) went in I1 (docs/mobile/plans/I1-identity.md).
 
 /// Translates a text known only at run time (an enum's raw value, say). Without
 /// a translation the text stays as it is. Fixed texts go through

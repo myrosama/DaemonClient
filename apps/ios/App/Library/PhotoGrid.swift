@@ -711,7 +711,7 @@ struct PhotoGrid: UIViewRepresentable {
                 return nil
             }
             // nur innerhalb der App: Asset-ID für das Ablegen auf einem Album (Sammlungen → Alben)
-            p.registerObject("homeroll-asset:\(a.id)" as NSString, visibility: .ownProcess)
+            p.registerObject("phosphor-asset:\(a.id)" as NSString, visibility: .ownProcess)
             let item = UIDragItem(itemProvider: p)
             item.localObject = a.id
             if let img = ImageCache.shared.get("\(a.id)-thumbnail") {

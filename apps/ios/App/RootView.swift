@@ -81,14 +81,12 @@ struct RootView: View {
                 .preferredColorScheme(.dark)   // Fotos-Ansicht und Editor bleiben auch im hellen Modus dunkel
         }
         .fullScreenCover(isPresented: $app.showSearch) { SearchView() }
-        // Tippen aufs Widget: homeroll://memory/<id> bzw. homeroll://asset/<id>
-        .onOpenURL { open($0) }
         .onReceive(NotificationCenter.default.publisher(for: .openFotosURL)) { n in if let u = n.object as? URL { open(u) } }
         .fullScreenCover(item: $app.memory) { MemoryPlayer(memory: $0).preferredColorScheme(.dark) }
     }
 
     private func open(_ url: URL) {
-            guard url.scheme == "homeroll", let id = url.pathComponents.dropFirst().first else { return }
+            guard url.scheme == "phosphor", let id = url.pathComponents.dropFirst().first else { return }
             app.viewer = nil; app.showSearch = false
             if url.host == "album" || url.host == "person" {
                 let name = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "name" }?.value ?? ""
@@ -101,17 +99,6 @@ struct RootView: View {
                 return
             }
             if url.host == "memory", let m = MemoryCenter.shared.items.first(where: { $0.id == id }) { app.memory = m }
-            else if url.host == "asset" {
-                // wie Apple: Foto direkt öffnen (mit den Nachbarn aus der Mediathek zum Weiterwischen)
-                Task {
-                    await timeline.loadAll()
-                    // war schon ein Foto offen: erst schließen lassen, sonst bleibt die alte Einzelansicht stehen
-                    try? await Task.sleep(for: .milliseconds(450))
-                    let all = timeline.allLoaded
-                    if let i = all.firstIndex(where: { $0.id == id }) { app.open(all, at: i) }
-                    else if let dto = try? await ImmichClient.shared.asset(id) { app.open([dto.asset], at: 0) }
-                }
-            }
     }
 }
 

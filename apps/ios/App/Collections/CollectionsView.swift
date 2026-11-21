@@ -404,7 +404,7 @@ struct CollectionsView: View {
                 }
                 .buttonStyle(.plain)
                 // wie Fotos: von überall ziehen – auf ein Album (AlbumDropTarget) oder in andere Apps
-                .draggable("homeroll-asset:\(a.id)") {
+                .draggable("phosphor-asset:\(a.id)") {
                     AssetThumb(id: a.id).frame(width: 90, height: 90).clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                 }
                 .contextMenu {

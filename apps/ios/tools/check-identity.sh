@@ -8,9 +8,14 @@ fail=0
 bad() { printf '✗ %b\n' "$*"; fail=1; }
 
 # 1. HomeRoll's ids, the App Group, the widget feeder, a registered URL scheme.
-hits=$(grep -rnE 'org\.homeroll|application-groups|AppGroup|WidgetFeeder|CFBundleURLSchemes|group\.(org|com|net|io|app|uz|dev)\.' "$ios" \
-  --include='*.swift' --include='*.yml' --include='*.plist' --include='*.entitlements' 2>/dev/null)
+# Every way back to a shared container or shared Keychain (I0b: the token must
+# never leave the app's own Keychain), and HomeRoll's ids in any case.
+hits=$(grep -rniE 'homeroll|application-groups|AppGroup|WidgetFeeder|CFBundleURLSchemes|"group\.|suiteName:|forSecurityApplicationGroupIdentifier|sharedContainerIdentifier|kSecAttrAccessGroup|keychain-access-groups|associated-domains' "$ios" \
+  --include='*.swift' --include='*.yml' --include='*.plist' --include='*.entitlements' --include='*.xcconfig' 2>/dev/null \
+  | grep -vE '^[^:]+:[0-9]+:\s*(//|#)' | grep -vE '^[^:]+:[0-9]+:.*HomeRoll(AppDelegate)?\b' )
 [ -z "$hits" ] || bad "HomeRoll's identity or a shared container is left:\n$hits"
+ents=$(find "$ios" -name '*.entitlements' -not -path '*/build/*' -not -path '*.xcodeproj/*' 2>/dev/null)
+[ -z "$ents" ] || bad "entitlements files (the app has none):\n$ents"
 
 # 2. The project: our bundle id and name, one target (no extensions).
 p="$ios/project.yml"
@@ -21,6 +26,8 @@ if [ ! -f "$p" ]; then bad "no project.yml"; else
   [ "$n" = 1 ] || bad "$n targets, expected 1 (no extensions)"
   grep -qE '^\s*developmentLanguage: en\s*$' "$p" || bad "developmentLanguage is not en"
   grep -qE 'CFBundleLocalizations: \[en, ru\]' "$p" || bad "CFBundleLocalizations is not [en, ru]"
+  ! grep -qE '^\s*entitlements:' "$p" || bad "an entitlements: key in project.yml (the app has none)"
+  ! grep -qE '^\s+type: app-clip' "$p" || bad "an app clip target"
 fi
 
 # 3. String catalogs: English source, English and Russian for every key, no German.
@@ -36,7 +43,7 @@ for f in sorted(pathlib.Path(sys.argv[1]).rglob('*.xcstrings')):
         for l in locs.values():
             if 'HomeRoll' in json.dumps(l): print(f'{f.name}: "HomeRoll" shown for {k[:50]!r}')
 PY
-)
+) || bad "the string catalog check crashed (a malformed .xcstrings?)"
 [ -z "$out" ] || bad "string catalogs:\n$(printf '%s' "$out" | head -20)"
 
 # 4. "HomeRoll" never shown: not inside a Swift string literal (comments and

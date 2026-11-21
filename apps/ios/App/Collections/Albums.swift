@@ -315,7 +315,7 @@ extension View {
 }
 
 /// Fotos auf ein Album ziehen (REA: PXPhotoKitAssetCollectionDropAssetsActionPerformer): aus dem Raster gezogene
-/// Objekte tragen „homeroll-asset:<id>“ (nur innerhalb der App) und landen im Album.
+/// Objekte tragen „phosphor-asset:<id>“ (nur innerhalb der App) und landen im Album.
 private struct AlbumDropTarget: ViewModifier {
     let album: AlbumDTO
     @Environment(AppModel.self) private var app
@@ -334,7 +334,7 @@ private struct AlbumDropTarget: ViewModifier {
                         let s: String? = await withCheckedContinuation { c in
                             _ = p.loadObject(ofClass: NSString.self) { obj, _ in c.resume(returning: (obj as? NSString) as String?) }
                         }
-                        guard let s, s.hasPrefix("homeroll-asset:") else { continue }
+                        guard let s, s.hasPrefix("phosphor-asset:") else { continue }
                         ids.append(String(s.dropFirst(15)))
                     }
                     guard !ids.isEmpty else { return }

@@ -7,7 +7,7 @@ import UIKit
 /// Nur Namen und Titel, keine Fotos – die bleiben auf dem Server. Je Konto: beim Wechsel wird alles ersetzt.
 @MainActor
 enum SpotlightIndex {
-    private static let domain = "homeroll"
+    private static let domain = "phosphor"
 
     static func update(albums: [AlbumDTO], people: [PersonDTO], memories: [Memory], account: String) {
         guard !account.isEmpty else { return }
@@ -51,7 +51,7 @@ enum SpotlightIndex {
     }
 
     private static func item(_ path: String, _ attr: CSSearchableItemAttributeSet) -> CSSearchableItem {
-        let i = CSSearchableItem(uniqueIdentifier: "homeroll://" + path, domainIdentifier: domain, attributeSet: attr)
+        let i = CSSearchableItem(uniqueIdentifier: "phosphor://" + path, domainIdentifier: domain, attributeSet: attr)
         i.expirationDate = Date().addingTimeInterval(60 * 86_400)
         return i
     }
