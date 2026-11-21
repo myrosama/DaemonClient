@@ -237,7 +237,24 @@ grid, the scrubber, the viewer's gestures) — never Apple's branding.
    `trash`, `search/random`; Immich v3 routes the worker never had: asset
    edits, metadata, HLS streaming. **Worker bug (Linux):** `POST
    /api/search/metadata` returns deleted (trashed) assets and labels them
-   `isTrashed: false`. Screens as below:
+   `isTrashed: false`.
+   **I0b, security (2026-11-22, a separate agent, read-only):** a sound base
+   — no third-party packages, the token in the Keychain (device-only), no
+   blanket certificate trust, https enforced, no secrets in logs, test hooks
+   only in debug builds. Details kept private (they concern HomeRoll's own
+   public code). **Our adoption requirements, before any build reaches a
+   phone:** (1) no credential or secret in any shared container — v1 ships
+   **without the widget and share extension**; (2) **Free Up Space only after
+   the core proves a backup** (the stored object complete, its decrypted hash
+   equal to the local file) — hidden until then; (3) server data validated
+   before it is cached or used (array lengths, bounds, ids as file names) —
+   a bad row is dropped, never a crash loop; (4) credentials sent only to the
+   configured host, no cross-host redirects; (5) a 401 or an account switch
+   wipes like sign-out; temporary decrypted files deleted when sharing ends;
+   (6) the local server's secret never in a URL path that diagnostics copy,
+   and no on-disk URL cache for loopback; (7) for encrypted libraries,
+   decide what may leave the app (Spotlight, notifications, map search).
+   Screens as below:
    sign-in and settings → timeline → viewer (photo, live
    photo, zoom, swipe) → video → backup (foreground, then background) →
    albums / favorites / archive / trash → save, share, delete → the exit run
