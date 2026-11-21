@@ -300,6 +300,10 @@ grid, the scrubber, the viewer's gestures) — never Apple's branding.
 6. **A — the Android app, from ReFra's code (SPEC D29)**: A0 ReFra unchanged
    on the emulator against the test worker (its Immich provider); A0b a
    security review and an integration map; then the same steps as I1–I11.
+   **Brand (SPEC D31):** DaemonClient becomes **Phosphor** later — both forks
+   keep brand text in few places, and the store identifiers (iOS bundle id,
+   Android application id) are settled with the operator before the first
+   TestFlight / Play release.
 7. **W — the websites on the engine** (Part 1 E2, WE, DE), with Linux.
 8. **P3 — the Drive apps**, native, on the same core.
 
