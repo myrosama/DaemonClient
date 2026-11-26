@@ -88,6 +88,8 @@ jobs:
       - uses: actions/checkout@v4
       - run: bash apps/ios/tools/test-check-identity.sh
       - run: bash apps/ios/tools/check-identity.sh
+      - run: bash apps/ios/tools/test-check-routes.sh
+      - run: bash apps/ios/tools/check-routes.sh
 
   # The Photos website (the Immich web fork): from a FROZEN lockfile, so a
   # package added to web/package.json without its lockfile entry fails here.

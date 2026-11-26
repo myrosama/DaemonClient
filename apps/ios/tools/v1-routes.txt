@@ -1,0 +1,20 @@
+# The worker routes the iPhone app may call in v1 — each one served by workers/user-worker (not a stub).
+# {} = an id. HomeRoll's whole server layer goes at I11; the core takes these over in I5–I9.
+timeline/buckets
+timeline/bucket
+assets
+assets/{}
+assets/{}/thumbnail
+assets/{}/original
+assets/{}/video/playback
+assets/bulk-upload-check
+albums
+albums/{}
+albums/{}/assets
+albums/{}/map-markers
+map/markers
+search/metadata          # the filtered lists: media types, an album's contents (Linux: trashed rows leak, 2026-11-21)
+trash/restore/assets
+users/me
+server/config
+server/features
