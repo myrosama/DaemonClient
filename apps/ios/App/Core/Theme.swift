@@ -72,9 +72,4 @@ extension Color {
     static let appFill2 = Color(uiColor: .systemGray5)
     /// Trennlinien, kräftigere Flächen (vorher ≈ 0,3)
     static let appFill3 = Color(uiColor: .systemGray4)
-    /// oberer Rand des Anmeldebildschirms: dunkles Marineblau bzw. helles Blau
-    static let loginTop = Color(uiColor: UIColor { t in
-        t.userInterfaceStyle == .dark ? UIColor(red: 0.05, green: 0.07, blue: 0.16, alpha: 1)
-                                      : UIColor(red: 0.86, green: 0.91, blue: 1.0, alpha: 1)
-    })
 }

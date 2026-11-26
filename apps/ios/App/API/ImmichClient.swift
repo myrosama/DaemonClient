@@ -7,15 +7,12 @@ import UIKit
 import UniformTypeIdentifiers
 
 enum APIError: LocalizedError {
-    case notLoggedIn, http(Int, String), badURL, emailAsServer, notImmich, insecureServer
+    case notLoggedIn, http(Int, String), badURL
     var errorDescription: String? {
         switch self {
         case .notLoggedIn: String(localized: "Nicht angemeldet")
         case .http(let c, let m): String(localized: "Server-Fehler \(c): \(m)")
         case .badURL: String(localized: "Ungültige Server-Adresse")
-        case .emailAsServer: String(localized: "Das ist eine E-Mail-Adresse. Ins erste Feld gehört die Adresse deines Immich-Servers, z. B. http://192.168.1.20:2283")
-        case .notImmich: String(localized: "Unter dieser Adresse antwortet kein Immich-Server. Stimmen Adresse und Port (meist 2283)?")
-        case .insecureServer: String(localized: "Diese Adresse liegt im Internet, aber ohne https – Passwort und Fotos gingen unverschlüsselt durchs Netz. Bitte https:// verwenden (z. B. über einen Reverse-Proxy) oder per VPN die Heimnetz-Adresse.")
         }
     }
 }
@@ -64,93 +61,6 @@ final class ImmichClient: NSObject, URLSessionDelegate, @unchecked Sendable {
         videoLock.withLock { videoFallback = [:]; realtimeHLS = nil }
     }
 
-    // MARK: Anmeldung
-
-    func login(server: String, email: String, password: String) async throws -> LoginResponse {
-        let url = try await findServer(server)
-        let r: LoginResponse = try await publicJSON(url, "auth/login", body: ["email": email, "password": password])
-        adopt(url, r)
-        return r
-    }
-
-    /// Erst nach erfolgreicher Anmeldung Server und Token übernehmen und merken.
-    private func adopt(_ url: URL, _ r: LoginResponse) {
-        baseURL = url
-        token = r.accessToken
-        UserDefaults.standard.set(url.absoluteString, forKey: "serverURL")
-        Keychain.set(r.accessToken, for: "accessToken")
-    }
-
-    // MARK: Anmeldung per SSO (OAuth) – wie die Immich-App. Nötig bei Servern ohne Passwort-Anmeldung, z. B. bei
-    // Immich-Anbietern wie PixelUnion („Login with …“).
-
-    struct LoginOptions: Sendable { let password: Bool; let sso: Bool; let ssoTitle: String? }
-    struct SSOFlow: Sendable { let base: URL; let url: URL; let state: String; let verifier: String }
-    /// Rücksprung-Adresse der Immich-App: beim Anbieter ohnehin freigeschaltet, Immich-Server kennen sie
-    static let ssoScheme = "app.immich"
-    private static let ssoRedirect = "app.immich:///oauth-callback"
-
-    /// Was die Anmeldeseite des Servers anbietet (öffentlich abrufbar, ohne Anmeldung).
-    func loginOptions(server: String) async throws -> LoginOptions {
-        let url = try await findServer(server)
-        struct Features: Decodable { let oauth: Bool?; let passwordLogin: Bool? }
-        struct Config: Decodable { let oauthButtonText: String? }
-        let f: Features = try await publicJSON(url, "server/features")
-        let c: Config? = try? await publicJSON(url, "server/config")
-        return LoginOptions(password: f.passwordLogin ?? true, sso: f.oauth ?? false,
-                            ssoTitle: c?.oauthButtonText.flatMap { $0.isEmpty ? nil : $0 })
-    }
-
-    /// Schritt 1: Anmeldeseite des Anbieters holen – mit eigenem state und PKCE (S256), wie die Immich-App.
-    func ssoStart(server: String) async throws -> SSOFlow {
-        let base = try await findServer(server)
-        let state = Self.randomKey(32), verifier = Self.randomKey(64)
-        let challenge = Self.base64URL(Data(SHA256.hash(data: Data(verifier.utf8))))
-        struct Start: Decodable { let url: String }
-        let r: Start = try await publicJSON(base, "oauth/authorize",
-                                            body: ["redirectUri": Self.ssoRedirect, "state": state, "codeChallenge": challenge])
-        guard let u = URL(string: r.url) else { throw APIError.badURL }
-        return SSOFlow(base: base, url: u, state: state, verifier: verifier)
-    }
-
-    /// Schritt 2: Rücksprung des Anbieters beim eigenen Server gegen ein Token einlösen.
-    func ssoFinish(_ flow: SSOFlow, callback: URL) async throws -> LoginResponse {
-        var s = callback.absoluteString
-        // iOS liefert die Adresse teils mit nur einem Schrägstrich zurück
-        if s.hasPrefix("app.immich:/oauth-callback") { s = Self.ssoRedirect + s.dropFirst("app.immich:/oauth-callback".count) }
-        let r: LoginResponse = try await publicJSON(flow.base, "oauth/callback",
-                                                    body: ["url": s, "state": flow.state, "codeVerifier": flow.verifier])
-        adopt(flow.base, r)
-        return r
-    }
-
-    private static func randomKey(_ bytes: Int) -> String {
-        var b = [UInt8](repeating: 0, count: bytes)
-        _ = SecRandomCopyBytes(kSecRandomDefault, bytes, &b)
-        return base64URL(Data(b))
-    }
-    private static func base64URL(_ d: Data) -> String {
-        d.base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_")
-            .replacingOccurrences(of: "=", with: "")
-    }
-
-    /// Anfrage an einen (noch nicht übernommenen) Server ohne Anmeldung – für Anmeldung und Anmeldeseite.
-    private func publicJSON<T: Decodable>(_ base: URL, _ path: String, body: [String: Any]? = nil) async throws -> T {
-        var req = URLRequest(url: base.appendingPathComponent("api").appendingPathComponent(path), timeoutInterval: 20)
-        if let body {
-            req.httpMethod = "POST"
-            req.httpBody = try JSONSerialization.data(withJSONObject: body)
-            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        }
-        let (data, resp) = try await session.data(for: req)
-        let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
-        guard (200..<300).contains(code) else {
-            let msg = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["message"] as? String
-            throw APIError.http(code, msg ?? "")
-        }
-        return try decoder.decode(T.self, from: data)
-    }
-
     /// Heimnetz/VPN statt Internet: private IPv4/IPv6-Bereiche, Tailscale (100.64/10), Namen ohne Punkt oder mit
     /// .local/.lan/.home/.internal/.home.arpa/.ts.net.
     static func isPrivateHost(_ host: String) -> Bool {
@@ -167,39 +77,6 @@ final class ImmichClient: NSObject, URLSessionDelegate, @unchecked Sendable {
         }
         if h.contains(":") { return h == "::1" || h.hasPrefix("fc") || h.hasPrefix("fd") || h.hasPrefix("fe80") }
         return false
-    }
-
-    /// http(s)-Adresse mit Rechnername und ohne Benutzerteil („test@email.com“ wäre sonst Benutzer test auf email.com).
-    static func validBase(_ s: String) -> URL? {
-        guard let u = URL(string: s), ["http", "https"].contains(u.scheme?.lowercased() ?? ""),
-              let h = u.host(), !h.isEmpty, u.user == nil else { return nil }
-        return u
-    }
-
-    /// Eingabe → Server-Adresse, unter der wirklich Immich antwortet. Ohne http(s):// erst https, dann http (Heimnetz).
-    private func findServer(_ input: String) async throws -> URL {
-        var s = input.trimmingCharacters(in: .whitespacesAndNewlines)
-        while s.hasSuffix("/") { s.removeLast() }
-        if s.lowercased().hasSuffix("/api") { s.removeLast(4) }
-        let hasScheme = s.lowercased().hasPrefix("http://") || s.lowercased().hasPrefix("https://")
-        // http nur im eigenen Netz (Heimnetz, VPN, Tailscale) – im Internet nie unverschlüsselt (GitHub-Issue #11)
-        var tries = (hasScheme ? [s] : ["https://" + s, "http://" + s]).compactMap(Self.validBase)
-        guard !tries.isEmpty else { throw s.contains("@") && !s.contains("/") ? APIError.emailAsServer : APIError.badURL }
-        tries = tries.filter { $0.scheme?.lowercased() == "https" || Self.isPrivateHost($0.host() ?? "") }
-        guard !tries.isEmpty else { throw APIError.insecureServer }
-        var reached = false, lastError: Error?
-        for u in tries {
-            var req = URLRequest(url: u.appendingPathComponent("api/server/ping"))
-            req.timeoutInterval = 10
-            do {
-                let (data, resp) = try await session.data(for: req)
-                if (resp as? HTTPURLResponse)?.statusCode == 200,
-                   (try? JSONDecoder().decode([String: String].self, from: data))?["res"] == "pong" { return u }
-                reached = true
-            } catch { lastError = error }
-        }
-        // Hat irgendein Server geantwortet (nur eben nicht Immich), ist das die nützlichere Meldung als ein Netzfehler
-        throw reached ? APIError.notImmich : (lastError ?? APIError.notImmich)
     }
 
     func logout() {

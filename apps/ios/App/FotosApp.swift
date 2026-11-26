@@ -29,8 +29,9 @@ struct FotosApp: App {
             .environment(app)
             .environment(timeline)
             .appTheme(app.theme)
+            // The worker refused the session: forget it everywhere, or the next launch restores it again.
             .onReceive(NotificationCenter.default.publisher(for: .sessionExpired)) { _ in
-                app.loggedIn = false
+                if app.loggedIn { app.signOut(timeline) }
             }
             // Tippen auf einen Treffer in der iPhone-Suche → wie ein homeroll://-Link
             .onContinueUserActivity(CSSearchableItemActionType) { act in

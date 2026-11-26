@@ -5,24 +5,43 @@ use std::sync::Arc;
 
 uniffi::setup_scaffolding!();
 
-/// An error the app can show: the core's own words ("wrong email or
-/// password", …), never a token or a URL.
+/// An error the app can show. The kind lets the app say it in the user's
+/// language; `Failed` carries the core's own words (never a token or a URL).
 #[derive(Debug, uniffi::Error)]
 #[uniffi(flat_error)]
 pub enum CoreError {
+    WrongCredentials,
+    NotProvisioned,
+    BadAddress,
+    Network,
+    SignedOut,
     Failed(String),
 }
 
 impl std::fmt::Display for CoreError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let Self::Failed(message) = self;
-        f.write_str(message)
+        let words = match self {
+            Self::WrongCredentials => dc_core::CoreError::WrongCredentials.to_string(),
+            Self::NotProvisioned => dc_core::CoreError::NotProvisioned.to_string(),
+            Self::BadAddress => dc_core::CoreError::BadAddress.to_string(),
+            Self::Network => "network problem".to_owned(),
+            Self::SignedOut => dc_core::CoreError::SignedOut.to_string(),
+            Self::Failed(message) => message.clone(),
+        };
+        f.write_str(&words)
     }
 }
 
 impl From<dc_core::CoreError> for CoreError {
     fn from(e: dc_core::CoreError) -> Self {
-        Self::Failed(e.to_string())
+        match e {
+            dc_core::CoreError::WrongCredentials => Self::WrongCredentials,
+            dc_core::CoreError::NotProvisioned => Self::NotProvisioned,
+            dc_core::CoreError::BadAddress => Self::BadAddress,
+            dc_core::CoreError::Network(_) => Self::Network,
+            dc_core::CoreError::SignedOut => Self::SignedOut,
+            other => Self::Failed(other.to_string()),
+        }
     }
 }
 
@@ -126,7 +145,8 @@ impl Core {
     }
 
     /// The local media server's addresses. Call at start and on every
-    /// resume: a listener the phone closed opens again on a new port.
+    /// resume: a listener the phone closed opens again on a new port. May
+    /// take ~2 s per listener — never on the main thread.
     pub fn media_server(&self) -> Result<MediaAddresses, CoreError> {
         let server = self.inner.media_server()?;
         Ok(MediaAddresses {
@@ -141,13 +161,10 @@ mod tests {
     use super::*;
 
     fn core() -> (Arc<Core>, tempfile::TempDir) {
-        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let dir = tempfile::tempdir().unwrap();
         let data = dir.path().join("data").to_string_lossy().into_owned();
         let cache = dir.path().join("cache").to_string_lossy().into_owned();
-        (
-            Core::new(data, cache).unwrap_or_else(|e| panic!("{e}")),
-            dir,
-        )
+        (Core::new(data, cache).unwrap(), dir)
     }
 
     #[test]
@@ -156,9 +173,14 @@ mod tests {
     }
 
     #[test]
-    fn errors_carry_the_cores_words_never_a_type_name() {
+    fn errors_carry_their_kind_and_the_cores_words() {
         let e: CoreError = dc_core::CoreError::WrongCredentials.into();
+        assert!(matches!(e, CoreError::WrongCredentials));
         assert_eq!(e.to_string(), "wrong email or password");
+        let e: CoreError = dc_core::CoreError::Network("the server answered 502".into()).into();
+        assert!(matches!(e, CoreError::Network));
+        let e: CoreError = dc_core::CoreError::NotFound.into();
+        assert_eq!(e.to_string(), "not found");
     }
 
     #[test]
@@ -177,7 +199,7 @@ mod tests {
     #[test]
     fn the_media_server_answers_and_sign_out_without_a_session_is_fine() {
         let (core, _dir) = core();
-        let media = core.media_server().unwrap_or_else(|e| panic!("{e}"));
+        let media = core.media_server().unwrap();
         assert!(media.grid_base.starts_with("http://127.0.0.1:"));
         assert_ne!(media.grid_base, media.viewer_base);
         assert!(core.sign_out().is_ok());

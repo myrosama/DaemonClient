@@ -2,13 +2,6 @@ import Foundation
 
 // MARK: - Server-Antworten (Immich v3.3.5, siehe API-NOTIZEN.md)
 
-struct LoginResponse: Decodable {
-    let accessToken: String
-    let name: String
-    let userId: String
-    let userEmail: String
-}
-
 struct TimeBucket: Decodable, Hashable, Identifiable, Sendable {
     let timeBucket: String          // "2024-12-01" (Monatsanfang)
     let count: Int

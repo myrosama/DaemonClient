@@ -4533,6 +4533,22 @@
         }
       }
     },
+    "Can't reach the server. Check your connection and try again." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Can't reach the server. Check your connection and try again."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не удаётся связаться с сервером. Проверьте подключение и попробуйте снова."
+          }
+        }
+      }
+    },
     "Code eingeben" : {
       "localizations" : {
         "en" : {
@@ -5089,6 +5105,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Документы"
+          }
+        }
+      }
+    },
+    "Don't have an account?" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Don't have an account?"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Нет аккаунта?"
           }
         }
       }
@@ -6459,6 +6491,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "В этот день год назад"
+          }
+        }
+      }
+    },
+    "Hide password" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hide password"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Скрыть пароль"
           }
         }
       }
@@ -8298,6 +8346,22 @@
         }
       }
     },
+    "No Phosphor server answers at this address." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No Phosphor server answers at this address."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "По этому адресу не отвечает сервер Phosphor."
+          }
+        }
+      }
+    },
     "Noch keine Fotos" : {
       "localizations" : {
         "en" : {
@@ -9562,6 +9626,22 @@
         }
       }
     },
+    "Server address" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Server address"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Адрес сервера"
+          }
+        }
+      }
+    },
     "Server nicht erreichbar" : {
       "localizations" : {
         "en" : {
@@ -9610,6 +9690,22 @@
         }
       }
     },
+    "Show password" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Show password"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Показать пароль"
+          }
+        }
+      }
+    },
     "Sichern" : {
       "localizations" : {
         "en" : {
@@ -9638,6 +9734,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Не удалось сохранить"
+          }
+        }
+      }
+    },
+    "Sign in to your library" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sign in to your library"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Войдите в свою медиатеку"
           }
         }
       }
@@ -9686,6 +9798,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Новые предложения появятся здесь, когда сервер распознает больше лиц."
+          }
+        }
+      }
+    },
+    "Something went wrong. Please try again." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Something went wrong. Please try again."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Что-то пошло не так. Попробуйте ещё раз."
           }
         }
       }
@@ -10296,6 +10424,38 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Отпуск 2025"
+          }
+        }
+      }
+    },
+    "Use the Phosphor service" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Use the Phosphor service"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Использовать сервис Phosphor"
+          }
+        }
+      }
+    },
+    "Use your own server" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Use your own server"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Использовать свой сервер"
           }
         }
       }
@@ -11006,6 +11166,22 @@
         }
       }
     },
+    "Wrong email or password." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wrong email or password."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Неверный адрес эл. почты или пароль."
+          }
+        }
+      }
+    },
     "Wärme" : {
       "localizations" : {
         "en" : {
@@ -11018,6 +11194,38 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Теплота"
+          }
+        }
+      }
+    },
+    "You were signed out. Please sign in again." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "You were signed out. Please sign in again."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Вы вышли из аккаунта. Войдите снова."
+          }
+        }
+      }
+    },
+    "Your storage isn't set up yet. Finish setting it up at accounts.daemonclient.uz." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Your storage isn't set up yet. Finish setting it up at accounts.daemonclient.uz."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Хранилище ещё не настроено. Завершите настройку на accounts.daemonclient.uz."
           }
         }
       }
@@ -11803,6 +12011,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Зелёный"
+          }
+        }
+      }
+    },
+    "Create account" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Create account"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Создать аккаунт"
           }
         }
       }

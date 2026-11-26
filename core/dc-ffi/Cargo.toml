@@ -14,12 +14,17 @@ dc-core = { path = "../dc-core" }
 uniffi = "=0.32.2"
 
 [dev-dependencies]
+log = "=0.4.34"
+serde_json = "=1.0.154"
 tempfile = "=3.27.0"
+tokio = { version = "=1.53.3", features = ["macros", "rt-multi-thread"] }
+wiremock = "=0.6.5"
 
 # Not `lints.workspace = true`: UniFFI's generated scaffolding needs `unsafe`
 # (the C ABI). The code written here has none and keeps the strict clippy set.
 [lints.clippy]
 all = { level = "deny", priority = -1 }
+cast_possible_truncation = "deny"
 unwrap_used = "deny"
 expect_used = "deny"
 indexing_slicing = "deny"

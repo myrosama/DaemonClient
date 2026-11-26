@@ -18,21 +18,23 @@ enum CoreBridge {
     }
 
     /// Signs in through the core and hands the worker's address and token to HomeRoll's client.
-    static func signIn(server: String, email: String, password: String) async throws -> SignedIn {
+    /// The account's display name; the token stays in here.
+    static func signIn(server: String, email: String, password: String) async throws -> String {
         guard let core else { throw CoreFailure(message: startError ?? "") }
         do {
             let s = try await core.signIn(address: server, email: email, password: password)
             save(s)
             adopt(s)
-            return s
+            return s.name
         } catch { throw CoreFailure(message: message(error)) }
     }
 
     /// At launch: the session kept in the Keychain back into the core and HomeRoll's client; false = sign in.
     static func restore() -> Bool {
+        // Unreadable before the first unlock after a reboot (like UserDefaults): then nothing is wiped.
+        guard let core, let s = stored() else { return false }
         // The Keychain outlives a deleted app, UserDefaults does not: a session from an earlier install is dropped.
         guard UserDefaults.standard.bool(forKey: installKey) else { save(nil); return false }
-        guard let core, let s = stored() else { return false }
         do { try core.restore(session: s) } catch { save(nil); return false }
         adopt(s)
         return true
@@ -43,10 +45,19 @@ enum CoreBridge {
         save(nil)
     }
 
-    /// The core's own words ("wrong email or password", …): the generated `errorDescription` shows the type name.
+    /// In the user's language by kind; otherwise the core's own words (the generated `errorDescription` shows the
+    /// type name).
     static func message(_ error: Error) -> String {
-        if case CoreError.Failed(let m) = error { return m }
-        return error.localizedDescription
+        switch error as? CoreError {
+        case .WrongCredentials: String(localized: "Wrong email or password.")
+        case .NotProvisioned: String(localized: "Your storage isn't set up yet. Finish setting it up at accounts.daemonclient.uz.")
+        case .BadAddress: String(localized: "No Phosphor server answers at this address.")
+        case .Network: String(localized: "Can't reach the server. Check your connection and try again.")
+        case .SignedOut: String(localized: "You were signed out. Please sign in again.")
+        case .Failed(let m): m
+        // e.g. a panic UniFFI caught: its text is not scrubbed by the core
+        case nil: String(localized: "Something went wrong. Please try again.")
+        }
     }
 
     private static func adopt(_ s: SignedIn) {
@@ -80,5 +91,9 @@ struct CoreFailure: LocalizedError {
 /// The core's log lines (tokens scrubbed by the core; it logs no URL or secret of its own) into the system log.
 private final class CoreLog: LogSink {
     private let log = Logger(subsystem: "uz.daemonclient.photos", category: "core")
+    #if DEBUG
     func line(line: String) { log.info("\(line, privacy: .public)") }
+    #else
+    func line(line: String) { log.info("\(line, privacy: .private)") }
+    #endif
 }

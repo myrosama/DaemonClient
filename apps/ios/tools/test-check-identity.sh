@@ -53,4 +53,5 @@ good; printf '        NSCameraUsageDescription: HomeRoll needs the camera\n' >> 
 good; printf '%s\n' 'let g = "group.x.y" // HomeRoll' >> "$t/App/App.swift"; expect 1 "an App Group behind a HomeRoll comment"
 good; printf '%s\n' '{"sourceLanguage":"en","strings":{"CFBundleDisplayName":{"localizations":{"en":{"stringUnit":{"value":"Phosphor Photos"}},"ru":{"stringUnit":{"value":"Фото"}}}}},"version":"1.0"}' > "$t/Resources/InfoPlist.xcstrings"; expect 1 "another home-screen name in Russian"
 good; printf '%s\n' '{"sourceLanguage":"en","strings":{"CFBundleDisplayName":{"localizations":{"en":{"stringUnit":{"value":"Phosphor Photos"}},"ru":{"stringUnit":{"value":"Phosphor Photos"}}}}},"version":"1.0"}' > "$t/Resources/InfoPlist.xcstrings"; expect 0 "the home-screen name in both languages"
+good; printf '  DCPhotosUITests:\n    type: bundle.ui-testing\n' >> "$t/project.yml"; expect 0 "a UI-test target is not an extension"
 echo "check-identity self-test: ok"
