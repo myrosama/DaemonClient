@@ -3979,6 +3979,22 @@
         }
       }
     },
+    "Back up photos to Phosphor?" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Back up photos to Phosphor?"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сохранять фото в Phosphor?"
+          }
+        }
+      }
+    },
     "Backup" : {
       "localizations" : {
         "en" : {
@@ -8282,6 +8298,22 @@
         }
       }
     },
+    "New photos and videos from this iPhone are uploaded as originals." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "New photos and videos from this iPhone are uploaded as originals."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Новые фото и видео с этого iPhone загружаются в оригинале."
+          }
+        }
+      }
+    },
     "Nicht angemeldet" : {
       "localizations" : {
         "en" : {
@@ -10152,6 +10184,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Текст на фото"
+          }
+        }
+      }
+    },
+    "This video's format can't be played on iPhone (for example HEVC tagged “hev1”, VP9 or AV1)." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This video's format can't be played on iPhone (for example HEVC tagged “hev1”, VP9 or AV1)."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Этот формат видео не воспроизводится на iPhone (например, HEVC с меткой «hev1», VP9 или AV1)."
           }
         }
       }

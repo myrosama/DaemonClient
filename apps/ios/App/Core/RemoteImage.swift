@@ -84,14 +84,6 @@ final class ImageCache: @unchecked Sendable {
         }
         NotificationCenter.default.post(name: .thumbChanged, object: id)
     }
-    /// Personenbild neu laden (nach „Als Titelbild für …“); URLSession-Cache umgehen über `v`
-    func bumpPerson(_ id: String) {
-        cache.removeObject(forKey: "person-\(id)" as NSString)
-        lock.withLock { personVersion[id, default: 0] += 1 }
-        NotificationCenter.default.post(name: .personThumbChanged, object: id)
-    }
-    func personVersionOf(_ id: String) -> Int { lock.withLock { personVersion[id] ?? 0 } }
-    private var personVersion: [String: Int] = [:]
 
     func set(_ k: String, _ img: UIImage) {
         cache.setObject(img, forKey: k as NSString, cost: Int(img.size.width * img.size.height * img.scale * img.scale * 4))
@@ -311,58 +303,6 @@ final class ThumbPrefetcher {
                 running[id] = nil; pump()
             }
         }
-    }
-}
-
-/// Personen-Bild (rundes/abgerundetes Gesicht).
-struct PersonThumb: View {
-    let id: String
-    @State private var image: UIImage?
-    @State private var reload = 0
-    var body: some View {
-        Rectangle().fill(Color.appFill2)
-            .overlay { if let image { Image(uiImage: image).resizable().scaledToFill() } }
-            .clipped()
-            .onReceive(NotificationCenter.default.publisher(for: .personThumbChanged)) { n in
-                if n.object as? String == id { reload += 1 }
-            }
-            .task(id: "\(id)-\(reload)") {
-                let key = "person-\(id)"
-                if let c = ImageCache.shared.get(key) { image = c; return }
-                // nach neuem Titelbild eine andere Adresse, sonst liefert der URL-Cache das alte Bild
-                let v = ImageCache.shared.personVersionOf(id)
-                if let base = ImmichClient.shared.personThumbURL(id),
-                   case let url = v == 0 ? base : base.appending(queryItems: [URLQueryItem(name: "v", value: String(v))]),
-                   let d = try? await ImmichClient.shared.data(url), let i = UIImage(data: d) {
-                    ImageCache.shared.set(key, i); image = i; return
-                }
-                // Server hat noch kein Personenbild gerechnet → Gesicht selbst aus einem Foto der Person schneiden
-                if let i = await Self.faceCrop(id) { ImageCache.shared.set(key, i); image = i }
-            }
-    }
-
-    /// Erstes Foto der Person laden und ihr Gesicht (Box aus Immich) mit etwas Rand ausschneiden.
-    @MainActor static func faceCrop(_ person: String) async -> UIImage? {
-        let api = ImmichClient.shared
-        guard let a = (try? await api.search(filter: ["personIds": ["any": [person]]], size: 1))?.first,
-              let url = try? api.url("faces", query: ["id": a.id]),
-              let data = try? await api.data(url) else { return nil }
-        struct Face: Decodable {
-            struct P: Decodable { let id: String }
-            let person: P?
-            let imageWidth: Int, imageHeight: Int
-            let boundingBoxX1: Int, boundingBoxY1: Int, boundingBoxX2: Int, boundingBoxY2: Int
-        }
-        guard let f = (try? JSONDecoder().decode([Face].self, from: data))?.first(where: { $0.person?.id == person }),
-              f.imageWidth > 0, f.imageHeight > 0,
-              let img = await ImageCache.shared.load(a.id, .preview), let cg = img.cgImage else { return nil }
-        let sx = CGFloat(cg.width) / CGFloat(f.imageWidth), sy = CGFloat(cg.height) / CGFloat(f.imageHeight)
-        let r = CGRect(x: CGFloat(f.boundingBoxX1) * sx, y: CGFloat(f.boundingBoxY1) * sy,
-                       width: CGFloat(f.boundingBoxX2 - f.boundingBoxX1) * sx, height: CGFloat(f.boundingBoxY2 - f.boundingBoxY1) * sy)
-        let side = max(r.width, r.height) * 1.6
-        let sq = CGRect(x: r.midX - side / 2, y: r.midY - side / 2, width: side, height: side)
-            .intersection(CGRect(x: 0, y: 0, width: cg.width, height: cg.height)).integral
-        return cg.cropping(to: sq).map { UIImage(cgImage: $0) }
     }
 }
 

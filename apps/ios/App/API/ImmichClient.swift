@@ -58,7 +58,7 @@ final class ImmichClient: NSObject, URLSessionDelegate, @unchecked Sendable {
     func activate(server: URL, token: String) {
         baseURL = server
         self.token = token
-        videoLock.withLock { videoFallback = [:]; realtimeHLS = nil }
+        videoLock.withLock { videoFallback = [:] }
     }
 
     /// Heimnetz/VPN statt Internet: private IPv4/IPv6-Bereiche, Tailscale (100.64/10), Namen ohne Punkt oder mit
@@ -82,7 +82,7 @@ final class ImmichClient: NSObject, URLSessionDelegate, @unchecked Sendable {
     func logout() {
         token = nil
         Keychain.set(nil, for: "accessToken")
-        videoLock.withLock { videoFallback = [:]; realtimeHLS = nil }
+        videoLock.withLock { videoFallback = [:] }
         // Bilder/Antworten des Kontos nicht auf dem Gerät lassen (bis 1 GB, GitHub-Issue #8)
         session.configuration.urlCache?.removeAllCachedResponses()
         URLCache.shared.removeAllCachedResponses()
@@ -161,246 +161,25 @@ final class ImmichClient: NSObject, URLSessionDelegate, @unchecked Sendable {
         (try? JSONDecoder().decode(BucketColumns.self, from: d))?.assets().sorted { $0.date < $1.date }
     }
 
+    /// The worker's timeline narrowed by its own filters (`albumId`, `visibility`, `isFavorite`): every month, oldest
+    /// first. (`search/metadata` reads an older request shape and ignores HomeRoll's filters.)
+    func timelineAssets(_ q: [String: String]) async throws -> [Asset] {
+        let months = try JSONDecoder().decode([TimeBucket].self, from: try await raw("timeline/buckets", query: q))
+        var out: [Asset] = []
+        for m in months {
+            out += Self.decodeBucket(try await raw("timeline/bucket", query: q.merging(["timeBucket": m.timeBucket]) { $1 })) ?? []
+        }
+        return out.sorted { $0.date < $1.date }
+    }
+
     func asset(_ id: String) async throws -> AssetDTO { try await request("assets/\(id)") }
 
-    func memories() async throws -> [MemoryDTO] {
-        let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"; f.locale = Locale(identifier: "en_US_POSIX")
-        return try await request("memories", query: ["for": f.string(from: Date())])
-    }
-
     func albums() async throws -> [AlbumDTO] { try await request("albums") }
-    /// Ordner, in denen der Server Fotos ablegt (externe Bibliotheken: echte Ordnerstruktur)
-    func folderPaths() async throws -> [String] { try await request("view/folder/unique-paths") }
-    /// Fotos direkt in einem Ordner (ohne Unterordner)
-    func folderAssets(_ path: String) async throws -> [AssetDTO] { try await request("view/folder", query: ["path": path]) }
-    func people() async throws -> [PersonDTO] {
-        let p: PeopleDTO = try await request("people", query: ["withHidden": "false"])
-        return p.people.filter { !($0.isHidden ?? false) }
-    }
     func mapMarkers() async throws -> [MapMarkerDTO] { try await request("map/markers") }
-    /// Freigabelink mit allen Optionen aus Immichs Dialog (Beschreibung, Passwort, Ablauf, Metadaten, Herunterladen,
-    /// Hochladen, eigener Name). Mit Namen lautet die Adresse …/s/<name>, sonst …/share/<Schlüssel>.
-    /// Mit `album` entsteht ein Album-Link (type ALBUM), sonst ein Link auf genau diese Objekte.
-    func createShareLink(_ ids: [String], album: String? = nil, options o: ShareLinkOptions) async throws -> URL {
-        struct Link: Decodable { let key: String; let slug: String? }
-        var body: [String: Any] = ["allowDownload": o.allowDownload, "allowUpload": album != nil && o.allowUpload,
-                                   "showMetadata": o.showMetadata]
-        if let album { body["type"] = "ALBUM"; body["albumId"] = album } else { body["type"] = "INDIVIDUAL"; body["assetIds"] = ids }
-        let text = o.description.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !text.isEmpty { body["description"] = text }
-        if !o.password.isEmpty { body["password"] = o.password }
-        if let d = o.expiresAt { body["expiresAt"] = ISO8601DateFormatter().string(from: d) }
-        let slug = o.cleanSlug
-        if !slug.isEmpty { body["slug"] = slug }
-        let l: Link = try await request("shared-links", method: "POST", body: json(body))
-        guard let url = await linkURL(key: l.key, slug: l.slug) else { throw APIError.badURL }
-        return url
-    }
-
-    /// Adresse eines Links (Server-Einstellung „externe Domain“, sonst die Anmelde-Adresse).
-    func linkURL(key: String, slug: String?) async -> URL? {
-        struct Config: Decodable { let externalDomain: String? }
-        let cfg: Config? = try? await request("server/config")
-        guard let base = cfg?.externalDomain.flatMap({ $0.isEmpty ? nil : URL(string: $0) }) ?? baseURL else { return nil }
-        if let s = slug, !s.isEmpty { return base.appendingPathComponent("s").appendingPathComponent(s) }
-        return base.appendingPathComponent("share").appendingPathComponent(key)
-    }
-
-    /// Aktive (nicht abgelaufene) Einzel-Links, die mindestens eines dieser Objekte enthalten – oder mit `album` die Links dieses Albums.
-    func sharedLinks(containing ids: [String], album: String? = nil) async throws -> [SharedLinkDTO] {
-        let all: [SharedLinkDTO] = try await request("shared-links")
-        let want = Set(ids)
-        return all.filter {
-            guard $0.isActive else { return false }
-            if let album { return $0.type == "ALBUM" && $0.album?.id == album }
-            return $0.type == "INDIVIDUAL" && ($0.assets ?? []).contains { want.contains($0.id) }
-        }
-            .sorted { ($0.expires ?? .distantFuture) < ($1.expires ?? .distantFuture) }
-    }
-
-    /// Link ändern (PATCH). Leeres Passwortfeld = unverändert, „Passwort entfernen“ schickt „“.
-    func updateSharedLink(_ id: String, options o: ShareLinkOptions, hadSlug: Bool) async throws {
-        var body: [String: Any] = ["description": o.description.trimmingCharacters(in: .whitespacesAndNewlines),
-                                   "allowDownload": o.allowDownload, "allowUpload": o.allowUpload,
-                                   "showMetadata": o.showMetadata, "changeExpiryTime": true]
-        if let d = o.expiresAt { body["expiresAt"] = ISO8601DateFormatter().string(from: d) }
-        if o.removePassword { body["password"] = "" } else if !o.password.isEmpty { body["password"] = o.password }
-        let slug = o.cleanSlug
-        if !slug.isEmpty { body["slug"] = slug } else if hadSlug { body["slug"] = NSNull() }
-        try await raw("shared-links/\(id)", method: "PATCH", body: json(body))
-    }
-
-    func deleteSharedLink(_ id: String) async throws { try await raw("shared-links/\(id)", method: "DELETE") }
-    /// Werte für Suchvorschläge (type: country | state | city | camera-make | camera-model)
-    func suggestions(_ type: String) async throws -> [String] { try await request("search/suggestions", query: ["type": type]) }
-    /// IDs geteilter Alben (die Liste „Alben mit Foto X“ liefert `shared` nicht zuverlässig)
-    func sharedAlbumIDs() async -> Set<String> {
-        let list: [AlbumDTO] = (try? await request("albums", query: ["shared": "true"])) ?? []
-        return Set(list.filter { $0.shared == true }.map(\.id))
-    }
-    /// Kommentare und Likes zu einem Foto in einem geteilten Album
-    func activities(album: String, asset: String) async throws -> [ActivityDTO] {
-        try await request("activities", query: ["albumId": album, "assetId": asset])
-    }
-    func addActivity(album: String, asset: String, comment: String?) async throws -> ActivityDTO {
-        var b: [String: Any] = ["albumId": album, "assetId": asset, "type": comment == nil ? "like" : "comment"]
-        if let comment { b["comment"] = comment }
-        return try decoder.decode(ActivityDTO.self, from: try await raw("activities", method: "POST", body: json(b)))
-    }
-    func deleteActivity(_ id: String) async throws { _ = try await raw("activities/\(id)", method: "DELETE") }
 
     /// Alben, in denen ein Objekt liegt (Info-Bereich „In Alben“)
     func albums(containing id: String) async throws -> [AlbumDTO] { try await request("albums", query: ["assetId": id]) }
-    func allPeople(withHidden: Bool) async throws -> [PersonDTO] {
-        let p: PeopleDTO = try await request("people", query: ["withHidden": withHidden ? "true" : "false", "size": "1000"])
-        return p.people
-    }
-    func updatePerson(_ id: String, _ fields: [String: Any]) async throws {
-        try await raw("people/\(id)", method: "PUT", body: json(fields))
-    }
-    /// `others` gehen in `id` auf (Immich: POST /people/{id}/merge)
-    func mergePeople(into id: String, _ others: [String]) async throws {
-        try await raw("people/\(id)/merge", method: "POST", body: json(["ids": others]))
-    }
-    func cities() async throws -> [AssetDTO] { try await request("search/cities") }
     func me() async throws -> UserDTO { try await request("users/me") }
-
-    /// Anzahl Fotos und Videos in der Mediathek (für die Fußzeile wie in Apples Fotos-App).
-    func statistics() async -> (images: Int, videos: Int)? {
-        struct S: Decodable { let images: Int; let videos: Int }
-        guard let s: S = try? await request("assets/statistics", query: ["visibility": "timeline"]) else { return nil }
-        return (s.images, s.videos)
-    }
-
-    /// Metadaten-Suche mit dem neuen Filter-Objekt (v3.2+), blättert über `nextCursor` bis `size`.
-    @MainActor func search(filter: [String: Any], size: Int = 250, order: String = "desc") async throws -> [AssetDTO] {
-        try await searchPage(filter: filter, size: size, order: order).items
-    }
-
-    /// Wie `search`, gibt aber den Cursor für die nächste Seite zurück (nil = alles geholt) – für „Mehr laden“.
-    @MainActor func searchPage(filter: [String: Any], size: Int, cursor start: String? = nil,
-                               order: String = "desc") async throws -> (items: [AssetDTO], next: String?) {
-        let filter = Self.visible(filter)
-        var out: [AssetDTO] = []
-        var cursor = start
-        repeat {
-            var body: [String: Any] = ["filter": filter, "size": min(1000, size - out.count), "withExif": true,
-                                       "orderBy": ["field": "fileCreatedAt", "direction": order]]
-            if let cursor { body["cursor"] = cursor }
-            let r: SearchResponseDTO = try await request("search/metadata", method: "POST", body: json(body))
-            out += r.assets.items
-            cursor = r.assets.nextCursor
-        } while cursor != nil && out.count < size
-        return (out, cursor)
-    }
-
-    /// Ohne eigene Sichtbarkeit nur die Mediathek: Immich liefert sonst auch die Videoteile der Live Photos
-    /// („hidden“) und Ausgeblendetes („archive“) mit.
-    static func visible(_ f: [String: Any]) -> [String: Any] {
-        guard f["visibility"] == nil, f["trashedAt"] == nil else { return f }
-        var f = f; f["visibility"] = ["eq": "timeline"]; return f
-    }
-
-    /// KI-Suche (mehrsprachiges Bild-Text-Modell auf dem Server); optional mit zusätzlichem Filter.
-    @MainActor func smartSearch(_ query: String, filter: [String: Any] = [:], size: Int = 120) async throws -> [AssetDTO] {
-        let body: [String: Any] = ["query": query, "size": size, "withExif": true, "filter": Self.visible(filter)]
-        let r: SearchResponseDTO = try await request("search/smart", method: "POST", body: json(body))
-        return r.assets.items
-    }
-
-    /// Zusatzdienste neben Immich (Ordner server/): direkt über ihren Port (http://<server>:<port>) oder über den
-    /// Reverse-Proxy unter /fotos-dienst/<name> (siehe server/README.md).
-    func serviceURL(_ name: String, port: Int) -> URL? {
-        guard let base = baseURL, var c = URLComponents(url: base, resolvingAgainstBaseURL: false) else { return nil }
-        if c.port == 2283 { c.port = port; c.path = "/\(name)" } else { c.path = "/fotos-dienst/\(name)" }
-        return c.url
-    }
-
-    /// Welche KI-Treffer wirklich passen (Relevanz-Dienst auf Port 2284 neben Immich, siehe server/relevanz.py).
-    /// nil = Dienst nicht erreichbar → App zeigt dann die ungeprüfte Liste.
-    func relevant(_ query: String, ids: [String]) async -> Set<String>? {
-        guard !ids.isEmpty, let url = serviceURL("relevanz", port: 2284), var req = try? authorized(url) else { return nil }
-        req.httpMethod = "POST"; req.timeoutInterval = 8
-        req.httpBody = json(["query": query, "ids": ids] as [String: Any])
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        struct R: Decodable { let keep: [String] }
-        guard let (data, resp) = try? await session.data(for: req), (resp as? HTTPURLResponse)?.statusCode == 200,
-              let r = try? decoder.decode(R.self, from: data) else { return nil }
-        return Set(r.keep)
-    }
-
-    /// Heikle Fotos unter `ids` (Relevanz-Dienst rechnet fehlende KI-Merkmale selbst nach, ~3 s je Foto).
-    /// nil = Dienst nicht erreichbar.
-    func sensitive(_ ids: [String], queries: [String]) async -> Set<String>? {
-        guard !ids.isEmpty, let url = serviceURL("relevanz", port: 2284), var req = try? authorized(url) else { return nil }
-        req.httpMethod = "POST"; req.timeoutInterval = 240
-        req.httpBody = json(["check": ids, "queries": queries] as [String: Any])
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        struct R: Decodable { let flagged: [String] }
-        guard let (data, resp) = try? await session.data(for: req), (resp as? HTTPURLResponse)?.statusCode == 200,
-              let r = try? decoder.decode(R.self, from: data) else { return nil }
-        return Set(r.flagged)
-    }
-
-    /// „Ist das X?“: noch nicht zugeordnete Gesichter, die dieser Person ähneln (Relevanz-Dienst, server/relevanz.py).
-    struct FaceSuggestion: Decodable, Identifiable, Hashable {
-        let faceId: String
-        let assetId: String
-        let distance: Double
-        let box: [Int]       // x1, y1, x2, y2 in Pixeln von `size`
-        let size: [Int]      // Breite, Höhe des Bildes, auf dem das Gesicht erkannt wurde
-        var id: String { faceId }
-    }
-    func similarFaces(_ personId: String) async -> [FaceSuggestion]? {
-        guard let url = serviceURL("relevanz", port: 2284), var req = try? authorized(url) else { return nil }
-        req.httpMethod = "POST"; req.timeoutInterval = 15
-        req.httpBody = json(["personId": personId])
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        struct R: Decodable { let faces: [FaceSuggestion] }
-        guard let (data, resp) = try? await session.data(for: req), (resp as? HTTPURLResponse)?.statusCode == 200,
-              let r = try? decoder.decode(R.self, from: data) else { return nil }
-        return r.faces
-    }
-    /// „Nicht diese Person“ (REA: PXPhotoKitNotThisPersonActionPerformer): Immich kennt kein Lösen eines Gesichts –
-    /// wie die Immich-Weboberfläche kommt das Gesicht zu einer neuen, unbenannten Person (leere räumt Immich selbst weg).
-    func notThisPerson(asset: String, person: String) async throws {
-        struct Face: Decodable { let id: String; let person: P?; struct P: Decodable { let id: String } }
-        let faces: [Face] = try await request("faces", query: ["id": asset])
-        guard let face = faces.first(where: { $0.person?.id == person }) else { return }
-        struct NewPerson: Decodable { let id: String }
-        let fresh: NewPerson = try await request("people", method: "POST", body: json([String: String]()))
-        try await assignFace(face.id, to: fresh.id)
-    }
-
-    /// Gesicht einer Person zuordnen (Immich: PUT /faces/{personId}, Gesicht im Body).
-    func assignFace(_ faceId: String, to personId: String) async throws {
-        try await raw("faces/\(personId)", method: "PUT", body: json(["id": faceId]))
-    }
-
-    /// Bereinigen (Objekte entfernen) über den Dienst auf Port 2285 neben Immich (server/bereinigen).
-    func cleanup(image: Data, mask: Data) async -> Data? {
-        guard let url = serviceURL("bereinigen", port: 2285), var req = try? authorized(url) else { return nil }
-        let boundary = "fotos-\(UUID().uuidString)"
-        var body = Data()
-        for (name, file, type, d) in [("image", "bild.jpg", "image/jpeg", image), ("mask", "maske.png", "image/png", mask)] {
-            body.append("--\(boundary)\r\nContent-Disposition: form-data; name=\"\(name)\"; filename=\"\(safeFilename(file))\"\r\nContent-Type: \(type)\r\n\r\n".data(using: .utf8)!)
-            body.append(d); body.append("\r\n".data(using: .utf8)!)
-        }
-        body.append("--\(boundary)--\r\n".data(using: .utf8)!)
-        req.httpMethod = "POST"; req.timeoutInterval = 120
-        req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-        guard let (d, resp) = try? await session.upload(for: req, from: body), (resp as? HTTPURLResponse)?.statusCode == 200 else { return nil }
-        return d
-    }
-
-    func tags() async throws -> [TagDTO] { try await request("tags") }
-
-    /// Legt Tags (Pfad „Kategorie/Bearbeitet“) an und hängt sie an Objekte.
-    func tag(_ ids: [String], with path: String) async throws {
-        let tags: [TagDTO] = try await request("tags", method: "PUT", body: json(["tags": [path]]))
-        guard let t = tags.first(where: { $0.value == path }) else { return }
-        try await raw("tags/assets", method: "PUT", body: json(["tagIds": [t.id], "assetIds": ids]))
-    }
 
     // MARK: Mehrfach-Aktionen (Auswahl)
 
@@ -444,54 +223,9 @@ final class ImmichClient: NSObject, URLSessionDelegate, @unchecked Sendable {
     func removeFromAlbum(_ id: String, _ ids: [String]) async throws {
         try await raw("albums/\(id)/assets", method: "DELETE", body: json(["ids": ids]))
     }
-    func albumAssets(_ id: String) async throws -> [AssetDTO] {
-        try await search(filter: ["albumIds": ["any": [id]]], size: 20000, order: "asc")
-    }
+    func albumAssets(_ id: String) async throws -> [Asset] { try await timelineAssets(["albumId": id]) }
     func albumMarkers(_ id: String) async throws -> [MapMarkerDTO] { try await request("albums/\(id)/map-markers") }
 
-    // MARK: Bearbeiten
-
-    /// Zuschneiden/Drehen/Spiegeln macht der Server selbst (nicht-destruktiv, Original bleibt).
-    func setEdits(_ id: String, _ edits: [[String: Any]]) async throws {
-        try await raw("assets/\(id)/edits", method: "PUT", body: json(["edits": edits]))
-    }
-    func removeEdits(_ id: String) async throws { try await raw("assets/\(id)/edits", method: "DELETE") }
-
-    func setMetadata(_ id: String, key: String, value: [String: Any]) async throws {
-        try await raw("assets/\(id)/metadata", method: "PUT", body: json(["items": [["key": key, "value": value]]]))
-    }
-    func metadata(_ id: String, key: String) async -> [String: Any]? {
-        guard let d = try? await raw("assets/\(id)/metadata/\(key)"),
-              let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return nil }
-        return o["value"] as? [String: Any]
-    }
-
-    func createStack(_ ids: [String]) async throws {
-        try await raw("stacks", method: "POST", body: json(["assetIds": ids]))
-    }
-    func deleteStack(_ id: String) async throws { try await raw("stacks/\(id)", method: "DELETE") }
-
-    /// Lädt eine Datei hoch (bearbeitete Fassung) und gibt die neue ID zurück.
-    func upload(_ data: Data, filename: String, created: String, mime: String = "image/jpeg") async throws -> String {
-        let boundary = "fotos-\(UUID().uuidString)"
-        var body = Data()
-        func field(_ name: String, _ value: String) {
-            body.append("--\(boundary)\r\nContent-Disposition: form-data; name=\"\(name)\"\r\n\r\n\(value)\r\n".data(using: .utf8)!)
-        }
-        field("fileCreatedAt", created); field("fileModifiedAt", ISO8601DateFormatter().string(from: Date())); field("filename", filename)
-        body.append("--\(boundary)\r\nContent-Disposition: form-data; name=\"assetData\"; filename=\"\(safeFilename(filename))\"\r\nContent-Type: \(mime)\r\n\r\n".data(using: .utf8)!)
-        body.append(data); body.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
-        var req = try authorized(try url("assets"))
-        req.httpMethod = "POST"
-        req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-        req.timeoutInterval = 300
-        let (d, resp) = try await session.upload(for: req, from: body)
-        guard let h = resp as? HTTPURLResponse, (200..<300).contains(h.statusCode),
-              let o = try JSONSerialization.jsonObject(with: d) as? [String: Any], let id = o["id"] as? String else {
-            throw APIError.http((resp as? HTTPURLResponse)?.statusCode ?? 0, String(data: d, encoding: .utf8) ?? "")
-        }
-        return id
-    }
     // MARK: Backup
 
     /// Kennt der Server die Datei schon (SHA1)? → vorhandene ID, sonst nil.
@@ -556,30 +290,8 @@ final class ImmichClient: NSObject, URLSessionDelegate, @unchecked Sendable {
         return try decoder.decode(UploadResult.self, from: d)
     }
 
-    func duplicates() async throws -> [DuplicateGroupDTO] { try await request("duplicates") }
-
-    /// Behält `keep`, verschiebt die übrigen der Gruppe in „Zuletzt gelöscht“.
-    func resolveDuplicate(_ g: DuplicateGroupDTO, keep: [String]) async throws {
-        let trash = g.assets.map(\.id).filter { !keep.contains($0) }
-        try await raw("duplicates/resolve", method: "POST",
-                      body: json(["groups": [["duplicateId": g.duplicateId, "keepAssetIds": keep, "trashAssetIds": trash]]]))
-    }
-
-    func random(size: Int = 12) async throws -> [AssetDTO] {
-        try await request("search/random", method: "POST", body: json(["size": size, "withExif": true] as [String: Any]))
-    }
-
     func setFavorite(_ id: String, _ fav: Bool) async throws {
         try await raw("assets/\(id)", method: "PUT", body: json(["isFavorite": fav]))
-    }
-
-    func trash(_ ids: [String]) async throws {
-        try await raw("assets", method: "DELETE", body: json(["ids": ids, "force": false] as [String: Any]))
-    }
-
-    /// Aus „Zuletzt gelöscht“ zurückholen.
-    func restore(_ ids: [String]) async throws {
-        try await raw("trash/restore/assets", method: "POST", body: json(["ids": ids]))
     }
 
     /// Endgültig löschen (nur aus „Zuletzt gelöscht“ heraus anbieten).
@@ -605,15 +317,12 @@ final class ImmichClient: NSObject, URLSessionDelegate, @unchecked Sendable {
 
     private let videoLock = NSLock()
     private var videoFallback: [String: URL] = [:]
-    private var realtimeHLS: Bool?
 
     /// Ausweg, wenn die Wiedergabedatei auf dem iPhone nicht abspielbar ist (HEVC mit Kennung „hev1“ statt „hvc1“,
-    /// VP9, AV1, MKV: Laufzeit lesbar, Bild schwarz – Issue #1): erst das Original (falls nur die umgewandelte Datei
-    /// nicht passt), dann Immichs Echtzeit-Umwandlung (HLS, wenn auf dem Server eingeschaltet). nil = beides nicht.
+    /// VP9, AV1, MKV: Laufzeit lesbar, Bild schwarz – Issue #1): dann das Original (falls nur die umgewandelte
+    /// Datei nicht passt). nil = auch das nicht.
     func playableFallback(for id: String) async -> AVURLAsset? {
-        var tries = [originalURL(id)].compactMap { $0 }
-        if await realtimeTranscoding(), let u = await hlsVariant(id) { tries.append(u) }
-        for u in tries {
+        for u in [originalURL(id)].compactMap({ $0 }) {
             let a = avAsset(u)
             if (try? await a.load(.isPlayable)) == true {
                 videoLock.withLock { videoFallback[id] = u }
@@ -622,35 +331,6 @@ final class ImmichClient: NSObject, URLSessionDelegate, @unchecked Sendable {
         }
         return nil
     }
-
-    /// HLS-Stream wie in Immich, aber FEST auf eine Stufe: Immichs Sitzung verträgt keinen Stufenwechsel („Variant
-    /// changed“ → Umwandlung startet neu), Apples Player probiert aber von sich aus mehrere → 1–2 min Laden, Ruckeln,
-    /// 20 s nach Pause (GitHub-Issue #1).
-    func hlsVariant(_ id: String) async -> URL? {
-        guard let main = try? url("assets/\(id)/video/stream/main.m3u8"), let d = try? await data(main),
-              let text = String(data: d, encoding: .utf8) else { return nil }
-        let lines = text.split(whereSeparator: \.isNewline).map(String.init)
-        var variants: [(height: Int, hevc: Bool, uri: String)] = []
-        for (n, line) in lines.enumerated() where line.hasPrefix("#EXT-X-STREAM-INF") && n + 1 < lines.count {
-            let res = line.range(of: #"RESOLUTION=\d+x(\d+)"#, options: .regularExpression).map { String(line[$0]) }
-            let h = res.flatMap { Int($0.split(separator: "x").last ?? "") } ?? 0
-            variants.append((h, line.contains("hvc1") || line.contains("hev1"), lines[n + 1]))
-        }
-        // H.264: auf Servern ohne Grafikbeschleunigung um ein Vielfaches schneller umzuwandeln als HEVC (HEVC 1080p
-        // mit 120 fps schaffte die CPU nicht in Echtzeit → Zeitüberschreitung); 720p im Heimnetz, 480p unterwegs.
-        let cap = Self.isPrivateHost(main.host() ?? "") ? 720 : 480
-        let fit = variants.filter { $0.height <= cap }
-        let pick = fit.filter { !$0.hevc }.max { $0.height < $1.height } ?? fit.max { $0.height < $1.height }
-            ?? variants.min { $0.height < $1.height }
-        guard let pick else { return nil }
-        return URL(string: pick.uri, relativeTo: main)?.absoluteURL
-    }
-
-    /// Beim Start einmal fragen, ob der Server Echtzeit-Umwandlung kann (spart die Wartezeit, wenn ein Video den Ausweichweg braucht).
-    func prepareVideo() async { _ = await realtimeTranscoding() }
-
-    /// Für die Video-Diagnose: Server kann Echtzeit-Umwandlung (HLS)?
-    func serverRealtime() async -> Bool { await realtimeTranscoding() }
 
     /// Für die Video-Diagnose: Status, Typ, Größe und Antwortzeit einer Adresse (lädt nur die ersten zwei Bytes).
     func probe(_ url: URL) async -> String {
@@ -672,19 +352,9 @@ final class ImmichClient: NSObject, URLSessionDelegate, @unchecked Sendable {
         }
     }
 
-    private func realtimeTranscoding() async -> Bool {
-        if let v = videoLock.withLock({ realtimeHLS }) { return v }
-        struct Features: Decodable { let realtimeTranscoding: Bool? }
-        // nur eine echte Antwort merken – scheitert die Abfrage (offline, Netz-Erlaubnis noch offen), später neu fragen
-        guard let f: Features = try? await request("server/features") else { return false }
-        let v = f.realtimeTranscoding ?? false
-        videoLock.withLock { realtimeHLS = v }
-        return v
-    }
     func originalURL(_ id: String, edited: Bool = true) -> URL? {
         try? url("assets/\(id)/original", query: ["edited": edited ? "true" : "false"])
     }
-    func personThumbURL(_ id: String) -> URL? { try? url("people/\(id)/thumbnail") }
 
     func data(_ url: URL) async throws -> Data {
         let (d, resp): (Data, URLResponse)

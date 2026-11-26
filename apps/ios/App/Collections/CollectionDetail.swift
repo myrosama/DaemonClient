@@ -1,6 +1,5 @@
 import SwiftUI
 import MapKit
-import ContactsUI
 
 /// Lädt die Inhalte einer Sammlung und zeigt sie als Raster.
 struct CollectionDetail: View {
@@ -15,82 +14,57 @@ struct CollectionDetail: View {
     var body: some View {
         switch route {
         case .category(.map): MapScreen(markers: model.markers)
-        case .category(.duplicates): DuplicatesScreen()
-        case .category(.largeVideos): LargeVideosScreen()
         case .category(let c) where c.locked: LockGate(title: c.title) { grid }
-        case .allMemories: MemoriesScreen()
         case .allMediaTypes: CategoryListScreen(title: String(localized: "Medienarten"), items: Category.mediaTypes)
         case .allOthers: CategoryListScreen(title: String(localized: "Sonstige"), items: Category.others)
         case .allAlbums: AlbumsListScreen(model: model)
         case .albumFolder(let id): AlbumsListScreen(model: model, folderID: id)
         case .album(let a): AlbumScreen(ref: a)
-        case .folder(let p): FolderScreen(path: p)
-        case .allPeople:
-            PeopleScreen(people: model.people)
         default: grid
         }
     }
 
     private var grid: some View {
-        AssetGridScreen(title: renamed ?? title, subtitle: loaded.map { $0.count == 1 ? String(localized: "1 Objekt") : String(localized: "\($0.count) Objekte") } ?? "",
+        AssetGridScreen(title: title, subtitle: loaded.map { $0.count == 1 ? String(localized: "1 Objekt") : String(localized: "\($0.count) Objekte") } ?? "",
                         assets: loaded ?? [], loading: loaded == nil,
-                        menu: personMenu,
-                        onRemove: { id in withAnimation(.snappy) { loaded?.removeAll { $0.id == id } } },
-                        back: { if case .folderPhotos = route { true } else { false } }())
+                        menu: historyMenu,
+                        onRemove: { id in withAnimation(.snappy) { loaded?.removeAll { $0.id == id } } })
             .task { if loaded == nil { loaded = await load() } }
-            // nach Einblenden/Wiederherstellen in der Einzelansicht die Liste auffrischen
+            // nach Einblenden in der Einzelansicht die Liste auffrischen
             .onChange(of: app.viewer == nil) { _, closed in
                 guard closed, case .category(let c) = route, c.locked else { return }
                 Task { loaded = await load() }
             }
     }
 
-    private var personMenu: AnyView? {
-        if case .category(let c) = route, c == .recentlyViewed || c == .recentlyShared {
-            // wie Apple: Verlauf von „Zuletzt angesehen/geteilt“ löschen
-            return AnyView(Menu {
-                Button(String(localized: "Verlauf löschen"), systemImage: "clock.badge.xmark", role: .destructive) {
-                    RecentStore.clear(c); withAnimation(.snappy) { loaded = [] }
-                }
-            } label: {
-                Image(systemName: "ellipsis").font(.system(size: 17, weight: .semibold)).frame(width: 44, height: 44).contentShape(.rect)
+    private var historyMenu: AnyView? {
+        guard case .category(let c) = route, c == .recentlyViewed || c == .recentlyShared else { return nil }
+        // wie Apple: Verlauf von „Zuletzt angesehen/geteilt“ löschen
+        return AnyView(Menu {
+            Button(String(localized: "Verlauf löschen"), systemImage: "clock.badge.xmark", role: .destructive) {
+                RecentStore.clear(c); withAnimation(.snappy) { loaded = [] }
             }
-            .glassEffect(.regular.interactive(), in: .circle))
+        } label: {
+            Image(systemName: "ellipsis").font(.system(size: 17, weight: .semibold)).frame(width: 44, height: 44).contentShape(.rect)
         }
-        guard case .person(let p) = route else { return nil }
-        return AnyView(PersonMenu(person: p) { renamed = $0.isEmpty ? String(localized: "Unbenannt") : $0 })
+        .glassEffect(.regular.interactive(), in: .circle))
     }
 
     private var title: String {
         switch route {
         case .category(let c): c.title
         case .album(let a): a.name
-        case .person(let p): p.name.isEmpty ? String(localized: "Unbenannt") : p.name
         case .assets(let t, _): t
-        case .folderPhotos(let p): FolderStore.name(p)
-        case .smart(let id): SmartAlbums.shared.album(id)?.name ?? ""
-        case .allTrips: String(localized: "Reisen")
-        case .allMemories: String(localized: "Rückblicke")
         default: ""
         }
     }
 
     private func load() async -> [Asset] {
-        let c = ImmichClient.shared
-        let all = timeline.allLoaded
         switch route {
         case .category(let cat): return await CategoryLoader.load(cat, timeline: timeline)
-        case .allTrips, .allMemories: return all
-        case .album(let a):
-            return ((try? await c.search(filter: ["albumIds": ["any": [a.id]]], size: 1000, order: "asc")) ?? []).map(\.asset)
-        case .person(let p):
-            return ((try? await c.search(filter: ["personIds": ["any": [p.id]]], size: 1000, order: "asc")) ?? []).map(\.asset)
+        case .album(let a): return (try? await ImmichClient.shared.albumAssets(a.id)) ?? []
         case .assets(_, let ids):
-            let set = Set(ids); return all.filter { set.contains($0.id) }
-        case .folderPhotos(let p): return await FolderStore.shared.assets(p)
-        case .smart(let id):
-            guard let a = SmartAlbums.shared.album(id) else { return [] }
-            return ((try? await c.search(filter: a.filter, size: 2000)) ?? []).map(\.asset)
+            let set = Set(ids); return timeline.allLoaded.filter { set.contains($0.id) }
         default: return []
         }
     }
@@ -127,7 +101,7 @@ struct AssetGridScreen: View {
                           onOpen: { i, _ in app.open(list, at: i) },
                           onToggle: { app.toggle($0) }, onSelect: { app.selected = $0 },
                           menu: { a in AssetMenuUIKit.context(a, app: app, timeline: timeline) { onRemove?(a.id) } },
-                          autoplay: app.autoplay && app.viewer == nil && app.memory == nil, startAtTop: newestFirst)
+                          autoplay: app.autoplay && app.viewer == nil, startAtTop: newestFirst)
                     .id(newestFirst)        // Reihenfolge gewechselt → neu aufbauen und oben bzw. unten beginnen
                     .ignoresSafeArea()
             }
@@ -239,312 +213,6 @@ struct CardGridScreen: View {
         }
         .background(Color.appBackground)
         .navigationTitle(title)
-    }
-}
-
-struct PeopleScreen: View {
-    let people: [PersonDTO]
-    @State private var all: [PersonDTO]?
-    @State private var showHidden = false
-
-    /// wie Apple: Favoriten zuerst, dann benannte, dann unbenannte
-    private var list: [PersonDTO] {
-        let src = (all ?? people).filter { showHidden || $0.isHidden != true }
-        return src.filter { $0.isFavorite == true } + src.filter { $0.isFavorite != true && !$0.name.isEmpty }
-            + src.filter { $0.isFavorite != true && $0.name.isEmpty }
-    }
-
-    var body: some View {
-        ScrollView {
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 18) {
-                ForEach(list) { p in
-                    NavigationLink(value: CollectionRoute.person(PersonRef(id: p.id, name: p.name))) {
-                        VStack(spacing: 6) {
-                            PersonThumb(id: p.id).aspectRatio(1, contentMode: .fit).clipShape(Circle())
-                                .opacity(p.isHidden == true ? 0.45 : 1)
-                                .overlay(alignment: .bottomTrailing) {
-                                    if p.isFavorite == true {
-                                        Image(systemName: "heart.fill").font(.system(size: 13)).foregroundStyle(.white)
-                                            .padding(6).background(Circle().fill(.black.opacity(0.55)))
-                                    }
-                                }
-                            Text(p.name.isEmpty ? String(localized: "Name hinzufügen") : p.name).font(.system(size: 14, weight: .medium))
-                                .foregroundStyle(p.name.isEmpty ? Color.blue : .primary).lineLimit(1)
-                        }
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .padding(20)
-        }
-        .background(Color.appBackground)
-        .navigationTitle(String(localized: "Personen"))
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Menu {
-                    Toggle(isOn: $showHidden) { Label(String(localized: "Ausgeblendete anzeigen"), systemImage: "eye") }
-                } label: { Image(systemName: "ellipsis") }
-            }
-        }
-        .task { all = try? await ImmichClient.shared.allPeople(withHidden: true) }
-    }
-}
-
-/// „…“ einer Person wie in Fotos: benennen, Favorit, zusammenführen, ausblenden.
-struct PersonMenu: View {
-    let person: PersonRef
-    let renamed: (String) -> Void
-    @Environment(\.dismiss) private var dismiss
-    @Environment(AppModel.self) private var app
-    @State private var askName = false
-    @State private var name = ""
-    @State private var merging = false
-    @State private var reviewing = false
-    @State private var askBirthday = false
-    @State private var birthday: Date?
-    @State private var birthdayDraft = Date()
-    @State private var favorite = false
-    @State private var hidden = false
-    @State private var pickingContact = false
-    @State private var linked = false
-
-    var body: some View {
-        Menu {
-            Button(person.name.isEmpty ? String(localized: "Name hinzufügen") : String(localized: "Umbenennen"), systemImage: "pencil") { name = person.name; askName = true }
-            Button(favorite ? String(localized: "Kein Favorit") : String(localized: "Als Favorit"), systemImage: favorite ? "heart.slash" : "heart") {
-                favorite.toggle()
-                let on = favorite
-                Task { try? await ImmichClient.shared.updatePerson(person.id, ["isFavorite": on]) }
-            }
-            Button(String(localized: "Mit Person zusammenführen …"), systemImage: "person.2.badge.plus") { merging = true }
-            Button(String(localized: "Weitere Fotos prüfen"), systemImage: "person.crop.circle.badge.questionmark") { reviewing = true }
-            Button(birthday == nil ? String(localized: "Geburtstag hinzufügen") : String(localized: "Geburtstag ändern"), systemImage: "gift") {
-                birthdayDraft = birthday ?? Calendar.current.date(byAdding: .year, value: -30, to: Date())!; askBirthday = true
-            }
-            if linked {
-                Button(String(localized: "Kontakt trennen"), systemImage: "person.crop.circle.badge.xmark") {
-                    ContactLinks.set(nil, for: person.id); linked = false
-                    app.toast(String(localized: "Kontakt getrennt"))
-                }
-            } else {
-                Button(String(localized: "Kontaktdaten verknüpfen"), systemImage: "person.crop.circle.badge.plus") { pickingContact = true }
-            }
-            Divider()
-            Button(hidden ? String(localized: "Wieder anzeigen") : String(localized: "Aus „Personen“ ausblenden"), systemImage: hidden ? "eye" : "eye.slash") {
-                hidden.toggle()
-                let on = hidden
-                Task { try? await ImmichClient.shared.updatePerson(person.id, ["isHidden": on]) }
-                app.toast(on ? String(localized: "Ausgeblendet") : String(localized: "Wird wieder angezeigt"))
-                if on { dismiss() }
-            }
-        } label: {
-            Image(systemName: "ellipsis").font(.system(size: 17, weight: .semibold)).frame(width: 44, height: 44).contentShape(.rect)
-        }
-        .glassEffect(.regular.interactive(), in: .circle)
-        .alert(person.name.isEmpty ? String(localized: "Name hinzufügen") : String(localized: "Umbenennen"), isPresented: $askName) {
-            TextField(String(localized: "Name"), text: $name)
-            Button(String(localized: "Abbrechen"), role: .cancel) {}
-            Button(String(localized: "Sichern")) {
-                let n = name.trimmingCharacters(in: .whitespaces)
-                Task { try? await ImmichClient.shared.updatePerson(person.id, ["name": n]) }
-                renamed(n)
-            }
-        }
-        .sheet(isPresented: $merging) { MergePeopleSheet(target: person) { dismiss() } }
-        .sheet(isPresented: $pickingContact) {
-            ContactPicker { c in
-                pickingContact = false
-                link(c)
-            }
-            .ignoresSafeArea()
-        }
-        .sheet(isPresented: $reviewing) { FaceReviewSheet(person: person) }
-        .sheet(isPresented: $askBirthday) {
-            NavigationStack {
-                DatePicker(String(localized: "Geburtstag"), selection: $birthdayDraft, in: ...Date(), displayedComponents: .date)
-                    .datePickerStyle(.wheel).labelsHidden().padding()
-                    .navigationTitle(String(localized: "Geburtstag")).navigationBarTitleDisplayMode(.inline)
-                    .toolbar {
-                        ToolbarItem(placement: .topBarLeading) { Button(String(localized: "Abbrechen")) { askBirthday = false } }
-                        ToolbarItem(placement: .topBarTrailing) {
-                            Button(String(localized: "Sichern")) {
-                                let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"
-                                let d = f.string(from: birthdayDraft); birthday = birthdayDraft; askBirthday = false
-                                Task { try? await ImmichClient.shared.updatePerson(person.id, ["birthDate": d]) }
-                                app.toast(String(localized: "Geburtstag gesichert – erscheint in Rückblicken"))
-                            }.bold()
-                        }
-                    }
-            }
-            .presentationDetents([.medium])
-        }
-        .task {
-            linked = ContactLinks.contact(for: person.id) != nil
-            if let all = try? await ImmichClient.shared.allPeople(withHidden: true), let me = all.first(where: { $0.id == person.id }) {
-                favorite = me.isFavorite == true; hidden = me.isHidden == true
-                if let b = me.birthDate { let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"; birthday = f.date(from: String(b.prefix(10))) }
-            }
-        }
-    }
-}
-
-extension PersonMenu {
-    /// Kontakt übernehmen: Name (Vor- und Nachname) und – falls im Kontakt – Geburtstag auf den Server schreiben
-    fileprivate func link(_ c: CNContact) {
-        ContactLinks.set(c.identifier, for: person.id); linked = true
-        let n = [c.givenName, c.familyName].filter { !$0.isEmpty }.joined(separator: " ")
-        var fields: [String: String] = [:]   // nur Text → Sendable (Swift 6: kein Datenrennen beim Weitergeben an den Task)
-        if !n.isEmpty { fields["name"] = n; renamed(n) }
-        if let b = c.birthday, let y = b.year, let m = b.month, let d = b.day {
-            fields["birthDate"] = String(format: "%04d-%02d-%02d", y, m, d)
-            birthday = Calendar.current.date(from: DateComponents(year: y, month: m, day: d))
-        }
-        if !fields.isEmpty {
-            let id = person.id, name = fields["name"] as? String, birth = fields["birthDate"] as? String
-            Task {
-                var f: [String: Any] = [:]
-                if let name { f["name"] = name }
-                if let birth { f["birthDate"] = birth }
-                try? await ImmichClient.shared.updatePerson(id, f)
-            }
-        }
-        app.toast(String(localized: "Mit Kontakt verknüpft"))
-    }
-}
-
-/// „Ist das X?“ wie in Fotos (Weitere Fotos prüfen): ähnliche, noch keiner Person zugeordnete Gesichter einzeln
-/// bestätigen. Ja ordnet das Gesicht in Immich zu, Nein merkt sich die App (wird nicht wieder gefragt).
-struct FaceReviewSheet: View {
-    let person: PersonRef
-    @Environment(\.dismiss) private var dismiss
-    @Environment(AppModel.self) private var app
-    @State private var queue: [ImmichClient.FaceSuggestion]?
-    @State private var index = 0
-    @State private var face: UIImage?
-    @State private var confirmed = 0
-    @AppStorage("faces.rejected") private var rejectedRaw = ""
-
-    private var name: String { person.name.isEmpty ? String(localized: "diese Person") : person.name }
-    private var current: ImmichClient.FaceSuggestion? { queue.flatMap { index < $0.count ? $0[index] : nil } }
-
-    var body: some View {
-        NavigationStack {
-            VStack(spacing: 22) {
-                if let queue, let f = current {
-                    Text(String(localized: "\(index + 1) von \(queue.count)")).font(.subheadline).foregroundStyle(.secondary)
-                    ZStack {
-                        if let face { Image(uiImage: face).resizable().scaledToFill() } else { Color.appFill2; ProgressView() }
-                    }
-                    .frame(width: 220, height: 220).clipShape(Circle())
-                    .overlay(Circle().stroke(Color.primary.opacity(0.2), lineWidth: 1))
-                    AssetThumb(id: f.assetId, size: .thumbnail).frame(width: 88, height: 88)
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
-                    Text(String(localized: "Ist das \(name)?")).font(.title2.bold())
-                    HStack(spacing: 14) {
-                        Button { answer(false) } label: { Text(String(localized: "Nein")).frame(maxWidth: .infinity).frame(height: 50) }
-                            .buttonStyle(.bordered).tint(.primary)
-                        Button { answer(true) } label: { Text("Ja").bold().frame(maxWidth: .infinity).frame(height: 50) }
-                            .buttonStyle(.borderedProminent)
-                    }
-                    .padding(.horizontal, 30)
-                } else if queue != nil {
-                    ContentUnavailableView(confirmed > 0 ? (confirmed == 1 ? String(localized: "1 Foto bestätigt") : String(localized: "\(confirmed) Fotos bestätigt")) : String(localized: "Keine weiteren Vorschläge"),
-                                           systemImage: "person.crop.circle.badge.checkmark",
-                                           description: Text(String(localized: "Sobald der Server weitere Gesichter erkannt hat, erscheinen hier neue Vorschläge.")))
-                } else {
-                    ProgressView(String(localized: "Ähnliche Gesichter werden gesucht …"))
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .navigationTitle(String(localized: "Weitere Fotos prüfen"))
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button(String(localized: "Fertig")) { dismiss() } } }
-        }
-        .task {
-            let rejected = Set(rejectedRaw.split(separator: ",").map(String.init))
-            queue = (await ImmichClient.shared.similarFaces(person.id) ?? []).filter { !rejected.contains($0.faceId) }
-            await loadFace()
-        }
-    }
-
-    private func answer(_ yes: Bool) {
-        guard let f = current else { return }
-        if yes {
-            confirmed += 1
-            Task { try? await ImmichClient.shared.assignFace(f.faceId, to: person.id) }
-        } else {
-            rejectedRaw = (rejectedRaw.isEmpty ? "" : rejectedRaw + ",") + f.faceId
-        }
-        index += 1; face = nil
-        if current == nil, confirmed > 0 { app.toast(confirmed == 1 ? String(localized: "1 Foto zu \(name) hinzugefügt") : String(localized: "\(confirmed) Fotos zu \(name) hinzugefügt")) }
-        Task { await loadFace() }
-    }
-
-    /// Gesicht aus der Vorschau schneiden (etwas Rand wie in Fotos).
-    private func loadFace() async {
-        guard let f = current, f.box.count == 4, f.size.count == 2, f.size[0] > 0,
-              let img = await ImageCache.shared.load(f.assetId, .preview), let cg = img.cgImage else { return }
-        let sx = CGFloat(cg.width) / CGFloat(f.size[0]), sy = CGFloat(cg.height) / CGFloat(f.size[1])
-        var r = CGRect(x: CGFloat(f.box[0]) * sx, y: CGFloat(f.box[1]) * sy,
-                       width: CGFloat(f.box[2] - f.box[0]) * sx, height: CGFloat(f.box[3] - f.box[1]) * sy)
-        let side = max(r.width, r.height) * 1.6
-        r = CGRect(x: r.midX - side / 2, y: r.midY - side / 2, width: side, height: side)
-            .intersection(CGRect(x: 0, y: 0, width: cg.width, height: cg.height))
-        guard current?.faceId == f.faceId, let crop = cg.cropping(to: r.integral) else { return }
-        face = UIImage(cgImage: crop)
-    }
-}
-
-/// Andere Personen auswählen, die dieselbe sind – sie gehen in `target` auf (Immich: zusammenführen).
-struct MergePeopleSheet: View {
-    let target: PersonRef
-    let done: () -> Void
-    @Environment(\.dismiss) private var dismiss
-    @Environment(AppModel.self) private var app
-    @State private var people: [PersonDTO] = []
-    @State private var chosen: Set<String> = []
-    @State private var confirm = false
-
-    var body: some View {
-        NavigationStack {
-            ScrollView {
-                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 18) {
-                    ForEach(people.filter { $0.id != target.id }) { p in
-                        Button { if chosen.contains(p.id) { chosen.remove(p.id) } else { chosen.insert(p.id) } } label: {
-                            VStack(spacing: 6) {
-                                PersonThumb(id: p.id).aspectRatio(1, contentMode: .fit).clipShape(Circle())
-                                    .overlay(alignment: .bottomTrailing) {
-                                        if chosen.contains(p.id) {
-                                            Image(systemName: "checkmark.circle.fill").font(.system(size: 24))
-                                                .symbolRenderingMode(.palette).foregroundStyle(.white, .blue)
-                                        }
-                                    }
-                                Text(p.name.isEmpty ? String(localized: "Unbenannt") : p.name).font(.system(size: 13)).lineLimit(1)
-                            }
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-                .padding(20)
-            }
-            .navigationTitle(String(localized: "Gleiche Person auswählen"))
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) { Button(String(localized: "Abbrechen")) { dismiss() } }
-                ToolbarItem(placement: .topBarTrailing) { Button(String(localized: "Zusammenführen")) { confirm = true }.bold().disabled(chosen.isEmpty) }
-            }
-            .confirmationDialog(chosen.count == 1 ? String(localized: "Diese Person ist „\(target.name.isEmpty ? String(localized: "Unbenannt") : target.name)“?")
-                                                  : String(localized: "Diese \(chosen.count) Personen sind „\(target.name.isEmpty ? String(localized: "Unbenannt") : target.name)“?"),
-                                isPresented: $confirm, titleVisibility: .visible) {
-                Button(String(localized: "Zusammenführen")) {
-                    let ids = Array(chosen)
-                    Task { try? await ImmichClient.shared.mergePeople(into: target.id, ids) }
-                    app.toast(String(localized: "Zusammengeführt"))
-                    dismiss(); done()
-                }
-            } message: { Text(String(localized: "Alle Fotos dieser Personen erscheinen danach unter einem Namen.")) }
-        }
-        .task { people = (try? await ImmichClient.shared.allPeople(withHidden: false)) ?? [] }
     }
 }
 

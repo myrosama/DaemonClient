@@ -8,7 +8,6 @@ struct ViewerView: View {
     @State private var selection: String = ""
     @State private var chrome = true
     @State private var showInfo = false
-    @State private var editing: Asset?
     @State private var sheet: ActionSheet?
     @State private var video = VideoState()
     @State private var analysis = PhotoAnalysis()
@@ -86,7 +85,7 @@ struct ViewerView: View {
         .onDisappear { video.stop(); Orientation.set(.portrait) }
         // Quer drehen nur in der Einzelansicht selbst – Bearbeiten, Info und Teilen bleiben im Hochformat
         .onAppear { Orientation.set(.allButUpsideDown); ViewerZoom.zoomed = false }
-        .onChange(of: editing != nil || showInfo || sheet != nil, initial: true) { _, busy in
+        .onChange(of: showInfo || sheet != nil, initial: true) { _, busy in
             Orientation.set(busy ? .portrait : .allButUpsideDown)
         }
         // Text/Objekte im Foto erkennen, sobald es gezeigt wird (VisionKit, auf dem iPhone)
@@ -96,10 +95,6 @@ struct ViewerView: View {
         }
         .overlay(alignment: .top) { VStack { BusyBadge(); ToastBadge() } }
         .actionSheets($sheet)
-        .fullScreenCover(item: $editing) { a in
-            if a.isVideo { VideoTrimView(asset: a) { result in replace(a, with: result) } }
-            else { EditorView(asset: a) { result in replace(a, with: result) } }
-        }
         .sheet(isPresented: $showInfo) {
             if let a = current {
                 InfoSheet(asset: a, lookUp: analysis.hasLookUp(a.id) ? { showInfo = false; analysis.lookUp = true } : nil)
@@ -146,17 +141,6 @@ struct ViewerView: View {
             Menu {
                 AssetMenu(assets: [a], style: .viewer, present: { sheet = $0 }) { removeLocal(a) }
                 if a.isVideo {
-                    Button(String(localized: "Videobild als Foto sichern"), systemImage: "photo.badge.plus") {
-                        let t = video.time
-                        Task { await AssetActions.saveVideoFrame(a, at: t, app: app, timeline: timeline) }
-                    }
-                }
-                if a.isLivePhoto && a.isImage {
-                    Button(String(localized: "Als Video sichern"), systemImage: "video.badge.plus") {
-                        Task { await AssetActions.saveLiveAsVideo(a, app: app, timeline: timeline) }
-                    }
-                }
-                if a.isVideo {
                     // Für Fehlerberichte (GitHub-Issue #1): was die App angefragt hat, Antworten, Codec, Zeiten
                     Button(String(localized: "Video-Diagnose kopieren"), systemImage: "stethoscope") {
                         Task {
@@ -196,7 +180,7 @@ struct ViewerView: View {
     }
 
     @ViewBuilder private func bottomBar(_ a: Asset) -> some View {
-        if a.isLocalOnly { localBar(a) } else if a.trashedAt != nil { trashBar(a) } else { normalBar(a) }
+        if a.isLocalOnly { localBar(a) } else { normalBar(a) }
     }
 
     /// Noch nicht gesichert: Bearbeiten, Favorit usw. gehen erst, wenn das Foto auf dem Server ist
@@ -219,36 +203,12 @@ struct ViewerView: View {
         .padding(.bottom, 6)
     }
 
-    /// In „Zuletzt gelöscht“ wie bei Apple: Löschen · verbleibende Tage · Wiederherstellen.
-    private func trashBar(_ a: Asset) -> some View {
-        HStack {
-            Button(String(localized: "Löschen")) { sheet = .confirmDeleteForever([a]) { removeLocal(a) } }
-                .foregroundStyle(.red)
-                .padding(.horizontal, 18).frame(height: 48)
-                .glassEffect(.regular.interactive(), in: .capsule)
-            Spacer()
-            Text(TrashDays.text(a)).font(.system(size: 13)).foregroundStyle(.secondary)
-            Spacer()
-            Button(String(localized: "Wiederherstellen")) {
-                AssetActions.restore([a.id], app: app, timeline: timeline); removeLocal(a)
-            }
-            .padding(.horizontal, 18).frame(height: 48)
-            .glassEffect(.regular.interactive(), in: .capsule)
-        }
-        .font(.system(size: 17, weight: .semibold))
-        .foregroundStyle(.white)
-        .buttonStyle(.plain)
-        .padding(.horizontal, 20)
-        .padding(.bottom, 6)
-    }
-
     private func normalBar(_ a: Asset) -> some View {
         GlassEffectContainer {
             HStack(spacing: 12) {
                 // Tippen teilt die Datei wie in Fotos, langes Drücken bietet zusätzlich „Als Link teilen“
                 Menu {
                     Button(String(localized: "Datei senden"), systemImage: "doc") { Task { await ShareService.share([a.id], app: app) } }
-                    Button(String(localized: "Link teilen (Heimnetz/VPN)"), systemImage: "link") { sheet = .shareLink([a.id]) }
                     Button(String(localized: "Teilen-Optionen …"), systemImage: "slider.horizontal.3") { sheet = .shareOptions([a.id]) }
                 } label: {
                     Image(systemName: "square.and.arrow.up").frame(width: 52, height: 52).contentShape(.rect)
@@ -271,13 +231,11 @@ struct ViewerView: View {
                             .frame(width: 44, height: 52).contentShape(.rect)
                     }
                     .accessibilityLabel(analysis.hasLookUp(a.id) ? String(localized: "Info, Nachschlagen verfügbar") : String(localized: "Info"))
-                    Button { editing = a } label: { Image(systemName: "slider.horizontal.3").frame(width: 44, height: 52).contentShape(.rect) }
-                        .accessibilityLabel(String(localized: "Bearbeiten"))
                 }
                 .padding(.horizontal, 12).frame(height: 52)
                 .glassEffect(.regular.interactive(), in: .capsule)
                 Spacer()
-                Button(role: .destructive) { trash(a) } label: {
+                Button(role: .destructive) { sheet = .confirmDeleteForever([a]) { removeLocal(a) } } label: {
                     Image(systemName: "trash").frame(width: 52, height: 52).contentShape(.rect)
                 }
                 .glassEffect(.regular.interactive(), in: .circle)
@@ -295,20 +253,6 @@ struct ViewerView: View {
         var b = a; b.isFavorite.toggle()
         assets[i] = b; timeline.update(b)
         Task { try? await ImmichClient.shared.setFavorite(a.id, b.isFavorite) }
-    }
-
-    /// Nach dem Bearbeiten: gleiche ID (Server-Zuschnitt) oder neue bearbeitete Fassung.
-    private func replace(_ old: Asset, with new: Asset) {
-        guard let i = assets.firstIndex(where: { $0.id == old.id }) else { return }
-        assets[i] = new
-        selection = new.id
-        Task { await timeline.reload() }
-    }
-
-    private func trash(_ a: Asset) {
-        Task { try? await ImmichClient.shared.trash([a.id]) }
-        timeline.remove(a.id)
-        removeLocal(a)
     }
 
     /// Nach Löschen/Ausblenden zum nächsten Objekt springen.
@@ -347,27 +291,12 @@ final class OriginalImages {
     private var cache: [(String, UIImage)] = []
     private var running: [String: Task<UIImage?, Never>] = [:]
     /// Originaldaten von Fotos mit Tiefenkarte (für die räumliche Szene)
-    private var depthData: [(String, Data)] = []
-    func hasDepth(_ id: String) -> Bool { depthData.contains { $0.0 == id } }
-
-    /// Vorder-/Hintergrund für die räumliche Szene (auf 2048 px verkleinert).
-    func spatialLayers(_ id: String) async -> SpatialLayers? {
-        guard let data = depthData.first(where: { $0.0 == id })?.1 else { return nil }
-        return await Task.detached(priority: .userInitiated) { () -> SpatialLayers? in
-            guard let img = CIImage(data: data, options: [.applyOrientationProperty: true]), let depth = DepthMaps(data: data) else { return nil }
-            let s = min(1, 2048 / max(img.extent.width, img.extent.height))
-            return SpatialLayers.make(image: img.transformed(by: CGAffineTransform(scaleX: s, y: s)), depth: depth)
-        }.value
-    }
 
     func load(_ id: String) async -> UIImage? {
         if let hit = cache.first(where: { $0.0 == id })?.1 { return hit }
         if Connectivity.shared.serverOffline { return nil }
         let t = running[id] ?? Task {
             guard let url = ImmichClient.shared.originalURL(id), let data = try? await ImmichClient.shared.data(url) else { return nil }
-            if await Task.detached(priority: .utility, operation: { DepthMaps(data: data) != nil }).value {
-                depthData.removeAll { $0.0 == id }; depthData.append((id, data)); if depthData.count > 2 { depthData.removeFirst() }
-            }
             return await Task.detached(priority: .userInitiated) { () -> UIImage? in
                 var c = UIImageReader.Configuration()
                 #if targetEnvironment(simulator)
@@ -398,8 +327,6 @@ private struct ZoomableImage: View {
     @State private var scale: CGFloat = 1
     @State private var playLive = false
     @State private var full: UIImage?
-    @State private var spatialAvailable = false
-    @State private var spatial: SpatialLayers?
     @Environment(AppModel.self) private var app
     /// Apples „Vitality“: beim Hinwischen bewegt sich ein Live Photo einmal kurz (stumm), dann steht das Foto
     /// Der Clip wird vorher geladen (sonst ist das feste Zeitfenster beim Streamen oft vorbei, bevor ein Bild kommt).
@@ -441,23 +368,7 @@ private struct ZoomableImage: View {
             guard analysis != nil, full == nil, app.alwaysOriginal || scale > 1.01 else { return }
             try? await Task.sleep(for: .milliseconds(app.alwaysOriginal ? 200 : 0))
             guard !Task.isCancelled, let img = await OriginalImages.shared.load(asset.id) else { return }
-            withAnimation(.easeOut(duration: 0.2)) { full = img; spatialAvailable = OriginalImages.shared.hasDepth(asset.id) }
-        }
-        .overlay(alignment: .topTrailing) {
-            // Apple: Knopf für die räumliche Szene oben rechts bei geeigneten Fotos
-            if spatialAvailable && chrome && scale <= 1.01 {
-                Button {
-                    Task { spatial = await OriginalImages.shared.spatialLayers(asset.id); if spatial == nil { app.toast(String(localized: "Räumliche Szene nicht möglich")) } }
-                } label: {
-                    Image(systemName: "cube.transparent").font(.system(size: 17, weight: .semibold)).foregroundStyle(.white).frame(width: 44, height: 44).contentShape(.rect)
-                }
-                .glassEffect(.regular.interactive(), in: .circle)
-                .padding(.trailing, 16).padding(.top, 120)
-                .accessibilityLabel(String(localized: "Räumliche Szene"))
-            }
-        }
-        .fullScreenCover(isPresented: Binding(get: { spatial != nil }, set: { if !$0 { spatial = nil } })) {
-            if let spatial { SpatialSceneView(layers: spatial) { self.spatial = nil } }
+            withAnimation(.easeOut(duration: 0.2)) { full = img }
         }
     }
 
@@ -541,7 +452,7 @@ private struct UnplayableVideoNote: View {
         VStack(spacing: 12) {
             Image(systemName: "play.slash.fill").font(.system(size: 40))
             Text(String(localized: "Dieses Video kann das iPhone nicht abspielen")).font(.headline)
-            Text(String(localized: "Das Dateiformat wird von iOS nicht unterstützt (z. B. HEVC mit Kennung „hev1“, VP9 oder AV1). Abhilfe in Immich unter Verwaltung → Einstellungen → Video-Transkodierung: Echtzeit-Transkodierung einschalten oder solche Videos in H.264 umwandeln lassen."))
+            Text(String(localized: "This video's format can't be played on iPhone (for example HEVC tagged “hev1”, VP9 or AV1)."))
                 .font(.footnote).multilineTextAlignment(.center).foregroundStyle(.white.opacity(0.85))
         }
         .foregroundStyle(.white).shadow(radius: 6)
@@ -609,71 +520,6 @@ private struct VitalityVideo: UIViewRepresentable {
     final class Coord { var player: AVPlayer?; var end: NSObjectProtocol? }
 }
 
-/// Geteiltes Album wie bei Apple: „Gefällt mir“ und Kommentare zum Foto (Immich-Aktivitäten).
-private struct AlbumActivityView: View {
-    let album: AlbumDTO
-    let assetId: String
-    @Environment(AppModel.self) private var app
-    @State private var items: [ActivityDTO] = []
-    @State private var draft = ""
-    @State private var sending = false
-
-    private var likes: [ActivityDTO] { items.filter { $0.type == "like" } }
-    private var comments: [ActivityDTO] { items.filter { $0.type == "comment" } }
-    private var myLike: ActivityDTO? { likes.first { $0.user.id == app.userID } }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("„\(album.albumName)“").font(.system(size: 15, weight: .semibold)).foregroundStyle(.secondary)
-                Spacer()
-                Button { Task { await toggleLike() } } label: {
-                    Label(likes.isEmpty ? String(localized: "Gefällt mir") : "\(likes.count)", systemImage: myLike == nil ? "hand.thumbsup" : "hand.thumbsup.fill")
-                        .font(.system(size: 15, weight: .medium))
-                }
-                .accessibilityLabel(myLike == nil ? String(localized: "Gefällt mir") : String(localized: "Gefällt mir nicht mehr"))
-            }
-            ForEach(comments) { c in
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(c.user.name).font(.system(size: 13, weight: .semibold))
-                    Text(c.comment ?? "").font(.system(size: 15))
-                }
-                .contextMenu {
-                    if c.user.id == app.userID {
-                        Button(String(localized: "Kommentar löschen"), systemImage: "trash", role: .destructive) { Task { await remove(c) } }
-                    }
-                }
-            }
-            HStack {
-                TextField(String(localized: "Kommentar hinzufügen"), text: $draft, axis: .vertical).textFieldStyle(.roundedBorder)
-                Button(String(localized: "Senden")) { Task { await send() } }
-                    .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || sending)
-            }
-        }
-        .padding(14)
-        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Color(white: 0.12)))
-        .task { items = (try? await ImmichClient.shared.activities(album: album.id, asset: assetId)) ?? [] }
-    }
-
-    private func toggleLike() async {
-        if let l = myLike {
-            try? await ImmichClient.shared.deleteActivity(l.id); items.removeAll { $0.id == l.id }
-        } else if let a = try? await ImmichClient.shared.addActivity(album: album.id, asset: assetId, comment: nil) {
-            items.append(a)
-        }
-    }
-    private func send() async {
-        let t = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !t.isEmpty else { return }
-        sending = true; defer { sending = false }
-        if let a = try? await ImmichClient.shared.addActivity(album: album.id, asset: assetId, comment: t) { items.append(a); draft = "" }
-        else { app.toast(String(localized: "Kommentar nicht gesendet")) }
-    }
-    private func remove(_ c: ActivityDTO) async {
-        try? await ImmichClient.shared.deleteActivity(c.id); items.removeAll { $0.id == c.id }
-    }
-}
-
 /// Info wie in Fotos: Untertitel, Datum + Dateiname, Kamera-Karte, Karte mit „Anpassen“.
 private struct InfoSheet: View {
     let asset: Asset
@@ -682,13 +528,8 @@ private struct InfoSheet: View {
     @Environment(AppModel.self) private var app
     @State private var dto: AssetDTO?
     @State private var nearby: [MapMarkerDTO] = []
-    /// „Mit Bereinigen bearbeitet“: alle so bearbeiteten Fotos (für den Tipp auf den Hinweis)
-    @State private var cleanedIDs: [String]?
     @State private var nearbyChecked = false
     @State private var albums: [AlbumDTO] = []
-    @State private var sharedAlbums: Set<String> = []
-    @State private var naming: PersonDTO?
-    @State private var newName = ""
     @State private var caption = ""
     @State private var sheet: ActionSheet?
     @FocusState private var editingCaption: Bool
@@ -727,23 +568,12 @@ private struct InfoSheet: View {
                             .font(.system(size: 16, weight: .semibold))
                         Text(fileName).font(.system(size: 15)).foregroundStyle(.secondary)
                     }
-                    Spacer()
-                    Button(String(localized: "Anpassen")) { sheet = .dateTime([asset]) }
-                }
-                if let ids = cleanedIDs {
-                    NavigationLink(value: CollectionRoute.assets(title: String(localized: "Mit Bereinigen bearbeitet"), ids: ids)) {
-                        Label(String(localized: "Mit Bereinigen bearbeitet"), systemImage: "eraser")
-                            .font(.system(size: 15)).foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.plain)
                 }
                 if let src = Provenance.source(dto?.originalFileName, make: dto?.exifInfo?.make) {
                     Label(src, systemImage: Provenance.isScreen(src) ? "camera.viewfinder" : "square.and.arrow.down")
                         .font(.system(size: 15)).foregroundStyle(.secondary)
                 }
-                peopleRow
                 albumsRow
-                ForEach(albums.filter { sharedAlbums.contains($0.id) }) { AlbumActivityView(album: $0, assetId: asset.id) }
                 cameraCard
                 mapCard
             }
@@ -756,87 +586,9 @@ private struct InfoSheet: View {
         .task {
             dto = try? await ImmichClient.shared.asset(asset.id)
             caption = dto?.exifInfo?.description ?? ""
-            await loadCleaned()
             albums = (try? await ImmichClient.shared.albums(containing: asset.id)) ?? []
-            if !albums.isEmpty { sharedAlbums = await ImmichClient.shared.sharedAlbumIDs() }
         }
         .actionSheets($sheet)
-        .alert(String(localized: "Name"), isPresented: Binding(get: { naming != nil }, set: { if !$0 { naming = nil } })) {
-            TextField(String(localized: "Name"), text: $newName)
-            Button(String(localized: "Abbrechen"), role: .cancel) {}
-            Button(String(localized: "Sichern")) {
-                guard let p = naming else { return }
-                let name = newName.trimmingCharacters(in: .whitespaces)
-                Task {
-                    try? await ImmichClient.shared.updatePerson(p.id, ["name": name])
-                    dto = try? await ImmichClient.shared.asset(asset.id)
-                }
-            }
-        } message: { Text(String(localized: "Wie heißt diese Person?")) }
-    }
-
-    /// Personen auf dem Foto (wie Apple: Gesichter mit Namen, unbenannte mit „Name hinzufügen“).
-    @ViewBuilder private var peopleRow: some View {
-        let people = (dto?.people ?? []).filter { $0.isHidden != true }
-        if !people.isEmpty {
-            VStack(alignment: .leading, spacing: 10) {
-                Text(String(localized: "Personen")).font(.system(size: 15, weight: .semibold)).foregroundStyle(.secondary)
-                ScrollView(.horizontal) {
-                    HStack(spacing: 16) {
-                        ForEach(people) { p in
-                            if p.name.isEmpty {
-                                Button { newName = ""; naming = p } label: { face(p, String(localized: "Name hinzufügen")) }.buttonStyle(.plain)
-                            } else {
-                                NavigationLink(value: CollectionRoute.person(PersonRef(id: p.id, name: p.name))) { face(p, p.name) }
-                                    .buttonStyle(.plain)
-                                    .contextMenu {
-                                        // wie Fotos (REA: PXPhotoKitPersonMakeKeyPhotoActionPerformer)
-                                        Button("Als Titelbild für \(p.name)", systemImage: "person.crop.square") {
-                                            Task {
-                                                do {
-                                                    let api = ImmichClient.shared
-                                                    func fetch() async -> Data? {
-                                                        guard let base = api.personThumbURL(p.id) else { return nil }
-                                                        // eigene Adresse je Abfrage, sonst antwortet der URL-Cache mit dem alten Bild
-                                                        return try? await api.data(base.appending(queryItems: [URLQueryItem(name: "t", value: UUID().uuidString)]))
-                                                    }
-                                                    let before = await fetch()
-                                                    try await api.updatePerson(p.id, ["featureFaceAssetId": asset.id])
-                                                    app.toast(String(localized: "Titelbild festgelegt"))
-                                                    // Server rechnet das Personenbild im Hintergrund neu – erst neu zeigen, wenn es da ist
-                                                    for _ in 0..<20 {
-                                                        try? await Task.sleep(for: .milliseconds(600))
-                                                        if let now = await fetch(), now != before { break }
-                                                    }
-                                                    ImageCache.shared.bumpPerson(p.id)
-                                                } catch { app.toast("Hat nicht geklappt") }
-                                            }
-                                        }
-                                        Button("Das ist nicht \(p.name)", systemImage: "person.crop.circle.badge.xmark") {
-                                            Task {
-                                                do {
-                                                    try await ImmichClient.shared.notThisPerson(asset: asset.id, person: p.id)
-                                                    app.toast(String(localized: "Aus „\(p.name)“ entfernt"))
-                                                } catch { app.toast(String(localized: "Hat nicht geklappt")) }
-                                                dto = try? await ImmichClient.shared.asset(asset.id)
-                                            }
-                                        }
-                                    }
-                            }
-                        }
-                    }
-                }
-                .scrollIndicators(.hidden)
-            }
-        }
-    }
-
-    private func face(_ p: PersonDTO, _ title: String) -> some View {
-        VStack(spacing: 6) {
-            PersonThumb(id: p.id).frame(width: 60, height: 60).clipShape(Circle())
-            Text(title).font(.system(size: 12, weight: .medium)).lineLimit(1).frame(width: 76)
-                .foregroundStyle(p.name.isEmpty ? Color.blue : .primary)
-        }
     }
 
     /// In welchen Alben das Foto liegt (Apple: „In Alben“).
@@ -911,19 +663,6 @@ private struct InfoSheet: View {
             .overlay(alignment: .trailing) { Rectangle().fill(Color(white: 0.3)).frame(width: 1, height: 16) }
     }
 
-    /// War es eine Bereinigen-Bearbeitung? (gespeicherter Bearbeitungsstand mit Strichen) → Hinweis + Liste aller bereinigten Fotos
-    private func loadCleaned() async {
-        let api = ImmichClient.shared
-        guard let meta = await api.metadata(asset.id, key: "fotos.edit"), let json = meta["state"] as? String,
-              let st = try? JSONDecoder().decode(EditState.self, from: Data(json.utf8)), !st.cleanup.isEmpty else { return }
-        var ids = [asset.id]
-        if let t = (try? await api.tags())?.first(where: { $0.value == "Kategorie/Bereinigt" }),
-           let found = try? await api.search(filter: ["tagIds": ["any": [t.id]]], size: 1000) {
-            ids = Array(Set(ids + found.map(\.id)))
-        }
-        cleanedIDs = ids
-    }
-
     /// Fotos im Umkreis von ~1 km (Immich-Kartenpunkte), ohne dieses Foto
     private func loadNearby(_ lat: Double, _ lon: Double) async {
         let all = (try? await ImmichClient.shared.mapMarkers()) ?? []
@@ -957,8 +696,6 @@ private struct InfoSheet: View {
                 HStack {
                     Text([dto?.exifInfo?.city, dto?.exifInfo?.country].compactMap { $0 }.joined(separator: ", "))
                         .font(.system(size: 15)).foregroundStyle(.secondary)
-                    Spacer()
-                    Button(String(localized: "Anpassen")) { sheet = .location([asset]) }
                 }
                 .padding(14)
                 if !nearby.isEmpty {
@@ -976,12 +713,6 @@ private struct InfoSheet: View {
                         .font(.system(size: 15)).padding(.horizontal, 14).padding(.bottom, 14)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
-            }
-            .background(Color(white: 0.14))
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        } else {
-            Button { sheet = .location([asset]) } label: {
-                Label(String(localized: "Ort hinzufügen"), systemImage: "mappin.and.ellipse").frame(maxWidth: .infinity).padding(14)
             }
             .background(Color(white: 0.14))
             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))

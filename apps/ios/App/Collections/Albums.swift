@@ -170,7 +170,7 @@ struct AlbumScreen: View {
         async let a = try? ImmichClient.shared.albumAssets(ref.id)
         async let l = try? ImmichClient.shared.albums()
         let list = await a, all = await l
-        if let list { assets = list.map(\.asset) } else if assets == nil { assets = [] }
+        if let list { assets = list } else if assets == nil { assets = [] }
         if let found = all?.first(where: { $0.id == ref.id }) { info = found }
     }
 
@@ -242,17 +242,7 @@ struct AlbumScreen: View {
         }
         Button(String(localized: "Teilen"), systemImage: "square.and.arrow.up") { Task { await ShareService.share(sorted.map(\.id), app: app) } }
             .disabled(sorted.isEmpty)
-        Button(String(localized: "Album als Link teilen"), systemImage: "link") { app.sheet = .albumLink(ref.id) }
         Button(String(localized: "Fotos hinzufügen"), systemImage: "plus") { picker = true }
-        // wie Fotos (REA: PXPhotoKitAssetCollectionPlayMovieActionPerformer): Album im Rückblick-Player
-        Button("Als Rückblick abspielen", systemImage: "play.rectangle.on.rectangle") {
-            let picked = MemoryEngine.curate(sorted, max: 60)
-            if let key = info?.albumThumbnailAssetId.flatMap({ id in picked.first { $0.id == id } }) ?? MemoryEngine.keyPhoto(picked) {
-                app.memory = Memory(id: "album-\(ref.id)", title: name, subtitle: MemoryEngine.range(picked), assets: picked,
-                                    key: key, date: picked.last?.date ?? Date())
-            } else { app.toast(String(localized: "Zu wenige Fotos für einen Rückblick")) }
-        }
-        .disabled(sorted.filter(\.isImage).count < 3)
         Button(String(localized: "Karte einblenden"), systemImage: "map") {
             Task {
                 markers = (try? await ImmichClient.shared.albumMarkers(ref.id)) ?? []
@@ -362,7 +352,6 @@ private struct AlbumContextMenu: ViewModifier {
             .contextMenu {
                 Button(String(localized: "Fotos teilen"), systemImage: "square.and.arrow.up") { Task { await AlbumActions.share(album.id, app: app) } }
                     .disabled(album.assetCount == 0)
-                Button(String(localized: "Album als Link teilen"), systemImage: "link") { app.sheet = .albumLink(album.id) }
                 Button(String(localized: "Fotos hinzufügen"), systemImage: "plus") { picker = true }
                 Divider()
                 Button(String(localized: "Titel bearbeiten"), systemImage: "pencil") { newName = album.albumName; renaming = true }
@@ -456,8 +445,6 @@ struct AlbumsListScreen: View {
     @State private var newAlbum = false
     @State private var naming: (id: String?, name: String)?
     @State private var folders = AlbumFolders.shared
-    @State private var smart = SmartAlbums.shared
-    @State private var editingSmart: SmartAlbum?
 
     private var folder: AlbumFolders.Folder? { folderID.flatMap { id in folders.folders.first { $0.id == id } } }
     private func visible(_ sort: AlbumSort) -> [AlbumDTO] {
@@ -473,7 +460,6 @@ struct AlbumsListScreen: View {
             LazyVGrid(columns: [GridItem(.flexible(), spacing: 16), GridItem(.flexible(), spacing: 16)], spacing: 18) {
                 if folderID == nil {
                     ForEach(folders.folders) { f in folderTile(f) }
-                    ForEach(smart.albums) { s in smartTile(s) }
                 }
                 ForEach(visible(sort)) { a in
                     NavigationLink(value: CollectionRoute.album(AlbumRef(id: a.id, name: a.albumName))) {
@@ -494,8 +480,7 @@ struct AlbumsListScreen: View {
         }
         .background(Color.appBackground)
         .navigationTitle(folder?.name ?? String(localized: "Alben"))
-        .onAppear { folders.use(app.userID); smart.use(app.userID) }
-        .sheet(item: $editingSmart) { s in SmartAlbumEditor(album: s) { smart.save($0) } }
+        .onAppear { folders.use(app.userID) }
         .overlay {
             if folderID != nil, visible(sort).isEmpty {
                 ContentUnavailableView("Ordner ist leer", systemImage: "folder",
@@ -519,7 +504,6 @@ struct AlbumsListScreen: View {
                     Button(String(localized: "Neues Album"), systemImage: "plus") { newAlbum = true }
                     if folderID == nil {
                         Button("Neuer Ordner", systemImage: "folder.badge.plus") { naming = (nil, "") }
-                        Button(String(localized: "Neues intelligentes Album"), systemImage: "gearshape") { editingSmart = SmartAlbum() }
                     }
                     Picker(String(localized: "Sortieren"), selection: $sortRaw) {
                         ForEach(AlbumSort.allCases) { Text($0.title).tag($0.rawValue) }
@@ -530,24 +514,6 @@ struct AlbumsListScreen: View {
         }
         .sheet(isPresented: $newAlbum) {
             NewAlbumSheet { created in if let folderID { folders.move(created.id, to: folderID) } }
-        }
-    }
-
-    /// Kachel eines intelligenten Albums (Zahnrad wie in Fotos)
-    private func smartTile(_ s: SmartAlbum) -> some View {
-        NavigationLink(value: CollectionRoute.smart(s.id)) {
-            VStack(alignment: .leading, spacing: 4) {
-                RoundedRectangle(cornerRadius: 18, style: .continuous).fill(Color.appFill)
-                    .aspectRatio(1, contentMode: .fit)
-                    .overlay { Image(systemName: "gearshape").font(.system(size: 44)).foregroundStyle(.secondary) }
-                Text(s.name).font(.system(size: 16, weight: .semibold)).foregroundStyle(.primary).lineLimit(1)
-                Text(String(localized: "Intelligentes Album")).font(.system(size: 14)).foregroundStyle(.secondary)
-            }
-        }
-        .buttonStyle(.plain)
-        .contextMenu {
-            Button(String(localized: "Regeln bearbeiten"), systemImage: "slider.horizontal.3") { editingSmart = s }
-            Button(String(localized: "Intelligentes Album löschen"), systemImage: "trash", role: .destructive) { smart.delete(s.id) }
         }
     }
 

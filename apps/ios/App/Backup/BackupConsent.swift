@@ -8,15 +8,22 @@ struct BackupConsentView: View {
     @State private var count: Int?
     private var server: URL? { ImmichClient.shared.baseURL }
     private var plainHTTP: Bool { server?.scheme?.lowercased() == "http" }
+    /// The Phosphor service: its worker address means nothing to the user, so it is not shown.
+    private var hosted: Bool { (UserDefaults.standard.string(forKey: "serverURL") ?? "").lowercased().contains("api.daemonclient.uz") }
 
     var body: some View {
         VStack(spacing: 18) {
             Image(systemName: "arrow.triangle.2.circlepath.icloud").font(.system(size: 52)).foregroundStyle(.tint)
                 .padding(.top, 24)
-            Text(String(localized: "Fotos auf deinem Server sichern?")).font(.title2.bold()).multilineTextAlignment(.center)
+            Text(hosted ? String(localized: "Back up photos to Phosphor?") : String(localized: "Fotos auf deinem Server sichern?"))
+                .font(.title2.bold()).multilineTextAlignment(.center)
             VStack(spacing: 8) {
-                Text(String(localized: "Neue Fotos und Videos von diesem iPhone werden als Originale hochgeladen nach")).foregroundStyle(.secondary)
-                Text(server?.host() ?? "–").font(.headline)
+                if hosted {
+                    Text("New photos and videos from this iPhone are uploaded as originals.").foregroundStyle(.secondary)
+                } else {
+                    Text(String(localized: "Neue Fotos und Videos von diesem iPhone werden als Originale hochgeladen nach")).foregroundStyle(.secondary)
+                    Text(server?.host() ?? "–").font(.headline)
+                }
                 if let count { Text(String(localized: "\(count.formatted()) Fotos und Videos auf diesem iPhone")).font(.subheadline).foregroundStyle(.secondary) }
             }
             .multilineTextAlignment(.center)

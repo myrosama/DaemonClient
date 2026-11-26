@@ -147,10 +147,6 @@ struct LibraryHeader: View {
             Toggle(isOn: $app.aspectGrid) { Label(String(localized: "Seitenverhältnisraster"), systemImage: "aspectratio") }
             Toggle(isOn: $app.autoplay) { Label(String(localized: "Videos & Live Photos automatisch abspielen"), systemImage: "play.square") }
             Toggle(isOn: $app.alwaysOriginal) { Label(String(localized: "Original immer anzeigen (HDR)"), systemImage: "sun.max") }
-            Section(String(localized: "Anzeigen:")) {
-                Toggle(isOn: $app.showScreenshots) { Label(String(localized: "Bildschirmfotos"), systemImage: "camera.viewfinder") }
-                Toggle(isOn: $app.showShared) { Label(String(localized: "Mit dir geteilt"), systemImage: "person.2") }
-            }
         } label: { Label(String(localized: "Darstellungsoptionen"), systemImage: "eye") }
         Menu {
             Picker(String(localized: "Filter"), selection: $app.filter) {
@@ -283,7 +279,7 @@ struct AllGrid: View {
                   onSelect: { app.selected = $0.filter { !$0.hasPrefix(LocalPending.prefix) } },
                   menu: { a in AssetMenuUIKit.context(a, app: app, timeline: timeline) },
                   // nicht hinter der Einzelansicht oder in anderen Tabs weiterspielen (Akku, Leitung fürs Video vorn)
-                  autoplay: app.autoplay && app.tab == .library && app.scale == .all && app.viewer == nil && app.memory == nil,
+                  autoplay: app.autoplay && app.tab == .library && app.scale == .all && app.viewer == nil,
                   showsScrollIndicator: true,
                   scrubLabel: { i in
                       guard i < items.count else { return nil }
@@ -380,29 +376,19 @@ final class LibraryQuery {
     @ObservationIgnored private(set) var index: [String: Int] = [:]
 
     func key(_ app: AppModel, _ t: TimelineStore) -> String {
-        "\(app.sortByAdded)|\(app.filter.rawValue)|\(app.showScreenshots)|\(app.showShared)|\(t.totalCount)|\(t.allLoaded.count)"
+        "\(app.sortByAdded)|\(app.filter.rawValue)|\(t.totalCount)|\(t.allLoaded.count)"
     }
 
     func refresh(app: AppModel, timeline: TimelineStore) async {
         await timeline.loadAll()
         var all = timeline.allLoaded
-        func ids(_ c: Category) async -> Set<String> { Set(await CategoryLoader.load(c, timeline: timeline).map(\.id)) }
-        if !app.showScreenshots { let shots = await ids(.screenshots); all.removeAll { shots.contains($0.id) } }
-        if !app.showShared, !app.userID.isEmpty { all.removeAll { ($0.ownerId ?? app.userID) != app.userID } }
         switch app.filter {
         case .all: break
         case .favorites: all = all.filter(\.isFavorite)
         case .photos: all = all.filter(\.isImage)
         case .videos: all = all.filter(\.isVideo)
         // wie Fotos (REA: PhotosGridToggleLiveFilter / TogglePortraitFilter)
-        case .livePhotos: let s = await ids(.livePhotos); all = all.filter { $0.isLivePhoto || s.contains($0.id) }
-        case .portrait: let s = await ids(.portrait); all = all.filter { s.contains($0.id) }
-        case .screenshots: let s = await ids(.screenshots); all = all.filter { s.contains($0.id) }
-        case .edited: let s = await ids(.recentlyEdited); all = all.filter { s.contains($0.id) }
-        case .shared: all = all.filter { $0.ownerId != nil && $0.ownerId != app.userID }
-        case .notInAlbum:
-            let inAlbum = Set(((try? await ImmichClient.shared.search(filter: ["hasAlbums": ["eq": true]], size: 100_000)) ?? []).map(\.id))
-            all.removeAll { inAlbum.contains($0.id) }
+        case .livePhotos: all = all.filter(\.isLivePhoto)
         }
         if app.sortByAdded { all.sort { ($0.addedAt ?? $0.date) < ($1.addedAt ?? $1.date) } }
         list = all

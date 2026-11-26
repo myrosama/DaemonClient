@@ -4,9 +4,10 @@ import SwiftUI
 /// Stand von iCloud kommt dort aus PXCPLStatusProvider): Anzahl Fotos/Videos, darunter das Backup auf den eigenen
 /// Server mit Balken und Pausieren/Fortsetzen – im Glas-Look von iOS 26 statt Apples alter weißer Box.
 struct LibraryFooter: View {
-    /// ändert sich mit der Mediathek → Anzahl neu vom Server holen
+    /// ändert sich mit der Mediathek → neu zählen
     let refresh: Int
     let onOpenBackup: () -> Void
+    @Environment(TimelineStore.self) private var timeline
     @State private var stats: (images: Int, videos: Int)?
     private var backup: BackupEngine { .shared }
     /// Zeitangaben in der Sprache der App, nicht des Systems (sonst „15 hours ago“ in deutscher Oberfläche)
@@ -25,11 +26,10 @@ struct LibraryFooter: View {
         .glassEffect(.regular, in: .rect(cornerRadius: 24))
         .padding(.horizontal, 16)
         .task(id: refresh) {
-            // beim Start ist das Netz manchmal noch nicht da → wiederholen, bis der Server antwortet
-            while !Task.isCancelled {
-                if let s = await ImmichClient.shared.statistics() { stats = s; return }
-                try? await Task.sleep(for: .seconds(stats == nil ? 3 : 30))
-            }
+            // counted from the library itself (the worker has no statistics route)
+            await timeline.loadAll()
+            let all = timeline.allLoaded
+            stats = (all.count { $0.isImage }, all.count { $0.isVideo })
         }
         .accessibilityElement(children: .contain)
     }

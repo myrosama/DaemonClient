@@ -56,7 +56,6 @@ struct BackupView: View {
                         Text(String(localized: "Die App sichert die ganze Mediathek, auch Fotos, die nur in iCloud liegen (sie werden dafür geladen). Hast du ältere Fotos schon anders auf den Server gebracht, z. B. mit icloudpd, schalte das ein: Dann sichert die App nur, was danach dazukommt."))
                     }
                 }
-                FreeUpSection()
                 OfflineSection()
                 Section {
                     ShareLink(item: PerfLog.url, preview: SharePreview("Leistungsprotokoll")) {

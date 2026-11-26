@@ -257,7 +257,6 @@ final class BackupEngine {
         let inFlight = await BackgroundUploader.shared.activeLocalIDs()
         background = inFlight.count
         await Self.sweepLeftovers()
-        await repairTags(api)
         phase = .uploading
 
         // Mehrere gleichzeitig: auf langen Strecken mit Paketverlust bringt eine einzelne Verbindung nur einen
@@ -290,65 +289,10 @@ final class BackupEngine {
                 if r.stop { stop = true }
             }
         }
-        if !Task.isCancelled { await syncEdits() }
         current = ""
         lastRun = Date(); UserDefaults.standard.set(lastRun, forKey: "backup.lastRun")
         storedPending = max(0, total - uploaded - duplicates); UserDefaults.standard.set(storedPending, forKey: "backup.pending")
         phase = Task.isCancelled ? .idle : .done
-    }
-
-    // MARK: Bearbeitungen aus Fotos nachziehen (Änderungs-Token, ab iOS 16)
-
-    /// Token je Konto: welche Fotos sich seit dem letzten Lauf in Fotos geändert haben (statt alles zu vergleichen)
-    private var tokenKey: String { "backup.changeToken.\(stateUser)" }
-
-    /// Fotos, die nach dem Sichern in Apples Fotos bearbeitet wurden: neue Fassung hochladen und auf den Stapel
-    /// über das Original legen (wie beim ersten Sichern). Ohne gespeichertes Token nur das Token merken.
-    private func syncEdits() async {
-        let lib = PHPhotoLibrary.shared()
-        let now = lib.currentChangeToken
-        defer { if let d = try? NSKeyedArchiver.archivedData(withRootObject: now, requiringSecureCoding: true) { UserDefaults.standard.set(d, forKey: tokenKey) } }
-        guard let raw = UserDefaults.standard.data(forKey: tokenKey),
-              let since = try? NSKeyedUnarchiver.unarchivedObject(ofClass: PHPersistentChangeToken.self, from: raw),
-              let changes = try? lib.fetchPersistentChanges(since: since) else { return }   // abgelaufen → ab jetzt neu
-        var updated: Set<String> = []
-        for c in changes {
-            if let d = try? c.changeDetails(for: .asset) { updated.formUnion(d.updatedLocalIdentifiers) }
-        }
-        let ids = updated.filter { state[$0] != nil }
-        guard !ids.isEmpty else { return }
-        let api = ImmichClient.shared
-        for lid in ids {
-            if Task.isCancelled { return }
-            guard var e = state[lid], let a = PHAsset.fetchAssets(withLocalIdentifiers: [lid], options: nil).firstObject else { continue }
-            let res = PHAssetResource.assetResources(for: a)
-            guard let full = res.first(where: { $0.type == (a.mediaType == .video ? .fullSizeVideo : .fullSizePhoto) }),
-                  let main = res.first(where: { $0.type == (a.mediaType == .video ? .video : .photo) }) else { continue }
-            // nur wenn sich die Bearbeitung seit dem letzten Hochladen geändert hat
-            let stamp = a.modificationDate ?? Date()
-            if let done = e.editedAt, done >= stamp { continue }
-            if e.edited != nil, e.editedAt == nil { e.editedAt = stamp; state[lid] = e; continue }   // Altbestand: nichts doppelt
-            current = main.originalFilename; uploading[lid] = 0
-            defer { uploading[lid] = nil }
-            var x: [String: String] = [:]
-            if a.isFavorite { x["isFavorite"] = "true" }
-            if a.isHidden { x["visibility"] = "archive" }
-            let stem = (main.originalFilename as NSString).deletingPathExtension
-            let ext = (full.originalFilename as NSString).pathExtension
-            let local = Self.needsLocalDate(a, full) ? Self.localISO(a.creationDate ?? Date()) : nil
-            guard let r = try? await send(full, of: a, network: true, extra: x, name: "\(stem)\(Category.editedSuffix).\(ext.isEmpty ? "jpg" : ext)", kind: "edited", localDate: local)
-            else { continue }
-            if r.isNew {
-                try? await api.createStack([r.id, e.remote]); try? await api.tag([r.id], with: "Kategorie/Bearbeitet")
-                // Erneut bearbeitet: Der neue Stapel nimmt dem alten das Original weg, die frühere Fassung stünde dann
-                // allein in der Mediathek. Wie im Editor der App ersetzt die neue Fassung sie → frühere in den Papierkorb.
-                if let previous = e.edited, previous != r.id { try? await api.trash([previous]) }
-            }
-            e.edited = r.id; e.editedAt = stamp; state[lid] = e
-            saveState()
-            uploaded += r.isNew ? 1 : 0
-        }
-        LocalPending.shared.reloadSoon()
     }
 
     /// Ein Objekt des Laufs sichern und zählen. true = Lauf anhalten (pausiert/abgebrochen).
@@ -365,13 +309,6 @@ final class BackupEngine {
                 state[lid] = Entry(remote: id, edited: edited, editedAt: edited != nil ? a.modificationDate : nil)
                 if isNew { uploaded += 1 } else { duplicates += 1 }
                 saveState()
-                // Tags sofort setzen, nicht erst am Ende des Laufs: wird die App vorher beendet,
-                // stünde das Bildschirmfoto sonst in der Mediathek, aber nie unter „Bildschirmfotos“.
-                var ok = true
-                for (t, ids) in Self.tagPlan(a, Entry(remote: id, edited: edited)) {
-                    do { try await api.tag(ids, with: t) } catch { ok = false }
-                }
-                if ok { state[lid]?.tagged = true; saveState() }
             }
         } catch is CancellationError {
             return true
@@ -408,20 +345,8 @@ final class BackupEngine {
         let local = Self.needsLocalDate(a, main) ? Self.localISO(a.creationDate ?? Date()) : nil
         let r = try await send(main, of: a, network: allowNetwork, extra: extra, localDate: local)
 
-        // Bearbeitung aus Fotos: gerenderte Fassung oben auf den Stapel (nur für neue Objekte).
-        var editedID: String?
-        if allowNetwork, let full = res.first(where: { $0.type == (a.mediaType == .video ? .fullSizeVideo : .fullSizePhoto) }) {
-            var e: [String: String] = [:]
-            if a.isFavorite { e["isFavorite"] = "true" }
-            if a.isHidden { e["visibility"] = "archive" }
-            let stem = (main.originalFilename as NSString).deletingPathExtension
-            let ext = (full.originalFilename as NSString).pathExtension
-            let elocal = Self.needsLocalDate(a, full) ? Self.localISO(a.creationDate ?? Date()) : nil
-            let er = try await send(full, of: a, network: true, extra: e, name: "\(stem)\(Category.editedSuffix).\(ext.isEmpty ? "jpg" : ext)", kind: "edited", localDate: elocal)
-            if er.isNew { try? await api.createStack([er.id, r.id]) }
-            editedID = er.id
-        }
-        return (r.id, editedID, r.isNew)
+        // Originals only (SPEC D30): an edit made in Apple's Photos is not sent.
+        return (r.id, nil, r.isNew)
     }
 
     /// Datei in den Zwischenordner holen, Prüfsumme bilden, beim Server nachfragen, ggf. hochladen.
@@ -521,49 +446,6 @@ final class BackupEngine {
         return sha.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
-    /// Tag → Server-IDs für ein gesichertes Objekt (Original und ggf. bearbeitete Fassung).
-    private static func tagPlan(_ a: PHAsset, _ e: Entry) -> [String: [String]] {
-        var plan: [String: [String]] = [:]
-        for t in tags(for: a) { plan[t, default: []].append(e.remote) }
-        if let edited = e.edited { plan["Kategorie/Bearbeitet", default: []].append(edited) }
-        return plan
-    }
-
-    /// Holt Tags nach, die frühere Läufe nicht mehr setzen konnten (App beendet, Netz weg).
-    /// Gesammelt je Tag in Paketen, damit auch viele Objekte nur wenige Anfragen kosten.
-    private func repairTags(_ api: ImmichClient) async {
-        let open = state.filter { $0.value.tagged != true }
-        guard !open.isEmpty else { return }
-        var plan: [String: [String]] = [:]
-        let found = PHAsset.fetchAssets(withLocalIdentifiers: Array(open.keys), options: nil)
-        found.enumerateObjects { a, _, _ in
-            guard let e = open[a.localIdentifier] else { return }
-            for (t, ids) in Self.tagPlan(a, e) { plan[t, default: []] += ids }
-        }
-        for (t, ids) in plan {
-            for i in stride(from: 0, to: ids.count, by: 500) {
-                guard (try? await api.tag(Array(ids[i..<min(i + 500, ids.count)]), with: t)) != nil else { return }
-            }
-        }
-        // auch vom iPhone Gelöschte abhaken: deren Art kennt nur noch der Server
-        for id in open.keys { state[id]?.tagged = true }
-        saveState()
-    }
-
-    /// Was nur das iPhone weiß – gleiche Tag-Namen wie Server-Kategorien und iCloud-Import.
-    static func tags(for a: PHAsset) -> [String] {
-        var t: [String] = []
-        let s = a.mediaSubtypes
-        if s.contains(.photoScreenshot) { t.append("Bildschirmfotos") }
-        if s.contains(.photoPanorama) { t.append("Panoramen") }
-        if s.contains(.photoDepthEffect) { t.append("Porträt") }
-        if s.contains(.videoTimelapse) { t.append("Zeitraffer") }
-        if s.contains(.videoHighFrameRate) { t.append("Slo-Mo") }
-        if s.contains(.videoCinematic) { t.append("Kino") }
-        if a.burstIdentifier != nil { t.append("Serien") }
-        return t.map { "Kategorie/\($0)" }
-    }
-
     /// Ergebnis einer Hintergrund-Übertragung, deren Ende die App nicht mehr selbst erlebt hat (beendet/eingefroren).
     /// Nur das Hauptobjekt ohne bearbeitete Fassung wird direkt übernommen; alles andere holt der nächste Lauf nach
     /// (der Server erkennt die Datei dann an der Prüfsumme, es wird nichts doppelt geladen).
@@ -604,25 +486,7 @@ final class BackupEngine {
     func remoteID(forLocal lid: String) -> String? { state[lid]?.remote }
     /// Server-ID der zuletzt gesicherten bearbeiteten Fassung (liegt oben auf dem Stapel, das Original darunter).
     func editedID(forLocal lid: String) -> String? { state[lid]?.edited }
-    /// Liegt der aktuelle Stand dieses Fotos auf dem Server? Nein, solange eine Bearbeitung aus Fotos noch nicht
-    /// nachgezogen ist (gleiche Regel wie `syncEdits`) – dann darf „Speicher freigeben“ es nicht löschen, sonst wäre
-    /// die neueste Fassung weg (gemeldet von @RedEforIT, GitHub #56). Unbearbeitete Fotos: das Original ist gesichert.
-    func currentVersionBackedUp(_ a: PHAsset) -> Bool {
-        guard let e = state[a.localIdentifier] else { return false }
-        let full: PHAssetResourceType = a.mediaType == .video ? .fullSizeVideo : .fullSizePhoto
-        guard PHAssetResource.assetResources(for: a).contains(where: { $0.type == full }) else { return true }
-        guard e.edited != nil, let done = e.editedAt else { return false }
-        return done >= (a.modificationDate ?? .distantFuture)
-    }
 
-    // MARK: Speicher freigeben (für FreeUpSection)
-
-    /// Gesicherte iPhone-Objekte mit ihrer Server-ID (nur das angemeldete Konto).
-    func backedUp() async -> [String: String] {
-        guard let me = try? await ImmichClient.shared.me() else { return [:] }
-        loadState(user: me.id)
-        return state.mapValues(\.remote)
-    }
     /// Nach dem Löschen auf dem iPhone die lokalen IDs vergessen.
     func forget(_ localIDs: [String]) {
         for id in localIDs { state[id] = nil }

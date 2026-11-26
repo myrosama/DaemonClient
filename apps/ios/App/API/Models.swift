@@ -12,6 +12,31 @@ struct TimeBucket: Decodable, Hashable, Identifiable, Sendable {
 }
 
 /// Spaltenformat von GET /timeline/bucket: jedes Feld ist ein Array, Index i = Asset i.
+/// A video's length in ms. The worker sends a number, but older rows still carry Immich's "H:MM:SS.mmm" text: a
+/// strict `[Int?]` let one such row blank its whole month (2026-11-26: 14 rows hid 880 photos on the test account).
+struct Millis: Decodable {
+    let value: Int?
+    init(_ value: Int?) { self.value = value }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.singleValueContainer()
+        if c.decodeNil() { value = nil }
+        else if let i = try? c.decode(Int.self) { value = i }
+        else if let x = try? c.decode(Double.self) { value = Self.whole(x) }
+        else if let s = try? c.decode(String.self) { value = Self.parse(s) }
+        else { value = nil }
+    }
+    /// "0:00:05.000", "05.5", "5000" → ms; anything else nil.
+    static func parse(_ s: String) -> Int? {
+        guard !s.contains("-") else { return nil }
+        let parts = s.split(separator: ":", omittingEmptySubsequences: false)
+        if parts.count == 1 { return Int(s) }
+        let nums = parts.compactMap { Double($0) }
+        guard nums.count == parts.count else { return nil }
+        return whole(nums.reduce(0) { $0 * 60 + $1 } * 1000)
+    }
+    private static func whole(_ x: Double) -> Int? { x.isFinite && abs(x) < 1e15 ? Int(x) : nil }
+}
+
 struct BucketColumns: Decodable {
     let id: [String]
     let isImage: [Bool]
@@ -19,7 +44,7 @@ struct BucketColumns: Decodable {
     let fileCreatedAt: [String]          // UTC, ohne "Z"
     let localOffsetHours: [Double?]?     // + Offset = Ortszeit der Aufnahme
     let ratio: [Double?]
-    let duration: [Int?]?                // Millisekunden, nur Videos
+    let duration: [Millis]?              // Millisekunden, nur Videos
     let livePhotoVideoId: [String?]
     let city: [String?]?
     let country: [String?]?
@@ -37,7 +62,7 @@ struct BucketColumns: Decodable {
                   isFavorite: isFavorite[i],
                   date: utc.addingTimeInterval(offset * 3600),
                   ratio: ratio[i] ?? 1,
-                  durationMs: duration?[i] ?? nil,
+                  durationMs: duration?[i].value,
                   livePhotoVideoId: livePhotoVideoId[i],
                   city: city?[i] ?? nil,
                   country: country?[i] ?? nil,
@@ -107,7 +132,6 @@ struct AssetDTO: Decodable {
     let stack: StackDTO?
     let visibility: String?          // timeline | hidden | archive | locked
     let isTrashed: Bool?
-    let people: [PersonDTO]?         // erkannte Personen auf dem Foto (GET /assets/{id})
     let updatedAt: String?           // bei Gelöschtem ≈ Zeitpunkt des Löschens (eigenes Feld gibt die API nicht her)
     struct StackDTO: Decodable { let id: String; let primaryAssetId: String?; let assetCount: Int? }
 
@@ -147,15 +171,6 @@ struct AssetDTO: Decodable {
     }
 }
 
-struct MemoryDTO: Decodable, Identifiable {
-    let id: String
-    let type: String
-    let memoryAt: String
-    let data: MemoryData
-    let assets: [AssetDTO]
-    struct MemoryData: Decodable { let year: Int? }
-}
-
 struct AlbumDTO: Decodable, Identifiable, Hashable {
     let id: String
     let albumName: String
@@ -168,30 +183,6 @@ struct AlbumDTO: Decodable, Identifiable, Hashable {
     var shared: Bool? = nil           // mit anderen geteilt (dann gibt es Kommentare/Likes)
 }
 
-/// Kommentar oder „Gefällt mir“ in einem geteilten Album (Immich: /activities).
-struct ActivityDTO: Decodable, Identifiable, Hashable {
-    struct User: Decodable, Hashable { let id: String; let name: String }
-    let id: String
-    let createdAt: String
-    let type: String                  // comment | like
-    let assetId: String?
-    let comment: String?
-    let user: User
-}
-
-struct PersonDTO: Decodable, Identifiable, Hashable {
-    let id: String
-    let name: String
-    let isHidden: Bool?
-    var isFavorite: Bool? = nil
-    var birthDate: String? = nil      // JJJJ-MM-TT (Geburtstags-Rückblicke)
-}
-
-struct PeopleDTO: Decodable {
-    let people: [PersonDTO]
-    let total: Int
-}
-
 struct MapMarkerDTO: Decodable, Identifiable {
     let id: String
     let lat: Double
@@ -200,36 +191,10 @@ struct MapMarkerDTO: Decodable, Identifiable {
     let country: String?
 }
 
-struct TagDTO: Decodable {
-    let id: String
-    let value: String                // voller Pfad, z. B. „Kategorie/Belege“
-}
-
-struct DuplicateGroupDTO: Decodable, Identifiable {
-    let duplicateId: String
-    let assets: [AssetDTO]
-    let suggestedKeepAssetIds: [String]?
-    var id: String { duplicateId }
-}
-
-struct SearchResponseDTO: Decodable {
-    let assets: Page
-    struct Page: Decodable {
-        let items: [AssetDTO]
-        let nextCursor: String?
-        let nextPage: String?
-    }
-}
-
 struct UserDTO: Decodable {
     let id: String
     let name: String
     let email: String
-}
-
-struct ServerStatsDTO: Decodable {
-    let images: Int?
-    let videos: Int?
 }
 
 // MARK: - Datum

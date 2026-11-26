@@ -13,7 +13,6 @@ struct SelectionBar: View {
         HStack(spacing: 12) {
             Menu {
                 Button(String(localized: "Datei senden"), systemImage: "doc") { Task { await ShareService.share(ids, app: app) } }
-                Button(String(localized: "Link teilen (Heimnetz/VPN)"), systemImage: "link") { app.sheet = .shareLink(ids) }
                 Button(String(localized: "Teilen-Optionen …"), systemImage: "slider.horizontal.3") { app.sheet = .shareOptions(ids) }
             } label: {
                 Image(systemName: "square.and.arrow.up").frame(width: 58, height: 58).contentShape(.rect)
@@ -35,11 +34,11 @@ struct SelectionBar: View {
         .buttonStyle(.plain)
         .confirmationDialog("", isPresented: $confirmDelete) {
             Button(SelectionText.deleteTitle(app.selected, timeline), role: .destructive) {
-                AssetActions.delete(ids, timeline: timeline)
+                AssetActions.deleteForever(ids, app: app, timeline: timeline)
                 withAnimation(.snappy) { app.endSelection() }
             }
         } message: {
-            Text(String(localized: "Diese Objekte kommen in „Zuletzt gelöscht“ und bleiben dort 30 Tage wiederherstellbar."))
+            Text(String(localized: "Diese \(ids.count) Objekte werden endgültig gelöscht. Dieser Vorgang kann nicht widerrufen werden."))
         }
     }
 }

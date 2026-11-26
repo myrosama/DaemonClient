@@ -1,5 +1,7 @@
 # The worker routes the iPhone app may call in v1 — each one served by workers/user-worker (not a stub).
 # {} = an id. HomeRoll's whole server layer goes at I11; the core takes these over in I5–I9.
+# Not here on purpose: search/metadata (the worker reads an older request shape and ignores HomeRoll's filters —
+# every list came back as the whole library) and trash/restore/assets (the worker refuses: deletes are permanent).
 timeline/buckets
 timeline/bucket
 assets
@@ -13,8 +15,6 @@ albums/{}
 albums/{}/assets
 albums/{}/map-markers
 map/markers
-search/metadata          # the filtered lists: media types, an album's contents (Linux: trashed rows leak, 2026-11-21)
-trash/restore/assets
 users/me
 server/config
 server/features

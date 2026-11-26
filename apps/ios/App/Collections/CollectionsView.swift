@@ -4,42 +4,19 @@ import MapKit
 enum CollectionRoute: Hashable {
     case assets(title: String, ids: [String])
     case category(Category)
-    case album(AlbumRef), person(PersonRef)
-    case allAlbums, allPeople, allTrips, allMemories, allMediaTypes, allOthers, allPinned
+    case album(AlbumRef)
+    case allAlbums, allMediaTypes, allOthers, allPinned
     case albumFolder(String)
-    /// Server-Ordner (GitHub #42): Übersicht eines Ordners bzw. nur seine Fotos
-    case folder(String), folderPhotos(String)
-    /// intelligentes Album (ID)
-    case smart(String)
 }
 struct AlbumRef: Hashable { let id: String; let name: String }
 struct PersonRef: Hashable { let id: String; let name: String }
 
-struct Trip: Identifiable, Hashable {
-    let title: String
-    let start: Date
-    let end: Date
-    let assets: [Asset]
-    var id: String { title + start.description }
-}
-
 @MainActor @Observable
 final class CollectionsModel {
-    var memories: [MemoryDTO] = []
     var albums: [AlbumDTO] = []
-    var people: [PersonDTO] = []
-    var featured: [Asset] = []
     var markers: [MapMarkerDTO] = []
     var userName = ""
     var loaded = false
-
-    /// „Aus Empfohlenen entfernen“ (REA: PXPhotoKitRemoveFromFeaturedPhotosActionPerformer) – gemerkt auf dem Gerät.
-    func removeFromFeatured(_ id: String) {
-        var l = UserDefaults.standard.stringArray(forKey: "featured.removed") ?? []
-        if !l.contains(id) { l.append(id) }
-        UserDefaults.standard.set(Array(l.suffix(2000)), forKey: "featured.removed")
-        featured.removeAll { $0.id == id }
-    }
 
     func reloadAlbums() async {
         guard let a = try? await ImmichClient.shared.albums() else { return }
@@ -49,43 +26,20 @@ final class CollectionsModel {
 
     func load() async {
         let c = ImmichClient.shared
-        async let m = try? c.memories()
         async let a = try? c.albums()
-        async let p = try? c.people()
-        async let r = try? c.random(size: 12)
         async let mk = try? c.mapMarkers()
         async let me = try? c.me()
-        async let folders: Void = FolderStore.shared.load()
-        memories = (await m ?? []).filter { !$0.assets.isEmpty }
         if let a = await a { albums = a; AlbumNames.byID = Dictionary(a.map { ($0.id, $0.albumName) }, uniquingKeysWith: { x, _ in x }) }
-        people = (await p ?? []).filter { !$0.name.isEmpty } + (await p ?? []).filter { $0.name.isEmpty }
-        let account = (await me)?.id ?? ""
-        let random = (await r ?? []).map(\.asset)
-        var sensitive = await SensitiveFilter.ids()
-        sensitive.formUnion(SensitiveFilter.known(random.map(\.id), account: account))
-        var picks: [Asset] = []
-        let removed = Set(UserDefaults.standard.stringArray(forKey: "featured.removed") ?? [])
-        for a in random where a.isImage && !sensitive.contains(a.id) && !removed.contains(a.id) {
-            if await !TextHeavy.check(a) { picks.append(a) }
-        }
-        featured = picks
         markers = await mk ?? []
-        await folders
         userName = (await me)?.name ?? ""
         loaded = true
-        // danach einzeln prüfen (Fotos ohne KI-Merkmale fängt die Suche oben nicht)
-        let bad = await SensitiveFilter.flagged(picks, account: account)
-        if !bad.isEmpty { featured.removeAll { bad.contains($0.id) } }
     }
 }
 
 struct CollectionsView: View {
     @Environment(AppModel.self) private var app
-    @AppStorage("folderSort") private var folderSortRaw = FolderSort.nameAsc.rawValue
-    @State private var folderOrder: [String] = []
     @Environment(TimelineStore.self) private var timeline
     @State private var model = CollectionsModel()
-    @State private var memories = MemoryCenter.shared
     @State private var path = NavigationPath()
     private var side: CGFloat { [100, 128, 160][min(2, max(0, cardSize))] }
     @AppStorage("collapsedSections") private var collapsedRaw = ""
@@ -97,12 +51,8 @@ struct CollectionsView: View {
     @State private var reorder = false
     @State private var newAlbum = false
     @State private var showBackup = false
-    @State private var showShared = false
     @State private var confirmSignOut = false
     @State private var recentDays: [DayGroup] = []
-    /// Titelbild je Tag ohne Bildschirmfotos/Dokumente (wie Apple), sonst das erste Foto des Tages
-    @State private var dayCovers: [Date: String] = [:]
-    @State private var trips: [Trip] = []
     @State private var albumName = ""
 
     private var order: [Sec] {
@@ -129,47 +79,27 @@ struct CollectionsView: View {
                 if r == .allPinned { PinnedScreen(items: PinItem.parse(pinnedRaw), model: model) }
                 else { CollectionDetail(route: r, model: model) }
             }
-            .navigationDestination(for: Trip.self) { t in AssetGridScreen(title: t.title, subtitle: tripRange(t), assets: t.assets) }
             .navigationDestination(for: DayGroup.self) { d in AssetGridScreen(title: d.title, subtitle: Fmt.weekdayDay.string(from: d.day), assets: d.assets) }
         }
         .environment(\.cardSide, [100, 128, 160][min(2, max(0, cardSize))])
         .task {
             if !model.loaded { await model.load() }
             await timeline.loadAll()
-            await memories.rebuild(timeline: timeline, server: model.memories)
-            SpotlightIndex.update(albums: model.albums, people: model.people, memories: memories.items, account: app.userID)
             AlbumFolders.shared.use(app.userID)
-            SmartAlbums.shared.use(app.userID)
         }
-        // Spotlight / Deep-Link: Album oder Person direkt öffnen
-        .onChange(of: app.pendingRoute) { _, r in
-            guard let r else { return }
-            app.pendingRoute = nil
-            path = NavigationPath(); path.append(r)
-        }
-        .onChange(of: timeline.totalCount) { Task { await memories.rebuild(timeline: timeline, server: model.memories) } }
         .task(id: timeline.version) { await rebuildDerived() }
         .sheet(isPresented: $editPinned) { PinnedEditor(raw: $pinnedRaw) }
         .sheet(isPresented: $reorder) { SectionOrderEditor(raw: $orderRaw) }
         .sheet(isPresented: $newAlbum) { NewAlbumSheet() }
         .sheet(isPresented: $showBackup) { BackupView() }
-        .sheet(isPresented: $showShared) { SharedLibraryView() }
         .onReceive(NotificationCenter.default.publisher(for: .albumsChanged)) { _ in Task { await model.reloadAlbums() } }
     }
 
     @ViewBuilder private func sectionView(_ sec: Sec) -> some View {
         switch sec {
-        case .memories: section(String(localized: "Rückblicke"), route: .allMemories) { memoriesRow }
         case .pinned: section(String(localized: "Angepinnt"), route: .allPinned, edit: true) { pinnedRow }
         case .albums: section(String(localized: "Alben"), route: model.albums.isEmpty ? nil : .allAlbums) { albumsRow }
-        case .folders:
-            if !FolderStore.shared.paths.isEmpty {
-                section(String(localized: "Ordner"), route: .folder(FolderStore.shared.root)) { foldersRow }
-            }
-        case .people: section(String(localized: "Personen"), route: model.people.isEmpty ? nil : .allPeople) { peopleRow }
-        case .featured: if !model.featured.isEmpty { section(String(localized: "Empfohlene Fotos")) { featuredRow } }
         case .recentDays: section(String(localized: "Letzte Tage")) { recentDaysRow }
-        case .trips: if !trips.isEmpty { section(String(localized: "Reisen"), route: .allTrips) { tripsRow } }
         case .mediaTypes: section(String(localized: "Medienarten"), route: .allMediaTypes) { CategoryRows(items: Category.mediaTypes) }
         case .others: section(String(localized: "Sonstige"), route: .allOthers) { CategoryRows(items: Category.others) }
         }
@@ -209,7 +139,6 @@ struct CollectionsView: View {
                 Menu {
                     Section(model.userName) {
                         Button(String(localized: "Backup"), systemImage: "arrow.triangle.2.circlepath.icloud") { showBackup = true }
-                        Button(String(localized: "Geteilte Mediathek"), systemImage: "person.2") { showShared = true }
                         Button(String(localized: "Einstellungen", table: "Theme"), systemImage: "gearshape") { app.showSettings = true }
                         Button(String(localized: "Aktualisieren"), systemImage: "arrow.clockwise") {
                             Task { await model.load(); await timeline.reload(); await timeline.loadAll() }
@@ -296,35 +225,6 @@ struct CollectionsView: View {
         .scrollIndicators(.hidden)
     }
 
-    // MARK: Rückblicke
-
-    private var memoriesRow: some View {
-        row {
-            if memories.items.isEmpty && !memories.settled {
-                // wie Fotos: graue Karten, solange die Rückblicke noch berechnet werden
-                ForEach(0..<2, id: \.self) { _ in
-                    RoundedRectangle(cornerRadius: 26, style: .continuous).fill(Color.appFill)
-                        .frame(width: side * 2.1, height: side * 2.1)
-                }
-            }
-            ForEach(memories.items.prefix(12)) { m in
-                Button { app.memory = m } label: {
-                    BigCard(assetID: m.key.id, title: m.title, subtitle: m.subtitle, play: true)
-                        .frame(width: side * 2.1, height: side * 2.1)
-                }
-                .buttonStyle(.plain)
-                .contextMenu { MemoryMenuItems(memory: m) }
-            }
-        }
-        .overlay {
-            if memories.items.isEmpty && memories.settled {
-                EmptyCard(icon: "clock.arrow.circlepath", title: String(localized: "Keine Rückblicke verfügbar"),
-                          text: String(localized: "Rückblicke erscheinen hier, wenn mehr Fotos und Videos zur Mediathek hinzugefügt werden."))
-            }
-        }
-        .frame(minHeight: memories.items.isEmpty ? 160 : nil)
-    }
-
     // MARK: Angepinnt
 
     private var pinnedRow: some View {
@@ -357,97 +257,26 @@ struct CollectionsView: View {
         }
     }
 
-    private var foldersRow: some View {
-        let top = FolderStore.shared.children(of: FolderStore.shared.root)
-        return row {
-            ForEach((folderOrder.isEmpty ? top : folderOrder).prefix(30), id: \.self) { f in
-                NavigationLink(value: CollectionRoute.folder(f)) { FolderCard(path: f) }.buttonStyle(.plain)
-            }
-        }
-        // gleiche Reihenfolge wie die in der Ordneransicht gewählte Sortierung (GitHub #57)
-        .task(id: "\(folderSortRaw)\(top.count)\(FolderStore.shared.root)") {
-            folderOrder = await FolderStore.shared.sorted(top, by: FolderSort(rawValue: folderSortRaw) ?? .nameAsc)
-        }
-    }
+    // MARK: Letzte Tage
 
-    @ViewBuilder private var peopleRow: some View {
-        if model.people.isEmpty {
-            EmptyCard(icon: "person.crop.circle", title: String(localized: "Noch keine Personen"),
-                      text: String(localized: "Personen erscheinen hier, sobald der Server Gesichter in deinen Fotos erkannt hat."))
-        } else { peopleList }
-    }
-
-    private var peopleList: some View {
-        row {
-            ForEach(model.people.prefix(20)) { p in
-                NavigationLink(value: CollectionRoute.person(PersonRef(id: p.id, name: p.name))) {
-                    PersonThumb(id: p.id)
-                        .frame(width: side, height: side)
-                        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-                        .overlay(alignment: .bottomLeading) {
-                            Text(p.name.isEmpty ? String(localized: "Unbenannt") : p.name).font(.system(size: 17, weight: .semibold))
-                                .foregroundStyle(.white).shadow(radius: 6).padding(12)
-                        }
-                }
-                .buttonStyle(.plain)
-            }
-        }
-    }
-
-    private var featuredRow: some View {
-        row {
-            ForEach(Array(model.featured.enumerated()), id: \.element.id) { i, a in
-                Button { app.open(model.featured, at: i) } label: {
-                    AssetThumb(id: a.id, size: .preview)
-                        .frame(width: side, height: side)
-                        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-                }
-                .buttonStyle(.plain)
-                // wie Fotos: von überall ziehen – auf ein Album (AlbumDropTarget) oder in andere Apps
-                .draggable("phosphor-asset:\(a.id)") {
-                    AssetThumb(id: a.id).frame(width: 90, height: 90).clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                }
-                .contextMenu {
-                    AssetMenu(assets: [a], style: .context, present: { app.sheet = $0 }) { model.featured.removeAll { $0.id == a.id } }
-                    Section {
-                        Button("Aus Empfohlenen entfernen", systemImage: "hand.thumbsdown") {
-                            withAnimation(.snappy) { model.removeFromFeatured(a.id) }
-                            app.toast(String(localized: "Wird nicht mehr empfohlen"))
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // MARK: Letzte Tage / Reisen
-
-    /// Letzte Tage und Reisen kosten bei 80 000 Objekten spürbar → nur bei neuer Zeitleisten-Version, im Hintergrund.
-    /// Kommt eine neuere Version, bricht die Rechnung ab und überschreibt deren Ergebnis nicht (Idee aus dem Fork vands2013).
+    /// Letzte Tage kosten bei 80 000 Objekten spürbar → nur bei neuer Zeitleisten-Version, im Hintergrund.
     private func rebuildDerived() async {
         let all = timeline.allLoaded
-        let worker = Task.detached(priority: .userInitiated) { () -> ([DayGroup], [Trip]) in
+        let worker = Task.detached(priority: .userInitiated) { () -> [DayGroup] in
             let tail = all.suffix(5000)   // die letzten 10 Tage stecken sicher in den neuesten Objekten
             let g = Dictionary(grouping: tail) { Calendar.wall.startOfDay(for: $0.date) }
-            let days = g.keys.sorted(by: >).prefix(10).map { DayGroup(day: $0, assets: g[$0]!) }
-            return (days, CollectionsView.trips(from: all))
+            return g.keys.sorted(by: >).prefix(10).map { DayGroup(day: $0, assets: g[$0]!) }
         }
-        let (days, t) = await withTaskCancellationHandler { await worker.value } onCancel: { worker.cancel() }
+        let days = await withTaskCancellationHandler { await worker.value } onCancel: { worker.cancel() }
         guard !Task.isCancelled else { return }
-        recentDays = days; trips = t
-        for d in days where dayCovers[d.day] == nil {
-            let pool = [d.keyAsset] + d.assets.filter { $0.isImage && $0.id != d.keyAsset.id && !MemoryEngine.looksLikeScreenshot($0) }
-            for c in pool.prefix(8) where !MemoryEngine.looksLikeScreenshot(c) {
-                if await !TextHeavy.check(c) { dayCovers[d.day] = c.id; break }
-            }
-        }
+        recentDays = days
     }
 
     private var recentDaysRow: some View {
         row {
             ForEach(recentDays) { d in
                 NavigationLink(value: d) {
-                    SmallCard(assetID: dayCovers[d.day] ?? d.keyAsset.id, title: dayLabel(d.day))
+                    SmallCard(assetID: d.keyAsset.id, title: dayLabel(d.day))
                 }
                 .buttonStyle(.plain)
             }
@@ -457,52 +286,7 @@ struct CollectionsView: View {
     private func dayLabel(_ d: Date) -> String { Fmt.relativeDay(d, fallback: Fmt.dayMonthYear) }
 
 
-    /// Reisen = zusammenhängende Tage außerhalb des Heimatlandes (häufigstes Land).
-    nonisolated static func trips(from input: [Asset]) -> [Trip] {
-        let all = input.filter { $0.country != nil }
-        guard !all.isEmpty else { return [] }
-        let home = Dictionary(grouping: all, by: { $0.country! }).max { $0.value.count < $1.value.count }?.key
-        var out: [Trip] = []
-        var cur: [Asset] = []
-        func flush() {
-            guard cur.count >= 3, let f = cur.first, let l = cur.last else { cur = []; return }
-            let place = Dictionary(grouping: cur.compactMap(\.city), by: { $0 }).max { $0.value.count < $1.value.count }?.key
-            let country = Dictionary(grouping: cur.compactMap(\.country), by: { $0 }).max { $0.value.count < $1.value.count }?.key
-            out.append(Trip(title: Self.countryDE(country) ?? place ?? String(localized: "Reise"), start: f.date, end: l.date, assets: cur))
-            cur = []
-        }
-        for (i, a) in all.sorted(by: { $0.date < $1.date }).enumerated() {
-            if i & 1023 == 0, Task.isCancelled { return [] }
-            if a.country == home { flush(); continue }
-            if let last = cur.last, a.date.timeIntervalSince(last.date) > 4 * 86400 || a.country != last.country { flush() }
-            cur.append(a)
-        }
-        flush()
-        return out.reversed()
-    }
 
-    private func tripRange(_ t: Trip) -> String {
-        Fmt.dayMonthYear.string(from: t.start) + (Calendar.wall.isDate(t.start, inSameDayAs: t.end) ? "" : " – " + Fmt.dayMonthYear.string(from: t.end))
-    }
-
-    private var tripsRow: some View {
-        row {
-            ForEach(trips) { t in
-                NavigationLink(value: t) {
-                    SmallCard(assetID: t.assets.first(where: \.isImage)?.id, title: t.title)
-                }
-                .buttonStyle(.plain)
-            }
-        }
-    }
-
-    nonisolated static func countryDE(_ c: String?) -> String? {
-        guard let c else { return nil }
-        guard CountryName.german else { return c }
-        let map = ["Germany": "Deutschland", "United Arab Emirates": "Dubai", "Thailand": "Thailand", "Indonesia": "Indonesien",
-                   "Turkey": "Türkei", "Türkiye": "Türkei", "Saudi Arabia": "Saudi-Arabien", "United States": "USA"]
-        return map[c] ?? c
-    }
 }
 
 // MARK: - Karten-Bausteine

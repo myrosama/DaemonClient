@@ -1,4 +1,3 @@
-import CoreSpotlight
 import Photos
 import SwiftUI
 
@@ -33,16 +32,6 @@ struct FotosApp: App {
             .onReceive(NotificationCenter.default.publisher(for: .sessionExpired)) { _ in
                 if app.loggedIn { app.signOut(timeline) }
             }
-            // Tippen auf einen Treffer in der iPhone-Suche → wie ein homeroll://-Link
-            .onContinueUserActivity(CSSearchableItemActionType) { act in
-                if let s = act.userInfo?[CSSearchableItemActivityIdentifier] as? String, let url = URL(string: s) {
-                    NotificationCenter.default.post(name: .openFotosURL, object: url)
-                }
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .openSearch)) { n in
-                app.pendingQuery = n.object as? String
-                app.viewer = nil; app.showSearch = true
-            }
         }
     }
 }
@@ -63,19 +52,18 @@ enum LibraryScale: String, CaseIterable, Identifiable {
 
 /// Filter/Sortierung der Mediathek – wie das Menü neben „Auswählen“ in Fotos.
 enum LibraryFilter: String, CaseIterable, Identifiable {
-    case all, favorites, edited, photos, videos, livePhotos, portrait, screenshots, shared, notInAlbum
+    case all, favorites, photos, videos, livePhotos
     var id: String { rawValue }
     var title: String {
         switch self {
-        case .all: String(localized: "Alle Objekte"); case .favorites: String(localized: "Favoriten"); case .edited: String(localized: "Bearbeitet"); case .photos: String(localized: "Fotos")
-        case .videos: String(localized: "Videos"); case .livePhotos: String(localized: "Live Photos"); case .portrait: String(localized: "Porträt")
-        case .screenshots: String(localized: "Bildschirmfotos"); case .shared: String(localized: "Geteilt mit dir"); case .notInAlbum: String(localized: "In keinem Album")
+        case .all: String(localized: "Alle Objekte"); case .favorites: String(localized: "Favoriten"); case .photos: String(localized: "Fotos")
+        case .videos: String(localized: "Videos"); case .livePhotos: String(localized: "Live Photos")
         }
     }
     var icon: String {
         switch self {
-        case .all: "square.grid.3x3"; case .favorites: "heart"; case .edited: "slider.horizontal.3"; case .photos: "photo"
-        case .videos: "video"; case .livePhotos: "livephoto"; case .portrait: "cube"; case .screenshots: "camera.viewfinder"; case .shared: "person.2"; case .notInAlbum: "rectangle.stack.badge.minus"
+        case .all: "square.grid.3x3"; case .favorites: "heart"; case .photos: "photo"
+        case .videos: "video"; case .livePhotos: "livephoto"
         }
     }
 }
@@ -91,7 +79,7 @@ final class AppModel {
     var loggedIn = CoreBridge.restore() || ImmichClient.shared.isLoggedIn
     /// Abmelden (Konto-Menü, oder „Server nicht erreichbar“ in der Mediathek → anderen Server wählen)
     func signOut(_ timeline: TimelineStore) {
-        CoreBridge.signOut(); ImmichClient.shared.logout(); timeline.clearCache(); MemoryCenter.shared.reset(); SpotlightIndex.clear(); LocalCopy.reset()
+        CoreBridge.signOut(); ImmichClient.shared.logout(); timeline.clearCache(); LocalCopy.reset()
         // alles vom Konto vom Gerät löschen: Offline-Vorschauen, Bild-Speicher (GitHub-Issue #8)
         OfflineSync.shared.stop(); OfflineStore.shared.clear(); ImageCache.shared.purge()
         // Liste heikler Fotos (IDs) des Kontos
@@ -111,14 +99,7 @@ final class AppModel {
     /// Backup-Fenster (aus der Mediathek-Fußzeile)
     var showBackup = false
     var scale: LibraryScale = .all
-    var showSearch = false
-    /// Suchbegriff aus Siri/Kurzbefehlen (wird von der Suche übernommen)
-    var pendingQuery: String?
-    /// Aus Spotlight/Link: diese Sammlung öffnen (CollectionsView übernimmt sie in den Navigationspfad)
-    var pendingRoute: CollectionRoute?
     var viewer: ViewerRequest?
-    /// Rückblick, der gerade abgespielt wird (Vollbild)
-    var memory: Memory?
     /// Ziel für „springe zu“ zwischen Jahre → Monate → Alle (timeBucket-ID).
     var scrollTarget: String?
     /// „In ‚Alle Fotos‘ anzeigen“: Mediathek springt zu diesem Objekt.
@@ -126,15 +107,15 @@ final class AppModel {
     func reveal(_ id: String) {
         endSelection(); scale = .all; tab = .library; revealID = id
     }
-    /// „In Mediathek zeigen“ (REA: PXPhotoKitShowInLibraryActionPerformer) aus Einzelansicht, Sammlung oder Suche:
-    /// erst Einzelansicht/Suche schließen, dann in der Mediathek hinspringen.
+    /// „In Mediathek zeigen“ (REA: PXPhotoKitShowInLibraryActionPerformer) aus Einzelansicht oder Sammlung:
+    /// erst die Einzelansicht schließen, dann in der Mediathek hinspringen.
     func showInLibrary(_ id: String) {
-        let covered = viewer != nil || showSearch
-        viewer = nil; showSearch = false; memory = nil
+        let covered = viewer != nil
+        viewer = nil
         if covered { Task { try? await Task.sleep(for: .milliseconds(450)); reveal(id) } } else { reveal(id) }
     }
     /// Gilt das Objekt außerhalb der Mediathek (Sammlung, Suche)? Dann bietet das Menü „In Mediathek zeigen“ an.
-    var outsideLibrary: Bool { tab != .library || showSearch }
+    var outsideLibrary: Bool { tab != .library }
     var userName = ""
     var userID = ""
 
@@ -146,14 +127,12 @@ final class AppModel {
     /// Einzelansicht: Original (HDR/Gain-Map, volle Auflösung) gleich laden statt nur Immichs SDR-Vorschau (GitHub #36);
     /// aus = Original erst beim Hineinzoomen (spart Daten)
     var alwaysOriginal = UserDefaults.standard.object(forKey: "viewer.alwaysOriginal") as? Bool ?? true { didSet { UserDefaults.standard.set(alwaysOriginal, forKey: "viewer.alwaysOriginal") } }
-    var showScreenshots = UserDefaults.standard.object(forKey: "lib.showShots") as? Bool ?? true { didSet { save() } }
-    var showShared = UserDefaults.standard.object(forKey: "lib.showShared") as? Bool ?? true { didSet { save() } }
     var columns = GridZoom.normalized(UserDefaults.standard.object(forKey: "lib.columns") as? Int ?? 3) { didSet { save() } }
-    var libraryCustomized: Bool { sortByAdded || filter != .all || !showScreenshots || !showShared }
+    var libraryCustomized: Bool { sortByAdded || filter != .all }
     private func save() {
         let d = UserDefaults.standard
         d.set(sortByAdded, forKey: "lib.sortByAdded"); d.set(filter.rawValue, forKey: "lib.filter"); d.set(aspectGrid, forKey: "lib.aspect")
-        d.set(showScreenshots, forKey: "lib.showShots"); d.set(showShared, forKey: "lib.showShared"); d.set(columns, forKey: "lib.columns")
+        d.set(columns, forKey: "lib.columns")
     }
 
     // Auswahl

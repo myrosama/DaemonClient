@@ -33,7 +33,6 @@ struct RootView: View {
         .sheet(isPresented: Binding(get: { backupConsent }, set: { if !$0 { backupConsent = false } })) { BackupConsentView() }
         .task {
             if timeline.buckets.isEmpty { await timeline.showCached() }
-            Task { await ImmichClient.shared.prepareVideo() }
             var reloaded = false
             if let me = try? await ImmichClient.shared.me() {
                 app.userID = me.id; app.userName = me.name; reloaded = await timeline.setUser(me.id)
@@ -66,7 +65,6 @@ struct RootView: View {
             guard p == .background else { return }
             BackupEngine.shared.schedule()
             OfflineSync.shared.stop()
-            Task { await MemoryNotifications.schedule(timeline: timeline) }
             app.privateUnlocked = false
             if app.viewer?.assets.contains(where: { $0.isHidden || $0.trashedAt != nil }) == true { app.viewer = nil }
         }
@@ -80,25 +78,6 @@ struct RootView: View {
                 .navigationTransition(.zoom(sourceID: app.zoomID, in: zoom))
                 .preferredColorScheme(.dark)   // Fotos-Ansicht und Editor bleiben auch im hellen Modus dunkel
         }
-        .fullScreenCover(isPresented: $app.showSearch) { SearchView() }
-        .onReceive(NotificationCenter.default.publisher(for: .openFotosURL)) { n in if let u = n.object as? URL { open(u) } }
-        .fullScreenCover(item: $app.memory) { MemoryPlayer(memory: $0).preferredColorScheme(.dark) }
-    }
-
-    private func open(_ url: URL) {
-            guard url.scheme == "phosphor", let id = url.pathComponents.dropFirst().first else { return }
-            app.viewer = nil; app.showSearch = false
-            if url.host == "album" || url.host == "person" {
-                let name = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "name" }?.value ?? ""
-                app.tab = .collections
-                Task {
-                    var title = name
-                    if url.host == "album", title.isEmpty { title = (try? await ImmichClient.shared.albums())?.first { $0.id == id }?.albumName ?? "" }
-                    app.pendingRoute = url.host == "album" ? .album(AlbumRef(id: id, name: title)) : .person(PersonRef(id: id, name: title))
-                }
-                return
-            }
-            if url.host == "memory", let m = MemoryCenter.shared.items.first(where: { $0.id == id }) { app.memory = m }
     }
 }
 
@@ -106,8 +85,6 @@ extension RootView {
     /// Für das Leistungsprotokoll: wo man gerade ist.
     private var perfScreen: String {
         if app.viewer != nil { return "Einzelansicht" }
-        if app.showSearch { return "Suche" }
-        if app.memory != nil { return "Rückblick" }
         if app.tab == .collections { return "Sammlungen" }
         return app.scale == .all ? "Mediathek \(app.columns) Spalten" : "Mediathek \(app.scale.rawValue)"
     }
@@ -203,6 +180,7 @@ struct BottomBar: View {
                 if app.tab == .library && !app.tabsExpanded {
                     Button { withAnimation(.snappy) { app.tabsExpanded = true } } label: {
                         Image(systemName: "photo.on.rectangle.angled")
+                            .accessibilityLabel(String(localized: "Mediathek"))   // opens the Library/Collections switch
                             .font(.system(size: 22, weight: .medium))
                             .symbolRenderingMode(.multicolor)
                             .foregroundStyle(.blue)
@@ -221,13 +199,6 @@ struct BottomBar: View {
                         .springLoaded(to: app.tab == .library ? .collections : .library, hovering: $hovering)
                     Spacer(minLength: 0)
                 }
-                Button { app.showSearch = true } label: {
-                    Image(systemName: "magnifyingglass")
-                        .font(.system(size: 22, weight: .medium))
-                        .foregroundStyle(.primary)
-                        .frame(width: 58, height: 58)
-                }
-                .glassEffect(.regular.interactive(), in: .circle)
             }
         }
     }
@@ -319,6 +290,4 @@ struct BusyBadge: View {
 
 extension Notification.Name {
     static let scrollToNewest = Notification.Name("scrollToNewest")
-    static let openFotosURL = Notification.Name("openFotosURL")
-    static let personThumbChanged = Notification.Name("personThumbChanged")
 }

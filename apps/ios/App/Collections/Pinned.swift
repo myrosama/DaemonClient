@@ -2,11 +2,10 @@ import SwiftUI
 
 /// Abschnitte der Sammlungen (Reihenfolge per „Neu anordnen“ änderbar).
 enum Sec: String, CaseIterable {
-    case memories, pinned, albums, folders, people, featured, recentDays, trips, mediaTypes, others
+    case pinned, albums, recentDays, mediaTypes, others
     var title: String {
         switch self {
-        case .memories: String(localized: "Rückblicke"); case .pinned: String(localized: "Angepinnt"); case .albums: String(localized: "Alben"); case .folders: String(localized: "Ordner"); case .people: String(localized: "Personen")
-        case .featured: String(localized: "Empfohlene Fotos"); case .recentDays: String(localized: "Letzte Tage"); case .trips: String(localized: "Reisen")
+        case .pinned: String(localized: "Angepinnt"); case .albums: String(localized: "Alben"); case .recentDays: String(localized: "Letzte Tage")
         case .mediaTypes: String(localized: "Medienarten"); case .others: String(localized: "Sonstige")
         }
     }
@@ -18,8 +17,8 @@ enum PinItem: Hashable {
     case section(Sec)
     case album(String)
 
-    static let defaults = "favorites,recentlySaved,map,videos,screenshots,trash"
-    static let sectionSuggestions: [Sec] = [.people, .albums, .trips, .memories, .featured, .mediaTypes, .others]
+    static let defaults = "favorites,recentlySaved,map,videos,livePhotos,hidden"
+    static let sectionSuggestions: [Sec] = [.albums, .mediaTypes, .others]
 
     var key: String {
         switch self { case .category(let c): c.rawValue; case .section(let s): "s." + s.rawValue; case .album(let id): "a." + id }
@@ -39,8 +38,7 @@ enum PinItem: Hashable {
         case .album: "rectangle.stack"
         case .section(let s):
             switch s {
-            case .people: "person.2"; case .albums: "rectangle.stack"; case .trips: "airplane"; case .memories: "clock.arrow.circlepath"
-            case .featured: "sparkles"; case .mediaTypes: "photo.on.rectangle"; case .others: "ellipsis.circle"; default: "square"
+            case .albums: "rectangle.stack"; case .mediaTypes: "photo.on.rectangle"; case .others: "ellipsis.circle"; default: "square"
             }
         }
     }
@@ -79,13 +77,9 @@ struct PinCard: View {
         case .album(let id): return .album(AlbumRef(id: id, name: item.title))
         case .section(let s):
             switch s {
-            case .people: return .allPeople
-            case .albums: return .allAlbums
-            case .trips: return .allTrips
-            case .featured: return .assets(title: String(localized: "Empfohlene Fotos"), ids: model.featured.map(\.id))
             case .mediaTypes: return .allMediaTypes
             case .others: return .allOthers
-            default: return .allMemories
+            default: return .allAlbums
             }
         }
     }
@@ -121,13 +115,10 @@ struct PinCard: View {
         case .category(.favorites): return all.last(where: \.isFavorite)?.id
         case .category(.videos): return all.last(where: \.isVideo)?.id
         case .category(let c):
-            if c.locked || c == .map || c == .recentlySaved || c == .duplicates { return nil }
+            if c.locked || c == .map || c == .recentlySaved { return nil }
             return await CategoryLoader.load(c, timeline: timeline).last?.id
         case .album(let id): return model.albums.first { $0.id == id }?.albumThumbnailAssetId
-        case .section(.people): return nil
         case .section(.albums): return model.albums.first?.albumThumbnailAssetId
-        case .section(.featured): return model.featured.first?.id
-        case .section(.memories): return MemoryCenter.shared.items.first?.key.id
         case .section: return all.last(where: \.isImage)?.id
         }
     }

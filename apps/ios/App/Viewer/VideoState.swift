@@ -239,9 +239,6 @@ final class VideoState {
         var u = utsname(); uname(&u)
         let model = withUnsafeBytes(of: &u.machine) { String(decoding: $0.prefix { $0 != 0 }, as: UTF8.self) }
         var out = ["Phosphor Photos \(info?["CFBundleShortVersionString"] ?? "?") (\(info?["CFBundleVersion"] ?? "?")), iOS \(UIDevice.current.systemVersion), \(model)"]
-        struct Version: Decodable { let major: Int; let minor: Int; let patch: Int }
-        if let v: Version = try? await api.request("server/version") { out.append("server: immich \(v.major).\(v.minor).\(v.patch)") }
-        out.append("realtime transcoding: \(await api.serverRealtime() ? "on" : "off")")
         out.append("photo access: \(LocalCopy.accessText), local copy: \(await LocalCopy.asset(asset.id) != nil ? "found" : "not found")")
         if let d = try? await api.asset(asset.id) {
             let size = d.exifInfo?.fileSizeInByte.map { String(format: "%.1f MB", Double($0) / 1_000_000) } ?? "?"
@@ -250,7 +247,6 @@ final class VideoState {
         out.append("")
         var probes: [(String, URL?)] = [("thumbnail", api.thumbnailURL(asset.id, .thumbnail)), ("preview", api.thumbnailURL(asset.id, .preview)),
                                         ("playback", try? api.url("assets/\(asset.id)/video/playback")), ("original", api.originalURL(asset.id))]
-        if await api.serverRealtime() { probes.append(("hls main", try? api.url("assets/\(asset.id)/video/stream/main.m3u8"))) }
         for (name, url) in probes {
             guard let url else { continue }
             out.append("\(name): \(await api.probe(url))")
