@@ -1,128 +1,146 @@
-import AuthenticationServices
+import SafariServices
 import SwiftUI
 
+/// Sign-in through the core (I4): the Phosphor service by default, a self-hosted server as the second choice (D8).
 struct LoginView: View {
     @Environment(AppModel.self) private var app
-    /// Nur vorbelegt – gespeichert wird die Adresse erst nach erfolgreicher Anmeldung (ImmichClient.login)
-    @State private var server = UserDefaults.standard.string(forKey: "serverURL") ?? ""
+    @State private var ownServer: Bool
+    @State private var server: String
     @State private var email = ""
     @State private var password = ""
+    @State private var showPassword = false
     @State private var busy = false
     @State private var error: String?
-    /// Anmeldearten des eingegebenen Servers (SSO-Knopf, Passwortfelder) – nil, solange unbekannt
-    @State private var options: ImmichClient.LoginOptions?
-    @Environment(\.webAuthenticationSession) private var webAuth
+    @FocusState private var focus: Field?
+
+    private enum Field { case server, email, password }
+    private static let hosted = "api.daemonclient.uz"
+    private static let signUp = URL(string: "https://accounts.daemonclient.uz/signup")!
 
     init() {
+        // Only to prefill: an address is kept after a successful sign-in.
+        var saved = UserDefaults.standard.string(forKey: "serverURL") ?? ""
+        var email = ""
         #if DEBUG
-        // Simulator-Tests: Felder mit „@“ vorbelegen (simctl tippt es mit deutscher Mac-Tastatur als Anführungszeichen)
         let env = ProcessInfo.processInfo.environment
-        if let s = env["FOTOS_LOGIN_SERVER"] { _server = State(initialValue: s) }
-        if let e = env["FOTOS_LOGIN_EMAIL"] { _email = State(initialValue: e) }
-        if let p = env["FOTOS_LOGIN_PASSWORD"] { _password = State(initialValue: p) }
+        if let s = env["FOTOS_LOGIN_SERVER"] { saved = s }
+        if let e = env["FOTOS_LOGIN_EMAIL"] { email = e }
         #endif
+        let own = !saved.isEmpty && !saved.lowercased().contains(Self.hosted)
+        _ownServer = State(initialValue: own)
+        _server = State(initialValue: own ? saved : "")
+        _email = State(initialValue: email)
     }
 
     var body: some View {
-        ZStack {
-            LinearGradient(colors: [Color.loginTop, Color.appBackground], startPoint: .top, endPoint: .bottom)
-                .ignoresSafeArea()
-            VStack(spacing: 18) {
-                Spacer()
-                Image(systemName: "photo.on.rectangle.angled")
-                    .font(.system(size: 64)).symbolRenderingMode(.multicolor)
-                Text(verbatim: "Phosphor Photos").font(.system(size: 40, weight: .bold))
-                Text(String(localized: "Deine Mediathek auf deinem eigenen Server")).foregroundStyle(.secondary)
-                VStack(spacing: 12) {
-                    field(String(localized: "Server, z. B. https://fotos.example.com"), text: $server, icon: "server.rack")
-                        .textInputAutocapitalization(.never).keyboardType(.URL).autocorrectionDisabled()
-                    if options?.password != false {
-                        field(String(localized: "E-Mail"), text: $email, icon: "person")
-                            .textInputAutocapitalization(.never).keyboardType(.emailAddress).autocorrectionDisabled()
-                        HStack {
-                            Image(systemName: "lock").frame(width: 24).foregroundStyle(.secondary)
-                            SecureField(String(localized: "Passwort"), text: $password).textContentType(.password)
+        ScrollView {
+            VStack(spacing: 0) {
+                Image("Logo")
+                    .resizable().frame(width: 88, height: 88)
+                    .clipShape(.rect(cornerRadius: 20, style: .continuous))
+                    .shadow(color: .black.opacity(0.15), radius: 12, y: 4)
+                    .accessibilityHidden(true)
+                Text(verbatim: "Phosphor Photos")
+                    .font(.largeTitle.bold()).padding(.top, 20)
+                Text("Sign in to your library")
+                    .foregroundStyle(.secondary).padding(.top, 4)
+
+                VStack(alignment: .leading, spacing: 16) {
+                    if ownServer {
+                        labeled(String(localized: "Server address")) {
+                            TextField(String(""), text: $server, prompt: Text(verbatim: "https://photos.example.com"))
+                                .keyboardType(.URL).textContentType(.URL)
+                                .focused($focus, equals: .server).submitLabel(.next)
+                                .onSubmit { focus = .email }
                         }
-                        .padding(.horizontal, 18).frame(height: 54)
-                        .glassEffect(.regular, in: .capsule)
                     }
-                }
-                .padding(.top, 20)
-                if let error { Text(error).font(.footnote).foregroundStyle(.red).multilineTextAlignment(.center) }
-                if options?.password != false {
-                    Button { Task { await login() } } label: {
+                    labeled(String(localized: "E-Mail")) {
+                        TextField(String(""), text: $email, prompt: Text(verbatim: "name@example.com"))
+                            .keyboardType(.emailAddress).textContentType(.username)
+                            .focused($focus, equals: .email).submitLabel(.next)
+                            .onSubmit { focus = .password }
+                    }
+                    labeled(String(localized: "Passwort")) {
+                        HStack {
+                            Group {
+                                if showPassword { TextField(String(""), text: $password) }
+                                else { SecureField(String(""), text: $password) }
+                            }
+                            .textContentType(.password)
+                            .focused($focus, equals: .password).submitLabel(.go)
+                            .onSubmit { if canSignIn { Task { await signIn() } } }
+                            Button { showPassword.toggle() } label: {
+                                Image(systemName: showPassword ? "eye.slash" : "eye").foregroundStyle(.secondary)
+                            }
+                            .accessibilityLabel(showPassword ? String(localized: "Hide password") : String(localized: "Show password"))
+                        }
+                    }
+                    if let error {
+                        Label(error, systemImage: "exclamationmark.circle.fill")
+                            .font(.footnote).foregroundStyle(.red)
+                    }
+                    Button { Task { await signIn() } } label: {
                         Group { if busy { ProgressView() } else { Text(String(localized: "Anmelden")).font(.headline) } }
-                            .frame(maxWidth: .infinity, minHeight: 54)
+                            .frame(maxWidth: .infinity, minHeight: 34)
                     }
-                    .buttonStyle(.glassProminent)
-                    .disabled(busy || email.isEmpty || password.isEmpty)
+                    .buttonStyle(.borderedProminent).controlSize(.large)
+                    .buttonBorderShape(.roundedRectangle(radius: 12))
+                    .disabled(!canSignIn)
+                    .padding(.top, 4)
                 }
-                if let o = options, o.sso {
-                    // SSO wie in der Immich-App; Knopftext kommt vom Server (z. B. „Login with PixelUnion“).
-                    // Ohne Passwort-Anmeldung ist es der Hauptknopf.
-                    if o.password {
-                        ssoButton(o).buttonStyle(.glass)
-                    } else {
-                        ssoButton(o).buttonStyle(.glassProminent)
-                    }
+                .textInputAutocapitalization(.never).autocorrectionDisabled()
+                .padding(.top, 36)
+
+                HStack(spacing: 4) {
+                    Text("Don't have an account?").foregroundStyle(.secondary)
+                    Button(String(localized: "Create account"), action: openSignUp).fontWeight(.semibold)
                 }
-                Spacer(); Spacer()
+                .font(.subheadline).padding(.top, 28)
+
+                Button(ownServer ? String(localized: "Use the Phosphor service") : String(localized: "Use your own server")) {
+                    withAnimation(.snappy) { ownServer.toggle(); error = nil }
+                    focus = ownServer ? .server : .email
+                }
+                .font(.footnote).padding(.top, 12)
+
+                Text(verbatim: "v\(AppInfo.version)")
+                    .font(.caption2).foregroundStyle(.tertiary).padding(.top, 40)
             }
-            .frame(maxWidth: 520)   // iPad: Formular nicht über die ganze Breite
-            .padding(.horizontal, 28)
+            .frame(maxWidth: 440)   // iPad: not across the whole width
+            .padding(.horizontal, 24).padding(.top, 72).padding(.bottom, 24)
+            .frame(maxWidth: .infinity)
         }
-        // Nach dem Tippen der Adresse kurz warten, dann die Anmeldearten des Servers abfragen
-        .task(id: server) {
-            options = nil
-            guard server.count > 3 else { return }
-            try? await Task.sleep(for: .milliseconds(700))
-            guard !Task.isCancelled else { return }
-            options = try? await ImmichClient.shared.loginOptions(server: server)
+        .scrollDismissesKeyboard(.interactively)
+        .background(Color(.systemGroupedBackground).ignoresSafeArea())
+    }
+
+    private var canSignIn: Bool {
+        !busy && !email.isEmpty && !password.isEmpty && (!ownServer || !server.isEmpty)
+    }
+
+    /// A label above a filled, outlined field (Immich's form style); the outline turns accent while focused.
+    private func labeled(_ title: String, @ViewBuilder field: () -> some View) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title).font(.subheadline.weight(.semibold))
+            field()
+                .padding(.horizontal, 14).frame(minHeight: 50)
+                .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: 12))
+                .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color(.separator), lineWidth: 1))
         }
     }
 
-    private func ssoButton(_ o: ImmichClient.LoginOptions) -> some View {
-        Button { Task { await loginSSO() } } label: {
-            Group {
-                if busy && !o.password { ProgressView() } else {
-                    Label(o.ssoTitle ?? String(localized: "Mit SSO anmelden"), systemImage: "person.badge.key").font(.headline)
-                }
-            }
-            .frame(maxWidth: .infinity, minHeight: 54)
-        }
-        .disabled(busy)
+    /// Sign-up and storage setup happen on the accounts site; closing it comes back here.
+    private func openSignUp() {
+        let scene = UIApplication.shared.connectedScenes.first { $0.activationState == .foregroundActive } as? UIWindowScene
+        scene?.keyWindow?.rootViewController?.present(SFSafariViewController(url: Self.signUp), animated: true)
     }
 
-    private func field(_ title: String, text: Binding<String>, icon: String) -> some View {
-        HStack {
-            Image(systemName: icon).frame(width: 24).foregroundStyle(.secondary)
-            TextField(title, text: text)
-        }
-        .padding(.horizontal, 18).frame(height: 54)
-        .glassEffect(.regular, in: .capsule)
-    }
-
-    private func loginSSO() async {
+    private func signIn() async {
         busy = true; error = nil; defer { busy = false }
+        let address = ownServer ? server : Self.hosted
         do {
-            let flow = try await ImmichClient.shared.ssoStart(server: server)
-            let callback = try await webAuth.authenticate(using: flow.url, callbackURLScheme: ImmichClient.ssoScheme,
-                                                          preferredBrowserSession: .shared)
-            let r = try await ImmichClient.shared.ssoFinish(flow, callback: callback)
-            app.userName = r.name
-            app.loggedIn = true
-        } catch let e as ASWebAuthenticationSessionError where e.code == .canceledLogin {
-            // abgebrochen: still zurück zur Anmeldeseite
-        } catch {
-            self.error = error.localizedDescription
-        }
-    }
-
-    private func login() async {
-        busy = true; error = nil; defer { busy = false }
-        do {
-            let r = try await ImmichClient.shared.login(server: server, email: email, password: password)
-            app.userName = r.name
+            app.userName = try await CoreBridge.signIn(server: address, email: email, password: password)
+            UserDefaults.standard.set(address, forKey: "serverURL")
             app.loggedIn = true
         } catch {
             self.error = error.localizedDescription

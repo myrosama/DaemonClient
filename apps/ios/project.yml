@@ -9,6 +9,8 @@ settings:
   base:
     SWIFT_VERSION: "6.0"
     SWIFT_STRICT_CONCURRENCY: minimal
+    # The core is built for arm64 only (device and Apple-silicon Simulator).
+    EXCLUDED_ARCHS[sdk=iphonesimulator*]: x86_64
     MARKETING_VERSION: "1.0.29"
     CURRENT_PROJECT_VERSION: "30"
     DEVELOPMENT_TEAM: ""
@@ -23,6 +25,11 @@ targets:
       - path: App
       - path: Resources
         buildPhase: resources
+      # The core's Swift bindings, generated with the library by core/dc-ffi/build-ios.sh (never copied here).
+      - path: ../../core/dc-ffi/build/swift/dc_ffi.swift
+    dependencies:
+      - framework: ../../core/dc-ffi/build/DCCore.xcframework
+        embed: false
     info:
       path: App/Info.plist
       properties:
@@ -50,3 +57,16 @@ targets:
         TARGETED_DEVICE_FAMILY: "1,2"
         GENERATE_INFOPLIST_FILE: NO
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    scheme:
+      testTargets: [DCPhotosUITests]
+  # I4 Gate 2 on the Simulator: sign-in, restore and sign-out through the core (UITests/SignInTests.swift).
+  DCPhotosUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [UITests]
+    dependencies:
+      - target: DCPhotos
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: uz.daemonclient.photos.uitests
+        GENERATE_INFOPLIST_FILE: YES

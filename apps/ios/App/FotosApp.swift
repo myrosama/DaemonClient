@@ -29,8 +29,9 @@ struct FotosApp: App {
             .environment(app)
             .environment(timeline)
             .appTheme(app.theme)
+            // The worker refused the session: forget it everywhere, or the next launch restores it again.
             .onReceive(NotificationCenter.default.publisher(for: .sessionExpired)) { _ in
-                app.loggedIn = false
+                if app.loggedIn { app.signOut(timeline) }
             }
             // Tippen auf einen Treffer in der iPhone-Suche → wie ein homeroll://-Link
             .onContinueUserActivity(CSSearchableItemActionType) { act in
@@ -87,10 +88,10 @@ struct ViewerRequest: Identifiable {
 
 @MainActor @Observable
 final class AppModel {
-    var loggedIn = ImmichClient.shared.isLoggedIn
+    var loggedIn = CoreBridge.restore() || ImmichClient.shared.isLoggedIn
     /// Abmelden (Konto-Menü, oder „Server nicht erreichbar“ in der Mediathek → anderen Server wählen)
     func signOut(_ timeline: TimelineStore) {
-        ImmichClient.shared.logout(); timeline.clearCache(); MemoryCenter.shared.reset(); SpotlightIndex.clear(); LocalCopy.reset()
+        CoreBridge.signOut(); ImmichClient.shared.logout(); timeline.clearCache(); MemoryCenter.shared.reset(); SpotlightIndex.clear(); LocalCopy.reset()
         // alles vom Konto vom Gerät löschen: Offline-Vorschauen, Bild-Speicher (GitHub-Issue #8)
         OfflineSync.shared.stop(); OfflineStore.shared.clear(); ImageCache.shared.purge()
         // Liste heikler Fotos (IDs) des Kontos

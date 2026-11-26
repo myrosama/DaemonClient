@@ -1,0 +1,8 @@
+# cargo-deny (CI: mobile-core.yml, `check advisories`).
+[advisories]
+ignore = [
+  # basic-toml is unmaintained (no fix). It is read only by askama's derive
+  # macro, at build time, inside UniFFI's bindings generator: nothing of it is
+  # compiled into the apps.
+  { id = "RUSTSEC-2026-0374", reason = "build-time only (askama_derive via uniffi_bindgen); not shipped" },
+]

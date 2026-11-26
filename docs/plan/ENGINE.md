@@ -282,7 +282,12 @@ grid, the scrubber, the viewer's gestures) — never Apple's branding.
    - **I3** remove the editor, stacks, date/location edits, Spotlight; backup
      without tags or edited versions; Free Up hidden.
    - **I4** the core linked as an XCFramework [S1]; sign-in, restore,
-     sign-out through it.
+     sign-out through it. **Done 2026-11-26** (PR, plan
+     `docs/mobile/plans/I4-core-bridge.md`), run straight after I1 at the
+     operator's request ("add the swift code to the core and run the tests
+     already"), before I2/I3. S1 in part: Swift async, errors by kind and
+     the iOS XCFramework proven; streams, cancelling, Android and binary
+     size still open.
    - **I4b** the apps sign in **without our central login** (the operator,
      2026-11-22: "why even make a central api.daemonclient.uz … what if it
      directly contacts the user's worker instead?"). The hosted sign-in in
@@ -315,7 +320,8 @@ grid, the scrubber, the viewer's gestures) — never Apple's branding.
    - **I4c** the sign-in screen redesigned (the operator, 2026-11-22: "need
      more work on the login page design later"): our brand, the hosted
      service by default with "your own server" as the second choice (D8),
-     English and Russian — designed before it is built. A **Create account**
+     English and Russian — designed before it is built. **The screen is done
+     (2026-11-26, with I4)**; Delete account is not. A **Create account**
      button opens the accounts site's sign-up in an in-app browser
      (`SFSafariViewController`; storage setup happens there), and the app
      returns to sign-in when it closes. Offering sign-up means the app must

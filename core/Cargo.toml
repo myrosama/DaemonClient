@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["dc-cli", "dc-core"]
+members = ["dc-cli", "dc-core", "dc-ffi", "uniffi-bindgen"]
 
 [workspace.package]
 version = "0.1.0"

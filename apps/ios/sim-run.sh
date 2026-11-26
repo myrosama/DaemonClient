@@ -3,6 +3,7 @@
 # The token comes from a file, never the repo: FOTOS_SERVER=<worker URL> FOTOS_TOKEN_FILE=<file> ./sim-run.sh
 set -euo pipefail
 cd "$(dirname "$0")"
+../../core/dc-ffi/build-ios.sh >/dev/null   # never link a stale core
 xcodegen generate -q
 xcodebuild -project DCPhotos.xcodeproj -scheme DCPhotos \
   -destination 'generic/platform=iOS Simulator' -derivedDataPath build -quiet build 2>&1 \

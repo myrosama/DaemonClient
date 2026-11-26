@@ -657,3 +657,38 @@ item exempt from the gate, more tests, stale text).
   bypass), the restart mark's wiring, name cleaning.
 - G2: the runs above on the test account.
 - G3: above. G4: the code commit and this docs commit.
+
+## I4 — The core in the iPhone app; the sign-in screen            2026-11-26
+
+**Planned:** ENGINE.md §9 I4, plan `docs/mobile/plans/I4-core-bridge.md`
+(written alongside the code: the operator asked to go straight to it), and
+I4c, the sign-in screen ("make it close to immich login screen
+professional"; "we need create account button that opens a web page").
+**Did:** `core/dc-ffi`, a thin UniFFI 0.32.2 bridge (`uniffi-bindgen`
+generates the Swift; the bindings and DCCore.xcframework are built into the
+git-ignored `core/dc-ffi/build/` by `build-ios.sh` and never copied into the
+app, so they cannot drift from the Rust); `CoreBridge.swift` keeps the whole
+session in one Keychain item with an install marker in UserDefaults;
+HomeRoll's client takes the worker address and token from it until I5–I8.
+The sign-in screen rebuilt; HomeRoll's Immich sign-in and SSO deleted.
+**Found:** UniFFI's generated `errorDescription` prints the Swift type name,
+so the app maps errors itself; `flat_error` alone gave Swift no kind to
+translate, so the bridge keeps kinds. `SignedIn` must not derive `Debug` (it
+holds the token). ring targets the newest SDK unless
+`IPHONEOS_DEPLOYMENT_TARGET` is set (linker warnings for iOS 26). A release
+core logs warnings only. `simctl pbcopy` did not reach the app on this Mac;
+the Mac's clipboard did. A skipped XCTest still runs its `defer`.
+**Deviations:** dc-ffi declares its own lint set (UniFFI's scaffolding needs
+`unsafe`). The token crosses the bridge in plain text until I5–I8 (it stays
+in-process). The `accessToken` wipe in `ImmichClient.init` goes at I11.
+**Gate 2:** Simulator UI tests passed (sign-in, wrong password, restore with
+the grid filling, sign-out, reinstall → the form); the new screen checked in
+English (light, dark) and Russian.
+**Gate 3:** security — 0 HIGH, 0 MEDIUM, 7 LOW, fixed (SSO past the core
+removed; unscrubbed panic text; the marker before first unlock; private
+logs in release; the test's password and results; the token kept inside
+`CoreBridge`) or recorded (restore's address check is looser than sign-in's
+— the deployment is not stored yet, with I4b; the password is not zeroed;
+sign-out does not revoke on the worker). Spec — 3 HIGH, fixed: a 401 left
+the session to be restored; the S1 claim was overstated (now in part); the
+audit job would fail (deny.toml; and `url` 2.5.9 for a new advisory).
