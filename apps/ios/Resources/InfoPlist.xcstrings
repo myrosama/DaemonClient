@@ -41,13 +41,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "So that only you can open Hidden and Recently Deleted."
+            "value" : "So that only you can open Hidden."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Чтобы только вы могли открыть «Скрытые» и «Недавно удалённые»."
+            "value" : "Чтобы только вы могли открыть «Скрытые»."
           }
         }
       }

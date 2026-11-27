@@ -16,5 +16,3 @@ albums/{}/assets
 albums/{}/map-markers
 map/markers
 users/me
-server/config
-server/features

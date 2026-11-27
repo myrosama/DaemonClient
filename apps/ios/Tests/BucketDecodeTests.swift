@@ -10,7 +10,25 @@ final class BucketDecodeTests: XCTestCase {
          "ratio":[1,1,1,1],"duration":[5000,"0:00:05.500","nonsense",null],"livePhotoVideoId":[null,null,null,null]}
         """#
         let cols = try JSONDecoder().decode(BucketColumns.self, from: Data(json.utf8))
-        XCTAssertEqual(cols.assets().map(\.durationMs), [5000, 5500, nil, nil])
+        XCTAssertEqual(cols.assets()?.map(\.durationMs), [5000, 5500, nil, nil])
+    }
+
+    func testHiddenFlagFromVisibility() throws {
+        let json = #"""
+        {"id":["a","b"],"isImage":[true,true],"isFavorite":[false,false],
+         "fileCreatedAt":["2026-08-01T10:00:00","2026-08-01T10:00:00"],"ratio":[1,1],"livePhotoVideoId":[null,null],
+         "visibility":["timeline","archive"]}
+        """#
+        let cols = try JSONDecoder().decode(BucketColumns.self, from: Data(json.utf8))
+        XCTAssertEqual(cols.assets()?.map(\.isHidden), [false, true])
+    }
+
+    func testAMonthWithAShortColumnIsRefusedNotIndexedPastItsEnd() {
+        let json = #"""
+        {"id":["a","b"],"isImage":[true],"isFavorite":[false,false],
+         "fileCreatedAt":["2026-08-01T10:00:00","2026-08-01T10:00:00"],"ratio":[1,1],"livePhotoVideoId":[null,null]}
+        """#
+        XCTAssertNil(ImmichClient.decodeBucket(Data(json.utf8)))
     }
 
     func testMillisParse() {

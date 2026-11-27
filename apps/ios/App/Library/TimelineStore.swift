@@ -170,7 +170,7 @@ final class TimelineStore {
                         for (k, f) in files {
                             if running >= 4 { await g.next(); running -= 1 }
                             g.addTask {
-                                if let d = try? Data(contentsOf: f), let a = ImmichClient.decodeBucket(d) { cont.yield((k, a, BucketData.group(a))) }
+                                if let d = try? Data(contentsOf: f), let a = ImmichClient.decodeBucket(d)?.filter({ !$0.isHidden }) { cont.yield((k, a, BucketData.group(a))) }
                             }
                             running += 1
                         }
@@ -237,7 +237,10 @@ final class TimelineStore {
         inFlight.insert(b); defer { inFlight.remove(b) }
         let gen = generation
         guard let d = try? await ImmichClient.shared.bucketData(b) else { return }
-        let r = await Task.detached(priority: .userInitiated) { ImmichClient.decodeBucket(d).map { ($0, BucketData.group($0)) } }.value
+        // hidden photos stay out of the library (the worker's month route ignores `visibility`)
+        let r = await Task.detached(priority: .userInitiated) {
+            ImmichClient.decodeBucket(d).map { $0.filter { !$0.isHidden } }.map { ($0, BucketData.group($0)) }
+        }.value
         guard let (a, days) = r, gen == generation else { return }
         save(d, to: file(b))
         // Nur neue Vorschauen (thumbhash) → Kacheln melden sich selbst (.thumbChanged); das 80k-Raster nicht neu bauen

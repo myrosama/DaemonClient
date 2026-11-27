@@ -8298,6 +8298,22 @@
         }
       }
     },
+    "New photos and videos are backed up in the background while the iPhone charges at night, and whenever you open the app. Nothing is deleted from your iPhone." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "New photos and videos are backed up in the background while the iPhone charges at night, and whenever you open the app. Nothing is deleted from your iPhone."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Новые фото и видео сохраняются в фоне, пока iPhone заряжается ночью, и каждый раз, когда вы открываете приложение. С iPhone ничего не удаляется."
+          }
+        }
+      }
+    },
     "New photos and videos from this iPhone are uploaded as originals." : {
       "localizations" : {
         "en" : {

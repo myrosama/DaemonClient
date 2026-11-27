@@ -249,14 +249,6 @@ struct AlbumScreen: View {
                 if markers.isEmpty { app.toast(String(localized: "Keine Fotos mit Ort in diesem Album")) } else { showMap = true }
             }
         }
-        Menu {
-            Picker(String(localized: "Sortieren"), selection: Binding(get: { ascending }, set: { asc in
-                Task { try? await ImmichClient.shared.updateAlbum(ref.id, ["order": asc ? "asc" : "desc"]); await load() }
-            })) {
-                Text(String(localized: "Älteste zuerst")).tag(true)
-                Text(String(localized: "Neueste zuerst")).tag(false)
-            }
-        } label: { Label(String(localized: "Sortieren"), systemImage: "arrow.up.arrow.down") }
         Divider()
         Button(String(localized: "Album löschen"), systemImage: "trash", role: .destructive) { confirmDelete = true }
     }

@@ -24,7 +24,6 @@ struct ShareOptionsSheet: View {
                         Text(String(localized: "Aktuell")).tag(false)
                         Text(String(localized: "Kompatibelstes")).tag(true)
                     }
-                    Toggle(String(localized: "Unbearbeitetes Original"), isOn: $o.unedited)
                 } footer: {
                     Text(String(localized: "„Kompatibelstes“ schickt Fotos als JPEG und Videos als H.264, damit sie überall aufgehen."))
                 }

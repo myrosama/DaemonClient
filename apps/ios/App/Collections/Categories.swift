@@ -57,7 +57,7 @@ enum CategoryLoader {
         case .videos: return all.filter(\.isVideo)
         case .livePhotos: return all.filter(\.isLivePhoto)
         case .favorites: return all.filter(\.isFavorite)
-        // the library holds only what is on the timeline; archived photos come from the worker's own filter
+        // the library holds no hidden photos; they come from the worker's months that have any (filtered on the phone)
         case .hidden: return (try? await ImmichClient.shared.timelineAssets(["visibility": "archive"])) ?? []
         case .recentlySaved:
             let since = Date().addingTimeInterval(-30 * 86400)

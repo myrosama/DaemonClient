@@ -14,6 +14,7 @@ struct TimeBucket: Decodable, Hashable, Identifiable, Sendable {
 /// Spaltenformat von GET /timeline/bucket: jedes Feld ist ein Array, Index i = Asset i.
 /// A video's length in ms. The worker sends a number, but older rows still carry Immich's "H:MM:SS.mmm" text: a
 /// strict `[Int?]` let one such row blank its whole month (2026-11-26: 14 rows hid 880 photos on the test account).
+/// Parses "0:00:05.500" and "5000"; other text is nil.
 struct Millis: Decodable {
     let value: Int?
     init(_ value: Int?) { self.value = value }
@@ -25,7 +26,6 @@ struct Millis: Decodable {
         else if let s = try? c.decode(String.self) { value = Self.parse(s) }
         else { value = nil }
     }
-    /// "0:00:05.000", "05.5", "5000" → ms; anything else nil.
     static func parse(_ s: String) -> Int? {
         guard !s.contains("-") else { return nil }
         let parts = s.split(separator: ":", omittingEmptySubsequences: false)
@@ -51,9 +51,16 @@ struct BucketColumns: Decodable {
     let thumbhash: [String?]?
     let createdAt: [String]?             // Upload-Zeitpunkt (für „Nach zuletzt hinzugefügt“)
     let ownerId: [String]?
+    let visibility: [String?]?           // "timeline" | "archive" (Ausgeblendet) | …
 
-    func assets() -> [Asset] {
-        id.indices.map { i in
+    /// nil when a column's length differs from `id`'s (a worker bug must not crash the app on every launch).
+    func assets() -> [Asset]? {
+        let n = id.count
+        let lengths = [isImage.count, isFavorite.count, fileCreatedAt.count, ratio.count, livePhotoVideoId.count,
+                       localOffsetHours?.count, duration?.count, city?.count, country?.count, thumbhash?.count,
+                       createdAt?.count, ownerId?.count, visibility?.count].compactMap { $0 }
+        guard lengths.allSatisfy({ $0 == n }) else { return nil }
+        return id.indices.map { i in
             ImageCache.shared.setHash(id[i], thumbhash?[i] ?? nil, video: !isImage[i])
             let utc = DateParsing.wallClock(fileCreatedAt[i]) ?? .distantPast
             let offset = (localOffsetHours?[i] ?? nil) ?? 0
@@ -67,7 +74,8 @@ struct BucketColumns: Decodable {
                   city: city?[i] ?? nil,
                   country: country?[i] ?? nil,
                   addedAt: createdAt.flatMap { DateParsing.wallClock($0[i]) },
-                  ownerId: ownerId?[i])
+                  ownerId: ownerId?[i],
+                  isHidden: (visibility?[i] ?? nil).map { $0 != "timeline" } ?? false)
         }
     }
 }
@@ -117,7 +125,7 @@ struct AssetDTO: Decodable {
     let isFavorite: Bool
     let localDateTime: String?       // Ortszeit der Aufnahme (mit falschem "Z")
     let fileCreatedAt: String
-    let duration: Int?               // Millisekunden (v3), null bei Fotos
+    let duration: Millis?               // Millisekunden (v3), null bei Fotos
     let livePhotoVideoId: String?
     let originalFileName: String?
     let originalMimeType: String?
@@ -162,7 +170,7 @@ struct AssetDTO: Decodable {
         return Asset(id: id, isImage: type == "IMAGE", isFavorite: isFavorite,
                      date: DateParsing.wallClock(localDateTime ?? fileCreatedAt) ?? .distantPast,
                      ratio: (w > 0 && h > 0) ? w / h : 1,
-                     durationMs: (duration ?? 0) > 0 ? duration : nil,
+                     durationMs: (duration?.value ?? 0) > 0 ? duration?.value : nil,
                      livePhotoVideoId: livePhotoVideoId,
                      city: exifInfo?.city, country: exifInfo?.country,
                      addedAt: createdAt.flatMap(DateParsing.wallClock), ownerId: ownerId,

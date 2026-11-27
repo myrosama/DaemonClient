@@ -36,7 +36,7 @@
 		<true/>
 	</dict>
 	<key>NSFaceIDUsageDescription</key>
-	<string>So that only you can open Hidden and Recently Deleted.</string>
+	<string>So that only you can open Hidden.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>To reach a Phosphor server on your local network.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>

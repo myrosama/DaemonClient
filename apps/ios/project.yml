@@ -46,7 +46,7 @@ targets:
         BGTaskSchedulerPermittedIdentifiers: [uz.daemonclient.photos.backup, uz.daemonclient.photos.refresh]
         NSPhotoLibraryUsageDescription: "To back up your photos and videos to your Phosphor storage."
         NSPhotoLibraryAddUsageDescription: "To save photos and videos from your Phosphor storage to this iPhone."
-        NSFaceIDUsageDescription: "So that only you can open Hidden and Recently Deleted."
+        NSFaceIDUsageDescription: "So that only you can open Hidden."
         NSLocalNetworkUsageDescription: "To reach a Phosphor server on your local network."
         # Loopback (the core's local media server) and self-hosted servers at home.
         NSAppTransportSecurity:

@@ -38,7 +38,7 @@ struct BackupView: View {
                     Toggle(String(localized: "Fotos sichern"), isOn: $engine.enabled)
                     Toggle(String(localized: "Nur im WLAN"), isOn: $engine.wifiOnly)
                 } footer: {
-                    Text(String(localized: "Neue Fotos und Videos landen auf deinem eigenen Server – im Hintergrund, wenn das iPhone nachts am Strom hängt, und sobald du die App öffnest. Auf dem iPhone wird nur gelöscht, wenn du unten „Speicher freigeben“ wählst."))
+                    Text("New photos and videos are backed up in the background while the iPhone charges at night, and whenever you open the app. Nothing is deleted from your iPhone.")
                 }
                 Section {
                     Toggle(String(localized: "Ältere Fotos sind schon auf dem Server"), isOn: Binding(

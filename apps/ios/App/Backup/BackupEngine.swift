@@ -380,7 +380,8 @@ final class BackupEngine {
         let meta = BackgroundUploader.Meta(user: stateUser, localID: a.localIdentifier, kind: kind, body: body.path,
                                            localDate: localDate, checksum: sha1)
         let r = try await BackgroundUploader.shared.upload(req, body: body, meta: meta)
-        if r.status != "duplicate", let localDate { api.setCaptureTime(r.id, localDate) }
+        // the worker's upload ignores `visibility`: a photo hidden on the iPhone is hidden afterwards
+        if a.isHidden, r.status != "duplicate" { try? await api.update([r.id], ["visibility": "archive"]) }
         return (r.id, r.status != "duplicate")
     }
 
@@ -452,16 +453,15 @@ final class BackupEngine {
     func adopt(_ r: ImmichClient.UploadResult, meta: BackgroundUploader.Meta) async {
         PerfLog.mark("Hintergrund-Übertragung fertig (\(meta.kind))")
         background = max(0, background - 1)
-        if meta.kind == "edited", r.status != "duplicate", let d = meta.localDate { ImmichClient.shared.setCaptureTime(r.id, d) }
         guard meta.kind == "main", !meta.user.isEmpty else { return }
         loadState(user: meta.user)
         guard state[meta.localID] == nil else { return }
         let a = PHAsset.fetchAssets(withLocalIdentifiers: [meta.localID], options: nil).firstObject
         let edited = a.map { PHAssetResource.assetResources(for: $0).contains { $0.type == .fullSizePhoto || $0.type == .fullSizeVideo } } ?? false
         guard !edited else { return }
-        state[meta.localID] = Entry(remote: r.id, edited: nil)   // Tags holt repairTags beim nächsten Lauf nach
+        state[meta.localID] = Entry(remote: r.id, edited: nil)
         saveState()
-        if r.status != "duplicate", let d = meta.localDate { ImmichClient.shared.setCaptureTime(r.id, d) }
+        if a?.isHidden == true, r.status != "duplicate" { try? await ImmichClient.shared.update([r.id], ["visibility": "archive"]) }
         if let p = storedPending, p > 0 { storedPending = p - 1; UserDefaults.standard.set(p - 1, forKey: "backup.pending") }
     }
 

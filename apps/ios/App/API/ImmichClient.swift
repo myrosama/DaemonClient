@@ -158,7 +158,7 @@ final class ImmichClient: NSObject, URLSessionDelegate, @unchecked Sendable {
     }
     /// Dekodieren außerhalb des Hauptthreads (2 000 Objekte ≈ 20 ms).
     nonisolated static func decodeBucket(_ d: Data) -> [Asset]? {
-        (try? JSONDecoder().decode(BucketColumns.self, from: d))?.assets().sorted { $0.date < $1.date }
+        (try? JSONDecoder().decode(BucketColumns.self, from: d))?.assets()?.sorted { $0.date < $1.date }
     }
 
     /// The worker's timeline narrowed by its own filters (`albumId`, `visibility`, `isFavorite`): every month, oldest
@@ -166,10 +166,12 @@ final class ImmichClient: NSObject, URLSessionDelegate, @unchecked Sendable {
     func timelineAssets(_ q: [String: String]) async throws -> [Asset] {
         let months = try JSONDecoder().decode([TimeBucket].self, from: try await raw("timeline/buckets", query: q))
         var out: [Asset] = []
-        for m in months {
-            out += Self.decodeBucket(try await raw("timeline/bucket", query: q.merging(["timeBucket": m.timeBucket]) { $1 })) ?? []
+        for m in Set(months.map(\.timeBucket)).sorted().prefix(1200) {   // 100 years: a bound, not a limit
+            out += Self.decodeBucket(try await raw("timeline/bucket", query: q.merging(["timeBucket": m]) { $1 })) ?? []
         }
-        return out.sorted { $0.date < $1.date }
+        // the worker's month route ignores `visibility`: hidden photos only in Hidden, never in an album's list
+        let hidden = q["visibility"] == "archive"
+        return out.filter { $0.isHidden == hidden }.sorted { $0.date < $1.date }
     }
 
     func asset(_ id: String) async throws -> AssetDTO { try await request("assets/\(id)") }
@@ -186,23 +188,6 @@ final class ImmichClient: NSObject, URLSessionDelegate, @unchecked Sendable {
     func update(_ ids: [String], _ fields: [String: Any]) async throws {
         var body = fields; body["ids"] = ids
         try await raw("assets", method: "PUT", body: json(body))
-    }
-
-    /// Aufnahmezeit mit Zeitzone (z. B. 2026-11-12T20:05:22-08:00) für ein frisch hochgeladenes Objekt setzen.
-    /// Der Server liest die Metadaten der Datei erst einige Sekunden nach dem Hochladen aus und überschreibt dabei
-    /// einen zu früh gesetzten Wert (Datei ohne Datum → UTC). Deshalb: setzen, prüfen, bei Bedarf wiederholen.
-    /// Läuft für sich, damit Sichern/Bearbeiten nicht warten müssen.
-    nonisolated func setCaptureTime(_ id: String, _ when: String) {
-        let wall = String(when.prefix(19))   // Ortszeit ohne Versatz, z. B. 2026-11-12T20:05:22
-        Task.detached {
-            for wait in [0, 3, 6, 12, 30] {
-                if wait > 0 { try? await Task.sleep(for: .seconds(wait)) }
-                try? await self.update([id], ["dateTimeOriginal": when])
-                try? await Task.sleep(for: .seconds(2))
-                if let dto = try? await self.asset(id), dto.localDateTime?.hasPrefix(wall) == true,
-                   dto.exifInfo?.timeZone != nil { return }
-            }
-        }
     }
 
     func addToAlbum(_ albumID: String, _ ids: [String]) async throws {

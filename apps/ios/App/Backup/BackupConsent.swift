@@ -9,7 +9,7 @@ struct BackupConsentView: View {
     private var server: URL? { ImmichClient.shared.baseURL }
     private var plainHTTP: Bool { server?.scheme?.lowercased() == "http" }
     /// The Phosphor service: its worker address means nothing to the user, so it is not shown.
-    private var hosted: Bool { (UserDefaults.standard.string(forKey: "serverURL") ?? "").lowercased().contains("api.daemonclient.uz") }
+    private var hosted: Bool { UserDefaults.standard.string(forKey: "serverURL") == "api.daemonclient.uz" }   // as LoginView stores it
 
     var body: some View {
         VStack(spacing: 18) {

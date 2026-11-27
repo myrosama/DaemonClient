@@ -242,7 +242,7 @@ final class VideoState {
         out.append("photo access: \(LocalCopy.accessText), local copy: \(await LocalCopy.asset(asset.id) != nil ? "found" : "not found")")
         if let d = try? await api.asset(asset.id) {
             let size = d.exifInfo?.fileSizeInByte.map { String(format: "%.1f MB", Double($0) / 1_000_000) } ?? "?"
-            out.append("asset: \(d.originalMimeType ?? "?"), \(size), \((d.duration ?? 0) / 1000) s, thumbhash \(d.thumbhash == nil ? "missing" : "ok")")
+            out.append("asset: \(d.originalMimeType ?? "?"), \(size), \((d.duration?.value ?? 0) / 1000) s, thumbhash \(d.thumbhash == nil ? "missing" : "ok")")
         }
         out.append("")
         var probes: [(String, URL?)] = [("thumbnail", api.thumbnailURL(asset.id, .thumbnail)), ("preview", api.thumbnailURL(asset.id, .preview)),

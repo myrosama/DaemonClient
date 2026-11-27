@@ -8,3 +8,4 @@ DerivedData/
 Resources/HeimnetzCA.der
 *.p12
 *.mobileprovision
+build-device/
