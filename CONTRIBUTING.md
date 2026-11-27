@@ -16,7 +16,7 @@ Start with the [README](README.md) for what the thing is, then:
 | Signup, setup wizard, dashboard | `apps/accounts-web/` |
 | The Photos web app | `apps/photos-web/web/` (a fork) |
 | The mobile apps (native, being built) | `apps/ios/`, `apps/android/`, on the Rust core in `core/` |
-| The Drive web app | `drive/` |
+| The Drive web app | `apps/drive-web/` |
 | Self-hosting CLI | `selfhost/` |
 
 `workers/user-worker` is where most of the interesting problems are.

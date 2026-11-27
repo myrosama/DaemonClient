@@ -5,8 +5,8 @@
 <h1 align="center">DaemonClient</h1>
 
 <p align="center">
-  <strong>Your own private cloud. Unlimited. Encrypted. $0/month.</strong><br>
-  <em>Photos and Drive, running entirely on free tiers you control.</em>
+  <strong>A private photo and file cloud that runs on free plans you control.</strong><br>
+  <em>Photos and Drive, with your files in your own Telegram channel.</em>
 </p>
 
 <p align="center">
@@ -32,34 +32,35 @@
 
 ## What this is
 
-Cloud storage is expensive and you don't own any of it. DaemonClient combines
-two services with unusually generous free tiers — **Telegram** (unlimited file
-storage through bots and channels) and **Cloudflare Workers** (serverless
-compute plus a D1 database) — into a personal cloud where **every user gets
-their own isolated stack**:
+Cloud storage costs money every month, and the files sit on someone else's
+servers. DaemonClient builds a personal cloud out of two services with
+generous free plans: Telegram, which stores files without a size cap through
+bots and channels, and Cloudflare Workers, which runs code and a small D1
+database. Every user gets their own copy of the whole setup:
 
-- **your own** Telegram bot and private channel — ownership actually transferred to you
-- **your own** Cloudflare Worker and D1 database — your API, your index, nobody else's traffic
-- **your own** encryption keys — files are encrypted before they ever reach Telegram
+- their own Telegram bot and private channel, owned by them;
+- their own Cloudflare worker and D1 database, which serve their API and keep
+  their file index;
+- their own encryption keys, so files are stored encrypted in their channel.
 
-There is no shared file server and no operator database holding everyone's
-photos. A photo you upload travels to *your* worker, gets encrypted, and lands
-in *your* Telegram channel as chunks only your stack can read back.
+There's no shared file server and no database of ours holding everyone's
+photos. A photo you upload is stored in your Telegram channel as encrypted
+parts, and your worker keeps the index that lets your stack read it back.
 
-**You can run the whole thing yourself.** One command builds a complete install
-on your own Telegram, Cloudflare and Firebase accounts, with nothing pointing
-back at us — see [Self-hosting](#self-hosting).
+You can also run all of it yourself. One command sets up a complete install on
+your own Telegram, Cloudflare and Firebase accounts, and nothing in it points
+back at us. See [Self-hosting](#self-hosting).
 
 ---
 
 ## Try it
 
-| | | |
+| App | Address | What's there |
 |---|---|---|
-| 📸 **Photos** | [photos.daemonclient.uz](https://photos.daemonclient.uz) | Timeline, albums, favourites, EXIF and map view, live photos, video, trash, zip downloads |
-| 📁 **Drive** | [drive.daemonclient.uz](https://drive.daemonclient.uz) | Folders, previews, client-side encryption, and a WebDAV mount |
-| 👤 **Accounts** | [accounts.daemonclient.uz](https://accounts.daemonclient.uz) | One account for both, plus the guided setup and your dashboard |
-| 📖 **Docs** | [docs.daemonclient.uz](https://docs.daemonclient.uz) | Architecture, the storage model, encryption, API reference, self-hosting |
+| Photos | [photos.daemonclient.uz](https://photos.daemonclient.uz) | Timeline, albums, favourites, photo details, live photos, video, trash and zip downloads |
+| Drive | [drive.daemonclient.uz](https://drive.daemonclient.uz) | Folders, previews, encryption in your browser, and a WebDAV mount |
+| Accounts | [accounts.daemonclient.uz](https://accounts.daemonclient.uz) | One account for both apps, the guided setup and your dashboard |
+| Docs | [docs.daemonclient.uz](https://docs.daemonclient.uz) | How it works, encryption, the API reference and self-hosting |
 
 <p align="center">
   <img src="apps/site/uploads/immich-screenshot.webp" alt="DaemonClient Photos" width="100%">
@@ -72,42 +73,41 @@ back at us — see [Self-hosting](#self-hosting).
 ```mermaid
 flowchart LR
     subgraph Clients["Your devices"]
-        WEB["Photos & Drive<br/>web apps"]
+        WEB["Photos and Drive<br/>web apps"]
         DAV["Any file manager<br/>(WebDAV mount)"]
     end
 
-    subgraph Stack["YOUR isolated stack"]
-        W["Your Cloudflare Worker<br/><i>API · encryption · auth</i>"]
-        D1[("Your D1 database<br/><i>metadata index</i>")]
+    subgraph Stack["Your own stack"]
+        W["Your Cloudflare Worker<br/><i>API, keys, sign-in</i>"]
+        D1[("Your D1 database<br/><i>file index</i>")]
         BOT["Your Telegram bot"]
-        CH[("Your private channel<br/><i>encrypted 19 MB chunks</i>")]
+        CH[("Your private channel<br/><i>encrypted 19 MB parts</i>")]
     end
 
-    WEB -->|metadata| W
+    WEB -->|metadata, and encrypted parts through its relay| W
     DAV --> W
     W <--> D1
     W <--> BOT
-    WEB -.->|file bytes, direct| CH
     BOT <--> CH
 ```
 
-Note the dotted line: **on the web, file bytes never touch the worker.** The
-browser chunks and encrypts a file itself and sends it straight to Telegram,
-and a service worker reads it back the same way. The worker only ever handles
-the index. That is what keeps a photo library inside a free tier that allows
-100,000 requests a day.
+On the web, your browser does the heavy work: it splits and encrypts a file
+itself and sends the parts to Telegram through your worker's relay, which
+streams them along without storing or decrypting them. A service worker reads
+files back the same way. The worker never assembles a whole file, which keeps
+it inside the free plan's CPU and memory limits.
 
-The only shared components are the control plane — the accounts portal, the
-login endpoint, and the service that provisions per-user workers. None of them
-sit in the path of your bytes.
+The parts we run are the control plane: the accounts portal, the sign-in
+service and the service that sets up and updates each user's worker. None of
+them is in the path of your files.
 
-**Three numbers explain most of the design:**
+Three numbers explain most of the design:
 
-| | | |
-|---|---|---|
-| **19 MB** | Telegram won't let a bot *download* a file bigger than 20 MB — uploads can be larger, which is a trap. Files are chunked below the cap and never merged. |
-| **10 ms** | The CPU a free Cloudflare Worker gets per request. No image decoding, no transcoding, no big buffers. |
-| **50** | External subrequests per invocation. A 50-chunk file is already at the ceiling, so background jobs run one at a time. |
+| Number | Why it matters |
+|---|---|
+| 19 MB | Telegram won't let a bot download a file bigger than 20 MB, even though it accepts bigger uploads. Files are split below that limit and never merged. |
+| 10 ms | The CPU time a free Cloudflare Worker gets per request: not enough to decode images, convert video or hold big buffers. |
+| 50 | Outside requests per worker invocation. A 50-part file already reaches it, so background jobs run one at a time. |
 
 The full explanation is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
@@ -117,135 +117,141 @@ The full explanation is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ```bash
 git clone https://github.com/myrosama/DaemonClient.git
-cd DaemonClient/immich-api-shim && npm install && cd ..
+cd DaemonClient
+(cd workers/user-worker && npm install) && (cd selfhost && npm ci)
 node selfhost/bin/daemonclient.mjs setup
 ```
 
-About ten minutes, most of it you clicking around in Telegram and Cloudflare.
-Then `daemonclient web` builds and deploys the three web apps to your own
-Firebase Hosting.
+Setup takes about ten minutes, most of it spent in Telegram and Cloudflare.
+After that, `daemonclient web` builds the three web apps and deploys them to
+your own Firebase Hosting. You need Node.js 22.13 or newer.
 
-**A self-hosted install depends on nothing we run.** Not your files, not your
-credentials, not a telemetry ping. The single outbound call to anything of ours
-is an anonymous check of the public GitHub releases feed, which sends nothing
-about your install and can be turned off. If this project disappears tomorrow,
-your install keeps working: the files are in your Telegram channel, the index is
-in your D1 database, and the code is in your clone under AGPL-3.0.
+A self-hosted install doesn't use anything we run. Your files and credentials
+stay on your own accounts, and nothing reports back to us. Apart from Telegram
+and your own Firebase project, it contacts only GitHub's public releases list,
+to check for updates; that request is anonymous, and there's no switch to turn
+it off yet.
+If this project disappeared, your install would keep working: the files are in
+your Telegram channel, the index is in your D1 database, and the code is in
+your clone under AGPL-3.0.
 
-Full guide: **[docs/SELF_HOSTING.md](docs/SELF_HOSTING.md)**.
+The full guide is [docs/SELF_HOSTING.md](docs/SELF_HOSTING.md).
 
 ---
 
-## What works, and what doesn't
-
-Honesty is more useful than a feature list, so both columns:
+## What works and what doesn't
 
 ### Working
 
-**Photos** — timeline with month buckets and thumbhash placeholders, albums,
-favourites, archive, trash, EXIF (camera, lens, exposure) with a map view from
-GPS, live photos, video playback with range-aware multi-chunk streaming,
-server-side SHA-1 so re-installs deduplicate instead of duplicating, zip
-downloads, and background jobs that quietly repair missing checksums, EXIF and
-thumbnails while you use the app.
+Photos has a timeline grouped by month, with blurred placeholders while
+thumbnails load, albums, favourites, archive, trash, photo details (camera,
+lens, exposure), live photos, video that streams across parts, checksums so a
+reinstall finds your existing photos instead of uploading them again, and zip
+downloads. A background job fills in missing checksums while you browse.
 
-**Drive** — folders, uploads of any size, previews, search, true zero-knowledge
-encryption (keys derived in your browser; the worker only ever holds
-ciphertext), and **WebDAV**, so your cloud mounts as a normal drive in Windows
-Explorer, macOS Finder or any file manager.
+Drive has folders, uploads of any size, previews, search, encryption in your
+browser, and a WebDAV mount, so your cloud shows up as a normal drive in
+Windows Explorer, macOS Finder or any other file manager. By default Drive's
+key is kept in your own D1 database so your devices and the mount can use it.
+If you set a custom password instead, it never leaves your browser.
 
-**Platform** — long-lived sessions, one sign-in across all three apps, and
-per-user workers that auto-update on your next login.
+Across all three apps you get long sessions and one sign-in, and on the
+hosted service we update each user's worker on a schedule.
 
-### Not working, or not there
+### Not working yet
 
-| | |
+| Feature | Status |
 |---|---|
-| **Mobile apps** | Native iPhone and Android apps on the Rust core ([`core/`](core)) are being built (`apps/ios`, `apps/android`); **not released yet**. See [Roadmap](docs/ROADMAP.md). |
-| **Videos over 100 MB from mobile** | Cloudflare's request-body cap. Needs chunked upload in the app. Web uploads are unaffected — they bypass the worker entirely. |
-| **HEIC thumbnails** | Blank unless you deploy the optional [`processor/`](processor). Workers cannot decode HEIC and Telegram won't thumbnail it. Every other format, video included, is fine. |
-| **Face recognition, smart search, places** | Not implemented. They need ML this architecture has nowhere to run. The routes return correctly-shaped empty results rather than errors. |
-| **Sharing between users** | Built and held pending a security review. One install, one owner, for now. |
-| **`POST /api/sync/ack`** | Not implemented — every ack the mobile client sends is a no-op. |
+| Phone apps | Native iPhone and Android apps on the Rust core ([`core/`](core)) are being built in [`apps/ios/`](apps/ios) and [`apps/android/`](apps/android). Not released yet. See the [roadmap](docs/ROADMAP.md). |
+| HEIC and some video thumbnails | Workers can't decode HEIC, and Telegram doesn't make thumbnails for it. In Photos, *Utilities > Fix HEIC & missing thumbnails* makes them in your browser, and *Fix video thumbnails* does the same for videos. |
+| Face recognition, smart search, places | Not built. They need machine learning, and this design has nowhere to run it. Those routes return empty results of the right shape instead of errors. |
+| Sharing between users | Not available. An install has one owner. |
 
-More detail, including the four-times-duplicated storage code, is under
-[known sharp edges](docs/ARCHITECTURE.md#known-sharp-edges).
+[Known sharp edges](docs/ARCHITECTURE.md#known-sharp-edges) has more detail.
 
 ---
 
 ## Security
 
-- **Drive** is encrypted *client-side* in your browser. Zero-knowledge — neither the worker nor Telegram sees plaintext.
-- **Photos** is encrypted on *your own* single-tenant worker, which is what makes thumbnails, EXIF and deduplication possible. A deliberate trade, confined to infrastructure serving one person.
-- **Your bytes never transit shared machines.** Enforced in code: optional heavy compute (HEIC conversion) only ever calls a *per-user* processor URL from your own config.
-- **One install, one owner**, enforced at the single authentication chokepoint rather than per route.
+- Drive encrypts files in your browser before upload. By default the key is in
+  your own D1 database, so your devices and the WebDAV mount can use it; with a
+  custom password, only your browser can decrypt.
+- Photos keeps its key in your own D1 database and stores your photos
+  encrypted in your channel. Your worker holds that key so it can work out
+  checksums and read photo details, and that worker serves only you.
+- Your files never pass through a server we share between users. Work that
+  needs real CPU, such as decoding HEIC photos, runs in your browser.
+- An install has one owner. The check sits in the one place every request is
+  authenticated, so new routes are covered too.
 
-Found something? **Please report it privately** — see [SECURITY.md](SECURITY.md).
-Past issues are listed there too, because they are the shape of thing worth
-looking for.
+If you find a security problem, please report it privately: see
+[SECURITY.md](SECURITY.md). Past issues are listed there too, because they show
+the kind of thing worth looking for.
 
 ---
 
 ## Repository map
 
-| Directory | What lives there |
+| Folder | What's there |
 |---|---|
-| [`workers/user-worker/`](workers/user-worker) | ⭐ The per-user worker: the entire Photos + Drive API — encryption, Telegram chunk I/O, D1, background repair |
-| [`selfhost/`](selfhost) | The self-hosting CLI. Dependency-free, runs from a fresh clone |
-| [`workers/deployment/`](deployment-service) | Provisions per-user workers for the managed service and ships them updates |
-| [`apps/accounts-web/`](accounts-portal) | Sign-up, the guided setup wizard, the dashboard |
-| [`workers/auth/`](auth-worker) | Cross-subdomain session broker (managed service only) |
-| [`immich/`](immich/FORK.md) | The Immich fork: the Photos web app (`web/`) |
-| [`core/`](core) | The Rust core under the mobile apps: storage format, Telegram, sync, uploads |
-| [`apps/`](apps) | The native mobile apps (`ios/`, `android/`) |
-| [`drive/`](drive) | The Drive web app — not a fork |
-| [`processor/`](processor) | Optional HEIC thumbnailer, deployed to each user's own Vercel |
-| [`workers/telegram-proxy/`](daemonclient-proxy) | CORS relay for the Telegram Bot API |
-| [`schema/`](schema) | The D1 schema, defined once for both provisioners |
-| [`apps/site/`](daemonclient-site) | The landing page |
-| [`apps/docs-web/`](docs-site) | The documentation site |
-| [`docs/`](docs) | Architecture, API reference, self-hosting guide |
+| [`workers/user-worker/`](workers/user-worker) | Each user's own worker: the whole Photos and Drive API, with encryption, Telegram I/O, D1 and background repair |
+| [`workers/deployment/`](workers/deployment) | Sets up each user's worker for the hosted service and keeps it updated |
+| [`workers/auth/`](workers/auth) | The sign-in service the websites share (hosted service only) |
+| [`workers/telegram-proxy/`](workers/telegram-proxy) | A CORS relay for the Telegram Bot API |
+| [`apps/photos-web/`](apps/photos-web) | The Photos website, a fork of Immich's web app ([FORK.md](apps/photos-web/FORK.md)) |
+| [`apps/drive-web/`](apps/drive-web) | The Drive website |
+| [`apps/accounts-web/`](apps/accounts-web) | Sign-up, the guided setup and the dashboard |
+| [`apps/site/`](apps/site), [`apps/docs-web/`](apps/docs-web) | The landing page and the docs site |
+| [`apps/ios/`](apps/ios), [`apps/android/`](apps/android) | The native phone apps, being built |
+| [`core/`](core) | The Rust core under the phone apps: storage format, Telegram, sync and uploads |
+| [`packages/schema/`](packages/schema) | The D1 database schema, defined once |
+| [`selfhost/`](selfhost) | The self-hosting command-line tool |
+| [`docs/`](docs) | Architecture, the API reference and the self-hosting guide |
 
-Every directory has its own README explaining what it is and how to run it.
+Most folders have a README that explains what's in them and how to run it.
 
 ---
 
 ## Contributing
 
-Start with [CONTRIBUTING.md](CONTRIBUTING.md) — it covers where things live, the
-four hard constraints that explain most of the odd-looking code, and the
-mistakes already made so you don't have to repeat them.
+Start with [CONTRIBUTING.md](CONTRIBUTING.md). It explains where things live,
+the four hard limits behind most of the odd-looking code, and the mistakes
+already made so you don't have to repeat them.
 
 ```bash
 cd workers/user-worker
 npm install
-npm test          # 294 tests
+npm test
 npx tsc --noEmit
 ```
 
-Please don't test against anyone else's deployment, including ours. Self-hosting
-builds you a full stack in about ten minutes on free tiers; test there.
+Please don't test against anyone else's deployment, ours included.
+Self-hosting gives you a full setup on free plans in about ten minutes; test
+there.
 
 ---
 
-## Built on the shoulders of
+## Built on
 
-- [**Immich**](https://github.com/immich-app/immich) — the excellent self-hosted photo platform our Photos apps are forked from. If you want a conventional gallery on your own hardware, go star it. See [immich/FORK.md](immich/FORK.md) for exactly what we changed.
-- **Telegram Bot API** — the storage layer.
-- **Cloudflare Workers + D1** — the compute layer that makes one-stack-per-user free.
+- [Immich](https://github.com/immich-app/immich), the self-hosted photo platform
+  the Photos website is forked from. If you want a conventional gallery on your
+  own hardware, use it and give it a star.
+  [apps/photos-web/FORK.md](apps/photos-web/FORK.md) lists what we changed.
+- The Telegram Bot API, for storage.
+- Cloudflare Workers and D1, which make a separate stack per user free.
 
-## Fair warnings
+## Before you rely on it
 
-- DaemonClient is in **beta**. It is used daily and treated with production care, but expect rough edges.
-- Your storage lives in your Telegram channel and is subject to Telegram's Terms of Service. Keep the bot in the channel and don't touch the channel's messages — they *are* your data.
-- Losing your encryption key means losing access to files already stored. There is no recovery path, by design.
+- DaemonClient is in beta. It's used every day and handled with production
+  care, but expect rough edges.
+- Your files live in your Telegram channel under Telegram's Terms of Service.
+  Keep the bot in the channel and don't delete the channel's messages, because
+  those messages are your files.
+- If you lose your encryption key, the files already stored can't be
+  recovered. There's no backdoor.
 
 ## Licence
 
 [AGPL-3.0-or-later](LICENSE). See [NOTICE](NOTICE) for attribution and
 trademarks. DaemonClient is not affiliated with or endorsed by Telegram,
-Cloudflare, Google, or the Immich project.
-
-<p align="center">
-  <sub>Your files. Your cloud. Your control.</sub>
-</p>
+Cloudflare, Google or the Immich project.

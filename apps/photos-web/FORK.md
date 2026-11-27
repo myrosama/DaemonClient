@@ -17,11 +17,11 @@ Docker, storage in your own Telegram channel.
 |---|---|
 | `web/` | **live** — deployed to `photos.daemonclient.uz` |
 | `i18n/`, `open-api/typescript-sdk/` | what `web/` builds from (translations; `@immich/sdk`) |
-| upstream's `mobile/` | **removed 2026-11-19** — DaemonClient's mobile apps are native, on the Rust core (`../mobile`, SPEC D26) |
+| upstream's `mobile/` | **removed 2026-11-19** — DaemonClient's mobile apps are native, on the Rust core ([`../ios`](../ios), [`../android`](../android), [`../../core`](../../core); SPEC D26) |
 | upstream's `server/`, `machine-learning/`, `docker/`, `e2e/`, `cli/`, … | **removed 2026-11-19** — never deployed |
 
 The upstream **server is not used at all**. Everything it does is done by
-[`../immich-api-shim`](../immich-api-shim), a Cloudflare Worker that impersonates
+[`../../workers/user-worker`](../../workers/user-worker), a Cloudflare Worker that impersonates
 the Immich API closely enough that these clients work against it unmodified.
 That is the whole trick: we did not rewrite a photo app, we rewrote the server
 it talks to.
@@ -70,6 +70,6 @@ than passing the raw column through, and why anything it emits needs a test.
 There is no automated merge. The fork is pinned and updated deliberately, since
 each upstream release can touch the service worker and the API surface at once.
 Before pulling upstream changes, read
-[`../docs/API.md`](../docs/API.md) — it records which routes our worker actually
+[`../../docs/API.md`](../../docs/API.md) — it records which routes our worker actually
 implements, and an upstream change that starts calling a new one will get a
 shaped empty response rather than data.

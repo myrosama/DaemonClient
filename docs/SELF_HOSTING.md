@@ -21,7 +21,8 @@ Telegram automatically.
 
 ```bash
 git clone https://github.com/myrosama/DaemonClient.git
-cd DaemonClient/immich-api-shim && npm install && cd ..
+cd DaemonClient
+(cd workers/user-worker && npm install) && (cd selfhost && npm ci)
 node selfhost/bin/daemonclient.mjs setup
 ```
 
@@ -138,8 +139,8 @@ daemonclient doctor      # diagnose a broken install
 
 ### Updates
 
-Your worker checks GitHub once a day for a newer release and shows a note on the
-dashboard when there is one. It never updates itself — that stays your decision,
+When you run `daemonclient status`, your worker checks GitHub for a newer
+release (at most every 12 hours) and the command tells you if there is one. It never updates itself — that stays your decision,
 and your server never phones home to us.
 
 To take an update:

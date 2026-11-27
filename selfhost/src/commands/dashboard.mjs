@@ -23,7 +23,7 @@ import { loadState, saveState, isDone } from '../state.mjs';
 const run = promisify(execFile);
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '../../..');
-const PORTAL = path.join(REPO_ROOT, 'accounts-portal');
+export const PORTAL = path.join(REPO_ROOT, 'apps', 'accounts-web');
 
 export async function runDashboard() {
   const state = loadState();
