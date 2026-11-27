@@ -1,0 +1,16 @@
+[package]
+name = "uniffi-bindgen"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Generates the Swift and Kotlin bindings for dc-ffi (a build tool, never shipped)."
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/main.rs"
+
+[dependencies]
+uniffi = { version = "=0.32.2", features = ["cli"] }
+
+[lints]
+workspace = true

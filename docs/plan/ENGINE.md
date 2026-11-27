@@ -237,12 +237,154 @@ grid, the scrubber, the viewer's gestures) — never Apple's branding.
    `trash`, `search/random`; Immich v3 routes the worker never had: asset
    edits, metadata, HLS streaming. **Worker bug (Linux):** `POST
    /api/search/metadata` returns deleted (trashed) assets and labels them
-   `isTrashed: false`. Screens as below:
+   `isTrashed: false`.
+   **I0b, security (2026-11-22, a separate agent, read-only):** a sound base
+   — no third-party packages, the token in the Keychain (device-only), no
+   blanket certificate trust, https enforced, no secrets in logs, test hooks
+   only in debug builds. Details kept private (they concern HomeRoll's own
+   public code). **Our adoption requirements, before any build reaches a
+   phone:** (1) no credential or secret in any shared container — v1 ships
+   **without the widget and share extension**; (2) **Free Up Space only after
+   the core proves a backup** (the stored object complete, its decrypted hash
+   equal to the local file) — hidden until then; (3) server data validated
+   before it is cached or used (array lengths, bounds, ids as file names) —
+   a bad row is dropped, never a crash loop; (4) credentials sent only to the
+   configured host, no cross-host redirects; (5) a 401 or an account switch
+   wipes like sign-out; temporary decrypted files deleted when sharing ends;
+   (6) the local server's secret never in a URL path that diagnostics copy,
+   and no on-disk URL cache for loopback; (7) for encrypted libraries,
+   decide what may leave the app (Spotlight, notifications, map search).
+   **I0b, integration map (2026-11-22, a separate agent):** HomeRoll is
+   19,475 Swift lines with no package dependencies; ~9,500 go (search,
+   memories, people, folders, partners, shared links, tags, smart albums,
+   duplicates, the editor, stacks, Spotlight, SSO, the widget and share
+   extension, the `server/` add-ons). Its timeline store (a JSON cache of the
+   worker's per-month buckets, refreshed daily — each bucket call reads every
+   row) is replaced by the core's index; its view model stays. Its PhotoKit
+   backup half (scan, queue, consent, BGTasks, resource export, time zones,
+   live-photo order) stays; the upload half goes to the core. The bridge API
+   it needs: session (sign in / restore / out), index (sync, months, month,
+   assets, asset, count, map markers; filters timeline / favorites / archive /
+   videos / album), media server addresses, actions (favorite, visibility,
+   delete), albums, upload (enqueue → parts → sent/failed, progress, cancel,
+   thumbhash), a listener (progress, library changed, log lines).
+   **The iPhone tasks, in order** (each one gated change; the core tasks they
+   need in brackets):
+   - **I1** our identity: `uz.daemonclient.photos`, "DC Photos" (D28), no
+     extensions, no App Group, ids and URL scheme renamed, NOTICE — still on
+     HomeRoll's own server layer, so Gate 2 compares with the I0 baseline.
+   - **I2** take out of v1 what the worker does not serve (search, memories,
+     people, folders, partners, shared links, tags, smart albums, duplicates,
+     SSO, add-ons). **Removed from v1, not dropped** (the operator,
+     2026-11-22: "search, memories and other stuff might come later"): their
+     code stays in git (HomeRoll `bd90811`, our history), and each returns
+     when the core can serve it — the **Later list** below.
+   - **I3** remove the editor, stacks, date/location edits, Spotlight; backup
+     without tags or edited versions; Free Up hidden.
+   - **I4** the core linked as an XCFramework [S1]; sign-in, restore,
+     sign-out through it. **Done 2026-11-26** (PR, plan
+     `docs/mobile/plans/I4-core-bridge.md`), run straight after I1 at the
+     operator's request ("add the swift code to the core and run the tests
+     already"), before I2/I3. S1 in part: Swift async, errors by kind and
+     the iOS XCFramework proven; streams, cancelling, Android and binary
+     size still open.
+   - **I4b** the apps sign in **without our central login** (the operator,
+     2026-11-22: "why even make a central api.daemonclient.uz … what if it
+     directly contacts the user's worker instead?"). The hosted sign-in in
+     the core becomes:
+     1. the password goes to **Google's Firebase Auth** only
+        (`accounts:signInWithPassword`) → an ID token and a refresh token;
+     2. the phone reads its own `config/cloudflare` from Firestore with that
+        token (the owner may read it — `firestore.rules`) → the worker's
+        address;
+     3. it hands the ID token to **its own worker**, `POST /api/auth/exchange`
+        (on every worker since 2026-08-03) → the session; a worker without it
+        gets the password at its own `/api/auth/login` (the same code runs
+        on every worker).
+
+     So `api.daemonclient.uz` is out of the apps' sign-in: no shared login to
+     flood or guess passwords against (Google throttles its own), our code
+     never sees a hosted user's password, and the central service no longer
+     reads every user's signing secret. Costs: the Firebase web key and
+     project id ship in the app (public by design, as on the websites); the
+     update nudge on sign-in goes (the fleet run still updates every worker).
+     Self-hosted servers are unchanged (their address, their own check).
+     **Turnstile** stays only where our central login still serves (the
+     websites, until the joint phase), with the WAF **rate-limiting rule** on
+     its path (the free plan has one; requests it blocks never reach a Worker
+     or count against its 100,000 a day). Each user's worker keeps rejecting
+     requests without a valid session before any database work
+     (`requireAuth`); a flood on one user's `workers.dev` address can still
+     use up that user's day (no WAF there) — one user, one day. Later: App
+     Check with App Attest (iOS) and Play Integrity (Android) on Firebase.
+   - **I4c** the sign-in screen redesigned (the operator, 2026-11-22: "need
+     more work on the login page design later"): our brand, the hosted
+     service by default with "your own server" as the second choice (D8),
+     English and Russian — designed before it is built. **The screen is done
+     (2026-11-26, with I4)**; Delete account is not. A **Create account**
+     button opens the accounts site's sign-up in an in-app browser
+     (`SFSafariViewController`; storage setup happens there), and the app
+     returns to sign-in when it closes. Offering sign-up means the app must
+     also offer **Delete account** (App Store 5.1.1(v), `APP_STORE.md` A4) —
+     in Settings, opening the deletion flow on the accounts site (Linux).
+   - **I5** photos and video from the core's local server: no auth header, no
+     URL cache, ≥ 24 connections on the grid, the original first, the secret
+     kept out of logs [C5: `no-store` and the `next` class from
+     `archive/p2-flutter-2.3` come back].
+   - **I6** the timeline from the core's index [C3]; the offline store off.
+   - **I7** details, favorite, archive, delete, map markers through the core [C6].
+   - **I8** albums through the core [C6].
+   - **I9** foreground backup through the core, the phone making thumbnails,
+     previews, EXIF, dimensions, duration [C4, S6].
+   - **I10** background backup (D22's hand-off).
+   - **Automatic, smart backup** (the operator, 2026-11-22) — what I9/I10 must
+     add up to: new photos go up on their own (foreground, and in the
+     background when iOS allows); nothing is sent twice (checksum checked
+     before the bytes); an interrupted upload resumes (the core's journal);
+     newest first; Wi-Fi-only, charging-only and Low Power rules; photos kept
+     only in iCloud are fetched when their turn comes; progress and errors in
+     plain words. The gallery side (I5/I6) keeps what the core already has:
+     thumbnails first, the Nuke-style scheduler (`core/dc-core/src/sched/`:
+     priorities, cancel on scroll-away, a rate limit), and the disk cache.
+   - **I11** HomeRoll's server layer deleted; trash as decided; comments in
+     English.
+   **Later list** — features taken out in I2/I3, to bring back from HomeRoll's
+   code once the core serves them (each its own planned task):
+   - **Search** — on the core's index: date, place (GPS → place names on the
+     phone), file name, media type; Apple's on-device text recognition for
+     "text in photos".
+   - **Memories** ("on this day", trips, the year) — built on the phone from
+     the index; our own wording (D28: not "Memories").
+   - **People and pets** — on-device face grouping (Vision), names kept by
+     the worker.
+   - **How memories and faces are made (the operator, 2026-11-22):** a small
+     on-device model runs **at night while the phone charges** (iOS
+     `BGProcessingTask` with external power; Android WorkManager with
+     charging + idle constraints), and its results — face groups, memory
+     picks — go through the worker into D1, so the website and the other
+     app show the same people and memories with no server-side AI. Face data
+     is sensitive: for encrypted libraries it is stored encrypted with the
+     user's key, like the photos. Needs a contract addition (Linux).
+   - **Smart albums** (selfies, screenshots, panoramas, …) — from metadata
+     the phone records at upload.
+   - **Shared albums and shared links, partner sharing** — need worker
+     support first (Linux).
+   - **The photo editor** — edits saved as a new version (worker support for
+     versions first).
+   - **The widget and the share extension** — once a paid team can sign an
+     App Group, and without any credential in it (I0b).
+   Screens as below:
    sign-in and settings → timeline → viewer (photo, live
    photo, zoom, swipe) → video → backup (foreground, then background) →
    albums / favorites / archive / trash → save, share, delete → the exit run
    on the Simulator, then a release build on the operator's iPhone.
-6. **A — the Android app**, the same list.
+6. **A — the Android app, from ReFra's code (SPEC D29)**: A0 ReFra unchanged
+   on the emulator against the test worker (its Immich provider); A0b a
+   security review and an integration map; then the same steps as I1–I11.
+   **Brand (SPEC D31):** DaemonClient becomes **Phosphor** later — both forks
+   keep brand text in few places, and the store identifiers (iOS bundle id,
+   Android application id) are settled with the operator before the first
+   TestFlight / Play release.
 7. **W — the websites on the engine** (Part 1 E2, WE, DE), with Linux.
 8. **P3 — the Drive apps**, native, on the same core.
 
@@ -311,7 +453,7 @@ package version changed.
 | Q10 | The look and behaviour: Apple Photos' grid (zoom levels, Years / Months / All), scrubber, selection, viewer gestures; iOS 26 Liquid Glass APIs; Material 3 | **Found 2026-11-19:** `NavigationStack`, `TabView` and toolbars take Liquid Glass by recompiling with the iOS 26 SDK; `.glassEffect()` for custom floating controls, grouped in a `GlassEffectContainer`; `tabBarMinimizeBehavior(.onScrollDown)` hides the tab bar while scrolling. **Glass only on a few fixed floating surfaces (toolbar, tab bar, a control group), never on grid cells** — per-cell glass costs heavy compositing while scrolling. Apple Photos' behaviour list (zoom levels, Years / Months / All, scrubber, selection, gestures) — to write down. |
 | Q11 | Distribution: the free team's limits (no App Group in v1), the paid account for TestFlight / App Store, Android signing | |
 | Q12 | The differential harnesses: what each compares, fixtures, where they run | **Proposed 2026-11-20** — each a `dc-cli` command, run against the test account (and the pure parts in CI): **H1 reads** — for N assets, the core's bytes (thumbnail, preview, original, every video part) equal what the website's service worker decrypts from the same manifest; **H2 uploads** — a fixture file uploaded by the core and by the website: the same stored fields (dimensions, duration, checksum, EXIF, thumbhash) and both open on the website; **H3 the index** — after a sync the core's index equals the worker's rows (v1: the timeline routes; v2: `/api/v2/changes` from 0), after every change (favorite, archive, delete, album add/remove); **H4 crypto** — the existing byte-for-byte vectors against Drive's JavaScript (CI); **H5 pacing** — the P1 1.9 benches against Telegram (sends, albums, reads). Fixtures (Q13): synthetic — the clock video, an iPhone Dolby Vision clip, HEIC with GPS, a live-photo pair, PNG, a >100 MB video. |
-| Q13 | Test data: a fresh test account with synthetic fixtures — **the operator decides** (the current one holds real ID documents) | |
+| Q13 | Test data: a fresh test account with synthetic fixtures — **the operator decides** (the current one holds real ID documents) | **Decided 2026-11-22 (D30): keep the current test account**; screenshots showing its documents are never committed or shared; synthetic fixtures are uploaded beside it when a harness needs them. |
 
 **Open for the operator (from the research):**
 - **Minimum versions.** iOS 26 gives the real Liquid Glass and

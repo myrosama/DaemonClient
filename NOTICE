@@ -20,6 +20,41 @@ Immich itself. It is excellent, and this project would not exist without it.
 
 ────────────────────────────────────────────────────────────────────────────
 
+The iPhone app (apps/ios) is built from HomeRoll
+(https://github.com/silentprovider423/HomeRoll), a native iOS client for
+Immich, copyright its authors, licensed under the GNU General Public License
+version 3 (apps/ios/LICENSE). It was imported at upstream commit bd90811 and
+modified; the combined work is distributed under the GNU Affero General
+Public License version 3, as section 13 of both licences permits.
+
+────────────────────────────────────────────────────────────────────────────
+
+The iPhone app's ThumbHash decoder (apps/ios/App/Core/ThumbHash.swift, from
+HomeRoll) is a Swift port of ThumbHash (https://github.com/evanw/thumbhash),
+used under the MIT License:
+
+  Copyright (c) 2023 Evan Wallace
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in
+  all copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  SOFTWARE.
+
+────────────────────────────────────────────────────────────────────────────
+
 The Photos service worker's media scheduler
 (apps/photos-web/web/src/service-worker/media-scheduler.ts) and the mobile core's
 scheduler (core/dc-core/src/sched/) port the design of the
