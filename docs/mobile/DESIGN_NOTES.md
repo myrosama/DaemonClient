@@ -692,3 +692,28 @@ logs in release; the test's password and results; the token kept inside
 sign-out does not revoke on the worker). Spec — 3 HIGH, fixed: a 401 left
 the session to be restored; the S1 claim was overstated (now in part); the
 audit job would fail (deny.toml; and `url` 2.5.9 for a new advisory).
+
+## I2 + I3 — Only what the worker serves            2026-11-27
+
+**Planned:** `docs/mobile/plans/I2-I3-v1-scope.md` (Gate 1 before the code;
+the route check written first). **Did:** ~9,000 lines of HomeRoll features
+out (the plan's Out list and the extras in As built); backup originals only,
+no tags, no Free Up; every delete permanent behind its warning (D30).
+**Found:** the worker's `search/metadata` reads an older request shape (every
+filtered list was the whole library); restore is refused; the month route
+ignores `visibility` and some rows send `duration` as text — HomeRoll's
+strict decoder blanked a whole month (880 photos as grey tiles) and never
+read the hidden flag, so hidden photos were not behind Face ID. All fixed on
+the phone; seven worker bugs to Linux (NOW.md).
+**Gate 3:** security — 1 HIGH (hidden photos, fixed), 1 MEDIUM (a short
+column crashed decoding on every launch, fixed), LOWs fixed or recorded
+(old Spotlight/notification data: only ever on the Simulator, no sweep;
+check-routes ignores methods). Spec — 2 HIGH (hidden; the single-asset
+duration), fixed; MEDIUMs fixed (capture-time retries, dead controls, Free
+Up and Recently Deleted wording) or recorded ("server" wording for hosted
+users → I4c follow-up; stale strings → I11).
+**Gate 2:** partly — SignInTests pass; library (all 2,176 items, footer
+1,916 photos + 260 videos), viewer and info panel checked in English. The
+rest (Collections, an album, the map, Backup, Russian, hide/unhide) and the
+build of the Gate 3 fixes wait for Xcode's reinstall.
+

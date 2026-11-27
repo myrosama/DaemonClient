@@ -46,6 +46,41 @@ backup, settings.
   in English and Russian; no German, no "Memories" / "Featured" / "Shared
   With You", no dead buttons.
 
+## As built (2026-11-26/27)
+
+- **The route check failed on 33 distinct routes (48 call sites)** at
+  d16253c, not 35 (that count included search/metadata and trash/restore,
+  later taken off the allowlist); it passes now.
+- **Also removed** (each needed a route or feature v1 does not have): spatial
+  scenes (the server clean-up add-on), saving a video frame or a Live
+  Photo's video as a new item (it copied date and place — an edit), duplicate
+  (`assets/copy`), trips (with Memories), album sort and the share sheet's
+  "Unedited Original" (the worker ignores `order` and `edited`), the
+  capture-time retries (the worker ignores `dateTimeOriginal`).
+- **search/metadata is not served for v1:** the worker reads an older,
+  flat request and ignored HomeRoll's `{"filter": …}` — every list was the
+  whole library. Media types now come from the library on the phone; an
+  album and Hidden from the worker's timeline filters (`albumId`,
+  `visibility`).
+- **Recently Deleted is gone** (the plan's Stays list contradicted D30): the
+  worker refuses restore, so every delete is permanent behind the "cannot be
+  undone" confirmation.
+- **Hidden:** the worker's month route ignores `visibility`, so the app
+  decodes the column and filters on the phone — the library and albums drop
+  hidden photos, Hidden keeps only them; a photo hidden on the iPhone is set
+  hidden after its upload (the upload ignores the field).
+- **Found while testing:** the worker sends `duration` as text for some
+  videos; the strict decoder blanked the whole month (880 photos, grey
+  tiles). `Millis` reads a number or "H:MM:SS.mmm", in the month columns and
+  the single-asset reply; a month whose columns disagree in length is
+  refused instead of crashing. Unit tests in `apps/ios/Tests` (run at Gate 2;
+  CI is Ubuntu-only).
+- **Left for I11 (no route, no UI):** stack/partner/edited fields and the
+  trash grid code; ~400 stale catalog strings.
+- **Worker bugs sent to Linux (NOW.md):** duration as text, the search
+  request shape, restore refused, the month route and the upload ignoring
+  `visibility`, `dateTimeOriginal` and album `order` ignored.
+
 ## Gate 3
 
 Two separate reviews: security (nothing removed weakens a check; Free Up

@@ -280,7 +280,10 @@ grid, the scrubber, the viewer's gestures) — never Apple's branding.
      code stays in git (HomeRoll `bd90811`, our history), and each returns
      when the core can serve it — the **Later list** below.
    - **I3** remove the editor, stacks, date/location edits, Spotlight; backup
-     without tags or edited versions; Free Up hidden.
+     without tags or edited versions; Free Up hidden. **I2 + I3 built
+     2026-11-26/27** (plan `docs/mobile/plans/I2-I3-v1-scope.md`, As built
+     there): ~9,000 lines out; Gate 3 done, fixes in; the final build and
+     Gate 2 wait for Xcode to be reinstalled on the Mac.
    - **I4** the core linked as an XCFramework [S1]; sign-in, restore,
      sign-out through it. **Done 2026-11-26** (PR, plan
      `docs/mobile/plans/I4-core-bridge.md`), run straight after I1 at the
@@ -373,6 +376,11 @@ grid, the scrubber, the viewer's gestures) — never Apple's branding.
      versions first).
    - **The widget and the share extension** — once a paid team can sign an
      App Group, and without any credential in it (I0b).
+   - **Also taken out in I2/I3** (2026-11-26): trips, spatial scenes, saving
+     a video frame / a Live Photo's video, duplicate, edit sync (backup of
+     edits made in Apple's Photos), stacks, date and location edits, album
+     sort, Spotlight and Siri search, Recently Deleted (with the real Trash,
+     CONTRACT_V2 §5b).
    Screens as below:
    sign-in and settings → timeline → viewer (photo, live
    photo, zoom, swipe) → video → backup (foreground, then background) →
