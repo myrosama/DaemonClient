@@ -118,7 +118,11 @@ describe('reconnecting', () => {
     const res = await exchange();
     expect(res.status).toBe(200);
     // No migration and no new encryption keys: the database is used as it is.
-    expect(calls.filter((c) => c.url.includes('/query'))).toEqual([]);
+    // The one query records the owner, and never replaces one.
+    const queries = calls.filter((c) => c.url.includes('/query'));
+    expect(queries.map((c) => JSON.parse(c.body!))).toEqual([
+      { sql: "INSERT OR IGNORE INTO config (key, value) VALUES ('owner_uid', ?)", params: ['uid1'] },
+    ]);
     const [save] = patches(calls);
     expect(new URL(save.url).searchParams.getAll('updateMask.fieldPaths')).toEqual([]); // the whole record is replaced…
     const f = fields(save);
@@ -133,5 +137,18 @@ describe('reconnecting', () => {
     expect(((await res.json()) as any).error).toMatch(/same Cloudflare account/);
     expect(patches(calls)).toEqual([]);
     expect(calls.filter((c) => c.url.includes('api.cloudflare.com/client/v4/accounts/'))).toEqual([]);
+  });
+});
+
+describe('the owner is recorded in the worker', () => {
+  it('on every update, before the deploy, and never replaces one', async () => {
+    const calls = stub(await oauthCfg(), { status: 200, body: { access_token: 'a', refresh_token: 'r-new' } });
+    const res = await autoUpdate();
+    expect(res.status).toBe(200);
+    const q = calls.findIndex((c) => c.url.includes('/d1/database/db/query'));
+    const deploy = calls.findIndex((c) => /\/workers\/scripts\/dc-x$/.test(c.url) && c.method === 'PUT');
+    expect(q).toBeGreaterThan(-1);
+    expect(q).toBeLessThan(deploy);
+    expect(JSON.parse(calls[q].body!)).toEqual({ sql: "INSERT OR IGNORE INTO config (key, value) VALUES ('owner_uid', ?)", params: ['uid1'] });
   });
 });

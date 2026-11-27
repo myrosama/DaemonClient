@@ -286,6 +286,17 @@ async function handleDeployWorker(request: Request, env: Env): Promise<Response>
 // credential afterwards (encrypted API token for paste, encrypted refresh
 // token for OAuth).
 interface ProvisionResult { success: boolean; error?: string; workerName?: string; workerUrl?: string; dbName?: string; databaseId?: string; sessionSecret?: string }
+// Record whose worker this is in its own D1, the row the worker's owner gate
+// reads (`owner_uid`, as self-host's setup writes it). Without it the first
+// owner is claimed by the first worker-signed session, so an app that signs in
+// straight to the worker with a Firebase ID token was refused on a new account.
+// INSERT OR IGNORE: an owner already recorded is never replaced.
+async function recordOwner(cfApi: CloudflareAPI, accountId: string, databaseId: string, apiToken: string, uid: string): Promise<void> {
+  const r = await cfApi.executeD1Query(accountId, databaseId, apiToken,
+    "INSERT OR IGNORE INTO config (key, value) VALUES ('owner_uid', ?)", [uid]);
+  if (!r.success) console.error('[owner] not recorded:', r.error);
+}
+
 async function provisionWorker(env: Env, uid: string, accountId: string, apiToken: string, existingSecret?: string): Promise<ProvisionResult> {
   // Sanitize UID for Cloudflare naming (lowercase alphanumeric + dashes only)
   const shortId = uid.substring(0, 8).toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -325,6 +336,9 @@ async function provisionWorker(env: Env, uid: string, accountId: string, apiToke
       `UPDATE config SET value = '${password}' WHERE key = 'zke_password'; UPDATE config SET value = '${salt}' WHERE key = 'zke_salt';`
     );
   }
+
+  // Step 3: the owner, on a new or an existing database (a reconnect).
+  await recordOwner(cfApi, accountId, databaseId, apiToken, uid);
 
   // Step 4: Deploy the real immich-api-shim to USER's account, bound to USER's D1
   const workerName = `dc-${shortId}`;
@@ -756,6 +770,9 @@ async function updateUserWorker(
         console.error('[auto-update] rotated refresh token save failed; saving again after the deploy:', e?.message);
       }
     }
+
+    // Workers set up before the owner was recorded at provisioning get it here.
+    if (cfg.databaseId) await recordOwner(cfApi, cfg.accountId, cfg.databaseId, apiToken, uid);
 
     const deployResult = await cfApi.deployWorker({
       accountId: cfg.accountId,

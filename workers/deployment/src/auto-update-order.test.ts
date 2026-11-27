@@ -70,7 +70,7 @@ async function stubWorld(world: World) {
 
 const fieldsOf = (c: Call) => JSON.parse(c.body || '{}').fields as Record<string, { stringValue: string }>;
 const saves = (calls: Call[]) => calls.filter((c) => c.method === 'PATCH');
-const deployIndex = (calls: Call[]) => calls.findIndex((c) => c.url.includes('api.cloudflare.com'));
+const deployIndex = (calls: Call[]) => calls.findIndex((c) => /api\.cloudflare\.com\/.*\/workers\/scripts\/[^/]+$/.test(c.url) && c.method === 'PUT');
 const autoUpdate = () =>
   worker.fetch(new Request('https://deploy.example/auto-update', { method: 'POST', headers: { Authorization: 'Bearer user-id-token' } }), env);
 const legacyCfg = async (extra: Record<string, string> = {}) => ({

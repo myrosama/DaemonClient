@@ -55,7 +55,10 @@ async function handleSearchMetadata(request: Request, env: Env): Promise<Respons
   const isFavorite = body.isFavorite;
   const type = body.type; // 'IMAGE' | 'VIDEO'
 
-  let allPhotos = await loadPhotos(env, uid, idToken);
+  // Deleted photos stay out unless asked for (Immich's `withDeleted`); photos
+  // already erased from Telegram never come back.
+  let allPhotos = (await loadPhotos(env, uid, idToken))
+    .filter((p: any) => !p.purgedAt && (body.withDeleted === true || !p.isTrashed));
 
   // Filter by text search (filename)
   if (query) {
@@ -110,7 +113,7 @@ async function handleSearchMetadata(request: Request, env: Env): Promise<Respons
     updatedAt: p.uploadedAt,
     isFavorite: !!p.isFavorite,
     isArchived: p.visibility === 'archive',
-    isTrashed: false,
+    isTrashed: !!p.isTrashed,
     duration: p.duration || '0:00:00.000000',
     exifInfo: {
       make: p.exifInfo?.make || null,

@@ -94,7 +94,8 @@ export class CloudflareAPI {
     accountId: string,
     databaseId: string,
     apiToken: string,
-    sql: string
+    sql: string,
+    params?: unknown[]
   ): Promise<{ success: boolean; error?: string }> {
     try {
       const response = await this.fetchWithRetry(
@@ -105,7 +106,7 @@ export class CloudflareAPI {
             'Authorization': `Bearer ${apiToken}`,
             'Content-Type': 'application/json'
           },
-          body: JSON.stringify({ sql })
+          body: JSON.stringify(params ? { sql, params } : { sql })
         }
       );
 
