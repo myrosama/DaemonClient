@@ -110,9 +110,15 @@ export class CloudflareAPI {
         }
       );
 
+      const text = await response.text();
       if (!response.ok) {
-        const error = await response.text();
-        return { success: false, error: `Query failed: ${response.status} ${error}` };
+        return { success: false, error: `Query failed: ${response.status} ${text}` };
+      }
+      // A 200 can still carry a failed statement.
+      let data: any = null;
+      try { data = JSON.parse(text); } catch { /* not JSON: trust the status */ }
+      if (data && (data.success === false || (Array.isArray(data.result) && data.result.some((r: any) => r?.success === false)))) {
+        return { success: false, error: `Query failed: ${JSON.stringify(data.errors || data.result)}` };
       }
 
       return { success: true };

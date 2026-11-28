@@ -99,11 +99,16 @@ describe('reconnecting', () => {
     expect(res.status).toBe(503);
     expect([patches(calls), built(calls)]).toEqual([[], []]);
   });
-  it('a first setup (no config yet) goes ahead', async () => {
+  it('a first setup (no config yet) goes ahead: schema, then keys, then the owner', async () => {
     const calls = stub(null, { status: 200, body: { access_token: 'a', refresh_token: 'r' } }, 'new-account');
     const res = await exchange();
     expect([409, 503]).not.toContain(res.status);
     expect(built(calls).length).toBeGreaterThan(0);
+    const sql = calls.filter((c) => c.url.includes('/query')).map((c) => JSON.parse(c.body!).sql as string);
+    expect(sql).toHaveLength(3);
+    expect(sql[0]).toMatch(/CREATE TABLE/);
+    expect(sql[1]).toMatch(/zke_password/);
+    expect(sql[2]).toBe("INSERT OR IGNORE INTO config (key, value) VALUES ('owner_uid', ?)");
   });
   it('with several accounts granted, uses the one that holds the cloud', async () => {
     const calls = stub(await oauthCfg(), { status: 200, body: { access_token: 'a', refresh_token: 'r' } }, ['other', 'acc']);
