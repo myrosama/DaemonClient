@@ -142,8 +142,15 @@ the key material is missing, rather than silently storing plaintext.
 
 | Method | Path | Auth | Callers |
 |---|---|---|---|
-| GET | `/api/timeline/buckets` | yes | web timeline |
-| GET | `/api/timeline/bucket` | yes | web timeline |
+| GET | `/api/timeline/buckets` | yes | web timeline, iPhone app |
+| GET | `/api/timeline/bucket` | yes | web timeline, iPhone app |
+
+Both honour `visibility`: absent or `timeline` gives the main timeline only;
+`archive`, `hidden` and `locked` give just that view; `all` gives everything.
+A month's count and its contents always agree. The month contents carry
+`duration` as Immich text (`H:MM:SS.ffffff`, what the website reads) and
+`durationMs`, whole milliseconds or null (what the apps read).
+`GET /api/assets/{id}` and search results carry `durationMs` too.
 
 Both accept `albumId`; `personId` and `tagId` are accepted and return **empty**,
 never the whole library. Each request also dispatches exactly **one** background
@@ -202,6 +209,17 @@ Not served, and 404 if called: `PUT /api/albums/assets`,
 | POST | `/api/search/metadata` | yes | real results from D1 |
 | GET | `/api/search/suggestions`, `/explore`, `/places`, `/cities` | no | `[]` |
 | POST | `/api/search/smart` | no | empty assets envelope |
+
+`/api/search/metadata` takes two shapes. The website sends Immich's older flat
+body (`q`, `type`, `isFavorite`, `takenAfter`, ...). The apps send Immich v3.2's
+`{ filter, size, orderBy, cursor }`; supported filter fields are `type`,
+`visibility`, `isFavorite`, `isMotion`, `trashedAt`, `takenAt`, `createdAt`,
+`city`, `country`, `make`, `model`, `lensModel`, `originalFileName`,
+`albumIds` and `hasAlbums`, with the operators `eq`, `ne`, `gt`, `gte`, `lt`,
+`lte`, `like`, `any` and `all`. `personIds`, `tagIds`, `ocr` and any unknown
+field or operator match nothing, never the whole library. Deleted photos come
+back only when the filter names `trashedAt`. Pages: `size` (max 1000) and the
+returned `nextCursor`.
 
 There is no smart search, no people and no places in the isolated per-user
 model. These return empty **shaped** results rather than 404, because a client

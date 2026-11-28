@@ -364,6 +364,16 @@ function toFirestoreValue(val: any): any {
   return { stringValue: String(val) };
 }
 
+/** Immich's "H:MM:SS.ffffff" duration as whole milliseconds, or null for none
+ *  or a value that isn't in that form. Responses keep `duration` as text (the
+ *  website reads it that way) and add this as `durationMs` for the apps. */
+export function durationToMs(d: unknown): number | null {
+  const m = typeof d === 'string' ? /^(\d+):(\d{1,2}):(\d{1,2}(?:\.\d+)?)$/.exec(d.trim()) : null;
+  if (!m) return null;
+  const ms = Math.round(((Number(m[1]) * 60 + Number(m[2])) * 60 + parseFloat(m[3])) * 1000);
+  return ms > 0 ? ms : null;
+}
+
 export function json(data: any, status = 200): Response {
   return new Response(JSON.stringify(data), {
     status,

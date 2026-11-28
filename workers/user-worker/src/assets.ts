@@ -1,5 +1,5 @@
 import type { Env } from './index';
-import { requireAuth, firestoreGet, firestoreSet, firestoreDelete, firestoreQuery, json } from './helpers';
+import { requireAuth, firestoreGet, firestoreSet, firestoreDelete, firestoreQuery, json, durationToMs } from './helpers';
 import sizeOf from 'image-size';
 import { normalizePhotoManifest } from './contracts';
 import { getFlagsForUser } from './feature-flags';
@@ -62,6 +62,16 @@ function webAppOrigin(request: Request, env: Env): string {
 // Anything else aborts its entire sync, so writes are filtered against this
 // set (sync.ts clamps again on emit, for rows written before this guard).
 const VALID_VISIBILITY = new Set(['timeline', 'hidden', 'archive', 'locked']);
+
+/** An edit of the taken date (Immich's dateTimeOriginal): keep the client's text,
+ *  time zone and all, as the photo's EXIF time, and move the photo on the
+ *  timeline, which sorts by fileCreatedAt in UTC. Unreadable values are ignored. */
+function takenAtUpdate(v: unknown): { dateTimeOriginal: string; fileCreatedAt: string } | null {
+  if (typeof v !== 'string' || !v.trim()) return null;
+  const t = Date.parse(v);
+  if (Number.isNaN(t)) return null;
+  return { dateTimeOriginal: v.trim(), fileCreatedAt: new Date(t).toISOString() };
+}
 // Bumped when the EXIF extraction logic improves so the lazy backfill re-checks
 // already-parsed photos. v2: re-check photos that got camera EXIF but no GPS
 // (the old backfill skipped any row with `make` set, so HEIC photos whose GPS
@@ -687,6 +697,8 @@ async function handleUpdateAsset(request: Request, env: Env, uid: string, assetI
   if (dto.description !== undefined) updates.description = dto.description;
   if (dto.latitude !== undefined) updates.latitude = dto.latitude;
   if (dto.longitude !== undefined) updates.longitude = dto.longitude;
+  if (typeof dto.visibility === 'string' && VALID_VISIBILITY.has(dto.visibility)) updates.visibility = dto.visibility;
+  Object.assign(updates, takenAtUpdate(dto.dateTimeOriginal));
 
   if (Object.keys(updates).length > 0) {
     if (env.DB) {
@@ -890,6 +902,7 @@ async function handleBulkUpdate(request: Request, env: Env, uid: string, idToken
   if (body.visibility !== undefined && VALID_VISIBILITY.has(body.visibility)) {
     updates.visibility = body.visibility;
   }
+  Object.assign(updates, takenAtUpdate(body.dateTimeOriginal));
 
   if (Object.keys(updates).length > 0) {
     if (env.DB) {
@@ -1418,6 +1431,7 @@ async function handleUploadImpl(request: Request, env: Env, uid: string, idToken
     let encryptionMode = isEncryptedByServer ? 'server' : 'off';
     let thumbEncrypted = false;
     let telegramPreviewId: string | null = null;
+    let uploadVisibility: string | undefined;
     let telegramPlaybackChunks: string | null = null;
     let clientSentExif = false;
     let pendingThumbGen: any = null;
@@ -1436,6 +1450,9 @@ async function handleUploadImpl(request: Request, env: Env, uid: string, idToken
         // is dropped, never a failed upload.
         const previewId = formData.get('telegramPreviewId');
         if (typeof previewId === 'string' && /^[A-Za-z0-9_-]{1,256}$/.test(previewId)) telegramPreviewId = previewId;
+        // A photo hidden or locked on the phone arrives that way.
+        const vis = formData.get('visibility');
+        if (typeof vis === 'string' && VALID_VISIBILITY.has(vis)) uploadVisibility = vis;
         // The phone's 720p H.264 copy of a video other players can't show
         // (SPEC P2-9), stored as {size, chunks} like the server-made one.
         if (mimeType.startsWith('video/')) telegramPlaybackChunks = clientPlayback(formData.get('telegramPlaybackChunks'), formData.get('playbackSize'));
@@ -1762,6 +1779,7 @@ async function handleUploadImpl(request: Request, env: Env, uid: string, idToken
     const photo = {
       id: assetId,
       ownerId: uid,
+      visibility: uploadVisibility,
       fileName,
       fileSize,
       mimeType,
@@ -2632,6 +2650,7 @@ function toAssetResponseDto(photo: any, ownerId: string): any {
     isEdited: false,
     hasMetadata: true,
     duration: effectiveDuration,
+    durationMs: durationToMs(effectiveDuration),
     ownerId,
     thumbhash: photo.thumbhash || null,
     visibility: photo.visibility || 'timeline',
