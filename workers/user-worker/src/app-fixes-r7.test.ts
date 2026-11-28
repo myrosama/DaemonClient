@@ -56,13 +56,20 @@ describe('duration', () => {
     expect(durationToMs('1:02:03.5')).toBe(3723500);
     expect(durationToMs('12500')).toBe(12500);
     expect([durationToMs('0:00:00.000000'), durationToMs(null), durationToMs('abc'), durationToMs('9999999999999:00:00')]).toEqual([null, null, null, null]);
-    expect([msToDurationText(12500), msToDurationText(3723500)]).toEqual(['0:00:12.500000', '1:02:03.500000']);
+    expect([msToDurationText(12500), msToDurationText(3723500)]).toEqual(['00:00:12.500000', '01:02:03.500000']);
   });
 
   it('reads the local time from a date that names its offset', () => {
     expect(localTimeOf('2026-11-12T20:05:22-08:00')).toEqual({ localDateTime: '2026-11-12T20:05:22.000Z', timeZone: 'UTC-8', offsetHours: -8 });
     expect(localTimeOf('2026-11-12T20:05:22+05:30')?.timeZone).toBe('UTC+5:30');
     expect(localTimeOf('2026-11-12T20:05:22')).toBeNull();
+  });
+
+  it('a date read from the file (camera time with Z) gets its offset from the real moment', () => {
+    // Taken 20:05 local in Tashkent (UTC+5) = 15:05 UTC.
+    expect(localTimeOf('2026-11-12T20:05:22Z', '2026-11-12T15:05:22.000Z')).toEqual({ localDateTime: '2026-11-12T20:05:22.000Z', timeZone: 'UTC+5', offsetHours: 5 });
+    expect(localTimeOf('2026-11-12T20:05:22Z')).toBeNull();
+    expect(localTimeOf('2026-11-12T20:05:22Z', '2026-11-10T00:00:00.000Z')).toBeNull(); // more than 14 h apart: no guess
   });
 
   it('the month contents carry durationMs as numbers or null, and keep duration as text', async () => {
@@ -72,7 +79,7 @@ describe('duration', () => {
     ]);
     const m = await get(DB, '/api/timeline/bucket?timeBucket=2026-08-01T00:00:00.000Z');
     const at = (k: string) => m[k][m.id.indexOf('v1')];
-    expect([at('durationMs'), at('duration')]).toEqual([12500, '0:00:12.500000']);
+    expect([at('durationMs'), at('duration')]).toEqual([12500, '00:00:12.500000']);
     expect(m.durationMs[m.id.indexOf('p1')]).toBeNull();
   });
 });
@@ -129,7 +136,7 @@ describe('edits the worker used to drop', () => {
   it('a bare-milliseconds duration from the app is stored as Immich text', async () => {
     const DB = await library([]);
     await upload(DB, { mimeType: 'video/quicktime', fileName: 'IMG_2.MOV', duration: '12500' });
-    expect(DB.rows('SELECT duration FROM photos')[0].duration).toBe('0:00:12.500000');
+    expect(DB.rows('SELECT duration FROM photos')[0].duration).toBe('00:00:12.500000');
   });
 
   it('after a dated edit, the asset reports the local time and time zone the app checks for', async () => {
@@ -150,7 +157,7 @@ describe('edits the worker used to drop', () => {
 
   it('junk dates are ignored', async () => {
     const DB = await library([{ id: 'p1' }]);
-    for (const bad of ['hello 2020', '1', '+275760-09-13T00:00:00Z', '1200-01-01T00:00:00Z', `2020-01-01T00:00:00Z${'x'.repeat(100)}`]) {
+    for (const bad of ['hello 2020', '1', '+275760-09-13T00:00:00Z', '1200-01-01T00:00:00Z', `2020-01-01T00:00:00Z${'x'.repeat(100)}`, '2020-02-30T10:00:00+05:00']) {
       const req = new Request('https://worker.test/api/assets/p1', {
         method: 'PUT', headers: { ...(await auth()), 'Content-Type': 'application/json' }, body: JSON.stringify({ dateTimeOriginal: bad }),
       });

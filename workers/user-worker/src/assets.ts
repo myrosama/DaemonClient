@@ -75,6 +75,10 @@ function takenAtUpdate(v: unknown): { dateTimeOriginal: string; fileCreatedAt: s
   if (Number.isNaN(t)) return null;
   const year = new Date(t).getUTCFullYear();
   if (year < 1800 || year > new Date().getUTCFullYear() + 1) return null;
+  // No rolled-over dates: 30 February must not quietly become 1 March.
+  const off = /([+-])(\d{2}):?(\d{2})?$/.exec(text);
+  const offsetMs = off ? (off[1] === '-' ? -1 : 1) * (Number(off[2]) * 60 + Number(off[3] || 0)) * 60000 : 0;
+  if (new Date(t + offsetMs).toISOString().slice(0, 10) !== text.slice(0, 10)) return null;
   return { dateTimeOriginal: text, fileCreatedAt: new Date(t).toISOString() };
 }
 // Bumped when the EXIF extraction logic improves so the lazy backfill re-checks
@@ -2638,7 +2642,7 @@ function toAssetResponseDto(photo: any, ownerId: string): any {
   // Live photos should not expose duration (prevents GIF treatment in gallery)
   const durationMs = photo.livePhotoVideoId ? null : durationToMs(photo.duration);
   const effectiveDuration = durationMs == null ? null : msToDurationText(durationMs);
-  const local = localTimeOf(photo.dateTimeOriginal);
+  const local = localTimeOf(photo.dateTimeOriginal, photo.fileCreatedAt);
 
   return {
     id,

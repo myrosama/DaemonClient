@@ -382,19 +382,29 @@ export function durationToMs(d: unknown): number | null {
 /** Milliseconds as Immich's duration text, which the website reads. */
 export function msToDurationText(ms: number): string {
   const h = Math.floor(ms / 3600000), m = Math.floor(ms / 60000) % 60, s = (ms % 60000) / 1000;
-  return `${h}:${String(m).padStart(2, '0')}:${s.toFixed(3).padStart(6, '0')}000`;
+  // Two-digit hours: the website's Luxon parser reads "0:00:12" as nothing.
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${s.toFixed(3).padStart(6, '0')}000`;
 }
 
-/** The local time a photo was taken, from a stored dateTimeOriginal that names
- *  its offset ("2026-11-12T20:05:22-08:00"). Immich reports it as the wall-clock
- *  time with a "Z" (localDateTime), "UTC-8" (timeZone) and the offset in hours.
- *  Null when the text names no offset. */
-export function localTimeOf(text: unknown): { localDateTime: string; timeZone: string; offsetHours: number } | null {
+/** The local time a photo was taken, from its stored dateTimeOriginal. Immich
+ *  reports it as the wall-clock time with a "Z" (localDateTime), "UTC-8"
+ *  (timeZone) and the offset in hours.
+ *  - "2026-11-12T20:05:22-08:00" (an edit) names its offset.
+ *  - "2026-11-12T20:05:22Z" (read from the file) is camera-local time with a
+ *    "Z": the offset is that time minus the real moment, fileCreatedAt, to the
+ *    nearest 15 minutes, when within ±14 hours.
+ *  Null when neither gives an offset. */
+export function localTimeOf(text: unknown, fileCreatedAt?: unknown): { localDateTime: string; timeZone: string; offsetHours: number } | null {
   if (typeof text !== 'string') return null;
   const m = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.\d+)?(Z|[+-]\d{2}(?::?\d{2})?)$/.exec(text.trim());
   if (!m) return null;
   let minutes = 0;
-  if (m[2] !== 'Z') {
+  if (m[2] === 'Z') {
+    const utc = typeof fileCreatedAt === 'string' ? Date.parse(fileCreatedAt) : NaN;
+    if (Number.isNaN(utc)) return null;
+    minutes = Math.round((Date.parse(`${m[1]}Z`) - utc) / 900000) * 15;
+    if (Math.abs(minutes) > 14 * 60) return null;
+  } else {
     const sign = m[2][0] === '-' ? -1 : 1;
     const digits = m[2].slice(1).replace(':', '');
     minutes = sign * (Number(digits.slice(0, 2)) * 60 + Number(digits.slice(2, 4) || 0));

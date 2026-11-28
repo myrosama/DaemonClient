@@ -124,7 +124,7 @@ const isVideoRow = (p: any) => !!(p.mimeType?.startsWith('video/') || p.type ===
 
 function toSearchItem(p: any, uid: string) {
   const ms = p.livePhotoVideoId ? null : durationToMs(p.duration);
-  const local = localTimeOf(p.dateTimeOriginal);
+  const local = localTimeOf(p.dateTimeOriginal, p.fileCreatedAt);
   return {
     id: p._id,
     deviceAssetId: p.originalFileName,

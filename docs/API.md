@@ -150,11 +150,12 @@ view (`timeline` is the main timeline); no visibility (albums, favourites,
 trash) gives timeline and archive; `all` gives everything. Locked and hidden
 photos appear only when asked for. A month's count and its contents always
 agree, and `order=asc` lists months oldest first. The month contents carry
-`duration` as Immich text (`H:MM:SS.ffffff`, what the website reads) and
+`duration` as Immich text (`HH:MM:SS.ffffff`, what the website reads) and
 `durationMs`, whole milliseconds or null (what the apps read); uploads may send
 either form. After an edit of `dateTimeOriginal` with an offset, the asset's
 `localDateTime` is the wall-clock time, `exifInfo.timeZone` is `UTC±H`, and the
-month's `localOffsetHours` carries the offset. `GET /api/assets/{id}` and
+month's `localOffsetHours` carries the offset. A date read from the file
+(camera time ending in `Z`) takes its offset from `fileCreatedAt`. `GET /api/assets/{id}` and
 search results carry `durationMs` too.
 
 Both accept `albumId`; `personId` and `tagId` are accepted and return **empty**,

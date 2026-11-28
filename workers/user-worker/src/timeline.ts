@@ -199,7 +199,7 @@ async function getTimeBucket(env: Env, uid: string, idToken: string, url: URL): 
     }),
     isTrashed: filtered.map(p => !!p.isTrashed),
     livePhotoVideoId: filtered.map(p => p.livePhotoVideoId || null),
-    localOffsetHours: filtered.map(p => localTimeOf(p.dateTimeOriginal)?.offsetHours ?? (p.localOffsetHours || 0)),
+    localOffsetHours: filtered.map(p => localTimeOf(p.dateTimeOriginal, p.fileCreatedAt)?.offsetHours ?? (p.localOffsetHours || 0)),
     ownerId: filtered.map(() => uid),
     projectionType: filtered.map(() => null),
     ratio: filtered.map(p => {
