@@ -10,7 +10,12 @@ import { D1Adapter } from './d1-adapter';
 let albumSortOrderReady = false;
 async function ensureAlbumSortOrder(db: any): Promise<void> {
   if (albumSortOrderReady) return;
-  try { await db.prepare('ALTER TABLE albums ADD COLUMN sortOrder TEXT').run(); } catch { /* exists */ }
+  try {
+    await db.prepare('ALTER TABLE albums ADD COLUMN sortOrder TEXT').run();
+  } catch (e: any) {
+    // Only "already there" means ready; any other failure is tried again next time.
+    if (!/duplicate column/i.test(String(e?.message))) return;
+  }
   albumSortOrderReady = true;
 }
 

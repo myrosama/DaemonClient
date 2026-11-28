@@ -1,5 +1,5 @@
 import type { Env } from './index';
-import { requireAuth, firestoreGet, firestoreSet, firestoreDelete, firestoreQuery, json, durationToMs } from './helpers';
+import { requireAuth, firestoreGet, firestoreSet, firestoreDelete, firestoreQuery, json, durationToMs, msToDurationText, localTimeOf } from './helpers';
 import sizeOf from 'image-size';
 import { normalizePhotoManifest } from './contracts';
 import { getFlagsForUser } from './feature-flags';
@@ -67,10 +67,15 @@ const VALID_VISIBILITY = new Set(['timeline', 'hidden', 'archive', 'locked']);
  *  time zone and all, as the photo's EXIF time, and move the photo on the
  *  timeline, which sorts by fileCreatedAt in UTC. Unreadable values are ignored. */
 function takenAtUpdate(v: unknown): { dateTimeOriginal: string; fileCreatedAt: string } | null {
-  if (typeof v !== 'string' || !v.trim()) return null;
-  const t = Date.parse(v);
+  if (typeof v !== 'string') return null;
+  const text = v.trim();
+  // An ISO date and time, from 1800 to next year; anything else is ignored.
+  if (text.length > 64 || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(text)) return null;
+  const t = Date.parse(text);
   if (Number.isNaN(t)) return null;
-  return { dateTimeOriginal: v.trim(), fileCreatedAt: new Date(t).toISOString() };
+  const year = new Date(t).getUTCFullYear();
+  if (year < 1800 || year > new Date().getUTCFullYear() + 1) return null;
+  return { dateTimeOriginal: text, fileCreatedAt: new Date(t).toISOString() };
 }
 // Bumped when the EXIF extraction logic improves so the lazy backfill re-checks
 // already-parsed photos. v2: re-check photos that got camera EXIF but no GPS
@@ -1305,7 +1310,10 @@ async function handleUploadImpl(request: Request, env: Env, uid: string, idToken
     const fileCreatedAt = (formData.get('fileCreatedAt') as string) || new Date().toISOString();
     const fileModifiedAt = (formData.get('fileModifiedAt') as string) || new Date().toISOString();
     const durationRaw = formData.get('duration') ? (formData.get('duration') as string) : null;
-    const duration = (!durationRaw || durationRaw === '0' || durationRaw === '0.000' || durationRaw === '0:00:00.00000') ? null : durationRaw;
+    // Stored as Immich text, whatever form the app sent (the iPhone app sends
+    // bare milliseconds); zero or unreadable is no duration.
+    const durationMsIn = durationToMs(durationRaw);
+    const duration = durationMsIn == null ? null : msToDurationText(durationMsIn);
     
     const fileSize = file ? file.size : parseInt(formData.get('fileSize') as string) || 0;
     const fileName = file ? file.name : (formData.get('fileName') as string) || 'unknown';
@@ -2628,8 +2636,9 @@ function toAssetResponseDto(photo: any, ownerId: string): any {
   );
 
   // Live photos should not expose duration (prevents GIF treatment in gallery)
-  const effectiveDuration = photo.livePhotoVideoId ? null :
-    (!photo.duration || photo.duration === '0' || photo.duration === '0.000' || photo.duration === '0:00:00.00000') ? null : photo.duration;
+  const durationMs = photo.livePhotoVideoId ? null : durationToMs(photo.duration);
+  const effectiveDuration = durationMs == null ? null : msToDurationText(durationMs);
+  const local = localTimeOf(photo.dateTimeOriginal);
 
   return {
     id,
@@ -2641,7 +2650,7 @@ function toAssetResponseDto(photo: any, ownerId: string): any {
     originalPath: `/upload/${id}`,
     fileCreatedAt: photo.fileCreatedAt || photo.uploadedAt || new Date().toISOString(),
     fileModifiedAt: photo.uploadedAt || new Date().toISOString(),
-    localDateTime: photo.fileCreatedAt || new Date().toISOString(),
+    localDateTime: local?.localDateTime || photo.fileCreatedAt || new Date().toISOString(),
     updatedAt: photo.uploadedAt || new Date().toISOString(),
     isFavorite: !!photo.isFavorite,
     isArchived: photo.visibility === 'archive',
@@ -2650,7 +2659,7 @@ function toAssetResponseDto(photo: any, ownerId: string): any {
     isEdited: false,
     hasMetadata: true,
     duration: effectiveDuration,
-    durationMs: durationToMs(effectiveDuration),
+    durationMs,
     ownerId,
     thumbhash: photo.thumbhash || null,
     visibility: photo.visibility || 'timeline',
@@ -2662,7 +2671,7 @@ function toAssetResponseDto(photo: any, ownerId: string): any {
       // it String? and Dart's strict parse rejects a number.
       orientation: photo.orientation != null ? String(photo.orientation) : null,
       dateTimeOriginal: photo.dateTimeOriginal || photo.fileCreatedAt || null,
-      modifyDate: null, timeZone: null, lensModel: photo.lensModel || null,
+      modifyDate: null, timeZone: local?.timeZone || null, lensModel: photo.lensModel || null,
       fNumber: typeof photo.fNumber === 'number' ? photo.fNumber : null,
       focalLength: typeof photo.focalLength === 'number' ? photo.focalLength : null,
       iso: typeof photo.iso === 'number' ? photo.iso : null,
@@ -2956,7 +2965,8 @@ export async function backfillExifBatch(env: Env, uid: string, idToken: string, 
               if (typeof ex.iso === 'number') patch.iso = ex.iso;
               if (ex.exposureTime) patch.exposureTime = ex.exposureTime;
               if (ex.orientation !== undefined) patch.orientation = String(ex.orientation);
-              if (ex.dateTimeOriginal) patch.dateTimeOriginal = ex.dateTimeOriginal;
+              // A date the owner set by hand is never replaced by the file's.
+              if (ex.dateTimeOriginal && !photo.dateTimeOriginal) patch.dateTimeOriginal = ex.dateTimeOriginal;
               if (photo.latitude == null && typeof ex.latitude === 'number' && typeof ex.longitude === 'number') {
                 patch.latitude = ex.latitude;
                 patch.longitude = ex.longitude;

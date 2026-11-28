@@ -145,12 +145,17 @@ the key material is missing, rather than silently storing plaintext.
 | GET | `/api/timeline/buckets` | yes | web timeline, iPhone app |
 | GET | `/api/timeline/bucket` | yes | web timeline, iPhone app |
 
-Both honour `visibility`: absent or `timeline` gives the main timeline only;
-`archive`, `hidden` and `locked` give just that view; `all` gives everything.
-A month's count and its contents always agree. The month contents carry
+Both honour `visibility` as Immich does: a named visibility gives just that
+view (`timeline` is the main timeline); no visibility (albums, favourites,
+trash) gives timeline and archive; `all` gives everything. Locked and hidden
+photos appear only when asked for. A month's count and its contents always
+agree, and `order=asc` lists months oldest first. The month contents carry
 `duration` as Immich text (`H:MM:SS.ffffff`, what the website reads) and
-`durationMs`, whole milliseconds or null (what the apps read).
-`GET /api/assets/{id}` and search results carry `durationMs` too.
+`durationMs`, whole milliseconds or null (what the apps read); uploads may send
+either form. After an edit of `dateTimeOriginal` with an offset, the asset's
+`localDateTime` is the wall-clock time, `exifInfo.timeZone` is `UTC±H`, and the
+month's `localOffsetHours` carries the offset. `GET /api/assets/{id}` and
+search results carry `durationMs` too.
 
 Both accept `albumId`; `personId` and `tagId` are accepted and return **empty**,
 never the whole library. Each request also dispatches exactly **one** background
@@ -218,8 +223,10 @@ body (`q`, `type`, `isFavorite`, `takenAfter`, ...). The apps send Immich v3.2's
 `albumIds` and `hasAlbums`, with the operators `eq`, `ne`, `gt`, `gte`, `lt`,
 `lte`, `like`, `any` and `all`. `personIds`, `tagIds`, `ocr` and any unknown
 field or operator match nothing, never the whole library. Deleted photos come
-back only when the filter names `trashedAt`. Pages: `size` (max 1000) and the
-returned `nextCursor`.
+back only when the filter names `trashedAt`; locked photos and Live Photo video
+parts (`hidden`) only when it names a `visibility`. Pages: `size` (max 1000)
+and the returned `nextCursor`. A filter with more than 20 fields or an `any` /
+`all` list longer than 500 is refused (400).
 
 There is no smart search, no people and no places in the isolated per-user
 model. These return empty **shaped** results rather than 404, because a client

@@ -11,7 +11,7 @@ import { handleTimeline } from './timeline';
 import { handleAssets } from './assets';
 import { handleSearch } from './search';
 import { handleAlbums } from './albums';
-import { durationToMs } from './helpers';
+import { durationToMs, msToDurationText, localTimeOf } from './helpers';
 import { sqliteD1 } from './test-d1';
 import { testSessionToken, testAuthEnv } from './test-session';
 // Another package, so the type check (rootDir = this package) skips this import.
@@ -51,10 +51,18 @@ async function search(DB: any, body: object) {
 const ids = (a: any) => a.items.map((i: any) => i.id).sort();
 
 describe('duration', () => {
-  it('reads Immich text as whole milliseconds; anything else is null', () => {
+  it('reads Immich text and bare milliseconds; zero, junk and overflow are null', () => {
     expect(durationToMs('0:00:12.345678')).toBe(12346);
     expect(durationToMs('1:02:03.5')).toBe(3723500);
-    expect([durationToMs('0:00:00.000000'), durationToMs('12345'), durationToMs(null), durationToMs('abc')]).toEqual([null, null, null, null]);
+    expect(durationToMs('12500')).toBe(12500);
+    expect([durationToMs('0:00:00.000000'), durationToMs(null), durationToMs('abc'), durationToMs('9999999999999:00:00')]).toEqual([null, null, null, null]);
+    expect([msToDurationText(12500), msToDurationText(3723500)]).toEqual(['0:00:12.500000', '1:02:03.500000']);
+  });
+
+  it('reads the local time from a date that names its offset', () => {
+    expect(localTimeOf('2026-11-12T20:05:22-08:00')).toEqual({ localDateTime: '2026-11-12T20:05:22.000Z', timeZone: 'UTC-8', offsetHours: -8 });
+    expect(localTimeOf('2026-11-12T20:05:22+05:30')?.timeZone).toBe('UTC+5:30');
+    expect(localTimeOf('2026-11-12T20:05:22')).toBeNull();
   });
 
   it('the month contents carry durationMs as numbers or null, and keep duration as text', async () => {
@@ -71,12 +79,23 @@ describe('duration', () => {
 
 describe('visibility in the timeline', () => {
   const rows = [{ id: 'shown' }, { id: 'archived', visibility: 'archive' }, { id: 'locked', visibility: 'locked' }];
-  it('the main timeline leaves out archived and locked photos, in the month list and its contents alike', async () => {
+  const month = '2026-08-01T00:00:00.000Z';
+  it('the main timeline (visibility=timeline) leaves out archived and locked photos, in the month list and its contents alike', async () => {
     const DB = await library(rows);
-    const months = await get(DB, '/api/timeline/buckets');
-    const m = await get(DB, '/api/timeline/bucket?timeBucket=2026-08-01T00:00:00.000Z');
+    const months = await get(DB, '/api/timeline/buckets?visibility=timeline');
+    const m = await get(DB, `/api/timeline/bucket?timeBucket=${month}&visibility=timeline`);
     expect(m.id).toEqual(['shown']);
-    expect(months).toEqual([{ timeBucket: '2026-08-01T00:00:00.000Z', count: 1 }]);
+    expect(months).toEqual([{ timeBucket: month, count: 1 }]);
+  });
+  it('no visibility (albums, favourites, trash) means timeline and archive, never locked', async () => {
+    const DB = await library(rows);
+    expect((await get(DB, `/api/timeline/bucket?timeBucket=${month}`)).id.sort()).toEqual(['archived', 'shown']);
+    expect(await get(DB, '/api/timeline/buckets')).toEqual([{ timeBucket: month, count: 2 }]);
+  });
+  it('an album set to oldest first lists its months oldest first', async () => {
+    const DB = await library([{ id: 'a', fileCreatedAt: '2026-01-02T00:00:00.000Z' }, { id: 'b', fileCreatedAt: '2026-03-02T00:00:00.000Z' }]);
+    const months = (await get(DB, '/api/timeline/buckets?order=asc')).map((m: any) => m.timeBucket.slice(0, 7));
+    expect(months).toEqual(['2026-01', '2026-03']);
   });
   it('a view asks for its own visibility and gets only that', async () => {
     const DB = await library(rows);
@@ -105,6 +124,40 @@ describe('edits the worker used to drop', () => {
     await upload(DB, { visibility: 'secret', deviceAssetId: 'dev-2', checksum: 'c2hhMg==' });
     const vis = DB.rows('SELECT deviceAssetId, visibility FROM photos ORDER BY deviceAssetId');
     expect(vis.map((r: any) => r.visibility)).toEqual(['locked', 'timeline']);
+  });
+
+  it('a bare-milliseconds duration from the app is stored as Immich text', async () => {
+    const DB = await library([]);
+    await upload(DB, { mimeType: 'video/quicktime', fileName: 'IMG_2.MOV', duration: '12500' });
+    expect(DB.rows('SELECT duration FROM photos')[0].duration).toBe('0:00:12.500000');
+  });
+
+  it('after a dated edit, the asset reports the local time and time zone the app checks for', async () => {
+    const DB = await library([{ id: 'p1' }]);
+    const put = new Request('https://worker.test/api/assets', {
+      method: 'PUT', headers: { ...(await auth()), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: ['p1'], dateTimeOriginal: '2026-11-12T20:05:22-08:00' }),
+    });
+    expect((await handleAssets(put, env(DB), '/api/assets', new URL(put.url))).status).toBeLessThan(300);
+    const req = new Request('https://worker.test/api/assets/p1', { headers: await auth() });
+    const dto = (await (await handleAssets(req, env(DB), '/api/assets/p1', new URL(req.url))).json()) as any;
+    expect(dto.localDateTime.startsWith('2026-11-12T20:05:22')).toBe(true);
+    expect(dto.exifInfo.timeZone).toBe('UTC-8');
+    expect(dto.fileCreatedAt).toBe('2026-11-13T04:05:22.000Z');
+    const m = await get(DB, '/api/timeline/bucket?timeBucket=2026-11-01T00:00:00.000Z');
+    expect(m.localOffsetHours).toEqual([-8]);
+  });
+
+  it('junk dates are ignored', async () => {
+    const DB = await library([{ id: 'p1' }]);
+    for (const bad of ['hello 2020', '1', '+275760-09-13T00:00:00Z', '1200-01-01T00:00:00Z', `2020-01-01T00:00:00Z${'x'.repeat(100)}`]) {
+      const req = new Request('https://worker.test/api/assets/p1', {
+        method: 'PUT', headers: { ...(await auth()), 'Content-Type': 'application/json' }, body: JSON.stringify({ dateTimeOriginal: bad }),
+      });
+      await handleAssets(req, env(DB), '/api/assets/p1', new URL(req.url));
+    }
+    expect(DB.rows("SELECT fileCreatedAt, dateTimeOriginal FROM photos WHERE id = 'p1'")[0])
+      .toEqual({ fileCreatedAt: '2026-08-10T10:00:00.000Z', dateTimeOriginal: null });
   });
 
   it('PUT dateTimeOriginal moves the photo on the timeline and keeps the time zone text', async () => {
@@ -168,9 +221,41 @@ describe('search with the Immich v3.2 filter', () => {
 
   it('people, tags, OCR and unknown fields or operators match nothing', async () => {
     const DB = await library(rows);
-    for (const filter of [{ personIds: { any: ['p'] } }, { tagIds: { any: ['t'] } }, { ocr: { matches: 'x' } }, { colour: { eq: 'red' } }, { type: { near: 'VIDEO' } }]) {
+    for (const filter of [{ personIds: { any: ['p'] } }, { tagIds: { any: ['t'] } }, { ocr: { matches: 'x' } }, { colour: { eq: 'red' } },
+      { type: { near: 'VIDEO' } }, { constructor: { eq: null } }, { toString: { eq: null } }]) {
       expect((await search(DB, { filter })).items).toEqual([]);
     }
+  });
+
+  it('locked photos and Live Photo video parts stay out unless the filter names a visibility', async () => {
+    const DB = await library([
+      ...rows,
+      { id: 'secret', visibility: 'locked' },
+      { id: 'still', livePhotoVideoId: 'motion', fileCreatedAt: '2026-06-05T00:00:00.000Z' },
+      { id: 'motion', mimeType: 'video/quicktime', duration: '0:00:02.000000' },
+    ]);
+    const all = ids(await search(DB, { filter: {} }));
+    expect(all).not.toContain('secret');
+    expect(all).not.toContain('motion');
+    expect(all).toContain('still');
+    expect(ids(await search(DB, { filter: { type: { eq: 'VIDEO' } } }))).toEqual(['video']);
+    expect(ids(await search(DB, { filter: { visibility: { eq: 'locked' } } }))).toEqual(['secret']);
+    expect(ids(await search(DB, { filter: { visibility: { eq: 'hidden' } } }))).toEqual(['motion']);
+  });
+
+  it('a still with an old zero-duration string is an image', async () => {
+    const DB = await library([{ id: 'oldstill', duration: '0:00:00.000000' }]);
+    const [item] = (await search(DB, { filter: {} })).items;
+    expect([item.type, item.durationMs]).toEqual(['IMAGE', null]);
+  });
+
+  it('a filter that is too large is refused', async () => {
+    const DB = await library(rows);
+    const req = new Request('https://worker.test/api/search/metadata', {
+      method: 'POST', headers: { ...(await auth()), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filter: { albumIds: { any: Array.from({ length: 501 }, (_, i) => `a${i}`) } } }),
+    });
+    expect((await handleSearch(req, env(DB), '/api/search/metadata')).status).toBe(400);
   });
 
   it('pages with size and cursor, in the order asked, and carries durationMs', async () => {

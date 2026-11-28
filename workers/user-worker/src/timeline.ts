@@ -1,5 +1,5 @@
 import type { Env } from './index';
-import { requireAuth, firestoreQuery, firestoreGet, json, durationToMs } from './helpers';
+import { requireAuth, firestoreQuery, firestoreGet, json, durationToMs, msToDurationText, localTimeOf } from './helpers';
 import { D1Adapter } from './d1-adapter';
 import { backfillChecksumBatch } from './assets';
 
@@ -85,12 +85,14 @@ export async function handleTimeline(request: Request, env: Env, path: string, u
   return json({ message: 'Not found' }, 404);
 }
 
-// The main timeline holds 'timeline' only; archive, hidden and locked are their
-// own views, so a client that trusts the query never shows them by mistake.
-// 'all' keeps every visibility.
+// Immich's rule: a view that names a visibility gets exactly that one; no
+// visibility (albums, favourites, trash) means timeline and archive; 'all' is
+// everything. Locked and hidden never appear unless asked for.
 export function visibilityMatches(v: string | null | undefined, wanted: string | null): boolean {
+  const own = v || 'timeline';
   if (wanted === 'all') return true;
-  return (v || 'timeline') === (wanted || 'timeline');
+  if (!wanted) return own === 'timeline' || own === 'archive';
+  return own === wanted;
 }
 
 async function getTimeBuckets(env: Env, uid: string, idToken: string, url: URL): Promise<Response> {
@@ -134,6 +136,8 @@ async function getTimeBuckets(env: Env, uid: string, idToken: string, url: URL):
   const result = Array.from(buckets.entries())
     .map(([timeBucket, count]) => ({ timeBucket, count }))
     .sort((a, b) => b.timeBucket.localeCompare(a.timeBucket));
+  // An album set to oldest-first lists its months that way too.
+  if (url.searchParams.get('order') === 'asc') result.reverse();
 
   return json(result);
 }
@@ -178,13 +182,13 @@ async function getTimeBucket(env: Env, uid: string, idToken: string, url: URL): 
     id: filtered.map(p => p._id),
     city: filtered.map(p => p.city || null),
     country: filtered.map(p => p.country || null),
+    // Live photos (HEIC with linked MOV) report no duration — prevents GIF
+    // treatment. Text for the website, whole milliseconds for the apps: one
+    // type per column, whatever form the row stored.
     duration: filtered.map(p => {
-      // Live photos (HEIC with linked MOV) should not report duration — prevents GIF treatment
-      if (p.livePhotoVideoId) return null;
-      if (!p.duration || p.duration === '0' || p.duration === '0.000' || p.duration === '0:00:00.000000') return null;
-      return p.duration;
+      const ms = p.livePhotoVideoId ? null : durationToMs(p.duration);
+      return ms == null ? null : msToDurationText(ms);
     }),
-    // Whole milliseconds, or null: one type for the whole column.
     durationMs: filtered.map(p => (p.livePhotoVideoId ? null : durationToMs(p.duration))),
     fileCreatedAt: filtered.map(p => p.fileCreatedAt || p.uploadedAt || new Date().toISOString()),
     isFavorite: filtered.map(p => !!p.isFavorite),
@@ -195,7 +199,7 @@ async function getTimeBucket(env: Env, uid: string, idToken: string, url: URL): 
     }),
     isTrashed: filtered.map(p => !!p.isTrashed),
     livePhotoVideoId: filtered.map(p => p.livePhotoVideoId || null),
-    localOffsetHours: filtered.map(p => p.localOffsetHours || 0),
+    localOffsetHours: filtered.map(p => localTimeOf(p.dateTimeOriginal)?.offsetHours ?? (p.localOffsetHours || 0)),
     ownerId: filtered.map(() => uid),
     projectionType: filtered.map(() => null),
     ratio: filtered.map(p => {
