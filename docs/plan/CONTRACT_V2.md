@@ -100,6 +100,69 @@ after 30 days (or "Delete now" / "Empty") does today's permanent delete
 (with `deletedAt`) separately from `deleted` (gone for good). Until this
 exists the apps delete permanently behind a clear warning.
 
+### Linux design for 5b (2026-11-28)
+
+Why first: the worker already tells the website `trash: true, trashDays: 30`,
+so the website's **Move to trash** looks reversible, but since R3 a delete is
+permanent and **Restore** answers 400. The website and the apps both need this.
+
+**Row states.** Two new columns, `deletedAt` and `purgeAt` (ISO text, added on
+first use like the other columns); `isTrashed` keeps meaning "out of the
+library".
+
+| State | isTrashed | purgeAt | purgedAt | Telegram parts | Restorable | Shown in |
+|---|---|---|---|---|---|---|
+| live | 0 | null | null | kept | | library |
+| in the trash | 1 | `deletedAt` + 30 days, in the future | null | kept | **yes** | Trash / Recently Deleted |
+| purge due | 1 | now or past (or null: rows R3 deleted) | null | being deleted | no | nowhere |
+| purged | 1 | | set | cleared | no | nowhere (tombstone, 90 days) |
+
+**Today's routes (the website and the apps use these now):**
+- `DELETE /api/assets {ids, force: false}` and `PUT … isTrashed: true` move to
+  the trash: `isTrashed=1, deletedAt=now, purgeAt=now+30d`. Nothing goes to
+  Telegram.
+- `DELETE /api/assets {ids, force: true}` deletes for good now (`purgeAt=now`,
+  then the R3 path: Telegram in batches of 100, parts forgotten once confirmed),
+  from the library or from the trash.
+- `POST /api/trash/restore/assets {ids}` and `POST /api/trash/restore` bring
+  restorable rows back (`isTrashed=0`, `deletedAt`/`purgeAt` cleared). Rows past
+  their purge are skipped and reported.
+- `POST|DELETE /api/trash/empty` makes every trashed row due, then drains (the
+  R3 caps: 1000 rows, 40 Telegram calls a request; the rest on later requests).
+- The trash view lists restorable rows only. Their thumbnails, originals and
+  manifest still load, so a trashed photo can be opened; due and purged rows
+  stay 404 (R3).
+- A Live Photo's still and video are trashed, restored and purged together.
+  Album membership stays while in the trash (hidden from the album) and comes
+  back on restore; the purge removes it.
+
+**The 30-day purge.** One job drains due rows (100 at a time, ≤ 40 Telegram
+calls). It runs after every delete or empty (as today) and in the background of
+the month and `/changes` routes at most once an hour per worker, so it needs no
+schedule of its own and costs one cheap query when nothing is due.
+
+**In contract v2:** `/changes` lists restorable rows as `trashed: [{ id,
+deletedAt, purgeAt }]` and due or purged ones in `deleted: [id]`; trashing,
+restoring and becoming due each bump `rev`. `POST /api/v2/assets/restore
+{ ids }` → `{ restored: [ids], notRestorable: [ids] }`. "Delete now" and
+"Empty" use the routes above.
+
+## 7. Build order (Linux, 2026-11-28)
+
+Each is its own worker release with all four gates; the MacBook builds the
+core's side against each as it lands.
+
+1. **R8: the Trash on today's routes** (5b above). The website's Trash and the
+   apps' Recently Deleted work at once; no v2 needed.
+2. **R9: `rev` + `GET /api/v2/changes` + `AssetRow`** (§2–4 with the 2026-11-20
+   answers: `MAX(rev)+1`, old rows at rev 0, the `(rev, id)` cursor,
+   `purgedThroughRev`, `durationMs` and the local time from R7).
+3. **R10: `POST /api/v2/assets` bulk create + `POST /api/v2/assets/restore`.**
+
+Questions for the MacBook before R8: (a) are the Live Photo and album rules
+above what the app expects; (b) is "Delete now" fine as
+`DELETE /api/assets {ids, force: true}`, or do you want a v2 route for it?
+
 ## 6. Questions for Linux
 
 1. `rev` by `MAX(rev)+1` in each write, or a counter row? Any write path
