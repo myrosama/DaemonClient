@@ -1,5 +1,5 @@
 import type { Env } from './index';
-import { requireAuth, firestoreQuery, firestoreGet, json } from './helpers';
+import { requireAuth, firestoreQuery, firestoreGet, json, durationToMs, msToDurationText, localTimeOf } from './helpers';
 import { D1Adapter } from './d1-adapter';
 import { backfillChecksumBatch } from './assets';
 
@@ -85,6 +85,16 @@ export async function handleTimeline(request: Request, env: Env, path: string, u
   return json({ message: 'Not found' }, 404);
 }
 
+// Immich's rule: a view that names a visibility gets exactly that one; no
+// visibility (albums, favourites, trash) means timeline and archive; 'all' is
+// everything. Locked and hidden never appear unless asked for.
+export function visibilityMatches(v: string | null | undefined, wanted: string | null): boolean {
+  const own = v || 'timeline';
+  if (wanted === 'all') return true;
+  if (!wanted) return own === 'timeline' || own === 'archive';
+  return own === wanted;
+}
+
 async function getTimeBuckets(env: Env, uid: string, idToken: string, url: URL): Promise<Response> {
   const photos = await loadPhotos(env, uid, idToken);
 
@@ -113,8 +123,7 @@ async function getTimeBuckets(env: Env, uid: string, idToken: string, url: URL):
   // The Trash view: a deletion Telegram already finished has nothing left to act on.
   if (isTrashed) filtered = filtered.filter(p => p.isTrashed && !p.purgedAt);
   else filtered = filtered.filter(p => !p.isTrashed);
-  if (visibility === 'archive') filtered = filtered.filter(p => p.visibility === 'archive');
-  else if (visibility !== 'all') filtered = filtered.filter(p => p.visibility !== 'archive');
+  filtered = filtered.filter(p => visibilityMatches(p.visibility, visibility));
 
   // Group by YYYY-MM-01
   const buckets = new Map<string, number>();
@@ -127,6 +136,8 @@ async function getTimeBuckets(env: Env, uid: string, idToken: string, url: URL):
   const result = Array.from(buckets.entries())
     .map(([timeBucket, count]) => ({ timeBucket, count }))
     .sort((a, b) => b.timeBucket.localeCompare(a.timeBucket));
+  // An album set to oldest-first lists its months that way too.
+  if (url.searchParams.get('order') === 'asc') result.reverse();
 
   return json(result);
 }
@@ -135,6 +146,7 @@ async function getTimeBucket(env: Env, uid: string, idToken: string, url: URL): 
   const timeBucket = url.searchParams.get('timeBucket') || '';
   const isFavorite = url.searchParams.get('isFavorite') === 'true';
   const isTrashed = url.searchParams.get('isTrashed') === 'true';
+  const visibility = url.searchParams.get('visibility');
 
   const photos = await loadPhotos(env, uid, idToken);
 
@@ -162,18 +174,22 @@ async function getTimeBucket(env: Env, uid: string, idToken: string, url: URL): 
   // The Trash view: a deletion Telegram already finished has nothing left to act on.
   if (isTrashed) filtered = filtered.filter(p => p.isTrashed && !p.purgedAt);
   else filtered = filtered.filter(p => !p.isTrashed);
+  // Same rule as the month list, so a month's count and its contents agree.
+  filtered = filtered.filter(p => visibilityMatches(p.visibility, visibility));
 
   // Build TimeBucketAssetResponseDto — columnar format
   const result = {
     id: filtered.map(p => p._id),
     city: filtered.map(p => p.city || null),
     country: filtered.map(p => p.country || null),
+    // Live photos (HEIC with linked MOV) report no duration — prevents GIF
+    // treatment. Text for the website, whole milliseconds for the apps: one
+    // type per column, whatever form the row stored.
     duration: filtered.map(p => {
-      // Live photos (HEIC with linked MOV) should not report duration — prevents GIF treatment
-      if (p.livePhotoVideoId) return null;
-      if (!p.duration || p.duration === '0' || p.duration === '0.000' || p.duration === '0:00:00.000000') return null;
-      return p.duration;
+      const ms = p.livePhotoVideoId ? null : durationToMs(p.duration);
+      return ms == null ? null : msToDurationText(ms);
     }),
+    durationMs: filtered.map(p => (p.livePhotoVideoId ? null : durationToMs(p.duration))),
     fileCreatedAt: filtered.map(p => p.fileCreatedAt || p.uploadedAt || new Date().toISOString()),
     isFavorite: filtered.map(p => !!p.isFavorite),
     isImage: filtered.map(p => {
@@ -183,7 +199,7 @@ async function getTimeBucket(env: Env, uid: string, idToken: string, url: URL): 
     }),
     isTrashed: filtered.map(p => !!p.isTrashed),
     livePhotoVideoId: filtered.map(p => p.livePhotoVideoId || null),
-    localOffsetHours: filtered.map(p => p.localOffsetHours || 0),
+    localOffsetHours: filtered.map(p => localTimeOf(p.dateTimeOriginal, p.fileCreatedAt)?.offsetHours ?? (p.localOffsetHours || 0)),
     ownerId: filtered.map(() => uid),
     projectionType: filtered.map(() => null),
     ratio: filtered.map(p => {

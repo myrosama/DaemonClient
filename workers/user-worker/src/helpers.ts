@@ -364,6 +364,56 @@ function toFirestoreValue(val: any): any {
   return { stringValue: String(val) };
 }
 
+/** A stored duration as whole milliseconds, or null for none or unreadable.
+ *  Immich text ("H:MM:SS.ffffff") and bare digits (milliseconds, what the iPhone
+ *  app uploads) are both read; anything past a safe integer is refused. */
+export function durationToMs(d: unknown): number | null {
+  let ms: number;
+  if (typeof d === 'number') ms = Math.round(d);
+  else if (typeof d === 'string' && /^\d{1,12}$/.test(d.trim())) ms = Number(d.trim());
+  else {
+    const m = typeof d === 'string' ? /^(\d{1,9}):(\d{1,2}):(\d{1,2}(?:\.\d{1,9})?)$/.exec(d.trim()) : null;
+    if (!m) return null;
+    ms = Math.round(((Number(m[1]) * 60 + Number(m[2])) * 60 + parseFloat(m[3])) * 1000);
+  }
+  return Number.isSafeInteger(ms) && ms > 0 ? ms : null;
+}
+
+/** Milliseconds as Immich's duration text, which the website reads. */
+export function msToDurationText(ms: number): string {
+  const h = Math.floor(ms / 3600000), m = Math.floor(ms / 60000) % 60, s = (ms % 60000) / 1000;
+  // Two-digit hours: the website's Luxon parser reads "0:00:12" as nothing.
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${s.toFixed(3).padStart(6, '0')}000`;
+}
+
+/** The local time a photo was taken, from its stored dateTimeOriginal. Immich
+ *  reports it as the wall-clock time with a "Z" (localDateTime), "UTC-8"
+ *  (timeZone) and the offset in hours.
+ *  - "2026-11-12T20:05:22-08:00" (an edit) names its offset.
+ *  - "2026-11-12T20:05:22Z" (read from the file) is camera-local time with a
+ *    "Z": the offset is that time minus the real moment, fileCreatedAt, to the
+ *    nearest 15 minutes, when within ±14 hours.
+ *  Null when neither gives an offset. */
+export function localTimeOf(text: unknown, fileCreatedAt?: unknown): { localDateTime: string; timeZone: string; offsetHours: number } | null {
+  if (typeof text !== 'string') return null;
+  const m = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.\d+)?(Z|[+-]\d{2}(?::?\d{2})?)$/.exec(text.trim());
+  if (!m) return null;
+  let minutes = 0;
+  if (m[2] === 'Z') {
+    const utc = typeof fileCreatedAt === 'string' ? Date.parse(fileCreatedAt) : NaN;
+    if (Number.isNaN(utc)) return null;
+    minutes = Math.round((Date.parse(`${m[1]}Z`) - utc) / 900000) * 15;
+    if (Math.abs(minutes) > 14 * 60) return null;
+  } else {
+    const sign = m[2][0] === '-' ? -1 : 1;
+    const digits = m[2].slice(1).replace(':', '');
+    minutes = sign * (Number(digits.slice(0, 2)) * 60 + Number(digits.slice(2, 4) || 0));
+  }
+  const abs = Math.abs(minutes), hh = Math.floor(abs / 60), mm = abs % 60;
+  const timeZone = minutes === 0 ? 'UTC' : `UTC${minutes < 0 ? '-' : '+'}${hh}${mm ? ':' + String(mm).padStart(2, '0') : ''}`;
+  return { localDateTime: `${m[1]}.000Z`, timeZone, offsetHours: minutes / 60 };
+}
+
 export function json(data: any, status = 200): Response {
   return new Response(JSON.stringify(data), {
     status,

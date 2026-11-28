@@ -1,5 +1,5 @@
 import type { Env } from './index';
-import { requireAuth, firestoreGet, firestoreSet, firestoreDelete, firestoreQuery, json } from './helpers';
+import { requireAuth, firestoreGet, firestoreSet, firestoreDelete, firestoreQuery, json, durationToMs, msToDurationText, localTimeOf } from './helpers';
 import sizeOf from 'image-size';
 import { normalizePhotoManifest } from './contracts';
 import { getFlagsForUser } from './feature-flags';
@@ -62,6 +62,25 @@ function webAppOrigin(request: Request, env: Env): string {
 // Anything else aborts its entire sync, so writes are filtered against this
 // set (sync.ts clamps again on emit, for rows written before this guard).
 const VALID_VISIBILITY = new Set(['timeline', 'hidden', 'archive', 'locked']);
+
+/** An edit of the taken date (Immich's dateTimeOriginal): keep the client's text,
+ *  time zone and all, as the photo's EXIF time, and move the photo on the
+ *  timeline, which sorts by fileCreatedAt in UTC. Unreadable values are ignored. */
+function takenAtUpdate(v: unknown): { dateTimeOriginal: string; fileCreatedAt: string } | null {
+  if (typeof v !== 'string') return null;
+  const text = v.trim();
+  // An ISO date and time, from 1800 to next year; anything else is ignored.
+  if (text.length > 64 || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(text)) return null;
+  const t = Date.parse(text);
+  if (Number.isNaN(t)) return null;
+  const year = new Date(t).getUTCFullYear();
+  if (year < 1800 || year > new Date().getUTCFullYear() + 1) return null;
+  // No rolled-over dates: 30 February must not quietly become 1 March.
+  const off = /([+-])(\d{2}):?(\d{2})?$/.exec(text);
+  const offsetMs = off ? (off[1] === '-' ? -1 : 1) * (Number(off[2]) * 60 + Number(off[3] || 0)) * 60000 : 0;
+  if (new Date(t + offsetMs).toISOString().slice(0, 10) !== text.slice(0, 10)) return null;
+  return { dateTimeOriginal: text, fileCreatedAt: new Date(t).toISOString() };
+}
 // Bumped when the EXIF extraction logic improves so the lazy backfill re-checks
 // already-parsed photos. v2: re-check photos that got camera EXIF but no GPS
 // (the old backfill skipped any row with `make` set, so HEIC photos whose GPS
@@ -687,6 +706,8 @@ async function handleUpdateAsset(request: Request, env: Env, uid: string, assetI
   if (dto.description !== undefined) updates.description = dto.description;
   if (dto.latitude !== undefined) updates.latitude = dto.latitude;
   if (dto.longitude !== undefined) updates.longitude = dto.longitude;
+  if (typeof dto.visibility === 'string' && VALID_VISIBILITY.has(dto.visibility)) updates.visibility = dto.visibility;
+  Object.assign(updates, takenAtUpdate(dto.dateTimeOriginal));
 
   if (Object.keys(updates).length > 0) {
     if (env.DB) {
@@ -890,6 +911,7 @@ async function handleBulkUpdate(request: Request, env: Env, uid: string, idToken
   if (body.visibility !== undefined && VALID_VISIBILITY.has(body.visibility)) {
     updates.visibility = body.visibility;
   }
+  Object.assign(updates, takenAtUpdate(body.dateTimeOriginal));
 
   if (Object.keys(updates).length > 0) {
     if (env.DB) {
@@ -1292,7 +1314,10 @@ async function handleUploadImpl(request: Request, env: Env, uid: string, idToken
     const fileCreatedAt = (formData.get('fileCreatedAt') as string) || new Date().toISOString();
     const fileModifiedAt = (formData.get('fileModifiedAt') as string) || new Date().toISOString();
     const durationRaw = formData.get('duration') ? (formData.get('duration') as string) : null;
-    const duration = (!durationRaw || durationRaw === '0' || durationRaw === '0.000' || durationRaw === '0:00:00.00000') ? null : durationRaw;
+    // Stored as Immich text, whatever form the app sent (the iPhone app sends
+    // bare milliseconds); zero or unreadable is no duration.
+    const durationMsIn = durationToMs(durationRaw);
+    const duration = durationMsIn == null ? null : msToDurationText(durationMsIn);
     
     const fileSize = file ? file.size : parseInt(formData.get('fileSize') as string) || 0;
     const fileName = file ? file.name : (formData.get('fileName') as string) || 'unknown';
@@ -1418,6 +1443,7 @@ async function handleUploadImpl(request: Request, env: Env, uid: string, idToken
     let encryptionMode = isEncryptedByServer ? 'server' : 'off';
     let thumbEncrypted = false;
     let telegramPreviewId: string | null = null;
+    let uploadVisibility: string | undefined;
     let telegramPlaybackChunks: string | null = null;
     let clientSentExif = false;
     let pendingThumbGen: any = null;
@@ -1436,6 +1462,9 @@ async function handleUploadImpl(request: Request, env: Env, uid: string, idToken
         // is dropped, never a failed upload.
         const previewId = formData.get('telegramPreviewId');
         if (typeof previewId === 'string' && /^[A-Za-z0-9_-]{1,256}$/.test(previewId)) telegramPreviewId = previewId;
+        // A photo hidden or locked on the phone arrives that way.
+        const vis = formData.get('visibility');
+        if (typeof vis === 'string' && VALID_VISIBILITY.has(vis)) uploadVisibility = vis;
         // The phone's 720p H.264 copy of a video other players can't show
         // (SPEC P2-9), stored as {size, chunks} like the server-made one.
         if (mimeType.startsWith('video/')) telegramPlaybackChunks = clientPlayback(formData.get('telegramPlaybackChunks'), formData.get('playbackSize'));
@@ -1762,6 +1791,7 @@ async function handleUploadImpl(request: Request, env: Env, uid: string, idToken
     const photo = {
       id: assetId,
       ownerId: uid,
+      visibility: uploadVisibility,
       fileName,
       fileSize,
       mimeType,
@@ -2610,8 +2640,9 @@ function toAssetResponseDto(photo: any, ownerId: string): any {
   );
 
   // Live photos should not expose duration (prevents GIF treatment in gallery)
-  const effectiveDuration = photo.livePhotoVideoId ? null :
-    (!photo.duration || photo.duration === '0' || photo.duration === '0.000' || photo.duration === '0:00:00.00000') ? null : photo.duration;
+  const durationMs = photo.livePhotoVideoId ? null : durationToMs(photo.duration);
+  const effectiveDuration = durationMs == null ? null : msToDurationText(durationMs);
+  const local = localTimeOf(photo.dateTimeOriginal, photo.fileCreatedAt);
 
   return {
     id,
@@ -2623,7 +2654,7 @@ function toAssetResponseDto(photo: any, ownerId: string): any {
     originalPath: `/upload/${id}`,
     fileCreatedAt: photo.fileCreatedAt || photo.uploadedAt || new Date().toISOString(),
     fileModifiedAt: photo.uploadedAt || new Date().toISOString(),
-    localDateTime: photo.fileCreatedAt || new Date().toISOString(),
+    localDateTime: local?.localDateTime || photo.fileCreatedAt || new Date().toISOString(),
     updatedAt: photo.uploadedAt || new Date().toISOString(),
     isFavorite: !!photo.isFavorite,
     isArchived: photo.visibility === 'archive',
@@ -2632,6 +2663,7 @@ function toAssetResponseDto(photo: any, ownerId: string): any {
     isEdited: false,
     hasMetadata: true,
     duration: effectiveDuration,
+    durationMs,
     ownerId,
     thumbhash: photo.thumbhash || null,
     visibility: photo.visibility || 'timeline',
@@ -2643,7 +2675,7 @@ function toAssetResponseDto(photo: any, ownerId: string): any {
       // it String? and Dart's strict parse rejects a number.
       orientation: photo.orientation != null ? String(photo.orientation) : null,
       dateTimeOriginal: photo.dateTimeOriginal || photo.fileCreatedAt || null,
-      modifyDate: null, timeZone: null, lensModel: photo.lensModel || null,
+      modifyDate: null, timeZone: local?.timeZone || null, lensModel: photo.lensModel || null,
       fNumber: typeof photo.fNumber === 'number' ? photo.fNumber : null,
       focalLength: typeof photo.focalLength === 'number' ? photo.focalLength : null,
       iso: typeof photo.iso === 'number' ? photo.iso : null,
@@ -2937,7 +2969,8 @@ export async function backfillExifBatch(env: Env, uid: string, idToken: string, 
               if (typeof ex.iso === 'number') patch.iso = ex.iso;
               if (ex.exposureTime) patch.exposureTime = ex.exposureTime;
               if (ex.orientation !== undefined) patch.orientation = String(ex.orientation);
-              if (ex.dateTimeOriginal) patch.dateTimeOriginal = ex.dateTimeOriginal;
+              // A date the owner set by hand is never replaced by the file's.
+              if (ex.dateTimeOriginal && !photo.dateTimeOriginal) patch.dateTimeOriginal = ex.dateTimeOriginal;
               if (photo.latitude == null && typeof ex.latitude === 'number' && typeof ex.longitude === 'number') {
                 patch.latitude = ex.latitude;
                 patch.longitude = ex.longitude;

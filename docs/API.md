@@ -142,8 +142,21 @@ the key material is missing, rather than silently storing plaintext.
 
 | Method | Path | Auth | Callers |
 |---|---|---|---|
-| GET | `/api/timeline/buckets` | yes | web timeline |
-| GET | `/api/timeline/bucket` | yes | web timeline |
+| GET | `/api/timeline/buckets` | yes | web timeline, iPhone app |
+| GET | `/api/timeline/bucket` | yes | web timeline, iPhone app |
+
+Both honour `visibility` as Immich does: a named visibility gives just that
+view (`timeline` is the main timeline); no visibility (albums, favourites,
+trash) gives timeline and archive; `all` gives everything. Locked and hidden
+photos appear only when asked for. A month's count and its contents always
+agree, and `order=asc` lists months oldest first. The month contents carry
+`duration` as Immich text (`HH:MM:SS.ffffff`, what the website reads) and
+`durationMs`, whole milliseconds or null (what the apps read); uploads may send
+either form. After an edit of `dateTimeOriginal` with an offset, the asset's
+`localDateTime` is the wall-clock time, `exifInfo.timeZone` is `UTC±H`, and the
+month's `localOffsetHours` carries the offset. A date read from the file
+(camera time ending in `Z`) takes its offset from `fileCreatedAt`. `GET /api/assets/{id}` and
+search results carry `durationMs` too.
 
 Both accept `albumId`; `personId` and `tagId` are accepted and return **empty**,
 never the whole library. Each request also dispatches exactly **one** background
@@ -202,6 +215,19 @@ Not served, and 404 if called: `PUT /api/albums/assets`,
 | POST | `/api/search/metadata` | yes | real results from D1 |
 | GET | `/api/search/suggestions`, `/explore`, `/places`, `/cities` | no | `[]` |
 | POST | `/api/search/smart` | no | empty assets envelope |
+
+`/api/search/metadata` takes two shapes. The website sends Immich's older flat
+body (`q`, `type`, `isFavorite`, `takenAfter`, ...). The apps send Immich v3.2's
+`{ filter, size, orderBy, cursor }`; supported filter fields are `type`,
+`visibility`, `isFavorite`, `isMotion`, `trashedAt`, `takenAt`, `createdAt`,
+`city`, `country`, `make`, `model`, `lensModel`, `originalFileName`,
+`albumIds` and `hasAlbums`, with the operators `eq`, `ne`, `gt`, `gte`, `lt`,
+`lte`, `like`, `any` and `all`. `personIds`, `tagIds`, `ocr` and any unknown
+field or operator match nothing, never the whole library. Deleted photos come
+back only when the filter names `trashedAt`; locked photos and Live Photo video
+parts (`hidden`) only when it names a `visibility`. Pages: `size` (max 1000)
+and the returned `nextCursor`. A filter with more than 20 fields or an `any` /
+`all` list longer than 500 is refused (400).
 
 There is no smart search, no people and no places in the isolated per-user
 model. These return empty **shaped** results rather than 404, because a client

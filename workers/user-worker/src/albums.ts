@@ -5,6 +5,20 @@ import { D1Adapter } from './d1-adapter';
 // Albums live in D1 on per-user workers (tables `albums` + `album_assets`).
 // On the central worker (no env.DB) we still go through Firestore for backwards
 // compatibility with users who haven't deployed their personal worker yet.
+// Albums gained a sort order after many workers were set up; add the column
+// once per isolate ("duplicate column name" means it is already there).
+let albumSortOrderReady = false;
+async function ensureAlbumSortOrder(db: any): Promise<void> {
+  if (albumSortOrderReady) return;
+  try {
+    await db.prepare('ALTER TABLE albums ADD COLUMN sortOrder TEXT').run();
+  } catch (e: any) {
+    // Only "already there" means ready; any other failure is tried again next time.
+    if (!/duplicate column/i.test(String(e?.message))) return;
+  }
+  albumSortOrderReady = true;
+}
+
 export async function handleAlbums(request: Request, env: Env, path: string): Promise<Response> {
   const session = await requireAuth(request, env);
   const uid = session.uid;
@@ -195,6 +209,8 @@ export async function handleAlbums(request: Request, env: Env, path: string): Pr
         if (body.albumThumbnailAssetId !== undefined) {
           updates.albumThumbnailAssetId = body.albumThumbnailAssetId;
         }
+        if (body.order === 'asc' || body.order === 'desc') updates.sortOrder = body.order;
+        if (adapter && updates.sortOrder) await ensureAlbumSortOrder(env.DB);
         if (adapter) {
           const existing = await adapter.getAlbum(albumId);
           if (!existing) return json({ message: 'Album not found' }, 404);
@@ -463,7 +479,7 @@ export function toAlbumDto(album: any) {
     startDate: null,
     endDate: null,
     lastModifiedAssetTimestamp: null,
-    order: 'desc',
+    order: album.sortOrder === 'asc' ? 'asc' : 'desc',
     isActivityEnabled: true,
   };
 }
