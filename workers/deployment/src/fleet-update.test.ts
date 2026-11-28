@@ -56,7 +56,7 @@ const env = async (extra: Record<string, unknown> = {}) => ({
 const outdated = async (uid: string, extra: Record<string, string> = {}): Promise<Doc> => ({
   uid, fields: { accountId: 'acc', workerName: `dc-${uid}`, databaseId: 'db', apiToken: await encryptToken('cf', MASTER), sessionSecret: 's'.repeat(40), lastDeployedVersion: 'old', lastUpdatedAt: '2026-01-01T00:00:00Z', ...extra },
 });
-const deploys = (calls: { url: string }[]) => calls.filter((c) => c.url.includes('api.cloudflare.com')).length;
+const deploys = (calls: { url: string }[]) => calls.filter((c) => /api\.cloudflare\.com\/.*\/workers\/scripts\/[^/]+$/.test(c.url)).length;
 
 afterEach(() => vi.unstubAllGlobals());
 

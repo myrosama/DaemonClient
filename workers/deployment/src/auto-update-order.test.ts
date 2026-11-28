@@ -70,7 +70,7 @@ async function stubWorld(world: World) {
 
 const fieldsOf = (c: Call) => JSON.parse(c.body || '{}').fields as Record<string, { stringValue: string }>;
 const saves = (calls: Call[]) => calls.filter((c) => c.method === 'PATCH');
-const deployIndex = (calls: Call[]) => calls.findIndex((c) => c.url.includes('api.cloudflare.com'));
+const deployIndex = (calls: Call[]) => calls.findIndex((c) => /api\.cloudflare\.com\/.*\/workers\/scripts\/[^/]+$/.test(c.url) && c.method === 'PUT');
 const autoUpdate = () =>
   worker.fetch(new Request('https://deploy.example/auto-update', { method: 'POST', headers: { Authorization: 'Bearer user-id-token' } }), env);
 const legacyCfg = async (extra: Record<string, string> = {}) => ({
@@ -122,6 +122,7 @@ describe('auto-update: a new session secret goes live only once the worker runs 
     expect(res.status).toBe(500);
     expect(await res.json()).toMatchObject({ updated: false, reason: 'config-save-failed' });
     expect(deployIndex(calls)).toBe(-1);
+    expect(calls.filter((c) => c.url.includes('/d1/database/'))).toEqual([]); // and nothing written to the database
   });
 
   it('with a live secret already, it deploys and then records the version — one save', async () => {
@@ -189,6 +190,7 @@ describe('auto-update: two runs at once (login and first sync both trigger one)'
     expect(res.status).toBe(409);
     expect(await res.json()).toMatchObject({ updated: false, reason: 'raced' });
     expect(deployIndex(calls)).toBe(-1);
+    expect(calls.filter((c) => c.url.includes('/d1/database/'))).toEqual([]); // and nothing written to the database
   });
 
   it('only the pending-secret save is conditional; the save after the deploy is not', async () => {
@@ -225,6 +227,7 @@ describe('auto-update: two runs at once (login and first sync both trigger one)'
     const res = await autoUpdate();
     expect(await res.json()).toMatchObject({ updated: false, reason: 'busy' });
     expect([refreshCalls(calls).length, deployIndex(calls), saves(calls).length]).toEqual([0, -1, 1]);
+    expect(calls.filter((c) => c.url.includes('/d1/database/'))).toEqual([]);
   });
 
   it('the second of two runs at once (sign-in + first sync), reading after the first one claimed, stops before spending the token', async () => {
@@ -232,6 +235,7 @@ describe('auto-update: two runs at once (login and first sync both trigger one)'
     const res = await autoUpdate();
     expect(await res.json()).toMatchObject({ updated: false, reason: 'busy' });
     expect([refreshCalls(calls).length, deployIndex(calls), saves(calls).length]).toEqual([0, -1, 0]);
+    expect(calls.filter((c) => c.url.includes('/d1/database/'))).toEqual([]);
   });
 
   it('a claim older than two minutes (a run that died) does not hold the next one', async () => {
@@ -256,6 +260,7 @@ describe('auto-update: two runs at once (login and first sync both trigger one)'
     const calls = await stubWorld({ cfg, rotate: true, patchStatus: [200, 503, 200] });
     expect((await autoUpdate()).status).toBe(500);
     expect(deployIndex(calls)).toBe(-1);
+    expect(calls.filter((c) => c.url.includes('/d1/database/'))).toEqual([]); // and nothing written to the database
     const last = saves(calls).at(-1)!;
     expect(await decryptToken(fieldsOf(last).refreshToken.stringValue, MASTER)).toBe('rotated-refresh');
     expect(fieldsOf(last).pendingSessionSecret).toBeUndefined();
@@ -279,6 +284,7 @@ describe('canary: a new shim release reaches only the listed workers first', () 
     );
     expect(await res.json()).toMatchObject({ updated: false, reason: 'held' });
     expect(deployIndex(calls)).toBe(-1);
+    expect(calls.filter((c) => c.url.includes('/d1/database/'))).toEqual([]); // and nothing written to the database
     expect(saves(calls).length).toBe(0);
   });
 
@@ -307,6 +313,7 @@ describe('force-update never deploys a worker without its own session secret', (
       expect(res.status).toBe(400);
     }
     expect(deployIndex(calls)).toBe(-1);
+    expect(calls.filter((c) => c.url.includes('/d1/database/'))).toEqual([]); // and nothing written to the database
   });
 });
 

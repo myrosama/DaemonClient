@@ -99,11 +99,16 @@ describe('reconnecting', () => {
     expect(res.status).toBe(503);
     expect([patches(calls), built(calls)]).toEqual([[], []]);
   });
-  it('a first setup (no config yet) goes ahead', async () => {
+  it('a first setup (no config yet) goes ahead: schema, then keys, then the owner', async () => {
     const calls = stub(null, { status: 200, body: { access_token: 'a', refresh_token: 'r' } }, 'new-account');
     const res = await exchange();
     expect([409, 503]).not.toContain(res.status);
     expect(built(calls).length).toBeGreaterThan(0);
+    const sql = calls.filter((c) => c.url.includes('/query')).map((c) => JSON.parse(c.body!).sql as string);
+    expect(sql).toHaveLength(3);
+    expect(sql[0]).toMatch(/CREATE TABLE/);
+    expect(sql[1]).toMatch(/zke_password/);
+    expect(sql[2]).toBe("INSERT OR IGNORE INTO config (key, value) VALUES ('owner_uid', ?)");
   });
   it('with several accounts granted, uses the one that holds the cloud', async () => {
     const calls = stub(await oauthCfg(), { status: 200, body: { access_token: 'a', refresh_token: 'r' } }, ['other', 'acc']);
@@ -118,7 +123,11 @@ describe('reconnecting', () => {
     const res = await exchange();
     expect(res.status).toBe(200);
     // No migration and no new encryption keys: the database is used as it is.
-    expect(calls.filter((c) => c.url.includes('/query'))).toEqual([]);
+    // The one query records the owner, and never replaces one.
+    const queries = calls.filter((c) => c.url.includes('/query'));
+    expect(queries.map((c) => JSON.parse(c.body!))).toEqual([
+      { sql: "INSERT OR IGNORE INTO config (key, value) VALUES ('owner_uid', ?)", params: ['uid1'] },
+    ]);
     const [save] = patches(calls);
     expect(new URL(save.url).searchParams.getAll('updateMask.fieldPaths')).toEqual([]); // the whole record is replaced…
     const f = fields(save);
@@ -133,5 +142,18 @@ describe('reconnecting', () => {
     expect(((await res.json()) as any).error).toMatch(/same Cloudflare account/);
     expect(patches(calls)).toEqual([]);
     expect(calls.filter((c) => c.url.includes('api.cloudflare.com/client/v4/accounts/'))).toEqual([]);
+  });
+});
+
+describe('the owner is recorded in the worker', () => {
+  it('on every update, before the deploy, and never replaces one', async () => {
+    const calls = stub(await oauthCfg(), { status: 200, body: { access_token: 'a', refresh_token: 'r-new' } });
+    const res = await autoUpdate();
+    expect(res.status).toBe(200);
+    const q = calls.findIndex((c) => c.url.includes('/d1/database/db/query'));
+    const deploy = calls.findIndex((c) => /\/workers\/scripts\/dc-x$/.test(c.url) && c.method === 'PUT');
+    expect(q).toBeGreaterThan(-1);
+    expect(q).toBeLessThan(deploy);
+    expect(JSON.parse(calls[q].body!)).toEqual({ sql: "INSERT OR IGNORE INTO config (key, value) VALUES ('owner_uid', ?)", params: ['uid1'] });
   });
 });
